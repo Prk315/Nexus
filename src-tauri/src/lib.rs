@@ -26,17 +26,20 @@ async fn register_app(
     State(registry): State<Registry>,
     Json(req): Json<RegisterRequest>,
 ) -> Json<RegisterResponse> {
-    let id = SystemTime::now()
+    // Use app name as stable ID so re-registrations replace the existing entry
+    let id = req.name.to_lowercase().replace(' ', "-");
+
+    let registered_at = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
-        .as_millis()
+        .as_secs()
         .to_string();
 
     let app = ConnectedApp {
         id: id.clone(),
         name: req.name,
         version: req.version,
-        registered_at: id.clone(),
+        registered_at,
     };
 
     registry.lock().await.insert(id.clone(), app);
