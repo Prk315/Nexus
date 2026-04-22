@@ -1,7 +1,8 @@
 import { Header } from "@/components/Header";
-import { AppGridButton, useConnectedApps } from "@nexus/core";
+import { AppGridButton, useConnectedApps, useNexusRegistration } from "@nexus/core";
 
 function App() {
+  useNexusRegistration("Nexus", "0.1.0");
   const { apps, isNexusRunning, isLoading } = useConnectedApps();
 
   return (
