@@ -18,7 +18,9 @@ function App() {
           <span className={`w-2 h-2 rounded-full ${isNexusRunning ? "bg-green-500" : "bg-muted"}`} />
         </div>
 
-        <WorkflowViewer className="h-[480px] mb-6" />
+        <div className="flex items-start gap-6">
+          <WorkflowViewer className="h-[220px] w-[340px] shrink-0" />
+        </div>
 
         {isLoading ? null : !isNexusRunning ? (
           <p className="text-sm text-muted-foreground">IPC server not reachable.</p>
