@@ -1,5 +1,4 @@
-import { Header } from "@/components/Header";
-import { AppGridButton, useConnectedApps, useNexusRegistration } from "@nexus/core";
+import { NexusHeader, AppGridButton, useConnectedApps, useNexusRegistration } from "@nexus/core";
 
 function App() {
   useNexusRegistration("Nexus", "0.1.0");
@@ -7,7 +6,7 @@ function App() {
 
   return (
     <div className="min-h-screen bg-background text-foreground flex flex-col">
-      <Header />
+      <NexusHeader appName="Nexus" />
       <main className="flex-1 p-6">
         <div className="flex items-center gap-2 mb-4">
           <span className="text-sm font-medium text-muted-foreground">Connected Apps</span>
