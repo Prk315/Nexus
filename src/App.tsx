@@ -8,7 +8,7 @@ function App() {
 
   return (
     <div className="min-h-screen bg-background text-foreground flex flex-col">
-      <NexusHeader appName="Nexus" onAgent={agent.open} onClock={calendar.toggle} />
+      <NexusHeader appName="Nexus" onAgent={agent.open} onCalendar={calendar.toggle} />
       <AgentBar isOpen={agent.isOpen} onClose={agent.close} />
       <CalendarSidebar isOpen={calendar.isOpen} onClose={calendar.close} />
       <LifeBar birthDate="2003-06-05" />
