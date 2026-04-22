@@ -1,12 +1,14 @@
-import { NexusHeader, LifeBar, AppGridButton, useConnectedApps, useNexusRegistration } from "@nexus/core";
+import { NexusHeader, LifeBar, AgentBar, AppGridButton, useConnectedApps, useNexusRegistration, useAgentBar } from "@nexus/core";
 
 function App() {
   useNexusRegistration("Nexus", "0.1.0");
   const { apps, isNexusRunning, isLoading } = useConnectedApps();
+  const agent = useAgentBar();
 
   return (
     <div className="min-h-screen bg-background text-foreground flex flex-col">
-      <NexusHeader appName="Nexus" />
+      <NexusHeader appName="Nexus" onAgent={agent.open} />
+      <AgentBar isOpen={agent.isOpen} onClose={agent.close} />
       <LifeBar birthDate="2003-06-05" />
       <main className="flex-1 p-6">
         <div className="flex items-center gap-2 mb-4">
