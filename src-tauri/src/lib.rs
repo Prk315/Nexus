@@ -60,7 +60,7 @@ async fn start_ipc_server(registry: Registry) {
     let app = Router::new()
         .route("/health", get(health))
         .route("/register", post(register_app))
-        .route("/unregister/:id", delete(unregister_app))
+        .route("/unregister/{id}", delete(unregister_app))
         .route("/apps", get(get_apps))
         .layer(CorsLayer::permissive())
         .with_state(registry);
