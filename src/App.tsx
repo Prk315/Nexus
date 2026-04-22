@@ -1,7 +1,6 @@
-import { NexusHeader, LifeBar, AgentBar, CalendarSidebar, WorkflowViewer, AppGridButton, useConnectedApps, useNexusRegistration, useAgentBar, useCalendarSidebar } from "@nexus/core";
+import { NexusHeader, LifeBar, AgentBar, CalendarSidebar, WorkflowViewer, AppGridButton, useConnectedApps, useAgentBar, useCalendarSidebar } from "@nexus/core";
 
 function App() {
-  useNexusRegistration("Nexus", "0.1.0");
   const { apps, isNexusRunning, isLoading } = useConnectedApps();
   const agent = useAgentBar();
   const calendar = useCalendarSidebar();
