@@ -1,6 +1,2 @@
-import { clsx, type ClassValue } from "clsx"
-import { twMerge } from "tailwind-merge"
-
-export function cn(...inputs: ClassValue[]) {
-  return twMerge(clsx(inputs))
-}
+// Re-export from nexus-core so existing imports via @/lib/utils keep working
+export { cn, timeAgo, createIpcMessage } from "@nexus/core"

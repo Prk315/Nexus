@@ -12,6 +12,7 @@ export default defineConfig(async () => ({
   resolve: {
     alias: {
       "@": path.resolve(__dirname, "./src"),
+      "@nexus/core": path.resolve(__dirname, "./nexus-core/src/index.ts"),
     },
   },
 
@@ -28,7 +29,7 @@ export default defineConfig(async () => ({
       ? {
           protocol: "ws",
           host,
-          port: 1421,
+          port: 1420,
         }
       : undefined,
     watch: {

@@ -21,9 +21,11 @@
     "noFallthroughCasesInSwitch": true,
     "baseUrl": ".",
     "paths": {
-      "@/*": ["./src/*"]
+      "@/*": ["./src/*"],
+      "@nexus/core": ["./nexus-core/src/index.ts"],
+      "@nexus/core/*": ["./nexus-core/src/*"]
     }
   },
-  "include": ["src"],
+  "include": ["src", "nexus-core/src"],
   "references": [{ "path": "./tsconfig.node.json" }]
 }
