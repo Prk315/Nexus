@@ -1,4 +1,4 @@
-import { NexusHeader, LifeBar, AgentBar, CalendarSidebar, AppGridButton, useConnectedApps, useNexusRegistration, useAgentBar, useCalendarSidebar } from "@nexus/core";
+import { NexusHeader, LifeBar, AgentBar, CalendarSidebar, WorkflowViewer, AppGridButton, useConnectedApps, useNexusRegistration, useAgentBar, useCalendarSidebar } from "@nexus/core";
 
 function App() {
   useNexusRegistration("Nexus", "0.1.0");
@@ -17,6 +17,8 @@ function App() {
           <span className="text-sm font-medium text-muted-foreground">Connected Apps</span>
           <span className={`w-2 h-2 rounded-full ${isNexusRunning ? "bg-green-500" : "bg-muted"}`} />
         </div>
+
+        <WorkflowViewer className="h-[480px] mb-6" />
 
         {isLoading ? null : !isNexusRunning ? (
           <p className="text-sm text-muted-foreground">IPC server not reachable.</p>
