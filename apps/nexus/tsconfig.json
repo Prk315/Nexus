@@ -22,10 +22,10 @@
     "baseUrl": ".",
     "paths": {
       "@/*": ["./src/*"],
-      "@nexus/core": ["./nexus-core/src/index.ts"],
-      "@nexus/core/*": ["./nexus-core/src/*"]
+      "@nexus/core": ["../../packages/nexus-core/src/index.ts"],
+      "@nexus/core/*": ["../../packages/nexus-core/src/*"]
     }
   },
-  "include": ["src", "nexus-core/src"],
+  "include": ["src", "../../packages/nexus-core/src"],
   "references": [{ "path": "./tsconfig.node.json" }]
 }

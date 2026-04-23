@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef } from "react";
+import { useNexusRegistration, NexusHeader } from "@nexus/core";
 import "./App.css";
 import { Sidebar, type Page } from "./components/Sidebar";
 import { Dashboard } from "./pages/Dashboard";
@@ -140,6 +141,7 @@ const PAGE_TITLES: Record<Page, string> = {
 const iconBtn = "flex h-7 w-7 items-center justify-center rounded-md text-muted-foreground/50 hover:text-muted-foreground hover:bg-secondary/60 transition-colors text-xs font-semibold";
 
 function App() {
+  useNexusRegistration("PathFinder");
   const [page, setPage] = useState<Page>("dashboard");
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
 
@@ -153,31 +155,7 @@ function App() {
       />
 
       <div className="flex flex-col flex-1 min-w-0">
-        {/* Top bar */}
-        <header className="flex h-10 shrink-0 items-center border-b border-border">
-          {/* Page title */}
-          <span className="flex-1 px-6 text-sm font-medium text-foreground">{PAGE_TITLES[page]}</span>
-
-          {/* Placeholder icon buttons */}
-          <div className="flex items-center gap-1 px-3">
-            <button className={iconBtn} title="Vault">V</button>
-            <button className={iconBtn} title="Nexus">N</button>
-            <button className={iconBtn} title="Messages">
-              <Mail className="h-3.5 w-3.5" />
-            </button>
-            <button className={iconBtn} title="Calendar">
-              <Calendar className="h-3.5 w-3.5" />
-            </button>
-          </div>
-
-          {/* Search */}
-          <div className="px-3">
-            <SearchBar onNavigate={setPage} />
-          </div>
-
-          {/* Grid menu — fills header vertically */}
-          <GridMenu />
-        </header>
+        <NexusHeader appName="PathFinder" onHome={() => setPage("dashboard")} />
 
         <main className="flex-1 overflow-y-auto">
           {page === "dashboard" && <Dashboard />}

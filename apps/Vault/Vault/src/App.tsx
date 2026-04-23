@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef, useMemo } from "react";
+import { useNexusRegistration, NexusHeader } from "@nexus/core";
 import { invoke } from "@tauri-apps/api/core";
 import ForceGraph2D from "react-force-graph-2d";
 import ForceGraph3D from "react-force-graph-3d";
@@ -16,6 +17,7 @@ import { EditorPane, EditorPaneHandle } from "./components/EditorPane";
 import "./App.css";
 
 function App() {
+  useNexusRegistration("Vault");
   const { graph, graphData, savePositions, loadGraph, createNode, deleteNode, addEdge, removeEdge, addTag, removeTag, setTagColor, createTag, renameTag, deleteTagGlobal } = useGraph();
 
   const [newName, setNewName] = useState("");
@@ -531,6 +533,7 @@ function App() {
 
   return (
     <div className="app">
+      <NexusHeader appName="Vault" />
       {fullGraph && (
         <div className="fullgraph-overlay">
           {is3D ? (

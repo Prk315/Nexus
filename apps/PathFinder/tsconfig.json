@@ -18,8 +18,14 @@
     "strict": true,
     "noUnusedLocals": true,
     "noUnusedParameters": true,
-    "noFallthroughCasesInSwitch": true
+    "noFallthroughCasesInSwitch": true,
+    "baseUrl": ".",
+    "paths": {
+      "@/*": ["./src/*"],
+      "@nexus/core": ["../../packages/nexus-core/src/index.ts"],
+      "@nexus/core/*": ["../../packages/nexus-core/src/*"]
+    }
   },
-  "include": ["src"],
+  "include": ["src", "../../packages/nexus-core/src"],
   "references": [{ "path": "./tsconfig.node.json" }]
 }

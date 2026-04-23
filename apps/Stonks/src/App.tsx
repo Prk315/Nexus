@@ -1,11 +1,12 @@
 import { useEffect } from "react"
+import { useNexusRegistration, NexusHeader } from "@nexus/core"
 import { useAppSelector } from "./store/hooks"
-import Header from "./components/Layout/Header"
 import SidePanel from "./components/Layout/SidePanel"
 import Footer from "./components/Layout/Footer"
 import Spreadsheet from "./components/Spreadsheet"
 
 function App() {
+  useNexusRegistration("Stonks")
   const theme = useAppSelector((state) => state.app.theme)
 
   useEffect(() => {
@@ -14,7 +15,7 @@ function App() {
 
   return (
     <div className="flex flex-col h-screen overflow-hidden bg-background text-foreground">
-      <Header />
+      <NexusHeader appName="Stonks" />
 
       <div className="flex flex-1 overflow-hidden relative">
         <SidePanel side="left" />
