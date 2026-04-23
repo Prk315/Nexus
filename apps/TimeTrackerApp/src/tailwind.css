@@ -1,0 +1,3 @@
+/* Tailwind utilities for nexus-core shared components (NexusHeader, etc.) */
+@import "tailwindcss";
+@source "../../packages/nexus-core/src";
