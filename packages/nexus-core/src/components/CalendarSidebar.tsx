@@ -1,3 +1,4 @@
+import { createPortal } from "react-dom";
 import { X } from "lucide-react";
 import { cn } from "../utils";
 import type { CalendarEvent } from "../types";
@@ -65,17 +66,19 @@ export function CalendarSidebar({ isOpen, onClose, date = new Date(), events = [
     month: "long",
   });
 
-  return (
+  // Portal to document.body so `position:fixed` always works regardless of parent CSS
+  return createPortal(
     <>
       {/* Backdrop */}
-      {isOpen && (
-        <div
-          className="fixed inset-0 z-40 bg-black/20"
-          onClick={onClose}
-        />
-      )}
+      <div
+        className={cn(
+          "fixed inset-0 z-40 bg-black/20 transition-opacity duration-300",
+          isOpen ? "opacity-100 pointer-events-auto" : "opacity-0 pointer-events-none"
+        )}
+        onClick={onClose}
+      />
 
-      {/* Sidebar */}
+      {/* Sidebar panel */}
       <div
         className={cn(
           "fixed top-0 right-0 z-50 h-full w-72 flex flex-col",
@@ -85,7 +88,7 @@ export function CalendarSidebar({ isOpen, onClose, date = new Date(), events = [
         )}
       >
         {/* Header */}
-        <div className="flex items-center justify-between px-4 h-12 border-b border-border shrink-0">
+        <div className="flex items-center justify-between px-4 h-11 border-b border-border shrink-0">
           <span className="text-sm font-medium truncate">{dayLabel}</span>
           <button
             onClick={onClose}
@@ -98,6 +101,7 @@ export function CalendarSidebar({ isOpen, onClose, date = new Date(), events = [
         {/* Day view */}
         <DayView date={date} events={events} />
       </div>
-    </>
+    </>,
+    document.body
   );
 }

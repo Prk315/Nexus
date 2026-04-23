@@ -11,7 +11,7 @@ export default defineConfig(async () => ({
   resolve: {
     alias: {
       "@": path.resolve(__dirname, "./src"),
-      "@nexus/core": path.resolve(__dirname, "../../../../packages/nexus-core/src/index.ts"),
+      "@nexus/core": path.resolve(__dirname, "../../../packages/nexus-core/src/index.ts"),
     },
   },
   optimizeDeps: {

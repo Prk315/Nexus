@@ -94,10 +94,11 @@ function App() {
       </ErrorBoundary>
 
       <main className="flex-1 p-6 flex flex-col gap-6">
-        <div className="flex items-start gap-6">
+        {/* Top row: workflow + 3D graph + connected apps */}
+        <div className="flex items-stretch gap-4 h-[260px]">
 
           <ErrorBoundary name="WorkflowViewer">
-            <WorkflowViewer className="h-[220px] w-[680px] shrink-0" />
+            <WorkflowViewer className="flex-[3] min-w-0" />
           </ErrorBoundary>
 
           <ErrorBoundary name="AppGraph3D">
@@ -105,12 +106,12 @@ function App() {
               nodes={graphNodes}
               edges={STATIC_EDGES}
               title="App Ecosystem"
-              className="h-[220px] w-[260px] shrink-0"
+              className="w-[240px] shrink-0"
               autoRotate
             />
           </ErrorBoundary>
 
-          <div className="flex-1">
+          <div className="w-[220px] shrink-0">
             <div className="flex items-center gap-2 mb-4">
               <span className="text-sm font-medium text-muted-foreground">
                 Connected Apps

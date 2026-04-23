@@ -3,6 +3,9 @@
 @import "shadcn/tailwind.css";
 @import "@fontsource-variable/inter";
 
+/* Ensure Tailwind scans the shared nexus-core component library */
+@source "../../../packages/nexus-core/src";
+
 @custom-variant dark (&:is(.dark *));
 
 @theme inline {

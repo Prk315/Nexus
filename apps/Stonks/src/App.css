@@ -2,6 +2,9 @@
 @import "tw-animate-css";
 @import "@fontsource-variable/inter";
 
+/* Ensure Tailwind scans the shared nexus-core component library */
+@source "../../../packages/nexus-core/src";
+
 @theme inline {
   --color-background: var(--background);
   --color-foreground: var(--foreground);
