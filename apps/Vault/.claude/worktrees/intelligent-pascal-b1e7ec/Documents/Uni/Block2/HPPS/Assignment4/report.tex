@@ -1,0 +1,107 @@
+\documentclass[a4paper,11pt]{article}
+\usepackage[utf8]{inputenc}
+\usepackage[margin=2.5cm]{geometry}
+\usepackage{booktabs}
+\usepackage{amsmath}
+\usepackage{hyperref}
+
+\title{HPPS Assignment 4: Locality Optimizations}
+\author{Bastian Thomsen}
+\date{December 2025}
+
+\begin{document}
+
+\maketitle
+
+\section{Introduction}
+
+This report documents my implementation of four programs for querying the OpenStreetMap place names dataset. The programs implement ID-based lookups (\texttt{id\_query\_naive}, \texttt{id\_query\_indexed}, \texttt{id\_query\_binsort}) and coordinate-based lookups (\texttt{coord\_query\_naive}).
+
+I am confident in the overall quality of my solution. All programs compile without warnings (except for one in the provided \texttt{timing.h} which I cannot modify), produce correct results verified against each other, and have been tested with AddressSanitizer for memory safety.
+
+To run the programs, use:
+\begin{verbatim}
+make all
+./id_query_naive dataset.tsv
+./id_query_indexed dataset.tsv
+./id_query_binsort dataset.tsv
+./coord_query_naive dataset.tsv
+\end{verbatim}
+
+\section{Analysis}
+
+\subsection{Temporal and Spatial Locality}
+
+\textbf{id\_query\_naive:} This implementation iterates through the full \texttt{struct record} array. Each \texttt{struct record} is large (containing many string pointers and numeric fields), so when scanning, we access much more data than needed (we only need \texttt{osm\_id}). \emph{Spatial locality is poor} because the relevant data (\texttt{osm\_id}) is spread far apart in memory. \emph{Temporal locality is minimal} since each record is visited once per query with no reuse.
+
+\textbf{id\_query\_indexed:} This implementation creates a compact index of \texttt{struct index\_record} (16 bytes: \texttt{int64\_t} + pointer). When scanning, we access contiguous memory containing only the data we need. \emph{Spatial locality is significantly improved} because multiple \texttt{osm\_id} values fit in a single cache line (64 bytes can hold 4 index records). \emph{Temporal locality remains minimal} (single pass per query).
+
+\textbf{id\_query\_binsort:} Uses the same compact index as \texttt{id\_query\_indexed}, but with binary search. \emph{Spatial locality is mixed}: the algorithm jumps around in the array, so consecutive accesses are not spatially local. However, the compact representation means each access loads useful data. \emph{Temporal locality is better for repeated queries}: the middle elements of the array are accessed frequently across queries, staying in cache.
+
+\textbf{coord\_query\_naive:} Scans all records checking \texttt{lon} and \texttt{lat} fields. Similar to \texttt{id\_query\_naive}, \emph{spatial locality is poor} because we access a large struct for just two \texttt{double} values. \emph{Temporal locality is minimal}.
+
+\subsection{Memory Corruption and Leaks}
+
+I tested all programs using AddressSanitizer (compiled with \texttt{-fsanitize=address}) which detects memory errors including buffer overflows, use-after-free, and other corruption. No errors were reported.
+
+For memory leaks, I verified that:
+\begin{itemize}
+    \item Each \texttt{malloc} has a corresponding \texttt{free}
+    \item The index structures are freed via \texttt{free\_naive} or \texttt{free\_indexed}
+    \item The record array is freed via \texttt{free\_records} (provided code)
+    \item No memory is allocated without being freed
+\end{itemize}
+
+The code follows a simple allocation pattern: \texttt{mk\_*} allocates, \texttt{free\_*} deallocates. I do not store pointers to dynamically allocated memory elsewhere, so there are no dangling references.
+
+\subsection{Correctness Confidence}
+
+I am highly confident in the correctness of my implementations:
+
+\begin{enumerate}
+    \item All three ID query programs produce identical results when tested with 100 random valid IDs
+    \item Results match the expected format from the assignment specification
+    \item Edge cases tested: IDs that exist, IDs that do not exist (return ``not found'')
+    \item The coordinate query correctly finds the closest place using Euclidean distance
+\end{enumerate}
+
+The implementations are straightforward: linear search, linear search on compact index, and binary search on sorted index. The algorithms are well-understood and the code closely follows standard patterns.
+
+\subsection{Benchmarks}
+
+I benchmarked the programs with different dataset sizes and query counts. Table~\ref{tab:benchmarks} shows results for 1000 queries.
+
+\begin{table}[h]
+\centering
+\begin{tabular}{lrrrrr}
+\toprule
+Program & Records & Build (ms) & Query (ms) & Query/rec ($\mu$s) \\
+\midrule
+id\_query\_naive & 20,000 & 0 & 25.4 & 1.27 \\
+id\_query\_indexed & 20,000 & 0 & 13.7 & 0.69 \\
+id\_query\_binsort & 20,000 & 2 & 0.19 & 0.01 \\
+\midrule
+id\_query\_naive & 100,000 & 0 & 210.6 & 2.11 \\
+id\_query\_indexed & 100,000 & 1 & 63.8 & 0.64 \\
+id\_query\_binsort & 100,000 & 13 & 0.18 & 0.002 \\
+\bottomrule
+\end{tabular}
+\caption{Benchmark results for 1000 ID queries}
+\label{tab:benchmarks}
+\end{table}
+
+\textbf{Key observations:}
+
+\begin{itemize}
+    \item \textbf{Naive vs Indexed (linear search):} The indexed version is approximately 2x faster on 20k records and 3x faster on 100k records. This speedup comes from improved spatial locality: scanning 16-byte index records is faster than scanning large \texttt{struct record} entries.
+
+    \item \textbf{Binary search:} The \texttt{id\_query\_binsort} is dramatically faster for queries ($O(\log n)$ vs $O(n)$). With 100k records, binary search is over 1000x faster per query. The trade-off is a build time of 13ms for sorting.
+
+    \item \textbf{Amortization:} Binary search's build cost is amortized over queries. With 1000 queries, the 13ms build time adds only 13$\mu$s per query, which is negligible compared to the 210$\mu$s saved per query versus naive.
+
+    \item \textbf{Scaling:} Query time for naive/indexed grows linearly with dataset size (5x records $\rightarrow$ ~5x time). Binary search query time remains nearly constant due to logarithmic complexity.
+\end{itemize}
+
+\textbf{Workload selection:} I chose 20k and 100k records to observe scaling behavior while keeping tests fast. I used 1000 queries to get stable timing averages and to demonstrate amortization of index build costs.
+
+\end{document}

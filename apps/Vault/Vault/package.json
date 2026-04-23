@@ -1,0 +1,48 @@
+{
+  "name": "vault",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc && vite build",
+    "preview": "vite preview",
+    "tauri": "tauri"
+  },
+  "dependencies": {
+    "@tauri-apps/api": "^2",
+    "@tauri-apps/plugin-clipboard-manager": "^2.3.2",
+    "@tauri-apps/plugin-opener": "^2",
+    "@tiptap/extension-mathematics": "^3.22.3",
+    "@tiptap/extension-placeholder": "^3.22.3",
+    "@tiptap/extension-table": "^3.22.3",
+    "@tiptap/extension-table-cell": "^3.22.3",
+    "@tiptap/extension-table-header": "^3.22.3",
+    "@tiptap/extension-table-row": "^3.22.3",
+    "@tiptap/pm": "^3.22.3",
+    "@tiptap/react": "^3.22.3",
+    "@tiptap/starter-kit": "^3.22.3",
+    "@tiptap/suggestion": "^3.22.3",
+    "katex": "^0.16.45",
+    "pdfjs-dist": "^5.6.205",
+    "react": "^19.1.0",
+    "react-dom": "^19.1.0",
+    "react-force-graph-2d": "^1.25.7",
+    "react-force-graph-3d": "^1.29.1",
+    "react-markdown": "^10.1.0",
+    "rehype-katex": "^7.0.1",
+    "remark-math": "^6.0.0",
+    "smiles-drawer": "^2.2.1",
+    "three-spritetext": "^1.10.0",
+    "tippy.js": "^6.3.7"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^2",
+    "@types/react": "^19.1.8",
+    "@types/react-dom": "^19.1.6",
+    "@types/three": "^0.184.0",
+    "@vitejs/plugin-react": "^4.6.0",
+    "typescript": "~5.8.3",
+    "vite": "^7.0.4"
+  }
+}

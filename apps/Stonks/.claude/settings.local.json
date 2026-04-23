@@ -1,0 +1,35 @@
+{
+  "permissions": {
+    "allow": [
+      "WebSearch",
+      "WebFetch(domain:github.com)",
+      "WebFetch(domain:www.npmjs.com)",
+      "WebFetch(domain:www.relume.io)",
+      "Bash(npm create:*)",
+      "Bash(source ~/.zshrc)",
+      "Read(//Users/bastianthomsen/.nvm/versions/**)",
+      "Read(//usr/local/bin/**)",
+      "Read(//opt/homebrew/Cellar/node/24.6.0/bin/**)",
+      "Bash(export PATH=\"/opt/homebrew/bin:$PATH\")",
+      "Bash(npm --version)",
+      "Bash(npx create-tauri-app@latest . --template react-ts --manager npm --no-interactive)",
+      "Bash(npm install:*)",
+      "Bash(npx tsc:*)",
+      "Bash(mkdir -p /Users/bastianthomsen/Repositories/Stonks/src-tauri/icons)",
+      "Bash(npx @tauri-apps/cli icon --help)",
+      "Bash(npm run:*)",
+      "Bash(python3 -c \":*)",
+      "Bash(sips -s format icns 128x128.png --out icon.icns)",
+      "Bash(cp 32x32.png icon.ico)",
+      "Bash(python3:*)",
+      "Bash(find /Users/bastianthomsen/Repositories/Stonks/src -type f \\\\\\(-name *.ts -o -name *.tsx -o -name *.json \\\\\\))",
+      "Bash(find /Users/bastianthomsen/Repositories/Stonks/src-tauri/src -type f \\\\\\(-name *.rs \\\\\\))",
+      "Bash(cargo check:*)",
+      "Bash(/Users/bastianthomsen/.nvm/versions/node/v22.15.0/bin/npx tsc:*)",
+      "Bash(/opt/homebrew/bin/node /opt/homebrew/bin/npx tsc --noEmit)",
+      "Bash(PATH=\"/opt/homebrew/bin:$PATH\" node --version)",
+      "Bash(PATH=\"/opt/homebrew/bin:$PATH\" npx --version)",
+      "Bash(PATH=\"/opt/homebrew/bin:$PATH\" npx tsc --noEmit)"
+    ]
+  }
+}

@@ -1,0 +1,10 @@
+[workspace]
+members = [
+    "apps/nexus/src-tauri",
+    "apps/PathFinder/src-tauri",
+    "apps/Vault/src-tauri",
+    "apps/TimeTrackerApp/src-tauri",
+    "apps/Stonks/src-tauri",
+    "packages/nexus-core/crate",
+]
+resolver = "2"
