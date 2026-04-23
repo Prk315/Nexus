@@ -1,23 +1,63 @@
-import { useMemo } from "react";
+import { useMemo, Component, type ReactNode } from "react";
 import {
   NexusHeader, LifeBar, AgentBar, CalendarSidebar, WorkflowViewer,
   AppGridButton, AppGraph3D, useConnectedApps, useAgentBar, useCalendarSidebar,
   type GraphNode, type GraphEdge,
 } from "@nexus/core";
 
-// Known apps in the ecosystem — always shown in the graph.
+// ── Error Boundary ─────────────────────────────────────────────────────────────
+class ErrorBoundary extends Component<
+  { children: ReactNode; name: string },
+  { error: Error | null }
+> {
+  constructor(props: { children: ReactNode; name: string }) {
+    super(props);
+    this.state = { error: null };
+  }
+  static getDerivedStateFromError(error: Error) {
+    return { error };
+  }
+  render() {
+    if (this.state.error) {
+      return (
+        <div
+          style={{
+            padding: "12px 16px",
+            background: "#fff1f2",
+            border: "1px solid #fecdd3",
+            borderRadius: 8,
+            fontSize: 12,
+            color: "#be123c",
+            fontFamily: "monospace",
+          }}
+        >
+          <strong>[{this.props.name}] Error:</strong> {this.state.error.message}
+        </div>
+      );
+    }
+    return this.props.children;
+  }
+}
+
+// ── Static ecosystem data ─────────────────────────────────────────────────────
+
 const STATIC_NODES: GraphNode[] = [
   { id: "nexus",      label: "Nexus",      color: "#60a5fa" },
   { id: "vault",      label: "Vault",      color: "#a78bfa" },
   { id: "pathfinder", label: "PathFinder", color: "#34d399" },
+  { id: "timetracker", label: "TimeTracker", color: "#fb923c" },
+  { id: "stonks",     label: "Stonks",     color: "#22d3ee" },
 ];
 
-// Known data flows between apps.
 const STATIC_EDGES: GraphEdge[] = [
-  { source: "nexus",      target: "vault",      color: "#3a4a5a" },
-  { source: "nexus",      target: "pathfinder", color: "#3a4a5a" },
-  { source: "vault",      target: "nexus",      color: "#3a4a5a" },
+  { source: "nexus", target: "vault",       color: "#3a4a5a" },
+  { source: "nexus", target: "pathfinder",  color: "#3a4a5a" },
+  { source: "nexus", target: "timetracker", color: "#3a4a5a" },
+  { source: "nexus", target: "stonks",      color: "#3a4a5a" },
+  { source: "vault", target: "nexus",       color: "#3a4a5a" },
 ];
+
+// ── App ───────────────────────────────────────────────────────────────────────
 
 function App() {
   const { apps, isNexusRunning, isLoading } = useConnectedApps();
@@ -30,7 +70,6 @@ function App() {
     return [
       ...STATIC_NODES.map((n) => ({
         ...n,
-        // Nexus itself is always active; others only when connected
         active: n.id === "nexus" ? isNexusRunning : connectedIds.has(n.id),
       })),
       ...apps
@@ -41,43 +80,73 @@ function App() {
 
   return (
     <div className="min-h-screen bg-background text-foreground flex flex-col">
-      <NexusHeader appName="Nexus" onAgent={agent.open} onCalendar={calendar.toggle} />
+      <NexusHeader
+        appName="Nexus"
+        onAgent={agent.open}
+        onCalendar={calendar.toggle}
+      />
+
       <AgentBar isOpen={agent.isOpen} onClose={agent.close} />
       <CalendarSidebar isOpen={calendar.isOpen} onClose={calendar.close} />
-      <LifeBar birthDate="2003-06-05" />
-      <main className="flex-1 p-6 flex flex-col gap-6">
 
+      <ErrorBoundary name="LifeBar">
+        <LifeBar birthDate="2003-06-05" />
+      </ErrorBoundary>
+
+      <main className="flex-1 p-6 flex flex-col gap-6">
         <div className="flex items-start gap-6">
-          <WorkflowViewer className="h-[220px] w-[680px] shrink-0" />
-          <AppGraph3D
-            nodes={graphNodes}
-            edges={STATIC_EDGES}
-            title="App Ecosystem"
-            className="h-[220px] w-[260px] shrink-0"
-            autoRotate
-          />
+
+          <ErrorBoundary name="WorkflowViewer">
+            <WorkflowViewer className="h-[220px] w-[680px] shrink-0" />
+          </ErrorBoundary>
+
+          <ErrorBoundary name="AppGraph3D">
+            <AppGraph3D
+              nodes={graphNodes}
+              edges={STATIC_EDGES}
+              title="App Ecosystem"
+              className="h-[220px] w-[260px] shrink-0"
+              autoRotate
+            />
+          </ErrorBoundary>
+
           <div className="flex-1">
             <div className="flex items-center gap-2 mb-4">
-              <span className="text-sm font-medium text-muted-foreground">Connected Apps</span>
-              <span className={`w-2 h-2 rounded-full ${isNexusRunning ? "bg-green-500" : "bg-muted"}`} />
+              <span className="text-sm font-medium text-muted-foreground">
+                Connected Apps
+              </span>
+              <span
+                className={`w-2 h-2 rounded-full ${
+                  isNexusRunning ? "bg-green-500" : "bg-muted"
+                }`}
+              />
             </div>
 
             {isLoading ? null : !isNexusRunning ? (
-              <p className="text-sm text-muted-foreground">IPC server not reachable.</p>
+              <p className="text-sm text-muted-foreground">
+                IPC server not reachable.
+              </p>
             ) : apps.length === 0 ? (
               <p className="text-sm text-muted-foreground">
-                No apps connected. Other apps call <code className="text-xs bg-muted px-1 py-0.5 rounded">nexus.register()</code> on startup to appear here.
+                No apps connected. Other apps call{" "}
+                <code className="text-xs bg-muted px-1 py-0.5 rounded">
+                  nexus.register()
+                </code>{" "}
+                on startup to appear here.
               </p>
             ) : (
               <div className="grid grid-cols-4 gap-3">
                 {apps.map((app) => (
-                  <AppGridButton key={app.id} name={app.name} onLaunch={() => {}} />
+                  <AppGridButton
+                    key={app.id}
+                    name={app.name}
+                    onLaunch={() => {}}
+                  />
                 ))}
               </div>
             )}
           </div>
         </div>
-
       </main>
     </div>
   );
