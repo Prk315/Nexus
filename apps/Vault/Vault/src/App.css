@@ -5051,7 +5051,6 @@ body {
   transition: background var(--duration) var(--ease), color var(--duration) var(--ease);
 }
 .tags-delete-btn:hover { background: var(--destructive-bg); color: var(--destructive); }
-; color: var(--destructive); }
 
 /* ── Journal Editor ───────────────────────────────────────────────────────── */
 .journal-container {

@@ -1,0 +1,4 @@
+/* Tailwind utilities for nexus-core shared components (NexusHeader, etc.)
+   Kept separate from App.css to avoid CSS parser conflicts. */
+@import "tailwindcss";
+@source "../../../../packages/nexus-core/src";

@@ -532,8 +532,9 @@ function App() {
   updateClusterMeshesRef.current = updateClusterMeshes;
 
   return (
-    <div className="app">
+    <div style={{ display: "flex", flexDirection: "column", height: "100vh" }}>
       <NexusHeader appName="Vault" />
+    <div className="app" style={{ flex: 1, minHeight: 0, height: "auto" }}>
       {fullGraph && (
         <div className="fullgraph-overlay">
           {is3D ? (
@@ -800,6 +801,7 @@ function App() {
           </React.Fragment>
         ))}
       </main>
+    </div>
     </div>
   );
 }

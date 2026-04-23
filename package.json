@@ -4,12 +4,13 @@
   "private": true,
   "workspaces": [
     "apps/*",
+    "apps/Vault/Vault",
     "packages/*"
   ],
   "scripts": {
     "dev:nexus": "npm run dev --workspace=apps/nexus",
     "dev:pathfinder": "npm run dev --workspace=apps/PathFinder",
-    "dev:vault": "npm run dev --workspace=apps/Vault",
+    "dev:vault": "npm run dev --workspace=apps/Vault/Vault",
     "dev:timetracker": "npm run dev --workspace=apps/TimeTrackerApp",
     "dev:stonks": "npm run dev --workspace=apps/Stonks",
     "build:all": "npm run build --workspaces --if-present",
