@@ -14,7 +14,7 @@ pub enum PollResult {
     NoChange,
     /// Remote session was silently adopted (local was idle, same device or
     /// matching session — frontend should call get_status to refresh).
-    Adopted,
+    Adopted(RemoteSession),
     /// A different device has an active session while we are also active.
     /// Frontend shows the conflict banner.
     Conflict(RemoteSession),
