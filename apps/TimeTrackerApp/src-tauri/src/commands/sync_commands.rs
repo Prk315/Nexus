@@ -1,7 +1,7 @@
 use crate::config::ConfigState;
-use crate::db::AppState;
+use crate::db::{timer, AppState};
 use crate::models::SyncResult;
-use crate::sync::{blocking, supabase};
+use crate::sync::{active_session, blocking, supabase};
 use serde::{Deserialize, Serialize};
 use tauri::State;
 
@@ -42,6 +42,51 @@ pub async fn test_supabase_connection(
     config: State<'_, ConfigState>,
 ) -> Result<bool, String> {
     supabase::test_connection(&config.get()).await
+}
+
+// ── Active session poll ───────────────────────────────────────────────────────
+
+/// Called by the frontend every ~10 s to reconcile the active timer across
+/// devices. Returns a PollResult that tells the frontend what (if anything)
+/// changed.
+#[tauri::command]
+pub async fn poll_active_session(
+    state: State<'_, AppState>,
+    config: State<'_, ConfigState>,
+) -> Result<active_session::PollResult, String> {
+    let cfg = config.get();
+
+    // Read local timer state
+    let local_status = {
+        let db = state.db.lock().map_err(|e| e.to_string())?;
+        crate::db::timer::get_status(&db).map_err(|e| e.to_string())?
+    };
+
+    let (status_str, local_start): (&str, Option<String>) = match (&local_status.active, &local_status.paused) {
+        (Some(a), _) => ("running", Some(a.start_time.clone())),
+        (_, Some(p)) => ("paused",  Some(p.start_time.clone())),
+        _            => ("idle",    None),
+    };
+
+    let result = active_session::poll(&cfg, status_str, local_start.as_deref()).await?;
+
+    // If poll says Adopted, insert the remote session into local DB now
+    if let active_session::PollResult::Adopted(ref remote) = result {
+        let db = state.db.lock().map_err(|e| e.to_string())?;
+        timer::adopt_remote_session(
+            &db,
+            &remote.task_name,
+            remote.project.as_deref(),
+            remote.tags.as_deref(),
+            remote.notes.as_deref(),
+            remote.billable,
+            remote.hourly_rate,
+            &remote.start_time,
+            Some(&remote.user_id),
+        )?;
+    }
+
+    Ok(result)
 }
 
 // ── Blocking sync ─────────────────────────────────────────────────────────────

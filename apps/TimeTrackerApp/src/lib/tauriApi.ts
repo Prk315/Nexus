@@ -153,6 +153,30 @@ export const deactivateGoal = (goalId: number) =>
 
 // ── Sync ─────────────────────────────────────────────────────────────────────
 
+// ── Active session poll ───────────────────────────────────────────────────────
+
+export type PollResult =
+  | { type: "NoChange" }
+  | { type: "Adopted" }
+  | { type: "Conflict"; data: RemoteSession }
+  | { type: "RemoteGone" };
+
+export interface RemoteSession {
+  device_id: string;
+  task_name: string;
+  project: string | null;
+  tags: string | null;
+  notes: string | null;
+  billable: boolean;
+  hourly_rate: number;
+  start_time: string;
+  paused_at: string | null;
+  elapsed_seconds: number;
+  user_id: string;
+}
+
+export const pollActiveSession = () => invoke<PollResult>("poll_active_session");
+
 export const syncPush = () => invoke<SyncResult>("sync_push");
 export const syncPull = (includeOwnDevice = false) =>
   invoke<SyncResult>("sync_pull", { includeOwnDevice });

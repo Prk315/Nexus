@@ -139,6 +139,7 @@ pub fn run() {
             commands::sync_pull,
             commands::sync_bidirectional,
             commands::test_supabase_connection,
+            commands::poll_active_session,
             // Sync — blocking system
             commands::sync_blocking_push,
             commands::sync_blocking_pull,

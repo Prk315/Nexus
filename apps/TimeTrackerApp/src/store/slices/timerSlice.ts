@@ -5,6 +5,20 @@ import type { ActiveSession, PausedSession, TimeEntry, TimerStatus } from "../ty
 export type TimerStatus2 = "idle" | "running" | "paused";
 export type PomodoroPhase = "work" | "break" | "long_break";
 
+export interface RemoteSession {
+  device_id: string;
+  task_name: string;
+  project: string | null;
+  tags: string | null;
+  notes: string | null;
+  billable: boolean;
+  hourly_rate: number;
+  start_time: string;
+  paused_at: string | null;
+  elapsed_seconds: number;
+  user_id: string;
+}
+
 interface TimerState {
   status: TimerStatus2;
   active: ActiveSession | null;
@@ -16,6 +30,7 @@ interface TimerState {
   pomodoroPhase: PomodoroPhase;
   pomodoroSecondsRemaining: number;
   pomodoroCompletedSessions: number;
+  remoteConflict: RemoteSession | null;
 }
 
 const initialState: TimerState = {
@@ -29,6 +44,7 @@ const initialState: TimerState = {
   pomodoroPhase: "work",
   pomodoroSecondsRemaining: 25 * 60,
   pomodoroCompletedSessions: 0,
+  remoteConflict: null,
 };
 
 // ── Thunks ────────────────────────────────────────────────────────────────────
@@ -119,6 +135,12 @@ const timerSlice = createSlice({
     incrementPomodoroSessions(state) {
       state.pomodoroCompletedSessions += 1;
     },
+    setRemoteConflict(state, action: PayloadAction<RemoteSession>) {
+      state.remoteConflict = action.payload;
+    },
+    clearRemoteConflict(state) {
+      state.remoteConflict = null;
+    },
   },
   extraReducers: (builder) => {
     const pending = (state: TimerState) => {
@@ -136,7 +158,10 @@ const timerSlice = createSlice({
       .addCase(fetchStatus.rejected, rejected)
 
       .addCase(startTimer.pending, pending)
-      .addCase(startTimer.fulfilled, (state, action) => applyStatus(state, action.payload))
+      .addCase(startTimer.fulfilled, (state, action) => {
+        applyStatus(state, action.payload);
+        state.remoteConflict = null; // clear any conflict when we start fresh
+      })
       .addCase(startTimer.rejected, rejected)
 
       .addCase(stopTimer.pending, pending)
@@ -146,6 +171,7 @@ const timerSlice = createSlice({
         state.paused = null;
         state.elapsedSeconds = 0;
         state.loading = false;
+        state.remoteConflict = null;
       })
       .addCase(stopTimer.rejected, rejected)
 
@@ -158,7 +184,10 @@ const timerSlice = createSlice({
       .addCase(resumeTimer.rejected, rejected)
 
       .addCase(cancelPaused.pending, pending)
-      .addCase(cancelPaused.fulfilled, (state, action) => applyStatus(state, action.payload))
+      .addCase(cancelPaused.fulfilled, (state, action) => {
+        applyStatus(state, action.payload);
+        state.remoteConflict = null;
+      })
       .addCase(cancelPaused.rejected, rejected)
 
       .addCase(resumeFromEntry.pending, pending)
@@ -173,5 +202,7 @@ export const {
   setPomodoroPhase,
   setPomodoroSecondsRemaining,
   incrementPomodoroSessions,
+  setRemoteConflict,
+  clearRemoteConflict,
 } = timerSlice.actions;
 export default timerSlice.reducer;

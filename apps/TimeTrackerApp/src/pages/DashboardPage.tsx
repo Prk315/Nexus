@@ -3,6 +3,8 @@ import { useAppDispatch, useAppSelector } from "../hooks/useAppDispatch";
 import { useTimer } from "../hooks/useTimer";
 import {
   cancelPaused,
+  clearRemoteConflict,
+  fetchStatus,
   pauseTimer,
   resumeFromEntry,
   resumeTimer,
@@ -34,7 +36,7 @@ function latestEntryByProject(entries: TimeEntry[]): Map<string, TimeEntry> {
 
 function TimerStartPanel() {
   const dispatch = useAppDispatch();
-  const { status, elapsedSeconds, active, paused, pomodoroEnabled, pomodoroPhase, pomodoroSecondsRemaining, loading, error } =
+  const { status, elapsedSeconds, active, paused, pomodoroEnabled, pomodoroPhase, pomodoroSecondsRemaining, loading, error, remoteConflict } =
     useAppSelector((s) => s.timer);
   const settings = useAppSelector((s) => s.settings);
 
@@ -74,6 +76,7 @@ function TimerStartPanel() {
   if (isActive) {
     return (
       <div style={{ display: "flex", flexDirection: "column", gap: 16, padding: "20px 20px" }}>
+        {conflictBanner}
         {/* Big elapsed time */}
         <div style={{ textAlign: "center" }}>
           <div style={{ position: "relative", display: "inline-flex", alignItems: "center", justifyContent: "center" }}>
@@ -161,8 +164,49 @@ function TimerStartPanel() {
     );
   }
 
+  // ── elapsed minutes from a remote session's start_time ──────────────────────
+  const remoteElapsedMin = remoteConflict
+    ? Math.floor((Date.now() - new Date(remoteConflict.start_time).getTime()) / 60000)
+    : 0;
+
+  const conflictBanner = remoteConflict ? (
+    <div style={{
+      padding: "10px 14px",
+      background: "rgba(255, 159, 10, 0.12)",
+      border: "1px solid rgba(255, 159, 10, 0.4)",
+      borderRadius: "var(--radius-sm)",
+      display: "flex",
+      flexDirection: "column",
+      gap: 8,
+    }}>
+      <div style={{ fontSize: 12, color: "var(--text)", lineHeight: 1.4 }}>
+        <span style={{ marginRight: 6 }}>📱</span>
+        <strong>{remoteConflict.device_id.slice(0, 8)}</strong> is tracking{" "}
+        <strong>"{remoteConflict.task_name}"</strong> ({remoteElapsedMin}m)
+      </div>
+      <div style={{ display: "flex", gap: 8 }}>
+        <button
+          onClick={() => {
+            dispatch(stopTimer());
+            setTimeout(() => dispatch(fetchStatus()), 500);
+          }}
+          style={{ ...btnPrimary, fontSize: 12, padding: "5px 14px" }}
+        >
+          Adopt
+        </button>
+        <button
+          onClick={() => dispatch(clearRemoteConflict())}
+          style={{ ...btnGhost, fontSize: 12, padding: "5px 14px" }}
+        >
+          Dismiss
+        </button>
+      </div>
+    </div>
+  ) : null;
+
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 12, padding: "20px 20px" }}>
+      {conflictBanner}
       <div style={{ fontSize: 11, color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: 4 }}>
         Start tracking
       </div>

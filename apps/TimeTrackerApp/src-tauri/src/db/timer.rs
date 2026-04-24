@@ -274,6 +274,44 @@ pub fn cancel_paused(conn: &Connection) -> Result<bool, String> {
     Ok(rows > 0)
 }
 
+/// Adopt a remote active session into the local DB.
+/// Used by the poll command when the local device is idle but another
+/// device has a running session.
+pub fn adopt_remote_session(
+    conn: &Connection,
+    task_name: &str,
+    project: Option<&str>,
+    tags: Option<&str>,
+    notes: Option<&str>,
+    billable: bool,
+    hourly_rate: f64,
+    start_time: &str,
+    user_id: Option<&str>,
+) -> Result<(), String> {
+    // Clear any stale local session first
+    let _ = conn.execute("DELETE FROM active_session WHERE id = 1", []);
+    let _ = conn.execute("DELETE FROM paused_sessions WHERE id = 1", []);
+
+    conn.execute(
+        "INSERT INTO active_session
+            (id, task_name, project, start_time, tags, notes, billable, hourly_rate, user_id)
+         VALUES (1, ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+        params![
+            task_name,
+            project,
+            start_time,
+            tags,
+            notes,
+            billable as i64,
+            hourly_rate,
+            user_id,
+        ],
+    )
+    .map_err(|e| e.to_string())?;
+
+    Ok(())
+}
+
 // ── helpers ──────────────────────────────────────────────────────────────────
 
 fn elapsed_since(start_time: &str) -> i64 {

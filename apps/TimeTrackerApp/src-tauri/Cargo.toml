@@ -29,6 +29,7 @@ uuid = { version = "1", features = ["v4"] }
 chrono = { version = "0.4", features = ["serde"] }
 thiserror = "1"
 dirs = "5"
+urlencoding = "2"
 
 # tray-icon is not supported on iOS — only enable it for non-iOS targets
 [target.'cfg(not(target_os = "ios"))'.dependencies]

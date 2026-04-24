@@ -1,6 +1,7 @@
 import { useEffect, useRef } from "react";
 import { useDispatch, useSelector } from "react-redux";
 import { sendNotification } from "@tauri-apps/plugin-notification";
+import { pollActiveSession } from "../lib/tauriApi";
 import type { AppDispatch, RootState } from "../store";
 import {
   fetchStatus,
@@ -8,7 +9,10 @@ import {
   setPomodoroPhase,
   setPomodoroSecondsRemaining,
   incrementPomodoroSessions,
+  setRemoteConflict,
 } from "../store/slices/timerSlice";
+
+const POLL_INTERVAL_MS = 10_000;
 
 export function useTimer() {
   const dispatch = useDispatch<AppDispatch>();
@@ -18,8 +22,12 @@ export function useTimer() {
   const pomodoroSecondsRemaining = useSelector((s: RootState) => s.timer.pomodoroSecondsRemaining);
   const completedSessions = useSelector((s: RootState) => s.timer.pomodoroCompletedSessions);
   const pomodoro = useSelector((s: RootState) => s.settings.pomodoro);
+  const supabaseConfigured = useSelector(
+    (s: RootState) => !!(s.settings.config?.supabase?.url && s.settings.config?.supabase?.key)
+  );
+
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
-  // Track last value to detect the zero crossing (not re-fire every render)
+  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const prevRemainingRef = useRef<number>(pomodoroSecondsRemaining);
 
   // Sync truth from Rust on mount and window focus
@@ -42,13 +50,38 @@ export function useTimer() {
     };
   }, [status, dispatch]);
 
+  // Poll Supabase for remote active session every 10s
+  useEffect(() => {
+    if (!supabaseConfigured) return;
+
+    const runPoll = async () => {
+      try {
+        const result = await pollActiveSession();
+        if (result.type === "Adopted") {
+          dispatch(fetchStatus());
+        } else if (result.type === "Conflict") {
+          dispatch(setRemoteConflict(result.data));
+        } else if (result.type === "RemoteGone") {
+          dispatch(fetchStatus());
+        }
+      } catch {
+        // Non-fatal — network may be offline
+      }
+    };
+
+    runPoll();
+    pollRef.current = setInterval(runPoll, POLL_INTERVAL_MS);
+    return () => {
+      if (pollRef.current) clearInterval(pollRef.current);
+    };
+  }, [supabaseConfigured, dispatch]);
+
   // Pomodoro phase transition when countdown hits zero
   useEffect(() => {
     const prev = prevRemainingRef.current;
     prevRemainingRef.current = pomodoroSecondsRemaining;
 
     if (!pomodoroEnabled || status !== "running") return;
-    // Only trigger when we cross from >0 to 0
     if (pomodoroSecondsRemaining !== 0 || prev === 0) return;
 
     if (pomodoroPhase === "work") {
