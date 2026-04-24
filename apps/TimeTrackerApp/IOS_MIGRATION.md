@@ -1,6 +1,10 @@
 # TimeTracker iOS Migration Plan
 
-## Status: Running on iPhone 17 simulator (iOS 26.4 beta) ✓
+## Status: Running on physical iPhone (iOS 26.2) with Supabase sync ✓
+
+The app now builds, installs, launches, and syncs to Supabase on a real device
+signed under the free Apple Developer tier. See Phase 8 for the deployment
+walkthrough and the two non-obvious crashes we had to fix along the way.
 
 ---
 
@@ -44,6 +48,55 @@
 - **Build note**: Sandbox/mount writes do not update macOS APFS mtimes reliably. If Cargo is not
   recompiling after a migration edit, paste the new file content from your own terminal using a
   `cat > file << 'EOF'` heredoc, then `touch` the file to guarantee a rebuild.
+
+### Phase 8 — Physical device deployment (free tier) ✓
+
+Getting from "runs in simulator" to "runs on my iPhone" exposed three separate
+issues that the Tauri CLI's `error 65` hides. Resolved 2026-04-24.
+
+**Bundle identifier must be globally unique.** `com.timetracker.app` was already
+registered by someone else on Apple's free tier, so Xcode's auto-signing refused
+to create a provisioning profile. Changed to `com.bastianthomsen.timetracker`
+in both `src-tauri/tauri.conf.json` and `src-tauri/gen/apple/project.yml`.
+
+**Development team must match a signed-in Xcode account.** `tauri.conf.json`'s
+`iOS.developmentTeam` has to match a team ID visible in Xcode → Settings →
+Accounts. Using the personal free team `G9D6JYJSLT` (Bastian Thomsen Personal
+Team). If you see "No Account for Team '...'" in the build log, the team ID
+in `tauri.conf.json` doesn't match any signed-in account.
+
+**`ENABLE_USER_SCRIPT_SANDBOXING` must be `NO` for both Debug and Release.**
+Xcode 15+ enables script sandboxing by default, which blocks the Tauri
+pre-build script (`node tauri ios xcode-script`) from reading the `tauri`
+helper folder. Symptom in the build log:
+`Sandbox: node(...) deny(1) file-read-data .../gen/apple/tauri`.
+Fix pinned in `src-tauri/gen/apple/project.yml` under the target's base
+settings so it survives `tauri ios init` regeneration:
+```yaml
+settings:
+  base:
+    ENABLE_USER_SCRIPT_SANDBOXING: NO
+```
+
+**iOS sandbox forbids writes to the app container root.** The crash that
+looked like "app installs fine, opens, closes immediately" was
+`settings.rs::timetracker_dir()` calling `home_dir()` which on iOS returns
+the sandbox root (`/var/mobile/Containers/Data/Application/<uuid>/`) — and
+that directory is **read-only** on iOS. Writes must go under `Documents/`,
+`Library/`, or `tmp/`. Fix in `src-tauri/src/config/settings.rs` added a
+`writable_root()` helper that anchors into `$HOME/Documents/` on iOS and
+leaves desktop paths unchanged. Symptom in Console.app when violated:
+`Sandbox: TimeTracker(pid) deny(1) file-write-create .../.timetracker`.
+
+**Build + deploy loop that works:**
+```bash
+cd ~/Repositories/Nexus/apps/TimeTrackerApp
+npx tauri ios dev
+```
+- Keychain will prompt twice for the codesign private key — hit **Always Allow**.
+- First launch on the phone shows "Ikke-godkendt udvikler" / "Untrusted Developer"
+  → Settings → General → VPN & Device Management → trust the developer profile.
+- Re-run the same command every ~7 days when the free cert expires.
 
 ### Phase 7 — Tauri 2 IPC camelCase fix ✓
 - **Bug**: Timer Start button (and all other Tauri commands with multi-word parameters) did nothing on
@@ -112,10 +165,18 @@ First compile takes 10–20 min (Rust cross-compiling for iOS). Subsequent build
 The simulator window opens automatically — do **not** launch it manually from Xcode first.
 
 ### 6. Build for physical iPhone
-Plug in iPhone via USB → trust the Mac when prompted → then:
+Plug in iPhone via USB → trust the Mac when prompted → verify with:
 ```bash
-tauri ios dev --device
+xcrun xctrace list devices   # your phone should appear under == Devices ==
 ```
+Then run:
+```bash
+cd ~/Repositories/Nexus/apps/TimeTrackerApp
+npx tauri ios dev
+```
+Pick your phone at the device prompt. See **Phase 8** above for the three
+gotchas that may block the first build (bundle ID collision, team ID
+mismatch, script sandboxing) — all four are already fixed in this repo.
 
 ---
 

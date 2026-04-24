@@ -12,6 +12,7 @@
     "dev:pathfinder": "npm run dev --workspace=apps/PathFinder",
     "dev:vault": "npm run dev --workspace=apps/Vault/Vault",
     "dev:timetracker": "npm run dev --workspace=apps/TimeTrackerApp",
+    "dev:timetracker:ios": "cd apps/TimeTrackerApp && npx tauri ios dev",
     "dev:stonks": "npm run dev --workspace=apps/Stonks",
     "build:all": "npm run build --workspaces --if-present",
     "lint:all": "npm run lint --workspaces --if-present"

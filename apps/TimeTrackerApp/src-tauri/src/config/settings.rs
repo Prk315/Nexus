@@ -64,16 +64,26 @@ impl ConfigState {
     }
 }
 
+/// Root of the app's writable storage area.
+///
+/// On desktop this is `$HOME`. On iOS the container root is read-only —
+/// the only paths an app may write to are subdirectories like `Documents/`,
+/// `Library/`, or `tmp/` — so we anchor into `Documents/`.
+fn writable_root() -> PathBuf {
+    let home = home_dir().unwrap_or_else(|| PathBuf::from("."));
+    if cfg!(target_os = "ios") {
+        home.join("Documents")
+    } else {
+        home
+    }
+}
+
 fn config_path() -> PathBuf {
-    home_dir()
-        .unwrap_or_else(|| PathBuf::from("."))
-        .join(".timetrackerrc")
+    writable_root().join(".timetrackerrc")
 }
 
 pub fn timetracker_dir() -> PathBuf {
-    let dir = home_dir()
-        .unwrap_or_else(|| PathBuf::from("."))
-        .join(".timetracker");
+    let dir = writable_root().join(".timetracker");
     let _ = fs::create_dir_all(&dir);
     dir
 }

@@ -132,6 +132,55 @@ All apps **must use React 19**. If an app ships its own `node_modules/react` at 
 - SQLite databases are managed via `tauri-plugin-sql` with inline migrations in each app's `lib.rs`. Nexus uses `nexus.db`; other apps use their own DB files.
 - The `launch_app` Tauri command in Nexus handles `.app` bundles, `.sh` scripts, and raw binary paths.
 
+## iOS Deployment Notes
+
+TimeTrackerApp is the first app in the ecosystem to ship to a physical iPhone
+(iOS 26.2, free Apple Developer tier). The plumbing is fiddly enough that the
+lessons learned are worth preserving before porting Vault / PathFinder / Stonks
+next. See `apps/TimeTrackerApp/IOS_MIGRATION.md` for the full walkthrough —
+these are the rules that apply to any app in the workspace:
+
+**Bundle IDs must be globally unique on the free tier.** Generic IDs like
+`com.<appname>.app` are often already claimed by someone else's free account.
+Use a personal namespace like `com.bastianthomsen.<appname>`. Set it in both
+`tauri.conf.json` (`identifier`) and `gen/apple/project.yml` (`bundleIdPrefix`
+and `PRODUCT_BUNDLE_IDENTIFIER`).
+
+**`tauri.conf.json`'s `iOS.developmentTeam` must match a signed-in Xcode
+account.** The personal team is `G9D6JYJSLT`. If you see "No Account for Team
+'...'" in the build log, the team ID doesn't match any account visible in
+Xcode → Settings → Accounts.
+
+**`ENABLE_USER_SCRIPT_SANDBOXING` must be `NO` in the iOS target's Build
+Settings** (both Debug and Release). Xcode 15+ enables it by default; it
+blocks Tauri's `node tauri ios xcode-script` pre-build phase from reading the
+`tauri` helper folder. Pin it in `gen/apple/project.yml` under the target's
+`settings.base` block so it survives `tauri ios init` regeneration.
+
+**Writes to the iOS app container root are denied by sandbox.** `home_dir()`
+on iOS returns the container root (`/var/mobile/Containers/Data/Application/
+<uuid>/`) which is **read-only**. Apps may only write under `Documents/`,
+`Library/`, or `tmp/`. Any code that currently does
+`home_dir().join(".something")` will crash at startup on iOS with
+`Sandbox: <App>(pid) deny(1) file-write-create ...`. TimeTrackerApp solves
+this with a `writable_root()` helper in `src-tauri/src/config/settings.rs`
+that routes through `$HOME/Documents/` on iOS and leaves desktop paths
+unchanged — copy the same pattern to any other app touching the filesystem
+directly.
+
+**Tauri 2 IPC keys must be camelCase.** `invoke("my_cmd", { task_name: ... })`
+silently works on macOS but hard-fails on iOS with
+`invalid args 'taskName' for command 'my_cmd'`. JS side = camelCase; Rust
+side stays snake_case, Tauri bridges the two.
+
+**SQLite on iOS 26.x betas hates `UNIQUE` and `CHECK` constraints** inside
+`CREATE TABLE IF NOT EXISTS`. Drop them from the DDL and enforce at the app
+layer, and wrap migrations in a loop that swallows errors per statement.
+
+**Free-tier certificates expire in ~7 days.** Re-running `npx tauri ios dev`
+(with the phone plugged in) refreshes the install. There's no App Store or
+TestFlight path on the free tier.
+
 ## Adding a New App to the Ecosystem
 
 1. Scaffold with `npm create tauri-app` inside `apps/<AppName>/`.
