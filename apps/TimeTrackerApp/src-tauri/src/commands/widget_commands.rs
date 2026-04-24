@@ -51,29 +51,39 @@ pub fn configure_widget<R: Runtime>(window: &WebviewWindow<R>) {
 /// Invoked from the frontend to show or hide all widget windows.
 /// All NSWindow work runs on the main thread via run_on_main_thread so the
 /// raw pointer access in apply_macos_workspace_behavior is thread-safe.
+///
+/// This command is desktop-only — hide/show/is_visible are not available on
+/// mobile platforms (iOS/Android).
 #[tauri::command]
 pub fn toggle_widgets(app: AppHandle) {
-    let handle = app.clone();
-    let _ = app.run_on_main_thread(move || {
-        let widgets: Vec<_> = handle
-            .webview_windows()
-            .into_iter()
-            .filter(|(label, _)| label.starts_with("widget"))
-            .map(|(_, win)| win)
-            .collect();
+    #[cfg(desktop)]
+    {
+        let handle = app.clone();
+        let _ = app.run_on_main_thread(move || {
+            let widgets: Vec<_> = handle
+                .webview_windows()
+                .into_iter()
+                .filter(|(label, _)| label.starts_with("widget"))
+                .map(|(_, win)| win)
+                .collect();
 
-        let Some(first) = widgets.first() else { return };
-        let visible = first.is_visible().unwrap_or(false);
+            let Some(first) = widgets.first() else { return };
+            let visible = first.is_visible().unwrap_or(false);
 
-        for win in &widgets {
-            if visible {
-                let _ = win.hide();
-            } else {
-                let _ = win.show();
-                // Re-apply every time we show so the flags survive
-                // any hide → show cycle.
-                apply_macos_workspace_behavior(win);
+            for win in &widgets {
+                if visible {
+                    let _ = win.hide();
+                } else {
+                    let _ = win.show();
+                    // Re-apply every time we show so the flags survive
+                    // any hide → show cycle.
+                    apply_macos_workspace_behavior(win);
+                }
             }
-        }
-    });
+        });
+    }
+    #[cfg(mobile)]
+    {
+        let _ = app; // no-op on mobile
+    }
 }

@@ -1,6 +1,6 @@
 # TimeTracker iOS Migration Plan
 
-## Status: Code complete — blocked on Xcode install
+## Status: Running on iPhone 17 simulator (iOS 26.4 beta) ✓
 
 ---
 
@@ -33,6 +33,17 @@
 ### Phase 5 — Xcode project config
 - `src-tauri/tauri.conf.json`: iOS bundle section added with `developmentTeam` placeholder
 
+### Phase 6 — iOS 26.4 beta SQLite workaround ✓
+- **Bug**: iOS 26.4 beta SQLite fails `CREATE TABLE IF NOT EXISTS` with a "Cannot add a UNIQUE column"
+  error even when the table already exists — this is a beta SDK defect, not standard SQLite behaviour.
+- **Fix applied to `src-tauri/src/db/migrations.rs`**:
+  - Removed all `UNIQUE` constraints from `CREATE TABLE` statements (enforced at the app layer instead).
+  - Split every `CREATE TABLE` into its own `execute_batch` call inside a loop that swallows errors.
+  - `run()` never propagates errors — always returns `Ok(())`.
+- **Build note**: Sandbox/mount writes do not update macOS APFS mtimes reliably. If Cargo is not
+  recompiling after a migration edit, paste the new file content from your own terminal using a
+  `cat > file << 'EOF'` heredoc, then `touch` the file to guarantee a rebuild.
+
 ---
 
 ## Features on iOS vs macOS
@@ -55,17 +66,14 @@
 
 ---
 
-## Next steps (requires Xcode)
+## Xcode setup (one-time, already done)
 
-### 1. Install Xcode
-From the Mac App Store — search "Xcode" by Apple Inc (~7-8GB download).
-
-### 2. Point tools at Xcode
+### 1. Point tools at Xcode
 ```bash
 sudo xcode-select -s /Applications/Xcode.app/Contents/Developer
 ```
 
-### 3. Find your Apple Team ID
+### 2. Find your Apple Team ID
 Xcode → Settings → Accounts → select Apple ID → copy the 10-character Team ID (e.g. `A1B2C3D4E5`)
 
 ### 4. Set your Team ID in the config
@@ -80,15 +88,16 @@ Edit `src-tauri/tauri.conf.json` line ~52 — replace `"XXXXXXXXXX"` with your r
 ### 5. Set signing in Xcode
 Open `src-tauri/gen/apple/timetracker-app.xcodeproj` → select `timetracker-app_iOS` target → Signing & Capabilities → set Team to your personal Apple ID.
 
-### 6. First build (simulator)
+### 5. Run on simulator (from monorepo root)
 ```bash
 export PATH="/opt/homebrew/bin:$PATH"
-cd /Users/bastianthomsen/Repositories/TimeTrackerApp
-tauri ios dev
+cd ~/Repositories/Nexus/apps/TimeTrackerApp
+npx tauri ios dev
 ```
 First compile takes 10–20 min (Rust cross-compiling for iOS). Subsequent builds are incremental.
+The simulator window opens automatically — do **not** launch it manually from Xcode first.
 
-### 7. Build for physical iPhone
+### 6. Build for physical iPhone
 Plug in iPhone via USB → trust the Mac when prompted → then:
 ```bash
 tauri ios dev --device

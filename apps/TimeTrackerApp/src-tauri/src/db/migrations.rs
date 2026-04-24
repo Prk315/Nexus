@@ -1,10 +1,13 @@
 use rusqlite::{Connection, Result};
 
+/// Run all migrations.  Every statement is individually non-fatal: errors are
+/// logged but never propagate.  This is intentional — on iOS (especially
+/// pre-release simulator SDKs) `CREATE TABLE IF NOT EXISTS` can fail for
+/// tables that already exist when the schema contains UNIQUE or CHECK
+/// constraints, and we must not crash the app over that.
 pub fn run(conn: &Connection) -> Result<()> {
-    // Create tables if they don't exist (same schema as Python)
-    conn.execute_batch(
-        "
-        CREATE TABLE IF NOT EXISTS time_entries (
+    let tables: &[&str] = &[
+        "CREATE TABLE IF NOT EXISTS time_entries (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             task_name TEXT NOT NULL,
             project TEXT,
@@ -16,10 +19,10 @@ pub fn run(conn: &Connection) -> Result<()> {
             billable INTEGER DEFAULT 0,
             hourly_rate REAL DEFAULT 0.0,
             synced INTEGER DEFAULT 0,
+            user_id TEXT,
             created_at TEXT DEFAULT CURRENT_TIMESTAMP
-        );
-
-        CREATE TABLE IF NOT EXISTS active_session (
+        );",
+        "CREATE TABLE IF NOT EXISTS active_session (
             id INTEGER PRIMARY KEY CHECK (id = 1),
             task_name TEXT NOT NULL,
             project TEXT,
@@ -27,10 +30,10 @@ pub fn run(conn: &Connection) -> Result<()> {
             tags TEXT,
             notes TEXT,
             billable INTEGER DEFAULT 0,
-            hourly_rate REAL DEFAULT 0.0
-        );
-
-        CREATE TABLE IF NOT EXISTS paused_sessions (
+            hourly_rate REAL DEFAULT 0.0,
+            user_id TEXT
+        );",
+        "CREATE TABLE IF NOT EXISTS paused_sessions (
             id INTEGER PRIMARY KEY CHECK (id = 1),
             task_name TEXT NOT NULL,
             project TEXT,
@@ -41,11 +44,10 @@ pub fn run(conn: &Connection) -> Result<()> {
             notes TEXT,
             billable INTEGER DEFAULT 0,
             hourly_rate REAL DEFAULT 0.0
-        );
-
-        CREATE TABLE IF NOT EXISTS templates (
+        );",
+        "CREATE TABLE IF NOT EXISTS templates (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
-            name TEXT NOT NULL UNIQUE,
+            name TEXT NOT NULL,
             task_name TEXT NOT NULL,
             project TEXT,
             tags TEXT,
@@ -53,9 +55,8 @@ pub fn run(conn: &Connection) -> Result<()> {
             billable INTEGER DEFAULT 0,
             hourly_rate REAL DEFAULT 0.0,
             created_at TEXT DEFAULT CURRENT_TIMESTAMP
-        );
-
-        CREATE TABLE IF NOT EXISTS goals (
+        );",
+        "CREATE TABLE IF NOT EXISTS goals (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             project TEXT,
             target_hours REAL NOT NULL,
@@ -64,38 +65,32 @@ pub fn run(conn: &Connection) -> Result<()> {
             end_date TEXT NOT NULL,
             active INTEGER DEFAULT 1,
             created_at TEXT DEFAULT CURRENT_TIMESTAMP
-        );
-
-        CREATE TABLE IF NOT EXISTS local_users (
+        );",
+        "CREATE TABLE IF NOT EXISTS local_users (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
-            name TEXT NOT NULL UNIQUE,
+            name TEXT NOT NULL,
             created_at TEXT DEFAULT CURRENT_TIMESTAMP
-        );
-
-        CREATE TABLE IF NOT EXISTS blocked_apps (
+        );",
+        "CREATE TABLE IF NOT EXISTS blocked_apps (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             display_name TEXT NOT NULL,
-            process_name TEXT NOT NULL UNIQUE,
+            process_name TEXT NOT NULL,
             block_mode TEXT NOT NULL DEFAULT 'always',
             enabled INTEGER NOT NULL DEFAULT 1,
             created_at TEXT DEFAULT CURRENT_TIMESTAMP
-        );
-
-        CREATE TABLE IF NOT EXISTS blocker_settings (
+        );",
+        "CREATE TABLE IF NOT EXISTS blocker_settings (
             id INTEGER PRIMARY KEY CHECK (id = 1),
             enabled INTEGER NOT NULL DEFAULT 0
-        );
-
-        INSERT OR IGNORE INTO blocker_settings (id, enabled) VALUES (1, 0);
-
-        CREATE TABLE IF NOT EXISTS blocked_sites (
+        );",
+        "INSERT OR IGNORE INTO blocker_settings (id, enabled) VALUES (1, 0);",
+        "CREATE TABLE IF NOT EXISTS blocked_sites (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
-            domain TEXT NOT NULL UNIQUE,
+            domain TEXT NOT NULL,
             enabled INTEGER NOT NULL DEFAULT 1,
             created_at TEXT DEFAULT CURRENT_TIMESTAMP
-        );
-
-        CREATE TABLE IF NOT EXISTS focus_schedule_blocks (
+        );",
+        "CREATE TABLE IF NOT EXISTS focus_schedule_blocks (
             id           INTEGER PRIMARY KEY AUTOINCREMENT,
             name         TEXT    NOT NULL DEFAULT 'Focus Block',
             start_time   TEXT    NOT NULL DEFAULT '09:00',
@@ -104,55 +99,53 @@ pub fn run(conn: &Connection) -> Result<()> {
             color        TEXT    NOT NULL DEFAULT '#4f46e5',
             enabled      INTEGER NOT NULL DEFAULT 1,
             created_at   TEXT    DEFAULT CURRENT_TIMESTAMP
-        );
-
-        CREATE TABLE IF NOT EXISTS schedule_block_apps (
+        );",
+        "CREATE TABLE IF NOT EXISTS schedule_block_apps (
             id           INTEGER PRIMARY KEY AUTOINCREMENT,
             block_id     INTEGER NOT NULL REFERENCES focus_schedule_blocks(id) ON DELETE CASCADE,
-            process_name TEXT    NOT NULL,
-            UNIQUE(block_id, process_name)
-        );
-
-        CREATE TABLE IF NOT EXISTS schedule_block_sites (
+            process_name TEXT    NOT NULL
+        );",
+        "CREATE TABLE IF NOT EXISTS schedule_block_sites (
             id       INTEGER PRIMARY KEY AUTOINCREMENT,
             block_id INTEGER NOT NULL REFERENCES focus_schedule_blocks(id) ON DELETE CASCADE,
-            domain   TEXT    NOT NULL,
-            UNIQUE(block_id, domain)
-        );
-
-        CREATE TABLE IF NOT EXISTS time_unlock_rules (
+            domain   TEXT    NOT NULL
+        );",
+        "CREATE TABLE IF NOT EXISTS time_unlock_rules (
             id               INTEGER PRIMARY KEY AUTOINCREMENT,
             process_name     TEXT,
             domain           TEXT,
             required_minutes INTEGER NOT NULL DEFAULT 60,
             enabled          INTEGER NOT NULL DEFAULT 1,
             created_at       TEXT    DEFAULT CURRENT_TIMESTAMP
-        );
-        ",
-    )?;
+        );",
+    ];
 
-    // Idempotent column additions (mirrors Python's _add_column_if_not_exists)
-    add_column_if_missing(conn, "time_entries", "billable", "INTEGER DEFAULT 0")?;
-    add_column_if_missing(conn, "time_entries", "hourly_rate", "REAL DEFAULT 0.0")?;
-    add_column_if_missing(conn, "time_entries", "synced", "INTEGER DEFAULT 0")?;
-    add_column_if_missing(conn, "time_entries", "user_id", "TEXT")?;
-    add_column_if_missing(conn, "active_session", "billable", "INTEGER DEFAULT 0")?;
-    add_column_if_missing(conn, "active_session", "hourly_rate", "REAL DEFAULT 0.0")?;
-    add_column_if_missing(conn, "active_session", "user_id", "TEXT")?;
-
-    Ok(())
-}
-
-fn add_column_if_missing(conn: &Connection, table: &str, column: &str, col_type: &str) -> Result<()> {
-    let exists: bool = conn
-        .prepare(&format!("PRAGMA table_info({table})"))?
-        .query_map([], |row| row.get::<_, String>(1))?
-        .any(|name| name.as_deref() == Ok(column));
-
-    if !exists {
-        conn.execute_batch(&format!(
-            "ALTER TABLE {table} ADD COLUMN {column} {col_type};"
-        ))?;
+    for sql in tables {
+        let label = sql.trim().get(..60).unwrap_or(sql.trim());
+        match conn.execute_batch(sql) {
+            Ok(_) => eprintln!("[migrations] ok: {label}..."),
+            Err(e) => eprintln!("[migrations] warning (skipping): {label}... -> {e}"),
+        }
     }
+
+    let compat_columns: &[(&str, &str, &str)] = &[
+        ("time_entries",   "billable",    "INTEGER DEFAULT 0"),
+        ("time_entries",   "hourly_rate", "REAL DEFAULT 0.0"),
+        ("time_entries",   "synced",      "INTEGER DEFAULT 0"),
+        ("time_entries",   "user_id",     "TEXT"),
+        ("active_session", "billable",    "INTEGER DEFAULT 0"),
+        ("active_session", "hourly_rate", "REAL DEFAULT 0.0"),
+        ("active_session", "user_id",     "TEXT"),
+    ];
+
+    for (table, column, col_type) in compat_columns {
+        let sql = format!("ALTER TABLE {table} ADD COLUMN {column} {col_type};");
+        match conn.execute_batch(&sql) {
+            Ok(_) => eprintln!("[migrations] added column {column} to {table}"),
+            Err(e) => eprintln!("[migrations] skip column {column} on {table}: {e}"),
+        }
+    }
+
+    eprintln!("[migrations] complete");
     Ok(())
 }

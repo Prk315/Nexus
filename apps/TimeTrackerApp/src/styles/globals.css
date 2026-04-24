@@ -10,7 +10,11 @@ html, body, #root {
   height: 100%;
   width: 100%;
   overflow: hidden;
-  /* iOS safe area: keeps content clear of notch, home bar, and status bar */
+}
+
+/* iOS safe area: apply ONCE on html only so the inset isn't stacked
+   across html → body → #root (which would triple the blank space). */
+html {
   padding-top: env(safe-area-inset-top);
   padding-bottom: env(safe-area-inset-bottom);
   padding-left: env(safe-area-inset-left);

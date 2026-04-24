@@ -13,7 +13,9 @@ import TimeKeeperPage from "../../pages/TimeKeeperPage";
 const IS_IOS = /iPhone|iPad|iPod/.test(navigator.userAgent);
 
 const ALL_TABS = ["Dashboard", "History", "Reports", "Focus", "Settings"] as const;
-const MOBILE_TABS = ["History", "Reports", "Focus", "Settings"] as const;
+// On iOS: "Dashboard" becomes the primary timer tab; "Focus" (app/site blocker) is hidden
+// since iOS sandboxing prevents blocking other apps or editing /etc/hosts.
+const MOBILE_TABS = ["Dashboard", "History", "Reports", "Settings"] as const;
 type Tab = (typeof ALL_TABS)[number];
 
 const TABS: readonly Tab[] = IS_IOS ? MOBILE_TABS : ALL_TABS;
@@ -34,7 +36,7 @@ async function toggleWidget() {
 }
 
 export default function AppShell() {
-  const [activeTab, setActiveTab] = useState<Tab>(IS_IOS ? "Focus" : "Dashboard");
+  const [activeTab, setActiveTab] = useState<Tab>(IS_IOS ? "Dashboard" : "Dashboard");
 
   useEffect(() => {
     if (IS_IOS) return;
@@ -50,7 +52,23 @@ export default function AppShell() {
 
   return (
     <div style={{ display: "flex", flexDirection: "column", height: "100%", background: "var(--bg)" }}>
-      <NexusHeader appName="TimeTracker" />
+      {IS_IOS ? (
+        /* Slim mobile header — no Nexus ecosystem icons, just the app name */
+        <div style={{
+          height: 44,
+          display: "flex",
+          alignItems: "center",
+          paddingLeft: 16,
+          paddingRight: 16,
+          borderBottom: "1px solid var(--border)",
+          background: "var(--surface)",
+          flexShrink: 0,
+        }}>
+          <span style={{ fontSize: 16, fontWeight: 600, letterSpacing: "-0.3px" }}>TimeTracker</span>
+        </div>
+      ) : (
+        <NexusHeader appName="TimeTracker" />
+      )}
       <div
         style={{
           display: "flex",
@@ -64,7 +82,7 @@ export default function AppShell() {
         {TABS.map((tab) => (
           <NavTab
             key={tab}
-            label={tab}
+            label={IS_IOS && tab === "Dashboard" ? "Timer" : tab}
             active={activeTab === tab}
             onClick={() => setActiveTab(tab)}
           />

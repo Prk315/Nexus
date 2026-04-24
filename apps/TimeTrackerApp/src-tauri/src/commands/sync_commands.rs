@@ -1,7 +1,8 @@
 use crate::config::ConfigState;
 use crate::db::AppState;
 use crate::models::SyncResult;
-use crate::sync::supabase;
+use crate::sync::{blocking, supabase};
+use serde::{Deserialize, Serialize};
 use tauri::State;
 
 #[tauri::command]
@@ -41,4 +42,110 @@ pub async fn test_supabase_connection(
     config: State<'_, ConfigState>,
 ) -> Result<bool, String> {
     supabase::test_connection(&config.get()).await
+}
+
+// ── Blocking sync ─────────────────────────────────────────────────────────────
+
+/// Serialisable summary returned to the frontend after a blocking sync operation.
+#[derive(Debug, Default, Serialize, Deserialize)]
+pub struct BlockingSyncSummary {
+    pub sites_pushed: usize,
+    pub sites_pulled: usize,
+    pub apps_pushed: usize,
+    pub apps_pulled: usize,
+    pub blocks_pushed: usize,
+    pub blocks_pulled: usize,
+    pub rules_pushed: usize,
+    pub rules_pulled: usize,
+    pub errors: Vec<String>,
+}
+
+impl From<blocking::BlockingSyncResult> for BlockingSyncSummary {
+    fn from(r: blocking::BlockingSyncResult) -> Self {
+        Self {
+            sites_pushed:  r.sites_pushed,
+            sites_pulled:  r.sites_pulled,
+            apps_pushed:   r.apps_pushed,
+            apps_pulled:   r.apps_pulled,
+            blocks_pushed: r.blocks_pushed,
+            blocks_pulled: r.blocks_pulled,
+            rules_pushed:  r.rules_pushed,
+            rules_pulled:  r.rules_pulled,
+            errors:        r.errors,
+        }
+    }
+}
+
+/// Push all locally-unsynced blocking rows to Supabase.
+#[tauri::command]
+pub async fn sync_blocking_push(
+    state: State<'_, AppState>,
+    config: State<'_, ConfigState>,
+) -> Result<BlockingSyncSummary, String> {
+    let cfg = config.get();
+    let mut total = blocking::BlockingSyncResult::default();
+
+    macro_rules! merge {
+        ($fut:expr) => {
+            match $fut.await {
+                Ok(r) => {
+                    total.sites_pushed  += r.sites_pushed;
+                    total.apps_pushed   += r.apps_pushed;
+                    total.blocks_pushed += r.blocks_pushed;
+                    total.rules_pushed  += r.rules_pushed;
+                    total.errors.extend(r.errors);
+                }
+                Err(e) => total.errors.push(e),
+            }
+        };
+    }
+
+    merge!(blocking::push_blocked_sites(&state, &cfg));
+    merge!(blocking::push_blocked_apps(&state, &cfg));
+    merge!(blocking::push_focus_blocks(&state, &cfg));
+    merge!(blocking::push_unlock_rules(&state, &cfg));
+
+    Ok(total.into())
+}
+
+/// Pull all remote blocking rows from Supabase into the local SQLite database.
+#[tauri::command]
+pub async fn sync_blocking_pull(
+    state: State<'_, AppState>,
+    config: State<'_, ConfigState>,
+) -> Result<BlockingSyncSummary, String> {
+    let cfg = config.get();
+    let mut total = blocking::BlockingSyncResult::default();
+
+    macro_rules! merge {
+        ($fut:expr) => {
+            match $fut.await {
+                Ok(r) => {
+                    total.sites_pulled  += r.sites_pulled;
+                    total.apps_pulled   += r.apps_pulled;
+                    total.blocks_pulled += r.blocks_pulled;
+                    total.rules_pulled  += r.rules_pulled;
+                    total.errors.extend(r.errors);
+                }
+                Err(e) => total.errors.push(e),
+            }
+        };
+    }
+
+    merge!(blocking::pull_blocked_sites(&state, &cfg));
+    merge!(blocking::pull_blocked_apps(&state, &cfg));
+    merge!(blocking::pull_focus_blocks(&state, &cfg));
+    merge!(blocking::pull_unlock_rules(&state, &cfg));
+
+    Ok(total.into())
+}
+
+/// Full bidirectional blocking sync: push unsynced rows, then pull remote changes.
+#[tauri::command]
+pub async fn sync_blocking_bidirectional(
+    state: State<'_, AppState>,
+    config: State<'_, ConfigState>,
+) -> Result<BlockingSyncSummary, String> {
+    let result = blocking::sync_all_blocking(&state, &config.get()).await?;
+    Ok(result.into())
 }

@@ -134,11 +134,15 @@ pub fn run() {
             commands::delete_entry,
             commands::get_statistics,
             commands::get_all_projects,
-            // Sync
+            // Sync — time entries
             commands::sync_push,
             commands::sync_pull,
             commands::sync_bidirectional,
             commands::test_supabase_connection,
+            // Sync — blocking system
+            commands::sync_blocking_push,
+            commands::sync_blocking_pull,
+            commands::sync_blocking_bidirectional,
             // Export / Import
             commands::export_csv,
             commands::export_json_entries,

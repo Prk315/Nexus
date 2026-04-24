@@ -1,5 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { save, open } from "@tauri-apps/plugin-dialog";
+
+const IS_IOS = /iPhone|iPad|iPod/.test(navigator.userAgent);
 import { useAppDispatch, useAppSelector } from "../hooks/useAppDispatch";
 import { fetchConfig, updateConfig, setTheme, setPomodoro } from "../store/slices/settingsSlice";
 import { fetchCategories, updateCategories } from "../store/slices/categoriesSlice";
@@ -506,18 +508,20 @@ export default function SettingsPage() {
         )}
       </section>
 
-      {/* Export / Import */}
-      <section>
-        <h3 style={sectionTitle}>Export / Import</h3>
-        <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-          <button onClick={handleExportCsv} style={btnSecondary}>Export CSV</button>
-          <button onClick={handleExportJson} style={btnSecondary}>Export JSON</button>
-          <button onClick={handleImportJson} style={btnSecondary}>Import JSON</button>
-        </div>
-        {importResult && (
-          <div style={{ marginTop: 8, fontSize: 12, color: "var(--text-muted)" }}>{importResult}</div>
-        )}
-      </section>
+      {/* Export / Import — desktop only (iOS has no filesystem access) */}
+      {!IS_IOS && (
+        <section>
+          <h3 style={sectionTitle}>Export / Import</h3>
+          <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+            <button onClick={handleExportCsv} style={btnSecondary}>Export CSV</button>
+            <button onClick={handleExportJson} style={btnSecondary}>Export JSON</button>
+            <button onClick={handleImportJson} style={btnSecondary}>Import JSON</button>
+          </div>
+          {importResult && (
+            <div style={{ marginTop: 8, fontSize: 12, color: "var(--text-muted)" }}>{importResult}</div>
+          )}
+        </section>
+      )}
     </div>
   );
 }
