@@ -157,24 +157,26 @@ pub async fn pull_blocked_sites(
             continue;
         }
 
+        // Two-step upsert (no UNIQUE constraint — iOS 26 beta SQLite bug workaround).
+        // 1. Update existing row if our data is at least as new.
+        // 2. Insert only if no row with this domain exists yet.
         let db = state.db.lock().map_err(|e| e.to_string())?;
-        // Upsert by domain — if local row is newer (updated_at >) keep it,
-        // otherwise overwrite. Simple last-write-wins.
-        let affected = db.execute(
+        let update_ok = db.execute(
+            "UPDATE blocked_sites
+             SET enabled = ?1, user_id = ?2, updated_at = ?3, synced = 1
+             WHERE domain = ?4
+               AND (updated_at IS NULL OR ?3 >= updated_at)",
+            params![enabled as i64, user_id, updated_at, domain],
+        );
+        let insert_ok = db.execute(
             "INSERT INTO blocked_sites (domain, enabled, user_id, updated_at, synced)
-             VALUES (?1, ?2, ?3, ?4, 1)
-             ON CONFLICT(domain) DO UPDATE SET
-               enabled    = CASE WHEN excluded.updated_at >= blocked_sites.updated_at
-                                 THEN excluded.enabled    ELSE blocked_sites.enabled    END,
-               user_id    = excluded.user_id,
-               updated_at = CASE WHEN excluded.updated_at >= blocked_sites.updated_at
-                                 THEN excluded.updated_at ELSE blocked_sites.updated_at END,
-               synced     = 1",
+             SELECT ?1, ?2, ?3, ?4, 1
+             WHERE NOT EXISTS (SELECT 1 FROM blocked_sites WHERE domain = ?1)",
             params![domain, enabled as i64, user_id, updated_at],
         );
-        match affected {
-            Ok(_) => result.sites_pulled += 1,
-            Err(e) => result.errors.push(format!("site {domain} pull upsert: {e}")),
+        match (update_ok, insert_ok) {
+            (Ok(_), Ok(_)) => result.sites_pulled += 1,
+            (Err(e), _) | (_, Err(e)) => result.errors.push(format!("site {domain} pull upsert: {e}")),
         }
     }
 
@@ -292,25 +294,24 @@ pub async fn pull_blocked_apps(
 
         if process_name.is_empty() { continue; }
 
+        // Two-step upsert — no UNIQUE constraint (iOS 26 beta SQLite bug workaround).
         let db = state.db.lock().map_err(|e| e.to_string())?;
-        let affected = db.execute(
+        let update_ok = db.execute(
+            "UPDATE blocked_apps
+             SET display_name = ?1, block_mode = ?2, enabled = ?3, user_id = ?4, updated_at = ?5, synced = 1
+             WHERE process_name = ?6
+               AND (updated_at IS NULL OR ?5 >= updated_at)",
+            params![display_name, block_mode, enabled as i64, user_id, updated_at, process_name],
+        );
+        let insert_ok = db.execute(
             "INSERT INTO blocked_apps (display_name, process_name, block_mode, enabled, user_id, updated_at, synced)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, 1)
-             ON CONFLICT(process_name) DO UPDATE SET
-               display_name = excluded.display_name,
-               block_mode   = CASE WHEN excluded.updated_at >= blocked_apps.updated_at
-                                   THEN excluded.block_mode ELSE blocked_apps.block_mode END,
-               enabled      = CASE WHEN excluded.updated_at >= blocked_apps.updated_at
-                                   THEN excluded.enabled    ELSE blocked_apps.enabled    END,
-               user_id      = excluded.user_id,
-               updated_at   = CASE WHEN excluded.updated_at >= blocked_apps.updated_at
-                                   THEN excluded.updated_at ELSE blocked_apps.updated_at END,
-               synced       = 1",
+             SELECT ?1, ?2, ?3, ?4, ?5, ?6, 1
+             WHERE NOT EXISTS (SELECT 1 FROM blocked_apps WHERE process_name = ?2)",
             params![display_name, process_name, block_mode, enabled as i64, user_id, updated_at],
         );
-        match affected {
-            Ok(_) => result.apps_pulled += 1,
-            Err(e) => result.errors.push(format!("app {process_name} pull upsert: {e}")),
+        match (update_ok, insert_ok) {
+            (Ok(_), Ok(_)) => result.apps_pulled += 1,
+            (Err(e), _) | (_, Err(e)) => result.errors.push(format!("app {process_name} pull upsert: {e}")),
         }
     }
 
@@ -463,35 +464,28 @@ pub async fn pull_focus_blocks(
 
         if remote_id.is_empty() { continue; }
 
-        // Use remote UUID as a stable dedup key via a remote_id column
-        // (added below via add_column_if_missing in migrations)
+        // Two-step upsert keyed on remote_id — no UNIQUE constraint (iOS 26 beta SQLite bug).
         let db = state.db.lock().map_err(|e| e.to_string())?;
-        let affected = db.execute(
-            "INSERT INTO focus_schedule_blocks
-               (name, start_time, end_time, days_of_week, color, enabled, user_id, updated_at, synced, remote_id)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, 1, ?9)
-             ON CONFLICT(remote_id) DO UPDATE SET
-               name         = CASE WHEN excluded.updated_at >= focus_schedule_blocks.updated_at
-                                   THEN excluded.name         ELSE focus_schedule_blocks.name         END,
-               start_time   = CASE WHEN excluded.updated_at >= focus_schedule_blocks.updated_at
-                                   THEN excluded.start_time   ELSE focus_schedule_blocks.start_time   END,
-               end_time     = CASE WHEN excluded.updated_at >= focus_schedule_blocks.updated_at
-                                   THEN excluded.end_time     ELSE focus_schedule_blocks.end_time     END,
-               days_of_week = CASE WHEN excluded.updated_at >= focus_schedule_blocks.updated_at
-                                   THEN excluded.days_of_week ELSE focus_schedule_blocks.days_of_week END,
-               color        = CASE WHEN excluded.updated_at >= focus_schedule_blocks.updated_at
-                                   THEN excluded.color        ELSE focus_schedule_blocks.color        END,
-               enabled      = CASE WHEN excluded.updated_at >= focus_schedule_blocks.updated_at
-                                   THEN excluded.enabled      ELSE focus_schedule_blocks.enabled      END,
-               updated_at   = CASE WHEN excluded.updated_at >= focus_schedule_blocks.updated_at
-                                   THEN excluded.updated_at   ELSE focus_schedule_blocks.updated_at   END,
-               synced       = 1",
+        let update_ok = db.execute(
+            "UPDATE focus_schedule_blocks
+             SET name = ?1, start_time = ?2, end_time = ?3, days_of_week = ?4,
+                 color = ?5, enabled = ?6, user_id = ?7, updated_at = ?8, synced = 1
+             WHERE remote_id = ?9
+               AND (updated_at IS NULL OR ?8 >= updated_at)",
             params![name, start_time, end_time, days_of_week, color, enabled as i64,
                     user_id, updated_at, remote_id],
         );
-        match affected {
-            Ok(_) => result.blocks_pulled += 1,
-            Err(e) => result.errors.push(format!("focus block {name} pull upsert: {e}")),
+        let insert_ok = db.execute(
+            "INSERT INTO focus_schedule_blocks
+               (name, start_time, end_time, days_of_week, color, enabled, user_id, updated_at, synced, remote_id)
+             SELECT ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, 1, ?9
+             WHERE NOT EXISTS (SELECT 1 FROM focus_schedule_blocks WHERE remote_id = ?9)",
+            params![name, start_time, end_time, days_of_week, color, enabled as i64,
+                    user_id, updated_at, remote_id],
+        );
+        match (update_ok, insert_ok) {
+            (Ok(_), Ok(_)) => result.blocks_pulled += 1,
+            (Err(e), _) | (_, Err(e)) => result.errors.push(format!("focus block {name} pull upsert: {e}")),
         }
     }
 
@@ -626,26 +620,26 @@ pub async fn pull_unlock_rules(
         if remote_id.is_empty() { continue; }
         if process_name.is_none() && domain.is_none() { continue; }
 
+        // Two-step upsert keyed on remote_id — no UNIQUE constraint (iOS 26 beta SQLite bug).
         let db = state.db.lock().map_err(|e| e.to_string())?;
-        let affected = db.execute(
-            "INSERT INTO time_unlock_rules
-               (process_name, domain, required_minutes, user_id, updated_at, synced, remote_id)
-             VALUES (?1, ?2, ?3, ?4, ?5, 1, ?6)
-             ON CONFLICT(remote_id) DO UPDATE SET
-               process_name     = excluded.process_name,
-               domain           = excluded.domain,
-               required_minutes = CASE WHEN excluded.updated_at >= time_unlock_rules.updated_at
-                                       THEN excluded.required_minutes
-                                       ELSE time_unlock_rules.required_minutes END,
-               updated_at       = CASE WHEN excluded.updated_at >= time_unlock_rules.updated_at
-                                       THEN excluded.updated_at
-                                       ELSE time_unlock_rules.updated_at END,
-               synced           = 1",
+        let update_ok = db.execute(
+            "UPDATE time_unlock_rules
+             SET process_name = ?1, domain = ?2, required_minutes = ?3,
+                 user_id = ?4, updated_at = ?5, synced = 1
+             WHERE remote_id = ?6
+               AND (updated_at IS NULL OR ?5 >= updated_at)",
             params![process_name, domain, required_minutes, user_id, updated_at, remote_id],
         );
-        match affected {
-            Ok(_) => result.rules_pulled += 1,
-            Err(e) => result.errors.push(format!("unlock rule pull upsert: {e}")),
+        let insert_ok = db.execute(
+            "INSERT INTO time_unlock_rules
+               (process_name, domain, required_minutes, user_id, updated_at, synced, remote_id)
+             SELECT ?1, ?2, ?3, ?4, ?5, 1, ?6
+             WHERE NOT EXISTS (SELECT 1 FROM time_unlock_rules WHERE remote_id = ?6)",
+            params![process_name, domain, required_minutes, user_id, updated_at, remote_id],
+        );
+        match (update_ok, insert_ok) {
+            (Ok(_), Ok(_)) => result.rules_pulled += 1,
+            (Err(e), _) | (_, Err(e)) => result.errors.push(format!("unlock rule pull upsert: {e}")),
         }
     }
 

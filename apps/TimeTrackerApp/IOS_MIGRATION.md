@@ -36,13 +36,27 @@
 ### Phase 6 — iOS 26.4 beta SQLite workaround ✓
 - **Bug**: iOS 26.4 beta SQLite fails `CREATE TABLE IF NOT EXISTS` with a "Cannot add a UNIQUE column"
   error even when the table already exists — this is a beta SDK defect, not standard SQLite behaviour.
+  Also affects tables with `CHECK` constraints (e.g. `CHECK (id = 1)` singleton pattern).
 - **Fix applied to `src-tauri/src/db/migrations.rs`**:
-  - Removed all `UNIQUE` constraints from `CREATE TABLE` statements (enforced at the app layer instead).
+  - Removed all `UNIQUE` and `CHECK` constraints from `CREATE TABLE` statements (enforced at the app layer instead).
   - Split every `CREATE TABLE` into its own `execute_batch` call inside a loop that swallows errors.
   - `run()` never propagates errors — always returns `Ok(())`.
 - **Build note**: Sandbox/mount writes do not update macOS APFS mtimes reliably. If Cargo is not
   recompiling after a migration edit, paste the new file content from your own terminal using a
   `cat > file << 'EOF'` heredoc, then `touch` the file to guarantee a rebuild.
+
+### Phase 7 — Tauri 2 IPC camelCase fix ✓
+- **Bug**: Timer Start button (and all other Tauri commands with multi-word parameters) did nothing on
+  iOS. Root cause: Tauri 2's WKWebView bridge strictly requires camelCase keys in `invoke()` calls.
+  macOS Tauri accepts snake_case silently, but iOS hard-fails with
+  `invalid args 'taskName' for command 'start_timer': command start_timer missing required key taskName`.
+- **Fix applied to `src/lib/tauriApi.ts`**:
+  - All `invoke()` argument keys converted to camelCase: `task_name` → `taskName`,
+    `hourly_rate` → `hourlyRate`, `user_id` → `userId`, `start_date` → `startDate`,
+    `entry_id` → `entryId`, `include_own_device` → `includeOwnDevice`, etc.
+  - Rust command signatures are unchanged — Tauri handles the snake↔camel mapping automatically.
+- **Rule for all Nexus apps**: Always use camelCase keys in `invoke()` calls across the entire
+  ecosystem. The Rust side stays snake_case; only the JS object keys change.
 
 ---
 

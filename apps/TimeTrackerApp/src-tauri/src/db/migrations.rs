@@ -129,13 +129,30 @@ pub fn run(conn: &Connection) -> Result<()> {
     }
 
     let compat_columns: &[(&str, &str, &str)] = &[
-        ("time_entries",   "billable",    "INTEGER DEFAULT 0"),
-        ("time_entries",   "hourly_rate", "REAL DEFAULT 0.0"),
-        ("time_entries",   "synced",      "INTEGER DEFAULT 0"),
-        ("time_entries",   "user_id",     "TEXT"),
-        ("active_session", "billable",    "INTEGER DEFAULT 0"),
-        ("active_session", "hourly_rate", "REAL DEFAULT 0.0"),
-        ("active_session", "user_id",     "TEXT"),
+        // time_entries
+        ("time_entries",          "billable",    "INTEGER DEFAULT 0"),
+        ("time_entries",          "hourly_rate", "REAL DEFAULT 0.0"),
+        ("time_entries",          "synced",      "INTEGER DEFAULT 0"),
+        ("time_entries",          "user_id",     "TEXT"),
+        // active_session
+        ("active_session",        "billable",    "INTEGER DEFAULT 0"),
+        ("active_session",        "hourly_rate", "REAL DEFAULT 0.0"),
+        ("active_session",        "user_id",     "TEXT"),
+        // blocking tables — sync tracking columns
+        ("blocked_sites",         "synced",      "INTEGER DEFAULT 0"),
+        ("blocked_sites",         "user_id",     "TEXT DEFAULT 'default'"),
+        ("blocked_sites",         "updated_at",  "TEXT DEFAULT CURRENT_TIMESTAMP"),
+        ("blocked_apps",          "synced",      "INTEGER DEFAULT 0"),
+        ("blocked_apps",          "user_id",     "TEXT DEFAULT 'default'"),
+        ("blocked_apps",          "updated_at",  "TEXT DEFAULT CURRENT_TIMESTAMP"),
+        ("focus_schedule_blocks", "synced",      "INTEGER DEFAULT 0"),
+        ("focus_schedule_blocks", "user_id",     "TEXT DEFAULT 'default'"),
+        ("focus_schedule_blocks", "updated_at",  "TEXT DEFAULT CURRENT_TIMESTAMP"),
+        ("focus_schedule_blocks", "remote_id",   "TEXT"),
+        ("time_unlock_rules",     "synced",      "INTEGER DEFAULT 0"),
+        ("time_unlock_rules",     "user_id",     "TEXT DEFAULT 'default'"),
+        ("time_unlock_rules",     "updated_at",  "TEXT DEFAULT CURRENT_TIMESTAMP"),
+        ("time_unlock_rules",     "remote_id",   "TEXT"),
     ];
 
     for (table, column, col_type) in compat_columns {

@@ -27,13 +27,13 @@ export const startTimer = (params: {
   userId?: string;
 }) =>
   invoke<void>("start_timer", {
-    task_name: params.taskName,
+    taskName: params.taskName,
     project: params.project ?? null,
     tags: params.tags ?? null,
     notes: params.notes ?? null,
     billable: params.billable,
-    hourly_rate: params.hourlyRate,
-    user_id: params.userId ?? null,
+    hourlyRate: params.hourlyRate,
+    userId: params.userId ?? null,
   });
 
 export const stopTimer = () => invoke<TimeEntry>("stop_timer");
@@ -43,14 +43,14 @@ export const cancelPaused = () => invoke<boolean>("cancel_paused");
 
 export const startFromTemplate = (templateName: string, userId?: string) =>
   invoke<void>("start_from_template", {
-    template_name: templateName,
-    user_id: userId ?? null,
+    templateName,
+    userId: userId ?? null,
   });
 
 export const resumeFromEntry = (entryId: number, userId?: string) =>
   invoke<void>("resume_from_entry", {
-    entry_id: entryId,
-    user_id: userId ?? null,
+    entryId,
+    userId: userId ?? null,
   });
 
 // ── Entries ──────────────────────────────────────────────────────────────────
@@ -66,10 +66,10 @@ export const getEntries = (params?: {
   invoke<TimeEntry[]>("get_entries", {
     limit: params?.limit ?? null,
     project: params?.project ?? null,
-    start_date: params?.startDate ?? null,
-    end_date: params?.endDate ?? null,
+    startDate: params?.startDate ?? null,
+    endDate: params?.endDate ?? null,
     tags: params?.tags ?? null,
-    user_id: params?.userId ?? null,
+    userId: params?.userId ?? null,
   });
 
 export const editEntry = (params: {
@@ -82,22 +82,22 @@ export const editEntry = (params: {
   hourlyRate?: number;
 }) =>
   invoke<boolean>("edit_entry", {
-    entry_id: params.entryId,
-    task_name: params.taskName ?? null,
+    entryId: params.entryId,
+    taskName: params.taskName ?? null,
     project: params.project ?? null,
     tags: params.tags ?? null,
     notes: params.notes ?? null,
     billable: params.billable ?? null,
-    hourly_rate: params.hourlyRate ?? null,
+    hourlyRate: params.hourlyRate ?? null,
   });
 
 export const deleteEntry = (entryId: number) =>
-  invoke<boolean>("delete_entry", { entry_id: entryId });
+  invoke<boolean>("delete_entry", { entryId });
 
 export const getStatistics = (params?: { startDate?: string; endDate?: string }) =>
   invoke<Statistics>("get_statistics", {
-    start_date: params?.startDate ?? null,
-    end_date: params?.endDate ?? null,
+    startDate: params?.startDate ?? null,
+    endDate: params?.endDate ?? null,
   });
 
 export const getAllProjects = () => invoke<string[]>("get_all_projects");
@@ -117,12 +117,12 @@ export const saveTemplate = (params: {
 }) =>
   invoke<boolean>("save_template", {
     name: params.name,
-    task_name: params.taskName,
+    taskName: params.taskName,
     project: params.project ?? null,
     tags: params.tags ?? null,
     notes: params.notes ?? null,
     billable: params.billable,
-    hourly_rate: params.hourlyRate,
+    hourlyRate: params.hourlyRate,
   });
 
 export const deleteTemplate = (name: string) =>
@@ -141,21 +141,21 @@ export const addGoal = (params: {
   project?: string;
 }) =>
   invoke<number>("add_goal", {
-    target_hours: params.targetHours,
+    targetHours: params.targetHours,
     period: params.period,
-    start_date: params.startDate,
-    end_date: params.endDate,
+    startDate: params.startDate,
+    endDate: params.endDate,
     project: params.project ?? null,
   });
 
 export const deactivateGoal = (goalId: number) =>
-  invoke<boolean>("deactivate_goal", { goal_id: goalId });
+  invoke<boolean>("deactivate_goal", { goalId });
 
 // ── Sync ─────────────────────────────────────────────────────────────────────
 
 export const syncPush = () => invoke<SyncResult>("sync_push");
 export const syncPull = (includeOwnDevice = false) =>
-  invoke<SyncResult>("sync_pull", { include_own_device: includeOwnDevice });
+  invoke<SyncResult>("sync_pull", { includeOwnDevice });
 export const syncBidirectional = () => invoke<SyncResult>("sync_bidirectional");
 export const testSupabaseConnection = () =>
   invoke<boolean>("test_supabase_connection");
@@ -169,10 +169,10 @@ export const exportCsv = (params: {
   endDate?: string;
 }) =>
   invoke<number>("export_csv", {
-    output_path: params.outputPath,
+    outputPath: params.outputPath,
     project: params.project ?? null,
-    start_date: params.startDate ?? null,
-    end_date: params.endDate ?? null,
+    startDate: params.startDate ?? null,
+    endDate: params.endDate ?? null,
   });
 
 export const exportJson = (params: {
@@ -182,14 +182,14 @@ export const exportJson = (params: {
   endDate?: string;
 }) =>
   invoke<number>("export_json_entries", {
-    output_path: params.outputPath,
+    outputPath: params.outputPath,
     project: params.project ?? null,
-    start_date: params.startDate ?? null,
-    end_date: params.endDate ?? null,
+    startDate: params.startDate ?? null,
+    endDate: params.endDate ?? null,
   });
 
 export const importJson = (filePath: string) =>
-  invoke<ImportResult>("import_json_entries", { file_path: filePath });
+  invoke<ImportResult>("import_json_entries", { filePath });
 
 // ── Config ───────────────────────────────────────────────────────────────────
 

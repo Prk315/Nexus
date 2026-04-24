@@ -34,7 +34,7 @@ function latestEntryByProject(entries: TimeEntry[]): Map<string, TimeEntry> {
 
 function TimerStartPanel() {
   const dispatch = useAppDispatch();
-  const { status, elapsedSeconds, active, paused, pomodoroEnabled, pomodoroPhase, pomodoroSecondsRemaining } =
+  const { status, elapsedSeconds, active, paused, pomodoroEnabled, pomodoroPhase, pomodoroSecondsRemaining, loading, error } =
     useAppSelector((s) => s.timer);
   const settings = useAppSelector((s) => s.settings);
 
@@ -73,9 +73,9 @@ function TimerStartPanel() {
 
   if (isActive) {
     return (
-      <div style={{ display: "flex", flexDirection: "column", gap: 16, padding: "20px 20px", height: "100%" }}>
+      <div style={{ display: "flex", flexDirection: "column", gap: 16, padding: "20px 20px" }}>
         {/* Big elapsed time */}
-        <div style={{ textAlign: "center", marginTop: "auto" }}>
+        <div style={{ textAlign: "center" }}>
           <div style={{ position: "relative", display: "inline-flex", alignItems: "center", justifyContent: "center" }}>
             {pomodoroEnabled && isRunning && (
               <div style={{ position: "absolute" }}>
@@ -115,7 +115,7 @@ function TimerStartPanel() {
         </div>
 
         {/* Controls */}
-        <div style={{ display: "flex", gap: 8, justifyContent: "center", marginBottom: "auto" }}>
+        <div style={{ display: "flex", gap: 8, justifyContent: "center" }}>
           {isRunning && (
             <>
               <button
@@ -143,12 +143,26 @@ function TimerStartPanel() {
             </>
           )}
         </div>
+
+        {error && (
+          <div style={{
+            padding: "8px 12px",
+            background: "rgba(255,59,48,0.12)",
+            border: "1px solid rgba(255,59,48,0.3)",
+            borderRadius: "var(--radius-sm)",
+            color: "var(--danger, #ff3b30)",
+            fontSize: 12,
+            wordBreak: "break-word",
+          }}>
+            ⚠ {error}
+          </div>
+        )}
       </div>
     );
   }
 
   return (
-    <div style={{ display: "flex", flexDirection: "column", gap: 12, padding: "20px 20px", height: "100%", justifyContent: "center" }}>
+    <div style={{ display: "flex", flexDirection: "column", gap: 12, padding: "20px 20px" }}>
       <div style={{ fontSize: 11, color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: 4 }}>
         Start tracking
       </div>
@@ -157,17 +171,16 @@ function TimerStartPanel() {
         value={taskName}
         onChange={(e) => setTaskName(e.target.value)}
         onKeyDown={(e) => e.key === "Enter" && handleStart()}
-        autoFocus
         style={{ fontSize: 14 }}
       />
       <ProjectPicker value={project} onChange={setProject} />
       <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
         <button
           onClick={() => handleStart()}
-          disabled={!taskName.trim()}
-          style={{ ...btnPrimary, flex: 1, opacity: !taskName.trim() ? 0.4 : 1 }}
+          disabled={!taskName.trim() || loading}
+          style={{ ...btnPrimary, flex: 1, opacity: (!taskName.trim() || loading) ? 0.4 : 1 }}
         >
-          Start
+          {loading ? "Starting…" : "Start"}
         </button>
         <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12, color: "var(--text-muted)", cursor: "pointer", flexShrink: 0 }}>
           <input
@@ -179,6 +192,20 @@ function TimerStartPanel() {
           Billable
         </label>
       </div>
+      {error && (
+        <div style={{
+          marginTop: 4,
+          padding: "8px 12px",
+          background: "rgba(255,59,48,0.12)",
+          border: "1px solid rgba(255,59,48,0.3)",
+          borderRadius: "var(--radius-sm)",
+          color: "var(--danger, #ff3b30)",
+          fontSize: 12,
+          wordBreak: "break-word",
+        }}>
+          ⚠ {error}
+        </div>
+      )}
     </div>
   );
 }
@@ -636,6 +663,8 @@ function ProjectBrowser({ onStart }: { onStart: (taskName: string, project?: str
   );
 }
 
+const IS_IOS = /iPhone|iPad|iPod/.test(navigator.userAgent);
+
 // ── Main dashboard ────────────────────────────────────────────────────────────
 
 export default function DashboardPage() {
@@ -666,6 +695,31 @@ export default function DashboardPage() {
     );
   };
 
+  // ── iOS: single-column layout ─────────────────────────────────────────────
+  if (IS_IOS) {
+    return (
+      <div style={{ display: "flex", flexDirection: "column", height: "100%", overflow: "hidden" }}>
+        {/* Timer panel — full width, takes priority */}
+        <div style={{ flexShrink: 0, borderBottom: "1px solid var(--border)" }}>
+          <TimerStartPanel />
+        </div>
+
+        {/* Today's projects — scrollable list below */}
+        <div style={{ flex: 1, overflow: "hidden", display: "flex", flexDirection: "column" }}>
+          <RecentProjectsPanel entries={entries} />
+        </div>
+
+        <style>{`
+          @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.4; }
+          }
+        `}</style>
+      </div>
+    );
+  }
+
+  // ── Desktop: two-panel layout ─────────────────────────────────────────────
   return (
     <div style={{ display: "flex", flexDirection: "column", height: "100%", overflow: "hidden" }}>
 
