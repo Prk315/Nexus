@@ -479,6 +479,10 @@ export function PdfViewer({ content: pdfPath, nodeId }: Props) {
   const [color,      setColor]      = useState("#1a1a1a");
   const [strokeWidth, setStrokeWidth] = useState(4);
   const [zoom,       setZoom]       = useState(1.0);
+  // Keep zoom in a ref so scroll/page-tracker callbacks always see the latest value
+  // without being recreated on every zoom change.
+  const zoomRef = useRef(1.0);
+  useEffect(() => { zoomRef.current = zoom; }, [zoom]);
   // renderScale is the canvas render scale (fit-to-width, recomputed on sidebar toggle).
   // zoom is a pure CSS visual multiplier applied on top — never triggers a canvas re-render.
   const [renderScale, setRenderScale] = useState(1.0);
@@ -523,6 +527,12 @@ export function PdfViewer({ content: pdfPath, nodeId }: Props) {
   const [visiblePages, setVisiblePages] = useState<Set<number>>(new Set([0, 1, 2]));
   // Estimated per-page CSS size so placeholders keep correct scroll height.
   const [pageSizes, setPageSizes] = useState<Record<number, { w: number; h: number }>>({});
+  // Natural (pre-zoom) total height of all page slots — used to compute the CSS transform margin-bottom.
+  const totalHeight = useMemo(() => {
+    let h = 0;
+    for (let i = 0; i < numPages; i++) h += (pageSizes[i]?.h ?? 0) + 16;
+    return h;
+  }, [pageSizes, numPages]);
 
   // Clear export error timer on unmount
   useEffect(() => () => { if (exportErrorTimerRef.current) clearTimeout(exportErrorTimerRef.current); }, []);
@@ -807,7 +817,10 @@ export function PdfViewer({ content: pdfPath, nodeId }: Props) {
     if (!root) return;
     const el = root.querySelector<HTMLElement>(`[data-page-idx="${pageIdx}"]`);
     if (el) {
-      root.scrollTop = el.offsetTop - 20;
+      // el.offsetTop is the un-zoomed layout position (includes 20px scroll-area padding).
+      // With transform: scale(zoom) origin at top-center, the visual position scales too.
+      const z = zoomRef.current;
+      root.scrollTop = (el.offsetTop - 20) * z;
     }
   }, []);
 
@@ -826,13 +839,15 @@ export function PdfViewer({ content: pdfPath, nodeId }: Props) {
     function onScroll() {
       const scrollTop = el.scrollTop;
       const sizes = pageSizesRef.current;
+      const z = zoomRef.current;
       let bestIdx = 0;
       let bestDist = Infinity;
       // If all page sizes are known, walk cumulative heights without touching DOM.
+      // cumH is the un-zoomed layout offset; multiply by z for the visual scroll position.
       if (Object.keys(sizes).length === numPages) {
         let cumH = 0;
         for (let i = 0; i < numPages; i++) {
-          const dist = Math.abs(cumH - scrollTop);
+          const dist = Math.abs(cumH * z - scrollTop);
           if (dist < bestDist) { bestDist = dist; bestIdx = i; }
           cumH += (sizes[i]?.h ?? 0) + 16; // 16px = .pdf-page-slot margin-bottom
         }
@@ -841,7 +856,7 @@ export function PdfViewer({ content: pdfPath, nodeId }: Props) {
         for (let i = 0; i < numPages; i++) {
           const slot = el.querySelector<HTMLElement>(`[data-page-idx="${i}"]`);
           if (!slot) continue;
-          const dist = Math.abs(slot.offsetTop - scrollTop);
+          const dist = Math.abs((slot.offsetTop - 20) * z - scrollTop);
           if (dist < bestDist) { bestDist = dist; bestIdx = i; }
         }
       }
@@ -1409,9 +1424,16 @@ export function PdfViewer({ content: pdfPath, nodeId }: Props) {
           {/* ── Pages + scrubber ──────────────────────────────────────── */}
           <div className="pdf-scroll-wrapper">
             <div className="pdf-scroll-area" ref={scrollRef}>
-              {/* CSS zoom applies visual magnification without re-rendering canvases.
-                  zoom=1 means fit-to-width (100%), zoom=2 means 2× larger, etc. */}
-              <div style={{ zoom: zoom }}>
+              {/* transform: scale() applies visual magnification without re-rendering canvases.
+                  Unlike CSS zoom, getBoundingClientRect() returns post-transform values in
+                  WebKit/WKWebView, so pointer-event normalisation (clientX - rect.left) / rect.width
+                  stays correct at every zoom level. marginBottom compensates for the layout space
+                  that transform does not expand, so the scroll area height reflects the visual size. */}
+              <div style={{
+                transform: `scale(${zoom})`,
+                transformOrigin: 'top center',
+                marginBottom: `${(zoom - 1) * totalHeight}px`,
+              }}>
               {pdfDoc && Array.from({ length: numPages }, (_, i) => {
                 const size = pageSizes[i] ?? estimatedPageSize;
                 const pageAnnots = textAnnotsByPage[i] ?? [];
