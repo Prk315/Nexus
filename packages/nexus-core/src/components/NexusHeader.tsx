@@ -37,6 +37,12 @@ function IconBtn({
   );
 }
 
+// data-tauri-drag-region triggers Tauri's start_dragging IPC which is a
+// desktop-only capability — it throws on iOS. Omit it on mobile devices.
+const isMobileDevice =
+  typeof navigator !== "undefined" &&
+  /iPad|iPhone|iPod|Android/.test(navigator.userAgent);
+
 export function NexusHeader({
   appName,
   onHome,
@@ -53,8 +59,8 @@ export function NexusHeader({
   return (
     <header
       className="h-11 border-b border-border bg-background/95 backdrop-blur-sm flex items-center px-3 gap-2 shrink-0"
-      // Allow dragging the window by the header on desktop
-      data-tauri-drag-region
+      // Allow dragging the window by the header on desktop only
+      data-tauri-drag-region={isMobileDevice ? undefined : ""}
     >
       {/* ── Left: avatar + app name ──────────────────────────────── */}
       <div className="flex items-center gap-2 min-w-0">
@@ -115,8 +121,8 @@ export function NexusHeader({
         </button>
       </div>
 
-      {/* ── Spacer (drag region) ─────────────────────────────────── */}
-      <div className="flex-1" data-tauri-drag-region />
+      {/* ── Spacer (drag region on desktop only) ────────────────── */}
+      <div className="flex-1" data-tauri-drag-region={isMobileDevice ? undefined : ""} />
 
       {/* ── Right: action icons + app switcher ──────────────────── */}
       <div className="flex items-center gap-0.5">

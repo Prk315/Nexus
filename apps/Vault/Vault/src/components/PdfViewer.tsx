@@ -4,6 +4,7 @@ import {
   useEffect,
   useCallback,
   memo,
+  useMemo,
 } from "react";
 import * as pdfjs from "pdfjs-dist";
 import type { PDFDocumentProxy, PDFPageProxy } from "pdfjs-dist";
@@ -82,6 +83,7 @@ interface PdfPageProps {
   strokeWidth: number;
   onStrokeAdded: (pageIdx: number, stroke: Stroke) => void;
   onErase: (pageIdx: number, updatedStrokes: Stroke[]) => void;
+  onSize: (pageIdx: number, w: number, h: number) => void;
 }
 
 const PdfPage = memo(function PdfPage({
@@ -94,11 +96,16 @@ const PdfPage = memo(function PdfPage({
   strokeWidth,
   onStrokeAdded,
   onErase,
+  onSize,
 }: PdfPageProps) {
   const pdfCanvasRef  = useRef<HTMLCanvasElement>(null);
   const annotCanvasRef = useRef<HTMLCanvasElement>(null);
   const isDrawingRef  = useRef(false);
   const currentPtsRef = useRef<Point[]>([]);
+  // Bounding rect captured at pointerDown and reused for the entire stroke,
+  // so a mid-gesture layout shift (e.g. sidebar opening/closing) doesn't
+  // cause a coordinate jump.
+  const capturedRectRef = useRef<DOMRect | null>(null);
   // keep latest strokes in a ref for eraser (avoids stale closure)
   const strokesRef = useRef<Stroke[]>(strokes);
   useEffect(() => { strokesRef.current = strokes; }, [strokes]);
@@ -156,6 +163,9 @@ const PdfPage = memo(function PdfPage({
       annotCanvas.style.width  = `${cssW}px`;
       annotCanvas.style.height = `${cssH}px`;
 
+      // Report rendered size so off-screen placeholders stay the right height
+      onSize(pageIdx, cssW, cssH);
+
       // pdfjs-dist v5+ wants `canvas` directly; `canvasContext` is deprecated
       // and silently no-ops on some pages.
       await page.render({ canvas: pdfCanvas, viewport }).promise;
@@ -172,8 +182,9 @@ const PdfPage = memo(function PdfPage({
       try { page?.cleanup(); } catch { /* ignore */ }
     };
   // Intentionally excluding `strokes`/`redraw` — only re-render PDF on doc/zoom change
+  // `onSize` is stable (useCallback with empty deps) so safe to include
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [doc, pageIdx, zoom]);
+  }, [doc, pageIdx, zoom, onSize]);
 
   // ── Re-draw annotations whenever strokes change ──────────────────────────
   useEffect(() => {
@@ -182,8 +193,11 @@ const PdfPage = memo(function PdfPage({
   }, [strokes, redraw]);
 
   // ── Pointer helpers ──────────────────────────────────────────────────────
+  // Use capturedRectRef if a stroke is in progress; otherwise read fresh.
+  // This prevents a layout shift mid-stroke (e.g. sidebar animation) from
+  // introducing a coordinate jump.
   function normalise(canvas: HTMLCanvasElement, e: React.PointerEvent): Point {
-    const r = canvas.getBoundingClientRect();
+    const r = capturedRectRef.current ?? canvas.getBoundingClientRect();
     return {
       x: (e.clientX - r.left)  / r.width,
       y: (e.clientY - r.top) / r.height,
@@ -214,6 +228,9 @@ const PdfPage = memo(function PdfPage({
     if (tool === "eraser") return;
     e.currentTarget.setPointerCapture(e.pointerId);
     isDrawingRef.current = true;
+    // Snapshot the bounding rect at stroke start so any mid-stroke layout
+    // change (sidebar slide, pane resize) doesn't shift coordinates.
+    capturedRectRef.current = e.currentTarget.getBoundingClientRect();
     const pt = normalise(e.currentTarget, e);
     currentPtsRef.current = [pt];
   }
@@ -246,9 +263,10 @@ const PdfPage = memo(function PdfPage({
     pts.push(pt);
   }
 
-  function handlePointerUp(e: React.PointerEvent<HTMLCanvasElement>) {
+  function handlePointerUp(_e: React.PointerEvent<HTMLCanvasElement>) {
     if (tool === "eraser" || !isDrawingRef.current) return;
     isDrawingRef.current = false;
+    capturedRectRef.current = null;
     const pts = currentPtsRef.current;
     currentPtsRef.current = [];
     if (pts.length < 2) return;
@@ -297,11 +315,17 @@ export function PdfViewer({ content: pdfPath, nodeId }: Props) {
   const [color,      setColor]      = useState("#1a1a1a");
   const [strokeWidth, setStrokeWidth] = useState(4);
   const [zoom,       setZoom]       = useState(1.0);
+  const [confirmClear, setConfirmClear] = useState(false);
 
   const annotationsRef  = useRef<Annotations>({});
   const saveTimerRef    = useRef<ReturnType<typeof setTimeout> | null>(null);
   const undoStackRef    = useRef<Array<{ pageIdx: number; strokeId: string }>>([]);
   const scrollRef       = useRef<HTMLDivElement>(null);
+  // Which pages are currently intersecting the scroll viewport.
+  // Off-screen pages render as placeholder divs (no canvases) to cap memory.
+  const [visiblePages, setVisiblePages] = useState<Set<number>>(new Set([0, 1, 2]));
+  // Estimated per-page CSS size so placeholders keep correct scroll height.
+  const [pageSizes, setPageSizes] = useState<Record<number, { w: number; h: number }>>({});
 
   // Keep annotationsRef current
   useEffect(() => { annotationsRef.current = annotations; }, [annotations]);
@@ -400,13 +424,15 @@ export function PdfViewer({ content: pdfPath, nodeId }: Props) {
   }, [scheduleSave]);
 
   // ── Clear all annotations ─────────────────────────────────────────────
+  // Uses inline confirmation state — window.confirm() is suppressed in
+  // Tauri's WKWebView (iOS) and would silently no-op, so we avoid it.
   function clearAll() {
-    if (!confirm("Clear all annotations on this PDF?")) return;
     const next: Annotations = {};
     setAnnotations(next);
     annotationsRef.current = next;
     undoStackRef.current = [];
     scheduleSave(next);
+    setConfirmClear(false);
   }
 
   // ── Zoom ──────────────────────────────────────────────────────────────
@@ -426,6 +452,63 @@ export function PdfViewer({ content: pdfPath, nodeId }: Props) {
     el.addEventListener("wheel", onWheel, { passive: false });
     return () => el.removeEventListener("wheel", onWheel);
   }, []);
+
+  // ── Virtual rendering: observe page wrappers, only mount canvases for
+  //    pages near the viewport. Keeps memory bounded regardless of PDF length.
+  //    rootMargin: render 1 full viewport ahead/behind so scrolling is smooth.
+  useEffect(() => {
+    const root = scrollRef.current;
+    if (!root || numPages === 0) return;
+
+    const io = new IntersectionObserver(
+      (entries) => {
+        setVisiblePages(prev => {
+          const next = new Set(prev);
+          for (const entry of entries) {
+            const idx = Number((entry.target as HTMLElement).dataset.pageIdx);
+            if (entry.isIntersecting) {
+              next.add(idx);
+            } else {
+              // Keep one page buffer on each side so scroll feels instant
+              const anyNeighbourVisible = next.has(idx - 1) || next.has(idx + 1);
+              if (!anyNeighbourVisible) next.delete(idx);
+            }
+          }
+          return next;
+        });
+      },
+      { root, rootMargin: "200% 0px" }
+    );
+
+    // Observe all page wrapper elements (they render even when off-screen)
+    const wrappers = root.querySelectorAll<HTMLElement>("[data-page-idx]");
+    wrappers.forEach(el => io.observe(el));
+
+    return () => io.disconnect();
+  // Re-run when numPages or zoom changes (zoom changes page heights)
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [numPages, zoom]);
+
+  // Track rendered page sizes so placeholder divs hold the right height.
+  const handlePageSize = useCallback((pageIdx: number, w: number, h: number) => {
+    setPageSizes(prev => {
+      if (prev[pageIdx]?.w === w && prev[pageIdx]?.h === h) return prev;
+      return { ...prev, [pageIdx]: { w, h } };
+    });
+  }, []);
+
+  // Estimate placeholder size for pages we haven't rendered yet (use last known
+  // or fall back to a rough A4 estimate based on zoom).
+  const estimatedPageSize = useMemo(() => {
+    const known = Object.values(pageSizes);
+    if (known.length > 0) {
+      const avgW = known.reduce((s, p) => s + p.w, 0) / known.length;
+      const avgH = known.reduce((s, p) => s + p.h, 0) / known.length;
+      return { w: avgW, h: avgH };
+    }
+    // A4 at 96dpi × zoom (CSS px)
+    return { w: Math.round(595 * zoom), h: Math.round(842 * zoom) };
+  }, [pageSizes, zoom]);
 
   // ── Render ────────────────────────────────────────────────────────────
   if (!pdfPath) {
@@ -524,28 +607,50 @@ export function PdfViewer({ content: pdfPath, nodeId }: Props) {
           >
             ↩
           </button>
-          <button className="pdf-tb-btn pdf-clear-btn" title="Clear all annotations" onClick={clearAll}>
-            🗑
-          </button>
+          {confirmClear ? (
+            <>
+              <span className="pdf-tb-confirm-label">Clear all?</span>
+              <button className="pdf-tb-btn pdf-clear-confirm-btn" title="Confirm clear" onClick={clearAll}>✓</button>
+              <button className="pdf-tb-btn" title="Cancel" onClick={() => setConfirmClear(false)}>✕</button>
+            </>
+          ) : (
+            <button className="pdf-tb-btn pdf-clear-btn" title="Clear all annotations" onClick={() => setConfirmClear(true)}>
+              🗑
+            </button>
+          )}
         </div>
       </div>
 
       {/* ── Pages ───────────────────────────────────────────────────── */}
       <div className="pdf-scroll-area" ref={scrollRef}>
-        {pdfDoc && Array.from({ length: numPages }, (_, i) => (
-          <PdfPage
-            key={i}
-            doc={pdfDoc}
-            pageIdx={i}
-            zoom={zoom}
-            strokes={annotations[i] ?? []}
-            tool={tool}
-            color={color}
-            strokeWidth={strokeWidth}
-            onStrokeAdded={handleStrokeAdded}
-            onErase={handleErase}
-          />
-        ))}
+        {pdfDoc && Array.from({ length: numPages }, (_, i) => {
+          const size = pageSizes[i] ?? estimatedPageSize;
+          return (
+            // data-page-idx is observed by IntersectionObserver above
+            <div key={i} data-page-idx={i} className="pdf-page-slot">
+              {visiblePages.has(i) ? (
+                <PdfPage
+                  doc={pdfDoc}
+                  pageIdx={i}
+                  zoom={zoom}
+                  strokes={annotations[i] ?? []}
+                  tool={tool}
+                  color={color}
+                  strokeWidth={strokeWidth}
+                  onStrokeAdded={handleStrokeAdded}
+                  onErase={handleErase}
+                  onSize={handlePageSize}
+                />
+              ) : (
+                // Placeholder keeps scroll height correct while canvases are unmounted
+                <div
+                  className="pdf-page-placeholder"
+                  style={{ width: size.w, height: size.h }}
+                />
+              )}
+            </div>
+          );
+        })}
       </div>
     </div>
   );
