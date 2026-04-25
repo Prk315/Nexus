@@ -63,6 +63,14 @@
   --radius: 0.75rem;
 }
 
+/* ── iOS safe area: apply once on html so the inset is not stacked ── */
+html {
+  padding-top:    env(safe-area-inset-top);
+  padding-bottom: env(safe-area-inset-bottom);
+  padding-left:   env(safe-area-inset-left);
+  padding-right:  env(safe-area-inset-right);
+}
+
 /* ── Reset ──────────────────────────────────────────────────────────────── */
 * {
   box-sizing: border-box;
@@ -756,6 +764,8 @@ body {
 
 .pdf-clear-btn { color: var(--fg-muted); }
 .pdf-clear-btn:hover { color: #e74c3c; border-color: #e74c3c; background: var(--bg-base); }
+.pdf-tb-confirm-label { font-size: 11px; color: var(--fg-muted); white-space: nowrap; padding: 0 2px; }
+.pdf-clear-confirm-btn { color: #e74c3c; border-color: #e74c3c; }
 
 /* Scroll area + pages */
 .pdf-scroll-area {
@@ -772,12 +782,10 @@ body {
 
 .pdf-page-wrapper {
   position: relative;
-  /* Block-level wrapper that hugs the canvas width and centers inside the
-     scroll area. width: max-content matches the canvas's intrinsic CSS size
-     (set inline by PdfViewer based on viewport). */
   display: block;
   width: max-content;
-  margin: 0 auto 16px auto;
+  /* Centering and shadow live on .pdf-page-slot so the placeholder
+     and the real canvas look identical while scrolling. */
   box-shadow: 0 2px 12px rgba(0,0,0,0.25);
   border-radius: 2px;
   overflow: hidden;
@@ -795,6 +803,19 @@ body {
   touch-action: none;
   -webkit-user-select: none;
   user-select: none;
+}
+
+.pdf-page-slot {
+  display: block;
+  width: max-content;
+  margin: 0 auto 16px auto;
+}
+
+.pdf-page-placeholder {
+  display: block;
+  background: #fff;
+  box-shadow: 0 2px 12px rgba(0,0,0,0.25);
+  border-radius: 2px;
 }
 
 .pdf-empty {

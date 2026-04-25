@@ -1,6 +1,6 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "vault",
+  "productName": "Vault",
   "version": "0.1.0",
   "identifier": "com.bastianthomsen.vault",
   "build": {
@@ -34,6 +34,10 @@
       "icons/128x128@2x.png",
       "icons/icon.icns",
       "icons/icon.ico"
-    ]
+    ],
+    "iOS": {
+      "developmentTeam": "G9D6JYJSLT",
+      "minimumSystemVersion": "14.0"
+    }
   }
 }
