@@ -34,6 +34,8 @@ targets:
           - "SafariBlockerExtension/**"
       - path: Assets.xcassets
       - path: Externals
+        excludes:
+          - "**/*.a"
       - path: timetracker-app_iOS
       - path: assets
         buildPhase: resources
