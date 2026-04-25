@@ -7,11 +7,14 @@ import {
   useMemo,
 } from "react";
 import * as pdfjs from "pdfjs-dist";
-import type { PDFDocumentProxy, PDFPageProxy } from "pdfjs-dist";
+import type { PDFDocumentProxy, PDFPageProxy, PageViewport } from "pdfjs-dist";
+import type { TextItem } from "pdfjs-dist/types/src/display/api";
 import * as api from "../lib/api";
+import { exportAnnotatedPdf } from "../lib/pdfExport";
 import { PdfTextAnnotationLayer } from "./PdfTextAnnotationLayer";
 import type { TextAnnotation, TextAnnotations } from "./PdfTextAnnotationLayer";
 import { PdfSidebarPanel } from "./PdfSidebarPanel";
+import { PdfSearchOverlay } from "./PdfSearchOverlay";
 
 // Vite ?url import for the PDF.js worker
 import workerUrl from "pdfjs-dist/build/pdf.worker.mjs?url";
@@ -38,7 +41,7 @@ const PDF_DOC_OPTIONS = {
 
 // ─── Types ──────────────────────────────────────────────────────────────────
 
-interface Point { x: number; y: number; } // normalised 0..1 within page
+interface Point { x: number; y: number; pressure: number; } // normalised 0..1 within page; pressure 0..1 (default 0.5)
 
 interface Stroke {
   id: string;
@@ -185,21 +188,21 @@ const PdfPage = memo(function PdfPage({
 
       if (s.tool === "highlighter") {
         ctx.globalAlpha = 0.35;
-        ctx.lineWidth   = s.width * zoom * DPR * 3;
-      } else {
-        ctx.lineWidth = s.width * zoom * DPR;
       }
 
       if (s.tool === "line" && s.points.length >= 2) {
+        ctx.lineWidth = s.width * zoom * DPR;
         ctx.beginPath();
         ctx.moveTo(s.points[0].x * w, s.points[0].y * h);
         ctx.lineTo(s.points[1].x * w, s.points[1].y * h);
         ctx.stroke();
       } else if (s.tool === "rect" && s.points.length >= 2) {
+        ctx.lineWidth = s.width * zoom * DPR;
         const x1 = s.points[0].x * w, y1 = s.points[0].y * h;
         const x2 = s.points[1].x * w, y2 = s.points[1].y * h;
         ctx.strokeRect(Math.min(x1,x2), Math.min(y1,y2), Math.abs(x2-x1), Math.abs(y2-y1));
       } else if (s.tool === "ellipse" && s.points.length >= 2) {
+        ctx.lineWidth = s.width * zoom * DPR;
         const x1 = s.points[0].x * w, y1 = s.points[0].y * h;
         const x2 = s.points[1].x * w, y2 = s.points[1].y * h;
         const cx = (x1+x2)/2, cy = (y1+y2)/2;
@@ -208,13 +211,41 @@ const PdfPage = memo(function PdfPage({
         ctx.ellipse(cx, cy, rx, ry, 0, 0, Math.PI * 2);
         ctx.stroke();
       } else if (s.points.length >= 2) {
-        // pen / highlighter
-        ctx.beginPath();
-        ctx.moveTo(s.points[0].x * w, s.points[0].y * h);
-        for (let i = 1; i < s.points.length; i++) {
-          ctx.lineTo(s.points[i].x * w, s.points[i].y * h);
+        // pen / highlighter — quadratic Bézier midpoint chaining for smooth curves
+        const spts = s.points;
+        const baseWidth = s.tool === "highlighter" ? s.width * zoom * DPR * 3 : s.width * zoom * DPR;
+        // 0.5 is exactly representable in IEEE 754; equality check is safe
+        const hasPressure = spts.some(p => p.pressure !== 0.5);
+
+        if (hasPressure) {
+          // Variable-width: one sub-path per segment so lineWidth can vary
+          for (let i = 0; i < spts.length - 1; i++) {
+            const avgP = (spts[i].pressure + spts[i + 1].pressure) / 2;
+            ctx.lineWidth = baseWidth * (0.5 + avgP * 1.5);
+            ctx.beginPath();
+            if (i === 0) {
+              ctx.moveTo(spts[i].x * w, spts[i].y * h);
+            } else {
+              ctx.moveTo((spts[i - 1].x + spts[i].x) / 2 * w, (spts[i - 1].y + spts[i].y) / 2 * h);
+            }
+            const mx = (spts[i].x + spts[i + 1].x) / 2 * w;
+            const my = (spts[i].y + spts[i + 1].y) / 2 * h;
+            ctx.quadraticCurveTo(spts[i].x * w, spts[i].y * h, mx, my);
+            ctx.stroke();
+          }
+        } else {
+          // Constant pressure (mouse / old strokes) — single smooth path
+          ctx.lineWidth = baseWidth;
+          ctx.beginPath();
+          ctx.moveTo(spts[0].x * w, spts[0].y * h);
+          for (let i = 1; i < spts.length - 1; i++) {
+            const mx = (spts[i].x + spts[i + 1].x) / 2 * w;
+            const my = (spts[i].y + spts[i + 1].y) / 2 * h;
+            ctx.quadraticCurveTo(spts[i].x * w, spts[i].y * h, mx, my);
+          }
+          ctx.lineTo(spts[spts.length - 1].x * w, spts[spts.length - 1].y * h);
+          ctx.stroke();
         }
-        ctx.stroke();
       }
       ctx.restore();
     }
@@ -298,6 +329,7 @@ const PdfPage = memo(function PdfPage({
     return {
       x: (e.clientX - r.left)  / r.width,
       y: (e.clientY - r.top) / r.height,
+      pressure: e.pressure ?? 0.5,
     };
   }
 
@@ -344,6 +376,7 @@ const PdfPage = memo(function PdfPage({
 
   // ── Pointer events ───────────────────────────────────────────────────────
   function handlePointerDown(e: React.PointerEvent<HTMLCanvasElement>) {
+    if (e.pointerType === "touch" && tool !== "text" && tool !== "lasso") return;
     e.currentTarget.setPointerCapture(e.pointerId);
     capturedRectRef.current = e.currentTarget.getBoundingClientRect();
     const pt = normalise(e.currentTarget, e);
@@ -362,6 +395,7 @@ const PdfPage = memo(function PdfPage({
   }
 
   function handlePointerMove(e: React.PointerEvent<HTMLCanvasElement>) {
+    if (e.pointerType === "touch" && tool !== "text" && tool !== "lasso") return;
     const canvas = e.currentTarget;
     if (tool === "lasso") {
       if (isDraggingSelectionRef.current && dragStartRef.current) {
@@ -456,12 +490,23 @@ export function PdfViewer({ content: pdfPath, nodeId }: Props) {
   const [selectedTextId, setSelectedTextId]   = useState<string | null>(null);
   const [selectedStrokes, setSelectedStrokes] = useState<Set<string>>(new Set());
   const [selectedPage, setSelectedPage]       = useState<number | null>(null);
+  const [exporting, setExporting]             = useState(false);
+  const [exportError, setExportError]           = useState<string | null>(null);
+
+  // ── Search state ─────────────────────────────────────────────────────────
+  const [searchOpen, setSearchOpen]           = useState(false);
+  const [searchQuery, setSearchQuery]         = useState("");
+  const [currentMatchIdx, setCurrentMatchIdx] = useState(0);
+  const textItemsRef  = useRef<Record<number, TextItem[]>>({});
+  const pageViewports = useRef<Record<number, PageViewport>>({});
 
   const annotationsRef     = useRef<Annotations>({});
   const textAnnotationsRef = useRef<TextAnnotations>([]);
   const saveTimerRef       = useRef<ReturnType<typeof setTimeout> | null>(null);
   const textSaveTimerRef   = useRef<ReturnType<typeof setTimeout> | null>(null);
   const bookmarkSaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const exportErrorTimerRef  = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const exportingRef         = useRef(false);
   const undoStackRef       = useRef<Array<{ pageIdx: number; strokeId: string }>>([]);
   const redoStackRef       = useRef<Array<{ pageIdx: number; strokeId: string }>>([]);
   const redoStrokesRef     = useRef<Map<string, Stroke>>(new Map());
@@ -472,6 +517,9 @@ export function PdfViewer({ content: pdfPath, nodeId }: Props) {
   const [visiblePages, setVisiblePages] = useState<Set<number>>(new Set([0, 1, 2]));
   // Estimated per-page CSS size so placeholders keep correct scroll height.
   const [pageSizes, setPageSizes] = useState<Record<number, { w: number; h: number }>>({});
+
+  // Clear export error timer on unmount
+  useEffect(() => () => { if (exportErrorTimerRef.current) clearTimeout(exportErrorTimerRef.current); }, []);
 
   // Keep annotationsRef current
   useEffect(() => { annotationsRef.current = annotations; }, [annotations]);
@@ -535,6 +583,31 @@ export function PdfViewer({ content: pdfPath, nodeId }: Props) {
     load();
     return () => { task?.destroy().catch(() => {}); };
   }, [pdfPath, nodeId]);
+
+  // ── Extract text content for search (runs in parallel after doc loads) ──
+  // Runs separately from the annotation-load effect so annotations appear
+  // immediately; text extraction is only needed when the user opens search.
+  useEffect(() => {
+    if (!pdfDoc) return;
+    let cancelled = false;
+    textItemsRef.current = {};
+    pageViewports.current = {};
+
+    async function extractPage(i: number) {
+      const page = await pdfDoc!.getPage(i + 1);
+      if (cancelled) return;
+      pageViewports.current[i] = page.getViewport({ scale: 1 });
+      const tc = await page.getTextContent();
+      if (cancelled) return;
+      textItemsRef.current[i] = tc.items.filter((it): it is TextItem => "str" in it);
+      try { page.cleanup(); } catch { /* ignore */ }
+    }
+
+    const jobs = Array.from({ length: pdfDoc.numPages }, (_, i) => extractPage(i));
+    Promise.all(jobs).catch(() => {});
+
+    return () => { cancelled = true; };
+  }, [pdfDoc]);
 
   // ── Persist annotations (debounced) ───────────────────────────────────
   const nodeIdRef = useRef(nodeId);
@@ -604,7 +677,7 @@ export function PdfViewer({ content: pdfPath, nodeId }: Props) {
       if (!strokes) return prev;
       const updated = strokes.map(s =>
         sel.has(s.id)
-          ? { ...s, points: s.points.map(p => ({ x: p.x + dx, y: p.y + dy })) }
+          ? { ...s, points: s.points.map(p => ({ x: p.x + dx, y: p.y + dy, pressure: p.pressure ?? 0.5 })) }
           : s
       );
       const next = { ...prev, [pageIdx]: updated };
@@ -618,6 +691,53 @@ export function PdfViewer({ content: pdfPath, nodeId }: Props) {
     setSelectedStrokes(new Set());
     setSelectedPage(null);
   }, []);
+
+  const deleteSelected = useCallback(() => {
+    if (selectedPage === null || selectedStrokes.size === 0) return;
+    const pageIdx = selectedPage;
+    const pageStrokes = annotationsRef.current[pageIdx] ?? [];
+    const removed = pageStrokes.filter(s => selectedStrokes.has(s.id));
+    const next = { ...annotationsRef.current, [pageIdx]: pageStrokes.filter(s => !selectedStrokes.has(s.id)) };
+    setAnnotations(next); annotationsRef.current = next;
+    for (const s of removed) undoStackRef.current.push({ pageIdx, strokeId: s.id });
+    redoStackRef.current = []; redoStrokesRef.current.clear();
+    setSelectedStrokes(new Set()); setSelectedPage(null);
+    scheduleSave(next);
+  }, [selectedPage, selectedStrokes, scheduleSave]);
+
+  const applyColorToSelected = useCallback((newColor: string) => {
+    if (selectedPage === null || selectedStrokes.size === 0) return;
+    setAnnotations(prev => {
+      const updated = (prev[selectedPage] ?? []).map(s =>
+        selectedStrokes.has(s.id) ? { ...s, color: newColor } : s
+      );
+      const next = { ...prev, [selectedPage]: updated };
+      annotationsRef.current = next;
+      scheduleSave(next);
+      return next;
+    });
+  }, [selectedPage, selectedStrokes, scheduleSave]);
+
+  const duplicateSelected = useCallback(() => {
+    if (selectedPage === null || selectedStrokes.size === 0) return;
+    setAnnotations(prev => {
+      const pageStrokes = prev[selectedPage] ?? [];
+      const clones = pageStrokes
+        .filter(s => selectedStrokes.has(s.id))
+        .map(s => ({
+          ...s,
+          id: Math.random().toString(36).slice(2),
+          points: s.points.map(p => ({ ...p, x: p.x + 0.02, y: p.y + 0.02 })),
+        }));
+      const next = { ...prev, [selectedPage]: [...pageStrokes, ...clones] };
+      annotationsRef.current = next;
+      scheduleSave(next);
+      for (const c of clones) undoStackRef.current.push({ pageIdx: selectedPage, strokeId: c.id });
+      redoStackRef.current = []; redoStrokesRef.current.clear();
+      setSelectedStrokes(new Set(clones.map(c => c.id)));
+      return next;
+    });
+  }, [selectedPage, selectedStrokes, scheduleSave]);
 
   // ── Bookmarks ─────────────────────────────────────────────────────────
   const scheduleBookmarkSave = useCallback((next: Set<number>) => {
@@ -643,6 +763,24 @@ export function PdfViewer({ content: pdfPath, nodeId }: Props) {
       return next;
     });
   }, [scheduleBookmarkSave]);
+
+  // ── Export annotated PDF ──────────────────────────────────────────────
+  const handleExport = useCallback(async () => {
+    if (!pdfPath || exportingRef.current) return;
+    exportingRef.current = true;
+    setExporting(true);
+    setExportError(null);
+    try {
+      await exportAnnotatedPdf(pdfPath, annotationsRef.current, textAnnotationsRef.current);
+    } catch {
+      setExportError("Export failed");
+      if (exportErrorTimerRef.current) clearTimeout(exportErrorTimerRef.current);
+      exportErrorTimerRef.current = setTimeout(() => setExportError(null), 3000);
+    } finally {
+      exportingRef.current = false;
+      setExporting(false);
+    }
+  }, [pdfPath]);
 
   // ── Scroll to page ────────────────────────────────────────────────────
   const scrollToPage = useCallback((pageIdx: number) => {
@@ -749,23 +887,14 @@ export function PdfViewer({ content: pdfPath, nodeId }: Props) {
       const mod = e.ctrlKey || e.metaKey;
       if (mod && e.key === "z" && !e.shiftKey) { e.preventDefault(); handleUndoBtn(); return; }
       if (mod && e.key === "z" && e.shiftKey)  { e.preventDefault(); handleRedoBtn(); return; }
+      if (mod && e.key === "f") { e.preventDefault(); setSearchOpen(true); return; }
+      if (e.key === "Escape" && searchOpen) { setSearchOpen(false); return; }
 
-      // Delete lasso-selected strokes
-      if ((e.key === "Delete" || e.key === "Backspace") && selectedPage !== null && selectedStrokes.size > 0) {
-        const pageIdx = selectedPage;
-        const pageStrokes = annotationsRef.current[pageIdx] ?? [];
-        const removed = pageStrokes.filter(s => selectedStrokes.has(s.id));
-        const next = { ...annotationsRef.current, [pageIdx]: pageStrokes.filter(s => !selectedStrokes.has(s.id)) };
-        setAnnotations(next); annotationsRef.current = next;
-        for (const s of removed) undoStackRef.current.push({ pageIdx, strokeId: s.id });
-        redoStackRef.current = []; redoStrokesRef.current.clear();
-        setSelectedStrokes(new Set()); setSelectedPage(null);
-        scheduleSave(next);
-      }
+      if (e.key === "Delete" || e.key === "Backspace") deleteSelected();
     }
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [handleUndoBtn, handleRedoBtn, scheduleSave, selectedStrokes, selectedPage]);
+  }, [handleUndoBtn, handleRedoBtn, deleteSelected, searchOpen]);
 
   // ── Clear all annotations ─────────────────────────────────────────────
   // Uses inline confirmation state — window.confirm() is suppressed in
@@ -932,6 +1061,48 @@ export function PdfViewer({ content: pdfPath, nodeId }: Props) {
     }
     return map;
   }, [textAnnotations]);
+
+  // ── Search: scan all pages for query matches ───────────────────────────
+  const matches = useMemo<{ pageIdx: number; itemIdx: number }[]>(() => {
+    if (!searchQuery.trim()) return [];
+    const q = searchQuery.toLowerCase();
+    const result: { pageIdx: number; itemIdx: number }[] = [];
+    const pages = textItemsRef.current;
+    for (const pageIdxStr of Object.keys(pages)) {
+      const pageIdx = Number(pageIdxStr);
+      const items = pages[pageIdx];
+      for (let i = 0; i < items.length; i++) {
+        if (items[i].str.toLowerCase().includes(q)) {
+          result.push({ pageIdx, itemIdx: i });
+        }
+      }
+    }
+    return result;
+  // searchQuery changes drive recompute; textItemsRef is stable after load
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [searchQuery]);
+
+  function prevMatch() {
+    if (matches.length === 0) return;
+    const idx = (currentMatchIdx - 1 + matches.length) % matches.length;
+    setCurrentMatchIdx(idx);
+    scrollToPage(matches[idx].pageIdx);
+  }
+
+  function nextMatch() {
+    if (matches.length === 0) return;
+    const idx = (currentMatchIdx + 1) % matches.length;
+    setCurrentMatchIdx(idx);
+    scrollToPage(matches[idx].pageIdx);
+  }
+
+  // Scroll to current match when search panel opens or the active match changes.
+  useEffect(() => {
+    if (searchOpen && matches.length > 0) {
+      scrollToPage(matches[Math.min(currentMatchIdx, matches.length - 1)].pageIdx);
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [searchOpen, currentMatchIdx]);
 
   // ── Render ────────────────────────────────────────────────────────────
   if (!pdfPath) {
@@ -1124,7 +1295,71 @@ export function PdfViewer({ content: pdfPath, nodeId }: Props) {
             </div>
           </>
         )}
+
+        <div className="pdf-tb-sep" />
+
+        {/* Search */}
+        <div className="pdf-toolbar-group">
+          <button className="pdf-tb-btn" title="Search (⌘F)" onClick={() => setSearchOpen(s => !s)}>🔍</button>
+          {searchOpen && (
+            <>
+              <input
+                className="pdf-search-input"
+                type="text"
+                placeholder="Search…"
+                value={searchQuery}
+                onChange={e => { setSearchQuery(e.target.value); setCurrentMatchIdx(0); }}
+                autoFocus
+              />
+              {searchQuery && (
+                <span className="pdf-tb-label">
+                  {matches.length === 0 ? "No results" : `${currentMatchIdx + 1} / ${matches.length}`}
+                </span>
+              )}
+              {matches.length > 0 && (
+                <>
+                  <button className="pdf-tb-btn" onClick={prevMatch} title="Previous">◀</button>
+                  <button className="pdf-tb-btn" onClick={nextMatch} title="Next">▶</button>
+                </>
+              )}
+            </>
+          )}
+        </div>
+
+        <div className="pdf-tb-sep" />
+
+        {/* Export PDF */}
+        <div className="pdf-toolbar-group">
+          {exportError && <span className="pdf-export-error">{exportError}</span>}
+          <button
+            className="pdf-tb-btn"
+            onClick={handleExport}
+            disabled={exporting || !pdfPath}
+            title="Export PDF with annotations"
+          >
+            {exporting ? "…" : "↓ PDF"}
+          </button>
+        </div>
       </div>
+
+      {/* ── Lasso action bar ─────────────────────────────────────────── */}
+      {selectedStrokes.size > 0 && selectedPage !== null && (
+        <div className="pdf-lasso-action-bar">
+          <span className="pdf-tb-label">Selection:</span>
+          {COLORS.map(c => (
+            <button
+              key={c}
+              className="pdf-color-swatch"
+              style={{ background: c }}
+              onClick={() => applyColorToSelected(c)}
+              title={`Recolor to ${c}`}
+            />
+          ))}
+          <div className="pdf-tb-sep" />
+          <button className="pdf-tb-btn" onClick={duplicateSelected} title="Duplicate selection">⧉ Dup</button>
+          <button className="pdf-tb-btn pdf-clear-btn" onClick={deleteSelected} title="Delete selection">🗑 Del</button>
+        </div>
+      )}
 
       {/* ── Body: sidebar + scroll area ──────────────────────────────── */}
       <div className="pdf-viewer-body">
@@ -1178,6 +1413,15 @@ export function PdfViewer({ content: pdfPath, nodeId }: Props) {
                           onCreate={handleTextCreate}
                           onDelete={handleTextDelete}
                         />
+                        {searchOpen && searchQuery && textItemsRef.current[i] && pageViewports.current[i] && (
+                          <PdfSearchOverlay
+                            pageIdx={i}
+                            matches={matches}
+                            currentMatchIdx={currentMatchIdx}
+                            textItems={textItemsRef.current[i]}
+                            viewport={pageViewports.current[i].clone({ scale: zoom })}
+                          />
+                        )}
                       </div>
                     ) : (
                       // Placeholder keeps scroll height correct while canvases are unmounted

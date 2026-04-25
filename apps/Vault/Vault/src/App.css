@@ -766,6 +766,18 @@ body {
 .pdf-clear-btn:hover { color: #e74c3c; border-color: #e74c3c; background: var(--bg-base); }
 .pdf-tb-confirm-label { font-size: 11px; color: var(--fg-muted); white-space: nowrap; padding: 0 2px; }
 .pdf-clear-confirm-btn { color: #e74c3c; border-color: #e74c3c; }
+.pdf-export-error { font-size: 11px; color: #e74c3c; white-space: nowrap; padding: 0 4px; }
+
+.pdf-lasso-action-bar {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 8px;
+  background: var(--bg-raised);
+  border-bottom: 1px solid var(--border-faint);
+  flex-shrink: 0;
+  flex-wrap: wrap;
+}
 
 /* Scroll area + pages */
 .pdf-scroll-area {
@@ -855,6 +867,36 @@ body {
 .pdf-text-annot-display { white-space: pre-wrap; padding: 2px 4px; font-family: inherit; }
 .pdf-text-annot-textarea { resize: none; border: none; outline: none; background: rgba(255,255,255,0.85); padding: 2px 4px; font-family: inherit; min-width: 60px; min-height: 24px; }
 .pdf-text-annot-delete { position: absolute; top: -8px; right: -8px; width: 16px; height: 16px; border-radius: 50%; background: #e74c3c; color: #fff; border: none; font-size: 10px; cursor: pointer; display: flex; align-items: center; justify-content: center; }
+
+/* ── PDF text search ────────────────────────────────────────────────────── */
+.pdf-search-input {
+  height: 26px;
+  padding: 0 6px;
+  border: 1px solid var(--border-faint);
+  border-radius: 4px;
+  background: var(--bg-base);
+  color: inherit;
+  font-size: 13px;
+  width: 140px;
+}
+.pdf-search-overlay {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+}
+.pdf-search-highlight {
+  position: absolute;
+  background: rgba(255, 220, 0, 0.4);
+  border-radius: 2px;
+  pointer-events: none;
+}
+.pdf-search-highlight.current {
+  background: rgba(255, 140, 0, 0.5);
+  outline: 1px solid rgba(255, 140, 0, 0.8);
+}
 
 /* ── PDF scroll wrapper + scrubber ─────────────────────────────────────── */
 .pdf-scroll-wrapper { flex: 1; display: flex; flex-direction: row; min-height: 0; overflow: hidden; }
