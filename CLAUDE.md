@@ -129,8 +129,32 @@ All apps **must use React 19**. If an app ships its own `node_modules/react` at 
 
 - Each app has its own `src-tauri/` with a `tauri.conf.json` and `Cargo.toml` that is a member of the root Cargo workspace.
 - Shared Rust types live in `packages/nexus-core/crate/` — add the crate as a dependency in any app's `Cargo.toml` to reuse `ConnectedApp`, `RegisterRequest`, etc.
-- SQLite databases are managed via `tauri-plugin-sql` with inline migrations in each app's `lib.rs`. Nexus uses `nexus.db`; other apps use their own DB files.
+- SQLite databases are managed via `tauri-plugin-sql` with inline migrations in each app's `lib.rs`. Nexus uses `nexus.db`; most other apps use their own DB files. **Exception:** PathFinder migrated to Supabase on 2026-04-25 — see the section below.
 - The `launch_app` Tauri command in Nexus handles `.app` bundles, `.sh` scripts, and raw binary paths.
+
+## PathFinder: Supabase Backend
+
+PathFinder migrated from local SQLite (via `tauri-plugin-sql`) to **Supabase** as the primary data store on 2026-04-25 (commit `efa8a64`). All `pf_*` tables live in the NEXUS Supabase project (`efxmzsdisaymtpebaxlp`).
+
+**Setup** (per developer, per machine):
+
+1. Copy `apps/PathFinder/.env.example` → `apps/PathFinder/.env`.
+2. Fill in `VITE_SUPABASE_ANON_KEY` from Supabase dashboard → Project Settings → API. The legacy anon (JWT) key and the new `sb_publishable_*` key both work.
+3. `.env` is gitignored — never commit it.
+
+**Current sync model — read this before assuming anything:**
+
+- Every CRUD call in `src/lib/api.ts` goes directly to Supabase. No local cache, no offline support — if the network drops, every operation throws.
+- Auth is **disabled**. Every row uses a hardcoded `USER_ID = "default"`, and every `pf_*` table has a permissive `anon_all` RLS policy (`USING (true) WITH CHECK (true)`).
+- No realtime subscriptions — multi-device awareness only on refresh.
+- Last-writer-wins on concurrent edits; no conflict detection.
+- The Rust SQLite plumbing (`src-tauri/src/{db,commands}.rs`) is **dead code** — left in tree for now but no longer called from the frontend.
+
+**To turn on multi-user / multi-device safely:**
+
+- Replace `USER_ID = "default"` in `api.ts` with `auth.uid()` after wiring `supabase.auth`.
+- Migrate RLS policies from `anon_all` to `USING (user_id = auth.uid())`.
+- TimeTrackerApp's commit `c29f73c` (multi-device active timer sync) is the closest in-tree precedent — start there.
 
 ## iOS Deployment Notes
 

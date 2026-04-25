@@ -13,9 +13,9 @@
     "windows": [
       {
         "title": "pathfinder-tmp",
-        "width": 800,
-        "height": 600,
-        "fullscreen": true
+        "width": 1280,
+        "height": 800,
+        "maximized": true
       }
     ],
     "security": {
