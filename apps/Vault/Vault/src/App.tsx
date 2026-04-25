@@ -83,7 +83,13 @@ function App() {
 
     function applyForces() {
       const fg = fullGraphRef.current as any;
-      if (!fg?.d3Force) {
+      // Wait for: kapsule API + data + kapsule's debounced _updateGraph.
+      // _updateGraph runs ~1ms after comp() and is what assigns state.layout.
+      // If we call d3ReheatSimulation before that, engineRunning flips true
+      // while state.layout is still undefined → next animation frame crashes
+      // inside three-forcegraph's layoutTick. The 50ms re-poll below is what
+      // pushes us past the 1ms debounce.
+      if (!fg?.d3Force || filteredNodesRef.current.length === 0) {
         retryId = setTimeout(applyForces, 50);
         return;
       }
@@ -143,7 +149,9 @@ function App() {
       fg.d3ReheatSimulation();
     }
 
-    applyForces();
+    // Defer the first attempt past kapsule's 1ms debounced digest so that
+    // _updateGraph has set state.layout before we flip engineRunning=true.
+    retryId = setTimeout(applyForces, 50);
     return () => clearTimeout(retryId);
   }, [fullGraph, is3D, graphFilters.gravity, graphFilters.showClusters, graphFilters.clusterStrength, graphFilters.clusterRepulsion]);
 
@@ -524,7 +532,11 @@ function App() {
     <div className="app" style={{ flex: 1, minHeight: 0, height: "auto" }}>
       {fullGraph && (
         <div className="fullgraph-overlay">
-          {is3D ? (
+          {filteredGraphData.nodes.length === 0 ? (
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "center", height: "100%", color: "#888" }}>
+              {graph && Object.keys(graph.nodes).length === 0 ? "No nodes in vault yet" : "Loading graph…"}
+            </div>
+          ) : is3D ? (
             <ForceGraph3D
               ref={fullGraphRef}
               graphData={filteredGraphData}

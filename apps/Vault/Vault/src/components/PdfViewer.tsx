@@ -148,7 +148,8 @@ const PdfPage = memo(function PdfPage({
     render();
     return () => {
       cancelled = true;
-      page?.cleanup().catch(() => {});
+      // pdfjs-dist v5+: page.cleanup() returns void, not a Promise.
+      try { page?.cleanup(); } catch { /* ignore */ }
     };
   // Intentionally excluding `strokes`/`redraw` — only re-render PDF on doc/zoom change
   // eslint-disable-next-line react-hooks/exhaustive-deps
