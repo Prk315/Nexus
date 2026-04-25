@@ -41,7 +41,7 @@ function App() {
           <NexusHeader appName="PathFinder" onHome={() => setPage("dashboard")} />
         )}
 
-        <main className={`flex-1 overflow-y-auto${IS_IOS ? " pb-16" : ""}`}>
+        <main className={`flex-1 overflow-y-auto${IS_IOS ? " pb-24" : ""}`}>
           {page === "dashboard" && <Dashboard />}
           {page === "week"      && <Week />}
           {page === "goals"     && <Goals />}

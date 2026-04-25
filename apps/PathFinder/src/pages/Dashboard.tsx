@@ -699,17 +699,17 @@ function WelcomeBox({
   ];
 
   return (
-    <div className="shrink-0 flex items-center gap-4 px-5 py-2.5 border-b border-border bg-card">
+    <div className="shrink-0 flex flex-col md:flex-row items-stretch md:items-center gap-4 px-5 py-2.5 border-b border-border bg-card">
 
       {/* Greeting */}
-      <div className="shrink-0">
+      <div className="shrink-0 w-full md:w-auto">
         <h1 className="text-xl font-semibold text-foreground">{greeting}</h1>
         <p className="text-sm text-muted-foreground mt-0.5">
           {new Date().toLocaleDateString("en-US", { weekday: "long", month: "long", day: "numeric" })}
         </p>
       </div>
 
-      <div className="h-10 w-px bg-border shrink-0" />
+      <div className="hidden md:block h-10 w-px bg-border shrink-0" />
 
       {/* Primary goal + today's progress */}
       <div className="flex flex-col gap-2 flex-1 min-w-0">
@@ -742,15 +742,15 @@ function WelcomeBox({
         )}
       </div>
 
-      <div className="h-10 w-px bg-border shrink-0" />
+      <div className="hidden md:block h-10 w-px bg-border shrink-0" />
 
       {/* Pie chart */}
       <TodayPie doneMin={doneMin} pendingMin={pendingMin} freeMin={freeMin} capTotal={capTotal} items={pieItems} />
 
-      <div className="h-10 w-px bg-border shrink-0" />
+      <div className="hidden md:block h-10 w-px bg-border shrink-0" />
 
       {/* Stat pills */}
-      <div className="flex items-center gap-2 shrink-0">
+      <div className="flex items-center gap-2 shrink-0 w-full md:w-auto flex-wrap">
         {[
           { label: "Goals",   value: activeGoals },
           { label: "Plans",   value: activePlans },
@@ -2202,15 +2202,15 @@ export function Dashboard() {
   };
 
   return (
-    <div className="flex flex-col h-[calc(100vh-2.5rem)] overflow-hidden">
+    <div className="flex flex-col h-[calc(100dvh-2.75rem-5.5rem)] md:h-[calc(100vh-2.5rem)] overflow-hidden">
 
       <WelcomeBox goals={goals} plans={plans} tasks={tasks} systems={systems}
         dailyGoals={dailyGoals} courseAssignments={courseAssignments} date={date} />
 
-      <div className="flex-1 min-h-0 flex overflow-hidden">
+      <div className="flex-1 min-h-0 flex flex-col md:flex-row overflow-hidden">
 
         {/* ── Left column ─────────────────────────────────────────────────── */}
-        <div className="flex-1 min-w-0 overflow-y-auto border-r border-border px-4 py-3 flex flex-col gap-4">
+        <div className="flex-1 min-w-0 overflow-y-auto border-r border-border px-3 py-2 md:px-4 md:py-3 flex flex-col gap-3 md:gap-4">
 
           {/* Daily Goals */}
           <DailyGoalsSection
@@ -2266,7 +2266,7 @@ export function Dashboard() {
         </div>
 
         {/* ── Right column: Day Calendar ──────────────────────────────────── */}
-        <div className="w-72 shrink-0 flex flex-col overflow-hidden px-3 py-3">
+        <div className="hidden md:flex w-72 shrink-0 flex-col overflow-hidden px-3 py-3">
           <DayCalendar
             date={date}
             calBlocks={calBlocks}
