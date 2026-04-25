@@ -9,6 +9,9 @@ import {
 import * as pdfjs from "pdfjs-dist";
 import type { PDFDocumentProxy, PDFPageProxy } from "pdfjs-dist";
 import * as api from "../lib/api";
+import { PdfTextAnnotationLayer } from "./PdfTextAnnotationLayer";
+import type { TextAnnotation, TextAnnotations } from "./PdfTextAnnotationLayer";
+import { PdfSidebarPanel } from "./PdfSidebarPanel";
 
 // Vite ?url import for the PDF.js worker
 import workerUrl from "pdfjs-dist/build/pdf.worker.mjs?url";
@@ -39,7 +42,7 @@ interface Point { x: number; y: number; } // normalised 0..1 within page
 
 interface Stroke {
   id: string;
-  tool: "pen" | "highlighter";
+  tool: "pen" | "highlighter" | "eraser" | "line" | "rect" | "ellipse";
   color: string;
   width: number; // base logical px (at zoom 1)
   points: Point[];
@@ -47,7 +50,40 @@ interface Stroke {
 
 type Annotations = Record<number, Stroke[]>; // page index → strokes
 
-type Tool = "pen" | "highlighter" | "eraser";
+type Tool = "pen" | "highlighter" | "eraser" | "text" | "line" | "rect" | "ellipse" | "lasso";
+
+interface LassoRect { x1: number; y1: number; x2: number; y2: number; }
+
+// ─── Lasso geometry helpers ───────────────────────────────────────────────────
+
+function normalizeRect(r: LassoRect): LassoRect {
+  return {
+    x1: Math.min(r.x1, r.x2), y1: Math.min(r.y1, r.y2),
+    x2: Math.max(r.x1, r.x2), y2: Math.max(r.y1, r.y2),
+  };
+}
+
+function pointInRect(p: Point, r: LassoRect): boolean {
+  return p.x >= r.x1 && p.x <= r.x2 && p.y >= r.y1 && p.y <= r.y2;
+}
+
+function strokeInRect(s: Stroke, r: LassoRect): boolean {
+  return s.points.every(p => pointInRect(p, r));
+}
+
+function strokesBoundingBox(stks: Stroke[]): LassoRect | null {
+  if (stks.length === 0) return null;
+  let x1 = Infinity, y1 = Infinity, x2 = -Infinity, y2 = -Infinity;
+  for (const s of stks) {
+    for (const p of s.points) {
+      if (p.x < x1) x1 = p.x;
+      if (p.y < y1) y1 = p.y;
+      if (p.x > x2) x2 = p.x;
+      if (p.y > y2) y2 = p.y;
+    }
+  }
+  return { x1, y1, x2, y2 };
+}
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
@@ -71,6 +107,8 @@ const STROKE_SIZES: { label: string; value: number }[] = [
   { label: "XL", value: 16 },
 ];
 
+const SHAPE_TOOLS: Tool[] = ["line", "rect", "ellipse"];
+
 // ─── PdfPage ─────────────────────────────────────────────────────────────────
 
 interface PdfPageProps {
@@ -78,12 +116,16 @@ interface PdfPageProps {
   pageIdx: number;
   zoom: number;
   strokes: Stroke[];
+  selectedStrokes: Set<string>;
   tool: Tool;
   color: string;
   strokeWidth: number;
   onStrokeAdded: (pageIdx: number, stroke: Stroke) => void;
   onErase: (pageIdx: number, updatedStrokes: Stroke[]) => void;
   onSize: (pageIdx: number, w: number, h: number) => void;
+  onLassoSelect: (pageIdx: number, ids: Set<string>) => void;
+  onLassoMove: (pageIdx: number, dx: number, dy: number) => void;
+  onDeselectLasso: () => void;
 }
 
 const PdfPage = memo(function PdfPage({
@@ -91,12 +133,16 @@ const PdfPage = memo(function PdfPage({
   pageIdx,
   zoom,
   strokes,
+  selectedStrokes,
   tool,
   color,
   strokeWidth,
   onStrokeAdded,
   onErase,
   onSize,
+  onLassoSelect,
+  onLassoMove,
+  onDeselectLasso,
 }: PdfPageProps) {
   const pdfCanvasRef  = useRef<HTMLCanvasElement>(null);
   const annotCanvasRef = useRef<HTMLCanvasElement>(null);
@@ -110,28 +156,79 @@ const PdfPage = memo(function PdfPage({
   const strokesRef = useRef<Stroke[]>(strokes);
   useEffect(() => { strokesRef.current = strokes; }, [strokes]);
 
+  // Lasso state — all in refs to avoid re-renders during drag
+  const lassoStartRef = useRef<Point | null>(null);
+  const lassoRectRef  = useRef<LassoRect | null>(null);
+  const isDraggingSelectionRef = useRef(false);
+  const dragStartRef = useRef<Point | null>(null);
+  const selectedStrokesRef = useRef<Set<string>>(selectedStrokes);
+  useEffect(() => { selectedStrokesRef.current = selectedStrokes; }, [selectedStrokes]);
+
   // ── Draw annotations on the annotation canvas ───────────────────────────
-  const redraw = useCallback((canvas: HTMLCanvasElement, stks: Stroke[]) => {
+  const redraw = useCallback((canvas: HTMLCanvasElement, stks: Stroke[], selIds?: Set<string>, lassoRect?: LassoRect | null) => {
     const ctx = canvas.getContext("2d")!;
     ctx.clearRect(0, 0, canvas.width, canvas.height);
+    const w = canvas.width;
+    const h = canvas.height;
+
     for (const s of stks) {
-      if (s.points.length < 2) continue;
+      if (s.points.length < 1) continue;
       ctx.save();
       ctx.strokeStyle = s.color;
       ctx.lineCap    = "round";
       ctx.lineJoin   = "round";
+
+      if (selIds?.has(s.id)) {
+        ctx.shadowBlur = 4;
+        ctx.shadowColor = "#4f8ef7";
+      }
+
       if (s.tool === "highlighter") {
         ctx.globalAlpha = 0.35;
         ctx.lineWidth   = s.width * zoom * DPR * 3;
       } else {
         ctx.lineWidth = s.width * zoom * DPR;
       }
-      ctx.beginPath();
-      ctx.moveTo(s.points[0].x * canvas.width, s.points[0].y * canvas.height);
-      for (let i = 1; i < s.points.length; i++) {
-        ctx.lineTo(s.points[i].x * canvas.width, s.points[i].y * canvas.height);
+
+      if (s.tool === "line" && s.points.length >= 2) {
+        ctx.beginPath();
+        ctx.moveTo(s.points[0].x * w, s.points[0].y * h);
+        ctx.lineTo(s.points[1].x * w, s.points[1].y * h);
+        ctx.stroke();
+      } else if (s.tool === "rect" && s.points.length >= 2) {
+        const x1 = s.points[0].x * w, y1 = s.points[0].y * h;
+        const x2 = s.points[1].x * w, y2 = s.points[1].y * h;
+        ctx.strokeRect(Math.min(x1,x2), Math.min(y1,y2), Math.abs(x2-x1), Math.abs(y2-y1));
+      } else if (s.tool === "ellipse" && s.points.length >= 2) {
+        const x1 = s.points[0].x * w, y1 = s.points[0].y * h;
+        const x2 = s.points[1].x * w, y2 = s.points[1].y * h;
+        const cx = (x1+x2)/2, cy = (y1+y2)/2;
+        const rx = Math.abs(x2-x1)/2, ry = Math.abs(y2-y1)/2;
+        ctx.beginPath();
+        ctx.ellipse(cx, cy, rx, ry, 0, 0, Math.PI * 2);
+        ctx.stroke();
+      } else if (s.points.length >= 2) {
+        // pen / highlighter
+        ctx.beginPath();
+        ctx.moveTo(s.points[0].x * w, s.points[0].y * h);
+        for (let i = 1; i < s.points.length; i++) {
+          ctx.lineTo(s.points[i].x * w, s.points[i].y * h);
+        }
+        ctx.stroke();
       }
-      ctx.stroke();
+      ctx.restore();
+    }
+
+    // Draw lasso rubber-band
+    if (lassoRect) {
+      const x1 = lassoRect.x1 * w, y1 = lassoRect.y1 * h;
+      const x2 = lassoRect.x2 * w, y2 = lassoRect.y2 * h;
+      ctx.save();
+      ctx.setLineDash([4, 3]);
+      ctx.strokeStyle = "#4f8ef7";
+      ctx.lineWidth = 1.5;
+      ctx.globalAlpha = 0.8;
+      ctx.strokeRect(Math.min(x1,x2), Math.min(y1,y2), Math.abs(x2-x1), Math.abs(y2-y1));
       ctx.restore();
     }
   }, [zoom]);
@@ -172,7 +269,7 @@ const PdfPage = memo(function PdfPage({
       if (cancelled) return;
 
       // Restore any existing annotations after re-render
-      redraw(annotCanvas, strokesRef.current);
+      redraw(annotCanvas, strokesRef.current, selectedStrokesRef.current, lassoRectRef.current);
     }
 
     render();
@@ -186,11 +283,11 @@ const PdfPage = memo(function PdfPage({
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [doc, pageIdx, zoom, onSize]);
 
-  // ── Re-draw annotations whenever strokes change ──────────────────────────
+  // ── Re-draw annotations whenever strokes / selection changes ────────────
   useEffect(() => {
     const canvas = annotCanvasRef.current;
-    if (canvas && canvas.width > 0) redraw(canvas, strokes);
-  }, [strokes, redraw]);
+    if (canvas && canvas.width > 0) redraw(canvas, strokes, selectedStrokes, lassoRectRef.current);
+  }, [strokes, selectedStrokes, redraw]);
 
   // ── Pointer helpers ──────────────────────────────────────────────────────
   // Use capturedRectRef if a stroke is in progress; otherwise read fresh.
@@ -223,65 +320,98 @@ const PdfPage = memo(function PdfPage({
     ctx.restore();
   }
 
+  function drawShapePreview(canvas: HTMLCanvasElement, start: Point, end: Point) {
+    redraw(canvas, strokesRef.current, selectedStrokesRef.current, null);
+    const ctx = canvas.getContext("2d")!;
+    const x1 = start.x * canvas.width,  y1 = start.y * canvas.height;
+    const x2 = end.x   * canvas.width,  y2 = end.y   * canvas.height;
+    ctx.save();
+    ctx.strokeStyle = color;
+    ctx.lineWidth   = strokeWidth * zoom * DPR;
+    ctx.lineCap     = "round";
+    ctx.lineJoin    = "round";
+    if (tool === "line") {
+      ctx.beginPath(); ctx.moveTo(x1, y1); ctx.lineTo(x2, y2); ctx.stroke();
+    } else if (tool === "rect") {
+      ctx.strokeRect(Math.min(x1,x2), Math.min(y1,y2), Math.abs(x2-x1), Math.abs(y2-y1));
+    } else if (tool === "ellipse") {
+      ctx.beginPath();
+      ctx.ellipse((x1+x2)/2, (y1+y2)/2, Math.abs(x2-x1)/2, Math.abs(y2-y1)/2, 0, 0, Math.PI*2);
+      ctx.stroke();
+    }
+    ctx.restore();
+  }
+
   // ── Pointer events ───────────────────────────────────────────────────────
   function handlePointerDown(e: React.PointerEvent<HTMLCanvasElement>) {
-    if (tool === "eraser") return;
     e.currentTarget.setPointerCapture(e.pointerId);
-    isDrawingRef.current = true;
-    // Snapshot the bounding rect at stroke start so any mid-stroke layout
-    // change (sidebar slide, pane resize) doesn't shift coordinates.
     capturedRectRef.current = e.currentTarget.getBoundingClientRect();
     const pt = normalise(e.currentTarget, e);
-    currentPtsRef.current = [pt];
+    if (tool === "lasso") {
+      const sel = selectedStrokesRef.current;
+      if (sel.size > 0) {
+        const stks = strokesRef.current.filter(s => sel.has(s.id));
+        const bbox = strokesBoundingBox(stks);
+        if (bbox && pointInRect(pt, bbox)) { isDraggingSelectionRef.current = true; dragStartRef.current = pt; return; }
+        onDeselectLasso();
+      }
+      lassoStartRef.current = pt; lassoRectRef.current = { x1: pt.x, y1: pt.y, x2: pt.x, y2: pt.y }; isDrawingRef.current = true; return;
+    }
+    if (tool === "eraser" || tool === "text") return;
+    isDrawingRef.current = true; currentPtsRef.current = [pt];
   }
 
   function handlePointerMove(e: React.PointerEvent<HTMLCanvasElement>) {
     const canvas = e.currentTarget;
-
+    if (tool === "lasso") {
+      if (isDraggingSelectionRef.current && dragStartRef.current) {
+        const pt = normalise(canvas, e);
+        const dx = pt.x - dragStartRef.current.x, dy = pt.y - dragStartRef.current.y;
+        dragStartRef.current = pt; onLassoMove(pageIdx, dx, dy); return;
+      }
+      if (!isDrawingRef.current || !lassoStartRef.current) return;
+      const pt = normalise(canvas, e);
+      lassoRectRef.current = { x1: lassoStartRef.current.x, y1: lassoStartRef.current.y, x2: pt.x, y2: pt.y };
+      redraw(canvas, strokesRef.current, selectedStrokesRef.current, lassoRectRef.current); return;
+    }
+    if (tool === "text") return;
     if (tool === "eraser") {
       if (e.buttons === 0) return;
       const pt = normalise(canvas, e);
-      const before = strokesRef.current;
-      const after  = before.filter(s =>
-        !s.points.some(p => {
-          const dx = p.x - pt.x;
-          const dy = p.y - pt.y;
-          return Math.sqrt(dx * dx + dy * dy) < ERASER_RADIUS;
-        })
-      );
-      if (after.length !== before.length) {
-        onErase(pageIdx, after);
-        redraw(canvas, after);
-      }
-      return;
+      const after = strokesRef.current.filter(s => !s.points.some(p => { const dx = p.x - pt.x, dy = p.y - pt.y; return Math.sqrt(dx*dx+dy*dy) < ERASER_RADIUS; }));
+      if (after.length !== strokesRef.current.length) { onErase(pageIdx, after); redraw(canvas, after, selectedStrokesRef.current, null); } return;
     }
-
     if (!isDrawingRef.current) return;
-    const pts = currentPtsRef.current;
-    const pt  = normalise(canvas, e);
+    const pts = currentPtsRef.current, pt = normalise(canvas, e);
+    if (SHAPE_TOOLS.includes(tool)) { if (pts.length > 0) drawShapePreview(canvas, pts[0], pt); return; }
     if (pts.length > 0) drawSegment(canvas, pts[pts.length - 1], pt);
     pts.push(pt);
   }
 
-  function handlePointerUp(_e: React.PointerEvent<HTMLCanvasElement>) {
-    if (tool === "eraser" || !isDrawingRef.current) return;
-    isDrawingRef.current = false;
-    capturedRectRef.current = null;
-    const pts = currentPtsRef.current;
-    currentPtsRef.current = [];
+  function handlePointerUp(e: React.PointerEvent<HTMLCanvasElement>) {
+    const canvas = e.currentTarget;
+    if (tool === "lasso") {
+      if (isDraggingSelectionRef.current) { isDraggingSelectionRef.current = false; dragStartRef.current = null; capturedRectRef.current = null; return; }
+      if (!isDrawingRef.current) return;
+      isDrawingRef.current = false; capturedRectRef.current = null;
+      const rect = lassoRectRef.current; lassoRectRef.current = null; lassoStartRef.current = null;
+      if (!rect) return;
+      const nr = normalizeRect(rect);
+      const ids = new Set(strokesRef.current.filter(s => strokeInRect(s, nr)).map(s => s.id));
+      onLassoSelect(pageIdx, ids); redraw(canvas, strokesRef.current, ids, null); return;
+    }
+    if (tool === "eraser" || tool === "text" || !isDrawingRef.current) return;
+    isDrawingRef.current = false; capturedRectRef.current = null;
+    const pts = currentPtsRef.current; currentPtsRef.current = [];
+    if (SHAPE_TOOLS.includes(tool)) {
+      const pt = normalise(canvas, e), start = pts[0]; if (!start) return;
+      onStrokeAdded(pageIdx, { id: Math.random().toString(36).slice(2), tool, color, width: strokeWidth, points: [start, pt] }); return;
+    }
     if (pts.length < 2) return;
-
-    const stroke: Stroke = {
-      id:    Math.random().toString(36).slice(2),
-      tool,
-      color,
-      width: strokeWidth,
-      points: pts,
-    };
-    onStrokeAdded(pageIdx, stroke);
+    onStrokeAdded(pageIdx, { id: Math.random().toString(36).slice(2), tool, color, width: strokeWidth, points: pts });
   }
 
-  const cursor = tool === "eraser" ? "cell" : "crosshair";
+  const cursor = tool === "eraser" ? "cell" : tool === "text" ? "default" : tool === "lasso" ? (selectedStrokes.size > 0 ? "grab" : "crosshair") : "crosshair";
 
   return (
     <div className="pdf-page-wrapper">
@@ -316,11 +446,27 @@ export function PdfViewer({ content: pdfPath, nodeId }: Props) {
   const [strokeWidth, setStrokeWidth] = useState(4);
   const [zoom,       setZoom]       = useState(1.0);
   const [confirmClear, setConfirmClear] = useState(false);
+  const [sidebarOpen, setSidebarOpen] = useState(true);
+  const [bookmarks, setBookmarks]   = useState<Set<number>>(new Set());
+  const [currentPage, setCurrentPage] = useState(0);
+  // null = indicator display; non-null string = editing mode with that value
+  const [pageInputValue, setPageInputValue] = useState<string | null>(null);
 
-  const annotationsRef  = useRef<Annotations>({});
-  const saveTimerRef    = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const undoStackRef    = useRef<Array<{ pageIdx: number; strokeId: string }>>([]);
-  const scrollRef       = useRef<HTMLDivElement>(null);
+  const [textAnnotations, setTextAnnotations] = useState<TextAnnotations>([]);
+  const [selectedTextId, setSelectedTextId]   = useState<string | null>(null);
+  const [selectedStrokes, setSelectedStrokes] = useState<Set<string>>(new Set());
+  const [selectedPage, setSelectedPage]       = useState<number | null>(null);
+
+  const annotationsRef     = useRef<Annotations>({});
+  const textAnnotationsRef = useRef<TextAnnotations>([]);
+  const saveTimerRef       = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const textSaveTimerRef   = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const bookmarkSaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const undoStackRef       = useRef<Array<{ pageIdx: number; strokeId: string }>>([]);
+  const redoStackRef       = useRef<Array<{ pageIdx: number; strokeId: string }>>([]);
+  const redoStrokesRef     = useRef<Map<string, Stroke>>(new Map());
+  const scrollRef          = useRef<HTMLDivElement>(null);
+  const scrubberRef        = useRef<HTMLDivElement>(null);
   // Which pages are currently intersecting the scroll viewport.
   // Off-screen pages render as placeholder divs (no canvases) to cap memory.
   const [visiblePages, setVisiblePages] = useState<Set<number>>(new Set([0, 1, 2]));
@@ -329,6 +475,7 @@ export function PdfViewer({ content: pdfPath, nodeId }: Props) {
 
   // Keep annotationsRef current
   useEffect(() => { annotationsRef.current = annotations; }, [annotations]);
+  useEffect(() => { textAnnotationsRef.current = textAnnotations; }, [textAnnotations]);
 
   // ── Load PDF & annotations ─────────────────────────────────────────────
   useEffect(() => {
@@ -360,6 +507,29 @@ export function PdfViewer({ content: pdfPath, nodeId }: Props) {
       } catch {
         // No annotations yet — that's fine
       }
+
+      // Load saved text annotations
+      try {
+        const rawTxt = await api.readContent(nodeId + "_textannot");
+        if (rawTxt) {
+          const parsed = JSON.parse(rawTxt) as TextAnnotations;
+          setTextAnnotations(parsed);
+          textAnnotationsRef.current = parsed;
+        }
+      } catch {
+        // No text annotations yet — that's fine
+      }
+
+      // Load saved bookmarks
+      try {
+        const rawBm = await api.readContent(nodeId + "_bookmarks");
+        if (rawBm) {
+          const arr = JSON.parse(rawBm) as number[];
+          setBookmarks(new Set(arr));
+        }
+      } catch {
+        // No bookmarks yet — that's fine
+      }
     }
 
     load();
@@ -381,6 +551,150 @@ export function PdfViewer({ content: pdfPath, nodeId }: Props) {
     }, SAVE_DEBOUNCE_MS);
   }, []);
 
+  // ── Persist text annotations (debounced) ─────────────────────────────
+  const scheduleTextSave = useCallback((next: TextAnnotations) => {
+    if (textSaveTimerRef.current) clearTimeout(textSaveTimerRef.current);
+    textSaveTimerRef.current = setTimeout(async () => {
+      try {
+        await api.saveContent(nodeIdRef.current + "_textannot", JSON.stringify(next));
+      } catch (err) {
+        console.error("Failed to save PDF text annotations:", err);
+      }
+    }, SAVE_DEBOUNCE_MS);
+  }, []);
+
+  // ── Text annotation CRUD ─────────────────────────────────────────────
+  const handleTextCreate = useCallback((a: TextAnnotation) => {
+    const next = [...textAnnotationsRef.current, a];
+    setTextAnnotations(next);
+    textAnnotationsRef.current = next;
+    setSelectedTextId(a.id);
+    scheduleTextSave(next);
+  }, [scheduleTextSave]);
+
+  const handleTextChange = useCallback((updated: TextAnnotation) => {
+    const next = textAnnotationsRef.current.map(a => a.id === updated.id ? updated : a);
+    setTextAnnotations(next);
+    textAnnotationsRef.current = next;
+    scheduleTextSave(next);
+  }, [scheduleTextSave]);
+
+  const handleTextDelete = useCallback((id: string) => {
+    const next = textAnnotationsRef.current.filter(a => a.id !== id);
+    setTextAnnotations(next);
+    textAnnotationsRef.current = next;
+    setSelectedTextId(prev => prev === id ? null : prev);
+    scheduleTextSave(next);
+  }, [scheduleTextSave]);
+
+  // ── Lasso selection handlers ──────────────────────────────────────────
+  const selectedStrokesStateRef = useRef<Set<string>>(selectedStrokes);
+  useEffect(() => { selectedStrokesStateRef.current = selectedStrokes; }, [selectedStrokes]);
+
+  const handleLassoSelect = useCallback((pageIdx: number, ids: Set<string>) => {
+    setSelectedStrokes(ids);
+    setSelectedPage(ids.size > 0 ? pageIdx : null);
+  }, []);
+
+  const handleLassoMove = useCallback((pageIdx: number, dx: number, dy: number) => {
+    if (dx === 0 && dy === 0) return;
+    const sel = selectedStrokesStateRef.current;
+    setAnnotations(prev => {
+      const strokes = prev[pageIdx];
+      if (!strokes) return prev;
+      const updated = strokes.map(s =>
+        sel.has(s.id)
+          ? { ...s, points: s.points.map(p => ({ x: p.x + dx, y: p.y + dy })) }
+          : s
+      );
+      const next = { ...prev, [pageIdx]: updated };
+      annotationsRef.current = next;
+      scheduleSave(next);
+      return next;
+    });
+  }, [scheduleSave]);
+
+  const handleDeselectLasso = useCallback(() => {
+    setSelectedStrokes(new Set());
+    setSelectedPage(null);
+  }, []);
+
+  // ── Bookmarks ─────────────────────────────────────────────────────────
+  const scheduleBookmarkSave = useCallback((next: Set<number>) => {
+    if (bookmarkSaveTimerRef.current) clearTimeout(bookmarkSaveTimerRef.current);
+    bookmarkSaveTimerRef.current = setTimeout(async () => {
+      try {
+        await api.saveContent(nodeIdRef.current + "_bookmarks", JSON.stringify([...next]));
+      } catch (err) {
+        console.error("Failed to save PDF bookmarks:", err);
+      }
+    }, SAVE_DEBOUNCE_MS);
+  }, []);
+
+  const toggleBookmark = useCallback((pageIdx: number) => {
+    setBookmarks(prev => {
+      const next = new Set(prev);
+      if (next.has(pageIdx)) {
+        next.delete(pageIdx);
+      } else {
+        next.add(pageIdx);
+      }
+      scheduleBookmarkSave(next);
+      return next;
+    });
+  }, [scheduleBookmarkSave]);
+
+  // ── Scroll to page ────────────────────────────────────────────────────
+  const scrollToPage = useCallback((pageIdx: number) => {
+    const root = scrollRef.current;
+    if (!root) return;
+    const el = root.querySelector<HTMLElement>(`[data-page-idx="${pageIdx}"]`);
+    if (el) {
+      root.scrollTop = el.offsetTop - 20;
+    }
+  }, []);
+
+  // ── Track current page via scroll ─────────────────────────────────────
+  // Keep pageSizes in a ref so the scroll handler reads the latest value
+  // without being recreated every time a page finishes rendering.
+  const pageSizesRef = useRef<Record<number, { w: number; h: number }>>({});
+  useEffect(() => { pageSizesRef.current = pageSizes; }, [pageSizes]);
+
+  useEffect(() => {
+    const root = scrollRef.current;
+    if (!root || numPages === 0) return;
+    // Capture as non-nullable so the closure doesn't need a null-check on each scroll.
+    const el = root;
+
+    function onScroll() {
+      const scrollTop = el.scrollTop;
+      const sizes = pageSizesRef.current;
+      let bestIdx = 0;
+      let bestDist = Infinity;
+      // If all page sizes are known, walk cumulative heights without touching DOM.
+      if (Object.keys(sizes).length === numPages) {
+        let cumH = 0;
+        for (let i = 0; i < numPages; i++) {
+          const dist = Math.abs(cumH - scrollTop);
+          if (dist < bestDist) { bestDist = dist; bestIdx = i; }
+          cumH += (sizes[i]?.h ?? 0) + 16; // 16px = .pdf-page-slot margin-bottom
+        }
+      } else {
+        // Fallback: DOM query before first render pass populates pageSizes.
+        for (let i = 0; i < numPages; i++) {
+          const slot = el.querySelector<HTMLElement>(`[data-page-idx="${i}"]`);
+          if (!slot) continue;
+          const dist = Math.abs(slot.offsetTop - scrollTop);
+          if (dist < bestDist) { bestDist = dist; bestIdx = i; }
+        }
+      }
+      setCurrentPage(prev => prev === bestIdx ? prev : bestIdx);
+    }
+
+    el.addEventListener("scroll", onScroll, { passive: true });
+    return () => el.removeEventListener("scroll", onScroll);
+  }, [numPages]);
+
   // ── Stroke callbacks ──────────────────────────────────────────────────
   const handleStrokeAdded = useCallback((pageIdx: number, stroke: Stroke) => {
     const next = {
@@ -390,6 +704,9 @@ export function PdfViewer({ content: pdfPath, nodeId }: Props) {
     setAnnotations(next);
     annotationsRef.current = next;
     undoStackRef.current.push({ pageIdx, strokeId: stroke.id });
+    // Any new stroke invalidates redo history
+    redoStackRef.current = [];
+    redoStrokesRef.current.clear();
     scheduleSave(next);
   }, [scheduleSave]);
 
@@ -400,28 +717,55 @@ export function PdfViewer({ content: pdfPath, nodeId }: Props) {
     scheduleSave(next);
   }, [scheduleSave]);
 
-  // ── Undo (Ctrl/Cmd+Z) ─────────────────────────────────────────────────
+  // ── Undo / Redo shared helpers ────────────────────────────────────────
+  const handleUndoBtn = useCallback(() => {
+    const entry = undoStackRef.current.pop();
+    if (!entry) return;
+    const { pageIdx, strokeId } = entry;
+    const pageStrokes = annotationsRef.current[pageIdx] ?? [];
+    const removed = pageStrokes.find(s => s.id === strokeId);
+    const next = { ...annotationsRef.current, [pageIdx]: pageStrokes.filter(s => s.id !== strokeId) };
+    setAnnotations(next); annotationsRef.current = next;
+    if (removed) { redoStackRef.current.push({ pageIdx, strokeId }); redoStrokesRef.current.set(strokeId, removed); }
+    scheduleSave(next);
+  }, [scheduleSave]);
+
+  const handleRedoBtn = useCallback(() => {
+    const entry = redoStackRef.current.pop();
+    if (!entry) return;
+    const { pageIdx, strokeId } = entry;
+    const stroke = redoStrokesRef.current.get(strokeId);
+    if (!stroke) return;
+    redoStrokesRef.current.delete(strokeId);
+    const next = { ...annotationsRef.current, [pageIdx]: [...(annotationsRef.current[pageIdx] ?? []), stroke] };
+    setAnnotations(next); annotationsRef.current = next;
+    undoStackRef.current.push({ pageIdx, strokeId });
+    scheduleSave(next);
+  }, [scheduleSave]);
+
+  // ── Keyboard shortcuts: Undo / Redo / Lasso Delete ────────────────────
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
-      if ((e.ctrlKey || e.metaKey) && e.key === "z" && !e.shiftKey) {
-        e.preventDefault();
-        const entry = undoStackRef.current.pop();
-        if (!entry) return;
-        const { pageIdx, strokeId } = entry;
-        const next = {
-          ...annotationsRef.current,
-          [pageIdx]: (annotationsRef.current[pageIdx] ?? []).filter(
-            s => s.id !== strokeId
-          ),
-        };
-        setAnnotations(next);
-        annotationsRef.current = next;
+      const mod = e.ctrlKey || e.metaKey;
+      if (mod && e.key === "z" && !e.shiftKey) { e.preventDefault(); handleUndoBtn(); return; }
+      if (mod && e.key === "z" && e.shiftKey)  { e.preventDefault(); handleRedoBtn(); return; }
+
+      // Delete lasso-selected strokes
+      if ((e.key === "Delete" || e.key === "Backspace") && selectedPage !== null && selectedStrokes.size > 0) {
+        const pageIdx = selectedPage;
+        const pageStrokes = annotationsRef.current[pageIdx] ?? [];
+        const removed = pageStrokes.filter(s => selectedStrokes.has(s.id));
+        const next = { ...annotationsRef.current, [pageIdx]: pageStrokes.filter(s => !selectedStrokes.has(s.id)) };
+        setAnnotations(next); annotationsRef.current = next;
+        for (const s of removed) undoStackRef.current.push({ pageIdx, strokeId: s.id });
+        redoStackRef.current = []; redoStrokesRef.current.clear();
+        setSelectedStrokes(new Set()); setSelectedPage(null);
         scheduleSave(next);
       }
     }
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [scheduleSave]);
+  }, [handleUndoBtn, handleRedoBtn, scheduleSave, selectedStrokes, selectedPage]);
 
   // ── Clear all annotations ─────────────────────────────────────────────
   // Uses inline confirmation state — window.confirm() is suppressed in
@@ -431,6 +775,8 @@ export function PdfViewer({ content: pdfPath, nodeId }: Props) {
     setAnnotations(next);
     annotationsRef.current = next;
     undoStackRef.current = [];
+    redoStackRef.current = [];
+    redoStrokesRef.current.clear();
     scheduleSave(next);
     setConfirmClear(false);
   }
@@ -452,6 +798,74 @@ export function PdfViewer({ content: pdfPath, nodeId }: Props) {
     el.addEventListener("wheel", onWheel, { passive: false });
     return () => el.removeEventListener("wheel", onWheel);
   }, []);
+
+  // ── Pinch-to-zoom (two-finger touch) ─────────────────────────────────
+  useEffect(() => {
+    const el = scrollRef.current;
+    if (!el) return;
+    let lastDist = 0;
+
+    function onTouchStart(e: TouchEvent) {
+      if (e.touches.length === 2) {
+        const dx = e.touches[0].clientX - e.touches[1].clientX;
+        const dy = e.touches[0].clientY - e.touches[1].clientY;
+        lastDist = Math.hypot(dx, dy);
+      }
+    }
+
+    function onTouchMove(e: TouchEvent) {
+      if (e.touches.length !== 2 || lastDist === 0) return;
+      e.preventDefault();
+      const dx = e.touches[0].clientX - e.touches[1].clientX;
+      const dy = e.touches[0].clientY - e.touches[1].clientY;
+      const dist = Math.hypot(dx, dy);
+      const ratio = dist / lastDist;
+      lastDist = dist;
+      setZoom(z => Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, +(z * ratio).toFixed(2))));
+    }
+
+    el.addEventListener("touchstart", onTouchStart, { passive: true });
+    el.addEventListener("touchmove", onTouchMove, { passive: false });
+    return () => {
+      el.removeEventListener("touchstart", onTouchStart);
+      el.removeEventListener("touchmove", onTouchMove);
+    };
+  }, []);
+
+  // ── Scrubber pointer interaction ──────────────────────────────────────
+  // Pointer capture routes all move/up events to the scrubber element,
+  // so React onPointerMove/onPointerUp on the div handle the full drag.
+  const scrubberRectRef = useRef<DOMRect | null>(null);
+
+  function onScrubberPointerDown(e: React.PointerEvent<HTMLDivElement>) {
+    if (numPages <= 1) return;
+    e.currentTarget.setPointerCapture(e.pointerId);
+    // Snapshot rect once at drag start to avoid forced layout on every move.
+    scrubberRectRef.current = e.currentTarget.getBoundingClientRect();
+    jumpScrubberToY(e.clientY);
+  }
+
+  function jumpScrubberToY(clientY: number) {
+    const rect = scrubberRectRef.current;
+    if (!rect) return;
+    const ratio = Math.max(0, Math.min(1, (clientY - rect.top) / rect.height));
+    scrollToPage(Math.round(ratio * (numPages - 1)));
+  }
+
+  function onScrubberPointerMove(e: React.PointerEvent<HTMLDivElement>) {
+    if (e.buttons === 0) return;
+    jumpScrubberToY(e.clientY);
+  }
+
+  function onScrubberPointerUp() {
+    scrubberRectRef.current = null;
+  }
+
+  function commitPageInput() {
+    const val = parseInt(pageInputValue ?? "", 10);
+    if (!isNaN(val)) scrollToPage(Math.max(0, Math.min(numPages - 1, val - 1)));
+    setPageInputValue(null);
+  }
 
   // ── Virtual rendering: observe page wrappers, only mount canvases for
   //    pages near the viewport. Keeps memory bounded regardless of PDF length.
@@ -510,6 +924,15 @@ export function PdfViewer({ content: pdfPath, nodeId }: Props) {
     return { w: Math.round(595 * zoom), h: Math.round(842 * zoom) };
   }, [pageSizes, zoom]);
 
+  // Group text annotations by page index to avoid O(N×M) filter inside the render loop.
+  const textAnnotsByPage = useMemo(() => {
+    const map: Record<number, TextAnnotation[]> = {};
+    for (const a of textAnnotations) {
+      (map[a.pageIdx] ??= []).push(a);
+    }
+    return map;
+  }, [textAnnotations]);
+
   // ── Render ────────────────────────────────────────────────────────────
   if (!pdfPath) {
     return <div className="pdf-empty"><p>PDF not loaded</p></div>;
@@ -519,6 +942,19 @@ export function PdfViewer({ content: pdfPath, nodeId }: Props) {
     <div className="pdf-viewer">
       {/* ── Toolbar ─────────────────────────────────────────────────── */}
       <div className="pdf-toolbar">
+
+        {/* Sidebar toggle */}
+        <div className="pdf-toolbar-group">
+          <button
+            className={`pdf-tb-btn${sidebarOpen ? " active" : ""}`}
+            onClick={() => setSidebarOpen(o => !o)}
+            title="Toggle sidebar (thumbnails & bookmarks)"
+          >
+            ◧
+          </button>
+        </div>
+
+        <div className="pdf-tb-sep" />
 
         {/* Zoom */}
         <div className="pdf-toolbar-group">
@@ -541,10 +977,52 @@ export function PdfViewer({ content: pdfPath, nodeId }: Props) {
               {t === "pen" ? "✏️" : t === "highlighter" ? "🖍" : "⌫"}
             </button>
           ))}
+          {/* Text tool */}
+          <button
+            className={`pdf-tb-btn pdf-tool-btn ${tool === "text" ? "active" : ""}`}
+            onClick={() => setTool("text")}
+            title="Text annotation (double-click page to add)"
+            style={{ fontWeight: 700, fontStyle: "italic", fontSize: 14 }}
+          >
+            T
+          </button>
         </div>
 
-        {/* Colors — hidden while eraser active */}
-        {tool !== "eraser" && (
+        <div className="pdf-tb-sep" />
+
+        {/* Shape tools */}
+        <div className="pdf-toolbar-group">
+          {([
+            { t: "line" as Tool, label: "—", title: "Line" },
+            { t: "rect" as Tool, label: "▭", title: "Rectangle" },
+            { t: "ellipse" as Tool, label: "◯", title: "Ellipse" },
+          ]).map(({ t, label, title }) => (
+            <button
+              key={t}
+              className={`pdf-tb-btn pdf-tool-btn ${tool === t ? "active" : ""}`}
+              onClick={() => setTool(t)}
+              title={title}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+
+        <div className="pdf-tb-sep" />
+
+        {/* Lasso select */}
+        <div className="pdf-toolbar-group">
+          <button
+            className={`pdf-tb-btn pdf-tool-btn ${tool === "lasso" ? "active" : ""}`}
+            onClick={() => setTool("lasso")}
+            title="Lasso select (drag to select, Delete to remove, drag selection to move)"
+          >
+            ⬚
+          </button>
+        </div>
+
+        {/* Colors — hidden while eraser/lasso/text active */}
+        {tool !== "eraser" && tool !== "text" && tool !== "lasso" && (
           <>
             <div className="pdf-tb-sep" />
             <div className="pdf-toolbar-group">
@@ -561,8 +1039,8 @@ export function PdfViewer({ content: pdfPath, nodeId }: Props) {
           </>
         )}
 
-        {/* Stroke sizes — hidden while eraser active */}
-        {tool !== "eraser" && (
+        {/* Stroke sizes — hidden while eraser/lasso/text tool active */}
+        {tool !== "eraser" && tool !== "text" && tool !== "lasso" && (
           <>
             <div className="pdf-tb-sep" />
             <div className="pdf-toolbar-group">
@@ -585,28 +1063,10 @@ export function PdfViewer({ content: pdfPath, nodeId }: Props) {
 
         <div className="pdf-tb-sep" />
 
-        {/* Undo & clear */}
+        {/* Undo / Redo / Clear */}
         <div className="pdf-toolbar-group">
-          <button
-            className="pdf-tb-btn"
-            title="Undo last stroke (⌘Z / Ctrl+Z)"
-            onClick={() => {
-              const entry = undoStackRef.current.pop();
-              if (!entry) return;
-              const { pageIdx, strokeId } = entry;
-              const next = {
-                ...annotationsRef.current,
-                [pageIdx]: (annotationsRef.current[pageIdx] ?? []).filter(
-                  s => s.id !== strokeId
-                ),
-              };
-              setAnnotations(next);
-              annotationsRef.current = next;
-              scheduleSave(next);
-            }}
-          >
-            ↩
-          </button>
+          <button className="pdf-tb-btn" title="Undo last stroke (⌘Z / Ctrl+Z)" onClick={handleUndoBtn}>↩</button>
+          <button className="pdf-tb-btn" title="Redo (⌘⇧Z / Ctrl+Shift+Z)" onClick={handleRedoBtn}>↪</button>
           {confirmClear ? (
             <>
               <span className="pdf-tb-confirm-label">Clear all?</span>
@@ -619,38 +1079,135 @@ export function PdfViewer({ content: pdfPath, nodeId }: Props) {
             </button>
           )}
         </div>
-      </div>
 
-      {/* ── Pages ───────────────────────────────────────────────────── */}
-      <div className="pdf-scroll-area" ref={scrollRef}>
-        {pdfDoc && Array.from({ length: numPages }, (_, i) => {
-          const size = pageSizes[i] ?? estimatedPageSize;
-          return (
-            // data-page-idx is observed by IntersectionObserver above
-            <div key={i} data-page-idx={i} className="pdf-page-slot">
-              {visiblePages.has(i) ? (
-                <PdfPage
-                  doc={pdfDoc}
-                  pageIdx={i}
-                  zoom={zoom}
-                  strokes={annotations[i] ?? []}
-                  tool={tool}
-                  color={color}
-                  strokeWidth={strokeWidth}
-                  onStrokeAdded={handleStrokeAdded}
-                  onErase={handleErase}
-                  onSize={handlePageSize}
+        <div className="pdf-tb-sep" />
+
+        {/* Bookmark current page */}
+        <div className="pdf-toolbar-group">
+          <button
+            className={`pdf-tb-btn${bookmarks.has(currentPage) ? " active" : ""}`}
+            onClick={() => toggleBookmark(currentPage)}
+            title={bookmarks.has(currentPage) ? "Remove bookmark" : "Bookmark this page"}
+          >
+            ★
+          </button>
+        </div>
+
+        {numPages > 0 && (
+          <>
+            <div className="pdf-tb-sep" />
+            <div className="pdf-toolbar-group">
+              {pageInputValue !== null ? (
+                <input
+                  className="pdf-page-indicator-input"
+                  type="number"
+                  min={1}
+                  max={numPages}
+                  value={pageInputValue}
+                  autoFocus
+                  onChange={e => setPageInputValue(e.target.value)}
+                  onKeyDown={e => {
+                    if (e.key === "Enter") commitPageInput();
+                    if (e.key === "Escape") setPageInputValue(null);
+                  }}
+                  onBlur={commitPageInput}
                 />
               ) : (
-                // Placeholder keeps scroll height correct while canvases are unmounted
-                <div
-                  className="pdf-page-placeholder"
-                  style={{ width: size.w, height: size.h }}
-                />
+                <button
+                  className="pdf-page-indicator"
+                  title="Click to jump to page"
+                  onClick={() => setPageInputValue(String(currentPage + 1))}
+                >
+                  {currentPage + 1} / {numPages}
+                </button>
               )}
             </div>
-          );
-        })}
+          </>
+        )}
+      </div>
+
+      {/* ── Body: sidebar + scroll area ──────────────────────────────── */}
+      <div className="pdf-viewer-body">
+        {sidebarOpen && (
+          <PdfSidebarPanel
+            doc={pdfDoc}
+            numPages={numPages}
+            currentPage={currentPage}
+            bookmarks={bookmarks}
+            onPageClick={scrollToPage}
+            onToggleBookmark={toggleBookmark}
+          />
+        )}
+        <div className="pdf-main-content">
+          {/* ── Pages + scrubber ──────────────────────────────────────── */}
+          <div className="pdf-scroll-wrapper">
+            <div className="pdf-scroll-area" ref={scrollRef}>
+              {pdfDoc && Array.from({ length: numPages }, (_, i) => {
+                const size = pageSizes[i] ?? estimatedPageSize;
+                const pageAnnots = textAnnotsByPage[i] ?? [];
+                return (
+                  // data-page-idx is observed by IntersectionObserver above
+                  <div key={i} data-page-idx={i} className="pdf-page-slot">
+                    {visiblePages.has(i) ? (
+                      <div className="pdf-page-with-text">
+                        <PdfPage
+                          doc={pdfDoc}
+                          pageIdx={i}
+                          zoom={zoom}
+                          strokes={annotations[i] ?? []}
+                          selectedStrokes={selectedPage === i ? selectedStrokes : new Set<string>()}
+                          tool={tool}
+                          color={color}
+                          strokeWidth={strokeWidth}
+                          onStrokeAdded={handleStrokeAdded}
+                          onErase={handleErase}
+                          onSize={handlePageSize}
+                          onLassoSelect={handleLassoSelect}
+                          onLassoMove={handleLassoMove}
+                          onDeselectLasso={handleDeselectLasso}
+                        />
+                        <PdfTextAnnotationLayer
+                          pageIdx={i}
+                          annotations={pageAnnots}
+                          pageWidth={size.w}
+                          pageHeight={size.h}
+                          tool={tool}
+                          selectedId={selectedTextId}
+                          onSelect={setSelectedTextId}
+                          onChange={handleTextChange}
+                          onCreate={handleTextCreate}
+                          onDelete={handleTextDelete}
+                        />
+                      </div>
+                    ) : (
+                      // Placeholder keeps scroll height correct while canvases are unmounted
+                      <div
+                        className="pdf-page-placeholder"
+                        style={{ width: size.w, height: size.h }}
+                      />
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+            {numPages > 1 && (
+              <div
+                className="pdf-scrubber"
+                ref={scrubberRef}
+                onPointerDown={onScrubberPointerDown}
+                onPointerMove={onScrubberPointerMove}
+                onPointerUp={onScrubberPointerUp}
+              >
+                <div
+                  className="pdf-scrubber-thumb"
+                  style={{ top: `${(currentPage / Math.max(1, numPages - 1)) * 100}%` }}
+                >
+                  <span className="pdf-scrubber-label">{currentPage + 1}</span>
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
       </div>
     </div>
   );

@@ -827,6 +827,47 @@ body {
   font-size: 14px;
 }
 
+/* ── PDF sidebar + body layout ─────────────────────────────────────────── */
+.pdf-viewer-body { flex: 1; display: flex; flex-direction: row; min-height: 0; overflow: hidden; }
+.pdf-main-content { flex: 1; display: flex; flex-direction: column; min-width: 0; }
+.pdf-sidebar-panel { width: 160px; flex-shrink: 0; border-right: 1px solid var(--border-faint); display: flex; flex-direction: column; background: var(--bg-deep); overflow: hidden; }
+.pdf-sidebar-tabs { display: flex; border-bottom: 1px solid var(--border-faint); flex-shrink: 0; }
+.pdf-sidebar-tab { flex: 1; padding: 8px 4px; font-size: 11px; background: none; border: none; cursor: pointer; color: var(--fg-muted); }
+.pdf-sidebar-tab.active { color: var(--fg-main); border-bottom: 2px solid var(--accent, #4f8ef7); }
+.pdf-sidebar-scroll { flex: 1; overflow-y: auto; padding: 8px 4px; }
+.pdf-thumb-item { margin-bottom: 8px; text-align: center; cursor: pointer; }
+.pdf-thumb-item.active canvas { outline: 2px solid var(--accent, #4f8ef7); border-radius: 2px; }
+.pdf-thumb-canvas { display: block; margin: 0 auto; border-radius: 2px; box-shadow: 0 1px 4px rgba(0,0,0,0.2); }
+.pdf-thumb-label { font-size: 10px; color: var(--fg-muted); margin-top: 3px; }
+.pdf-thumb-placeholder { display: block; width: 90px; height: 128px; margin: 0 auto; background: var(--bg-raised); border-radius: 2px; }
+.pdf-bookmark-item { display: flex; align-items: center; gap: 6px; padding: 6px 4px; border-radius: 4px; }
+.pdf-bookmark-item:hover { background: var(--bg-raised); }
+.pdf-bookmark-label { flex: 1; font-size: 12px; color: var(--fg-main); }
+.pdf-bookmark-go { font-size: 11px; background: none; border: none; cursor: pointer; color: var(--accent, #4f8ef7); }
+.pdf-bookmark-del { font-size: 11px; background: none; border: none; cursor: pointer; color: var(--fg-muted); }
+.pdf-sidebar-empty { padding: 16px 8px; font-size: 11px; color: var(--fg-ghost); text-align: center; }
+
+/* ── PDF text annotation layer ───────────────────────────────────────────── */
+.pdf-page-with-text { position: relative; display: block; width: max-content; }
+.pdf-text-annot-layer { position: absolute; top: 0; left: 0; width: 100%; height: 100%; }
+.pdf-text-annot { position: absolute; cursor: move; min-width: 60px; min-height: 24px; }
+.pdf-text-annot.selected { outline: 2px solid var(--accent, #4f8ef7); border-radius: 2px; }
+.pdf-text-annot-display { white-space: pre-wrap; padding: 2px 4px; font-family: inherit; }
+.pdf-text-annot-textarea { resize: none; border: none; outline: none; background: rgba(255,255,255,0.85); padding: 2px 4px; font-family: inherit; min-width: 60px; min-height: 24px; }
+.pdf-text-annot-delete { position: absolute; top: -8px; right: -8px; width: 16px; height: 16px; border-radius: 50%; background: #e74c3c; color: #fff; border: none; font-size: 10px; cursor: pointer; display: flex; align-items: center; justify-content: center; }
+
+/* ── PDF scroll wrapper + scrubber ─────────────────────────────────────── */
+.pdf-scroll-wrapper { flex: 1; display: flex; flex-direction: row; min-height: 0; overflow: hidden; }
+.pdf-scrubber { width: 20px; flex-shrink: 0; background: var(--bg-deep); border-left: 1px solid var(--border-faint); position: relative; cursor: pointer; }
+.pdf-scrubber-thumb { position: absolute; left: 2px; right: 2px; height: 32px; background: var(--bg-raised); border: 1px solid var(--border-faint); border-radius: 4px; transform: translateY(-50%); display: flex; align-items: center; justify-content: center; transition: background 0.1s; }
+.pdf-scrubber-thumb:hover { background: var(--accent, #4f8ef7); }
+.pdf-scrubber-label { font-size: 9px; color: var(--fg-muted); writing-mode: vertical-rl; line-height: 1; }
+
+/* ── PDF page indicator (jump-to-page) ──────────────────────────────────── */
+.pdf-page-indicator { background: none; border: none; cursor: pointer; font-size: 11px; font-variant-numeric: tabular-nums; color: var(--fg-muted); padding: 0 4px; font-family: inherit; }
+.pdf-page-indicator:hover { color: var(--fg-base); }
+.pdf-page-indicator-input { width: 40px; font-size: 11px; text-align: center; background: var(--bg-raised); border: 1px solid var(--border-faint); border-radius: 3px; padding: 1px 2px; color: var(--fg-base); }
+
 /* ── Node list / tree ───────────────────────────────────────────────────── */
 .node-list {
   list-style: none;
@@ -1439,6 +1480,8 @@ body {
   background-size: 24px 24px;
   cursor: grab;
   user-select: none;
+  touch-action: none;
+  -webkit-user-select: none;
 }
 
 .canvas-editor:active {
@@ -1452,6 +1495,7 @@ body {
   width: 0;
   height: 0;
   transform-origin: 0 0;
+  touch-action: none;
 }
 
 .canvas-toolbar-trigger {
@@ -1617,6 +1661,7 @@ body {
   align-items: center;
   justify-content: space-between;
   padding: 6px 10px;
+  min-height: 32px;
   background: var(--bg-raised);
   cursor: grab;
   flex-shrink: 0;
@@ -1642,6 +1687,11 @@ body {
   box-shadow: none;
   border-radius: 4px;
   transition: color var(--duration) var(--ease);
+  min-width: 24px;
+  min-height: 24px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
 }
 
 .canvas-block-close:hover {
@@ -1667,8 +1717,8 @@ body {
   position: absolute;
   bottom: 0;
   right: 0;
-  width: 14px;
-  height: 14px;
+  width: 20px;
+  height: 20px;
   cursor: se-resize;
   background: linear-gradient(135deg, transparent 50%, var(--border-base) 50%);
   border-radius: 0 0 calc(var(--radius) - 1px) 0;
@@ -1708,10 +1758,48 @@ body {
   letter-spacing: 0.06em;
   text-transform: uppercase;
   flex: 1;
+  padding: 0 6px;
 }
 
 .canvas-tool-sticky {
   color: var(--sticky);
+}
+
+/* ── Canvas touch / coarse-pointer overrides (iPad / finger) ────────────── */
+@media (pointer: coarse) {
+  .canvas-tool-btn {
+    min-width: 44px;
+    min-height: 44px;
+    padding: 0 8px;
+    font-size: 15px;
+  }
+  .canvas-overlay-toolbar {
+    gap: 4px;
+    padding: 8px 12px;
+  }
+  .canvas-block-header {
+    min-height: 40px;
+    padding: 8px 12px;
+  }
+  .canvas-block-resize {
+    width: 24px;
+    height: 24px;
+  }
+  .canvas-block-close {
+    min-width: 36px;
+    min-height: 36px;
+  }
+  .canvas-zoom-label {
+    min-width: 44px;
+  }
+  .toolbar-dd-item {
+    padding: 10px 14px;
+    font-size: 14px;
+  }
+  .canvas-port {
+    width: 18px !important;
+    height: 18px !important;
+  }
 }
 
 /* ── Canvas checklist ───────────────────────────────────────────────────── */

@@ -372,7 +372,7 @@ function ChecklistContent({ block, onUpdate }: { block: ChecklistBlock; onUpdate
   }
 
   return (
-    <div className="canvas-checklist" onMouseDown={e => e.stopPropagation()}>
+    <div className="canvas-checklist" onPointerDown={e => e.stopPropagation()}>
       {block.items.length > 0 && (
         <div className="canvas-checklist-progress-bar">
           <div className="canvas-checklist-progress-fill" style={{ width: `${(done / block.items.length) * 100}%` }} />
@@ -425,7 +425,7 @@ function KanbanContent({ block, onUpdate, onSelect }: { block: KanbanBlock; onUp
     }));
   }
   return (
-    <div className="canvas-kanban" onMouseDown={e => { e.stopPropagation(); onSelect?.(); }}>
+    <div className="canvas-kanban" onPointerDown={e => { e.stopPropagation(); onSelect?.(); }}>
       {block.columns.map((col, colIdx) => (
         <div key={col.id} className="canvas-kanban-col">
           <div className="canvas-kanban-col-header">
@@ -548,43 +548,43 @@ function TableContent({ block, onUpdate, onSelect, zoom = 1 }: {
   }
 
   // ── Column resize ──────────────────────────────────────────────────────────
-  function onColResizeMouseDown(e: React.MouseEvent, ci: number) {
+  function onColResizePointerDown(e: React.PointerEvent, ci: number) {
     e.stopPropagation(); e.preventDefault();
     const startX = e.clientX;
     const startW = colWidths[ci];
-    function onMove(ev: MouseEvent) {
+    function onMove(ev: PointerEvent) {
       const delta = (ev.clientX - startX) / zoom;
       const newW = Math.max(MIN_COL_W, startW + delta);
       onUpdate(block.id, { colWidths: colWidths.map((w, i) => i === ci ? newW : w) });
     }
     function onUp() {
-      window.removeEventListener("mousemove", onMove);
-      window.removeEventListener("mouseup", onUp);
+      window.removeEventListener("pointermove", onMove);
+      window.removeEventListener("pointerup", onUp);
     }
-    window.addEventListener("mousemove", onMove);
-    window.addEventListener("mouseup", onUp);
+    window.addEventListener("pointermove", onMove);
+    window.addEventListener("pointerup", onUp);
   }
 
   // ── Row resize ─────────────────────────────────────────────────────────────
-  function onRowResizeMouseDown(e: React.MouseEvent, ri: number) {
+  function onRowResizePointerDown(e: React.PointerEvent, ri: number) {
     e.stopPropagation(); e.preventDefault();
     const startY = e.clientY;
     const startH = rowHeights[ri];
-    function onMove(ev: MouseEvent) {
+    function onMove(ev: PointerEvent) {
       const delta = (ev.clientY - startY) / zoom;
       const newH = Math.max(MIN_ROW_H, startH + delta);
       onUpdate(block.id, { rowHeights: rowHeights.map((h, i) => i === ri ? newH : h) });
     }
     function onUp() {
-      window.removeEventListener("mousemove", onMove);
-      window.removeEventListener("mouseup", onUp);
+      window.removeEventListener("pointermove", onMove);
+      window.removeEventListener("pointerup", onUp);
     }
-    window.addEventListener("mousemove", onMove);
-    window.addEventListener("mouseup", onUp);
+    window.addEventListener("pointermove", onMove);
+    window.addEventListener("pointerup", onUp);
   }
 
   return (
-    <div className="canvas-table-wrap" onMouseDown={e => { e.stopPropagation(); onSelect?.(); }}>
+    <div className="canvas-table-wrap" onPointerDown={e => { e.stopPropagation(); onSelect?.(); }}>
       <table className="canvas-table" style={{ tableLayout: "fixed" }}>
         <colgroup>
           {colWidths.map((w, ci) => <col key={ci} style={{ width: w }} />)}
@@ -604,7 +604,7 @@ function TableContent({ block, onUpdate, onSelect, zoom = 1 }: {
                 )}
                 {/* Column resize handle */}
                 <div className="canvas-table-col-resize"
-                  onMouseDown={e => onColResizeMouseDown(e, ci)} />
+                  onPointerDown={e => onColResizePointerDown(e, ci)} />
               </th>
             ))}
             <th className="canvas-table-add-col-th">
@@ -632,7 +632,7 @@ function TableContent({ block, onUpdate, onSelect, zoom = 1 }: {
                 )}
                 {/* Row resize handle */}
                 <div className="canvas-table-row-resize"
-                  onMouseDown={e => onRowResizeMouseDown(e, ri)} />
+                  onPointerDown={e => onRowResizePointerDown(e, ri)} />
               </td>
             </tr>
           ))}
@@ -700,7 +700,7 @@ function MathContent({ block, onUpdate }: { block: MathBlock; onUpdate: (id: str
       <div
         className="canvas-math-preview"
         dangerouslySetInnerHTML={{ __html: rendered ?? "" }}
-        onMouseDown={e => e.stopPropagation()}
+        onPointerDown={e => e.stopPropagation()}
       />
     );
   }
@@ -712,7 +712,7 @@ function MathContent({ block, onUpdate }: { block: MathBlock; onUpdate: (id: str
       spellCheck={false}
       onChange={e => onUpdate(block.id, { formula: e.target.value })}
       onPaste={handleNativePaste}
-      onMouseDown={e => e.stopPropagation()}
+      onPointerDown={e => e.stopPropagation()}
       onDoubleClick={e => e.stopPropagation()}
     />
   );
@@ -876,8 +876,8 @@ function MoleculeContent({ block, onUpdate, onSelect }: {
   }, [block.smiles, block.width, block.height]);
 
   return (
-    <div className="chem-block-content" onMouseDown={e => { e.stopPropagation(); onSelect?.(); }}>
-      <div className="chem-input-row" onMouseDown={e => e.stopPropagation()}>
+    <div className="chem-block-content" onPointerDown={e => { e.stopPropagation(); onSelect?.(); }}>
+      <div className="chem-input-row" onPointerDown={e => e.stopPropagation()}>
         <input
           className="chem-smiles-input"
           value={block.smiles}
@@ -894,7 +894,7 @@ function MoleculeContent({ block, onUpdate, onSelect }: {
           : null
       }
       <svg ref={svgRef} className="chem-molecule-svg" style={(!block.smiles.trim() || !!error) ? { display: "none" } : {}} />
-      <div className="chem-label-row" onMouseDown={e => e.stopPropagation()}>
+      <div className="chem-label-row" onPointerDown={e => e.stopPropagation()}>
         <input
           className="chem-label-input"
           value={block.label}
@@ -928,9 +928,9 @@ function ChemEqContent({ block, onUpdate, onSelect }: {
   }, [block.formula]);
 
   return (
-    <div className="chem-block-content" onMouseDown={e => { e.stopPropagation(); onSelect?.(); }}>
+    <div className="chem-block-content" onPointerDown={e => { e.stopPropagation(); onSelect?.(); }}>
       {!block.preview && (
-        <div className="chem-input-row" onMouseDown={e => e.stopPropagation()}>
+        <div className="chem-input-row" onPointerDown={e => e.stopPropagation()}>
           <input
             className="chem-smiles-input"
             value={block.formula}
@@ -941,12 +941,12 @@ function ChemEqContent({ block, onUpdate, onSelect }: {
           />
         </div>
       )}
-      <div className="chem-eq-render" onMouseDown={e => e.stopPropagation()}>
+      <div className="chem-eq-render" onPointerDown={e => e.stopPropagation()}>
         {!block.formula.trim() && <div className="chem-empty">Enter a chemical equation above</div>}
         {renderError && <div className="chem-error">{renderError}</div>}
         <div ref={previewRef} className={renderError || !block.formula.trim() ? "chem-hidden" : ""} />
       </div>
-      <div className="chem-label-row" onMouseDown={e => e.stopPropagation()}>
+      <div className="chem-label-row" onPointerDown={e => e.stopPropagation()}>
         <input
           className="chem-label-input"
           value={block.label}
@@ -978,8 +978,8 @@ function ElementContent({ block, onUpdate, onSelect }: {
 
   if (editing) {
     return (
-      <div className="chem-block-content" onMouseDown={e => { e.stopPropagation(); onSelect?.(); }}>
-        <div className="chem-input-row" onMouseDown={e => e.stopPropagation()}>
+      <div className="chem-block-content" onPointerDown={e => { e.stopPropagation(); onSelect?.(); }}>
+        <div className="chem-input-row" onPointerDown={e => e.stopPropagation()}>
           <input
             className="chem-smiles-input"
             value={search}
@@ -989,7 +989,7 @@ function ElementContent({ block, onUpdate, onSelect }: {
             onDoubleClick={e => e.stopPropagation()}
           />
         </div>
-        <div className="chem-element-list" onMouseDown={e => e.stopPropagation()}>
+        <div className="chem-element-list" onPointerDown={e => e.stopPropagation()}>
           {filtered.slice(0, 20).map(e => (
             <button key={e.s} className="chem-element-option" onClick={() => {
               onUpdate(block.id, { symbol: e.s });
@@ -1006,7 +1006,7 @@ function ElementContent({ block, onUpdate, onSelect }: {
     );
   }
 
-  if (!el) return <div className="chem-empty" onMouseDown={e => { e.stopPropagation(); onSelect?.(); }}>Unknown element</div>;
+  if (!el) return <div className="chem-empty" onPointerDown={e => { e.stopPropagation(); onSelect?.(); }}>Unknown element</div>;
 
   const cpkColors: Record<string, string> = {
     H:"#FFFFFF",C:"#404040",N:"#4169E1",O:"#FF4444",F:"#DAA520",P:"#FF8000",
@@ -1017,7 +1017,7 @@ function ElementContent({ block, onUpdate, onSelect }: {
 
   return (
     <div className="chem-element-card" style={{ "--cpk": cpk } as React.CSSProperties}
-      onMouseDown={e => { e.stopPropagation(); onSelect?.(); }}
+      onPointerDown={e => { e.stopPropagation(); onSelect?.(); }}
       onDoubleClick={e => { e.stopPropagation(); setEditing(true); }}>
       <div className="chem-ec-z">{el.z}</div>
       <div className="chem-ec-sym">{el.s}</div>
@@ -1059,29 +1059,29 @@ function CodeCellContent({ block, sessionId, onUpdate, onRunAll, onRestart, onSe
     }
   }
 
-  function onSplitterMouseDown(e: React.MouseEvent) {
+  function onSplitterPointerDown(e: React.PointerEvent) {
     e.stopPropagation();
     e.preventDefault();
     splitterDrag.current = { startY: e.clientY, startH: codeHeight };
-    function onMove(ev: MouseEvent) {
+    function onMove(ev: PointerEvent) {
       if (!splitterDrag.current) return;
       const dy = ev.clientY - splitterDrag.current.startY;
       setCodeHeight(Math.max(48, splitterDrag.current.startH + dy));
     }
     function onUp() {
       splitterDrag.current = null;
-      window.removeEventListener("mousemove", onMove);
-      window.removeEventListener("mouseup", onUp);
+      window.removeEventListener("pointermove", onMove);
+      window.removeEventListener("pointerup", onUp);
     }
-    window.addEventListener("mousemove", onMove);
-    window.addEventListener("mouseup", onUp);
+    window.addEventListener("pointermove", onMove);
+    window.addEventListener("pointerup", onUp);
   }
 
   const outputs = block.outputs ?? [];
   const hasOutput = outputs.length > 0;
 
   return (
-    <div className="code-cell-wrap" onMouseDown={e => { e.stopPropagation(); onSelect?.(); }}>
+    <div className="code-cell-wrap" onPointerDown={e => { e.stopPropagation(); onSelect?.(); }}>
       <div className="code-cell-toolbar">
         <button className="code-cell-btn code-cell-run" onClick={e => { e.stopPropagation(); runSingle(); }} disabled={block.running} title="Run cell (Shift+Enter)">▶</button>
         <button className="code-cell-btn code-cell-run-all" onClick={e => { e.stopPropagation(); onRunAll(); }} disabled={block.running} title="Run all cells in order">⏩</button>
@@ -1095,7 +1095,7 @@ function CodeCellContent({ block, sessionId, onUpdate, onRunAll, onRestart, onSe
         value={block.code}
         onChange={e => onUpdate({ code: e.target.value })}
         onPaste={handleNativePaste}
-        onMouseDown={e => e.stopPropagation()}
+        onPointerDown={e => e.stopPropagation()}
         onDoubleClick={e => e.stopPropagation()}
         onKeyDown={e => {
           if (e.key === "Enter" && e.shiftKey) { e.preventDefault(); runSingle(); }
@@ -1105,7 +1105,7 @@ function CodeCellContent({ block, sessionId, onUpdate, onRunAll, onRestart, onSe
       />
       {hasOutput && (
         <>
-          <div className="code-cell-splitter" onMouseDown={onSplitterMouseDown} />
+          <div className="code-cell-splitter" onPointerDown={onSplitterPointerDown} />
           <div className="code-cell-output">
             {outputs.map((chunk, i) =>
               chunk.type === "image"
@@ -1145,7 +1145,7 @@ function HtmlContent({ block, onUpdate, onSelect }: {
       value={block.code}
       onChange={e => onUpdate(block.id, { code: e.target.value })}
       onPaste={handleNativePaste}
-      onMouseDown={e => { e.stopPropagation(); onSelect?.(); }}
+      onPointerDown={e => { e.stopPropagation(); onSelect?.(); }}
       onDoubleClick={e => e.stopPropagation()}
       spellCheck={false}
       placeholder={"<!DOCTYPE html>\n<html>\n  <!-- paste your simulation here -->\n</html>"}
@@ -1229,7 +1229,7 @@ function MolDrawContent({ block, onUpdate, onSelect }: {
 
   const { atoms, bonds } = block;
 
-  function toSvg(e: React.MouseEvent): { x: number; y: number } {
+  function toSvg(e: React.PointerEvent): { x: number; y: number } {
     const r = svgRef.current!.getBoundingClientRect();
     return { x: e.clientX - r.left, y: e.clientY - r.top };
   }
@@ -1257,7 +1257,7 @@ function MolDrawContent({ block, onUpdate, onSelect }: {
     return null;
   }
 
-  function onSvgDown(e: React.MouseEvent<SVGSVGElement>) {
+  function onSvgDown(e: React.PointerEvent<SVGSVGElement>) {
     e.stopPropagation();
     onSelect?.();
     const pt = toSvg(e);
@@ -1285,7 +1285,7 @@ function MolDrawContent({ block, onUpdate, onSelect }: {
     }
   }
 
-  function onSvgMove(e: React.MouseEvent<SVGSVGElement>) {
+  function onSvgMove(e: React.PointerEvent<SVGSVGElement>) {
     const pt = toSvg(e);
     if (dragFrom) {
       const snapped = snapBondEnd(dragFrom.x, dragFrom.y, pt.x, pt.y);
@@ -1297,7 +1297,7 @@ function MolDrawContent({ block, onUpdate, onSelect }: {
     }
   }
 
-  function onSvgUp(e: React.MouseEvent<SVGSVGElement>) {
+  function onSvgUp(e: React.PointerEvent<SVGSVGElement>) {
     const pt = toSvg(e);
     const ds = dragStartRef.current;
     const wasDrag = ds != null && Math.hypot(pt.x - ds.x, pt.y - ds.y) > 6;
@@ -1452,14 +1452,14 @@ function MolDrawContent({ block, onUpdate, onSelect }: {
 
   return (
     <div className="moldraw-wrap" tabIndex={-1} onKeyDown={onKeyDown}
-      onMouseDown={e => e.stopPropagation()}>
-      <div className="moldraw-toolbar" onMouseDown={e => e.stopPropagation()}>
+      onPointerDown={e => e.stopPropagation()}>
+      <div className="moldraw-toolbar" onPointerDown={e => e.stopPropagation()}>
         <div className="moldraw-elem-row">
           {MOL_ELEM_PALETTE.map(el => (
             <button key={el}
               className={`moldraw-elem-btn${activeElem === el ? " md-active" : ""}`}
               style={{ background: el === "C" ? "#1e293b" : (MOL_CPK[el] ?? "#606060"), color: MOL_CPK_TEXT[el] ?? "#fff" }}
-              onMouseDown={e => e.stopPropagation()}
+              onPointerDown={e => e.stopPropagation()}
               onClick={() => { setActiveElem(el); setDrawTool("draw"); }}
             >{el}</button>
           ))}
@@ -1477,10 +1477,10 @@ function MolDrawContent({ block, onUpdate, onSelect }: {
       </div>
       <svg ref={svgRef}
         className={`moldraw-svg${drawTool === "erase" ? " md-erase" : ""}`}
-        onMouseDown={onSvgDown}
-        onMouseMove={onSvgMove}
-        onMouseUp={onSvgUp}
-        onMouseLeave={() => { setDragFrom(null); setSnapPt(null); setHovAtomId(null); }}
+        onPointerDown={onSvgDown}
+        onPointerMove={onSvgMove}
+        onPointerUp={onSvgUp}
+        onPointerLeave={() => { setDragFrom(null); setSnapPt(null); setHovAtomId(null); }}
       >
         {/* Ghost bond direction hints */}
         {ghostAtom && ghostAngles.map((angle, i) => (
@@ -1517,7 +1517,7 @@ function MolDrawContent({ block, onUpdate, onSelect }: {
       <input className="moldraw-caption"
         value={block.label}
         onChange={e => onUpdate(block.id, { label: e.target.value })}
-        onMouseDown={e => e.stopPropagation()}
+        onPointerDown={e => e.stopPropagation()}
         placeholder="Molecule name…"
       />
     </div>
@@ -1600,6 +1600,8 @@ export function CanvasEditor({ content, onChange, nodeId }: Props) {
   const dataRef          = useRef(data);
   dataRef.current        = data;
   const lastSaved        = useRef(content);
+
+  const touchStartRef    = useRef<{ dist: number; midX: number; midY: number } | null>(null);
 
   const imageInputRef    = useRef<HTMLInputElement>(null);
 
@@ -1906,10 +1908,11 @@ export function CanvasEditor({ content, onChange, nodeId }: Props) {
     setSelectedArrowId(null);
   }
 
-  // ── Mouse handlers ──────────────────────────────────────────────────────────
+  // ── Pointer handlers ────────────────────────────────────────────────────────
 
-  function onBgMouseDown(e: React.MouseEvent) {
-    if (e.button !== 0) return;
+  function onBgPointerDown(e: React.PointerEvent) {
+    if (!e.isPrimary) return;
+    e.currentTarget.setPointerCapture(e.pointerId);
     setOpenMenu(null);
     if (pendingRef.current) { setPendingArrow(null); setPreviewPos(null); return; }
     setSelectedId(null); setSelectedArrowId(null); setSelectedIds(new Set());
@@ -1962,8 +1965,9 @@ export function CanvasEditor({ content, onChange, nodeId }: Props) {
     addBlock(mkText, e.clientX - rect.left, e.clientY - rect.top);
   }
 
-  const onHeaderMouseDown = useCallback((e: React.MouseEvent, block: CanvasBlock) => {
+  const onHeaderPointerDown = useCallback((e: React.PointerEvent, block: CanvasBlock) => {
     e.stopPropagation();
+    e.currentTarget.setPointerCapture(e.pointerId);
     preDragSnapshot.current = snapshotData();
     const curIds = selectedIdsRef.current;
     const inMulti = curIds.has(block.id) && curIds.size > 1;
@@ -1983,13 +1987,14 @@ export function CanvasEditor({ content, onChange, nodeId }: Props) {
     dragBlock.current = { id: block.id, mx: e.clientX, my: e.clientY, ox: block.x, oy: block.y, width: block.width, height: block.height, others };
   }, []);
 
-  const onResizeMouseDown = useCallback((e: React.MouseEvent, block: CanvasBlock) => {
+  const onResizePointerDown = useCallback((e: React.PointerEvent, block: CanvasBlock) => {
     e.stopPropagation();
+    e.currentTarget.setPointerCapture(e.pointerId);
     preResizeSnapshot.current = snapshotData();
     resizeBlock.current = { id: block.id, mx: e.clientX, my: e.clientY, ow: block.width, oh: block.height };
   }, []);
 
-  const onPortMouseDown = useCallback((e: React.MouseEvent, blockId: string, port: Port) => {
+  const onPortPointerDown = useCallback((e: React.PointerEvent, blockId: string, port: Port) => {
     e.stopPropagation(); e.preventDefault();
     const pa = pendingRef.current;
     if (pa) {
@@ -2013,33 +2018,33 @@ export function CanvasEditor({ content, onChange, nodeId }: Props) {
     }
   }, []);
 
-  function onDividerMouseDown(e: React.MouseEvent, div: DividerBlock) {
+  function onDividerPointerDown(e: React.PointerEvent, div: DividerBlock) {
     e.stopPropagation();
     preDividerSnapshot.current = snapshotData();
     setSelectedId(div.id); setSelectedIds(new Set([div.id])); setSelectedArrowId(null);
     dragDivider.current = { id: div.id, mode: "line", mx: e.clientX, my: e.clientY, ox: div.x, oy: div.y, ox2: div.x2, oy2: div.y2 };
   }
 
-  function onDividerEndpointMouseDown(e: React.MouseEvent, div: DividerBlock, which: "p1" | "p2") {
+  function onDividerEndpointPointerDown(e: React.PointerEvent, div: DividerBlock, which: "p1" | "p2") {
     e.stopPropagation();
     preDividerSnapshot.current = snapshotData();
     setSelectedId(div.id); setSelectedIds(new Set([div.id])); setSelectedArrowId(null);
     dragDivider.current = { id: div.id, mode: which, mx: e.clientX, my: e.clientY, ox: div.x, oy: div.y, ox2: div.x2, oy2: div.y2 };
   }
 
-  function onDrawArrowMouseDown(e: React.MouseEvent, b: DrawArrowBlock) {
+  function onDrawArrowPointerDown(e: React.PointerEvent, b: DrawArrowBlock) {
     e.stopPropagation();
     preDrawSnapshot.current = snapshotData();
     setSelectedId(b.id); setSelectedIds(new Set([b.id])); setSelectedArrowId(null);
     dragDrawArrow.current = { id: b.id, mode: "line", mx: e.clientX, my: e.clientY, ox: b.x, oy: b.y, ox2: b.x2, oy2: b.y2 };
   }
-  function onDrawArrowEndpointMouseDown(e: React.MouseEvent, b: DrawArrowBlock, which: "p1" | "p2") {
+  function onDrawArrowEndpointPointerDown(e: React.PointerEvent, b: DrawArrowBlock, which: "p1" | "p2") {
     e.stopPropagation();
     preDrawSnapshot.current = snapshotData();
     setSelectedId(b.id); setSelectedIds(new Set([b.id])); setSelectedArrowId(null);
     dragDrawArrow.current = { id: b.id, mode: which, mx: e.clientX, my: e.clientY, ox: b.x, oy: b.y, ox2: b.x2, oy2: b.y2 };
   }
-  function onDrawShapeMouseDown(e: React.MouseEvent, b: DrawEllipseBlock | DrawPolygonBlock) {
+  function onDrawShapePointerDown(e: React.PointerEvent, b: DrawEllipseBlock | DrawPolygonBlock) {
     e.stopPropagation();
     preDrawSnapshot.current = snapshotData();
     setSelectedId(b.id); setSelectedIds(new Set([b.id])); setSelectedArrowId(null);
@@ -2049,7 +2054,7 @@ export function CanvasEditor({ content, onChange, nodeId }: Props) {
     };
   }
 
-  function onMouseMove(e: React.MouseEvent) {
+  function onPointerMove(e: React.PointerEvent) {
     const vp = viewportRef.current;
     if (pendingRef.current) {
       const rect = containerRef.current!.getBoundingClientRect();
@@ -2191,7 +2196,7 @@ export function CanvasEditor({ content, onChange, nodeId }: Props) {
     }
   }
 
-  function onMouseUp() {
+  function onPointerUp() {
     if (lassoStart.current) {
       const ls = lassoStart.current;
       const le = lassoEnd.current ?? ls;
@@ -2264,11 +2269,49 @@ export function CanvasEditor({ content, onChange, nodeId }: Props) {
     setSnapGuides([]);
   }
 
+  // ── Touch gesture handlers (pinch-to-zoom + two-finger pan) ─────────────────
+
+  function onTouchStart(e: React.TouchEvent) {
+    if (e.touches.length !== 2) return;
+    e.preventDefault();
+    const [t0, t1] = [e.touches[0], e.touches[1]];
+    touchStartRef.current = {
+      dist: Math.hypot(t1.clientX - t0.clientX, t1.clientY - t0.clientY),
+      midX: (t0.clientX + t1.clientX) / 2,
+      midY: (t0.clientY + t1.clientY) / 2,
+    };
+  }
+
+  function onTouchMove(e: React.TouchEvent) {
+    if (e.touches.length !== 2 || !touchStartRef.current) return;
+    e.preventDefault();
+    const [t0, t1] = [e.touches[0], e.touches[1]];
+    const dist = Math.hypot(t1.clientX - t0.clientX, t1.clientY - t0.clientY);
+    const midX = (t0.clientX + t1.clientX) / 2;
+    const midY = (t0.clientY + t1.clientY) / 2;
+    const prev = touchStartRef.current;
+    const scaleRatio = dist / prev.dist;
+    const panDx = midX - prev.midX;
+    const panDy = midY - prev.midY;
+    if (!dragBlock.current) {
+      setViewport(vp => ({
+        x: vp.x + panDx,
+        y: vp.y + panDy,
+        zoom: Math.min(4, Math.max(0.15, vp.zoom * scaleRatio)),
+      }));
+    }
+    touchStartRef.current = { dist, midX, midY };
+  }
+
+  function onTouchEnd() {
+    touchStartRef.current = null;
+  }
+
   // ── Render helpers ──────────────────────────────────────────────────────────
 
   function closeBtn(blockId: string) {
     return (
-      <button className="canvas-block-close" onMouseDown={e => e.stopPropagation()}
+      <button className="canvas-block-close" onPointerDown={e => e.stopPropagation()}
         onClick={e => { e.stopPropagation(); deleteBlock(blockId); }}>×</button>
     );
   }
@@ -2277,7 +2320,7 @@ export function CanvasEditor({ content, onChange, nodeId }: Props) {
     return (
       <button
         className="canvas-preview-toggle"
-        onMouseDown={e => e.stopPropagation()}
+        onPointerDown={e => e.stopPropagation()}
         onClick={() => updateBlock(block.id, { preview: !block.preview })}
       >{block.preview ? "Edit" : "Preview"}</button>
     );
@@ -2288,15 +2331,15 @@ export function CanvasEditor({ content, onChange, nodeId }: Props) {
       const defaultSize = block.level === 1 ? 28 : block.level === 2 ? 20 : 15;
       const currentSize = block.fontSize ?? defaultSize;
       return (
-        <div className="canvas-block-header" onMouseDown={e => onHeaderMouseDown(e, block)}>
+        <div className="canvas-block-header" onPointerDown={e => onHeaderPointerDown(e, block)}>
           <span className="canvas-block-drag">⠿</span>
-          <div className="canvas-title-levels" onMouseDown={e => e.stopPropagation()}>
+          <div className="canvas-title-levels" onPointerDown={e => e.stopPropagation()}>
             {([1, 2, 3] as const).map(l => (
               <button key={l} className={`canvas-title-level-btn${block.level === l ? " active" : ""}`}
                 onClick={() => updateBlock(block.id, { level: l, fontSize: undefined })}>H{l}</button>
             ))}
           </div>
-          <div className="canvas-title-size" onMouseDown={e => e.stopPropagation()}>
+          <div className="canvas-title-size" onPointerDown={e => e.stopPropagation()}>
             <button className="canvas-title-size-btn" onClick={() => updateBlock(block.id, { fontSize: Math.max(8, currentSize - 2) })} title="Decrease font size">A−</button>
             <span className="canvas-title-size-val">{currentSize}</span>
             <button className="canvas-title-size-btn" onClick={() => updateBlock(block.id, { fontSize: Math.min(120, currentSize + 2) })} title="Increase font size">A+</button>
@@ -2307,7 +2350,7 @@ export function CanvasEditor({ content, onChange, nodeId }: Props) {
     }
     if (block.type === "table") {
       return (
-        <div className="canvas-block-header" onMouseDown={e => onHeaderMouseDown(e, block)}>
+        <div className="canvas-block-header" onPointerDown={e => onHeaderPointerDown(e, block)}>
           <span className="canvas-block-drag">⠿</span>
           <span className="canvas-block-type-label">Table</span>
           {closeBtn(block.id)}
@@ -2316,7 +2359,7 @@ export function CanvasEditor({ content, onChange, nodeId }: Props) {
     }
     if (block.type === "math") {
       return (
-        <div className="canvas-block-header" onMouseDown={e => onHeaderMouseDown(e, block)}>
+        <div className="canvas-block-header" onPointerDown={e => onHeaderPointerDown(e, block)}>
           <span className="canvas-block-drag">⠿</span>
           <span className="canvas-block-type-label">∑ Math</span>
           {previewToggle(block)}
@@ -2327,9 +2370,9 @@ export function CanvasEditor({ content, onChange, nodeId }: Props) {
     if (block.type === "sticky") {
       const preset = stickyPreset(block.color);
       return (
-        <div className="canvas-block-header" style={{ background: block.color }} onMouseDown={e => onHeaderMouseDown(e, block)}>
+        <div className="canvas-block-header" style={{ background: block.color }} onPointerDown={e => onHeaderPointerDown(e, block)}>
           <span className="canvas-block-drag" style={{ color: preset.accent + "60" }}>⠿</span>
-          <div className="canvas-sticky-swatches" onMouseDown={e => e.stopPropagation()}>
+          <div className="canvas-sticky-swatches" onPointerDown={e => e.stopPropagation()}>
             {STICKY_COLORS.map(p => (
               <button key={p.bg} className={`canvas-sticky-swatch${block.color === p.bg ? " active" : ""}`}
                 style={{ background: p.accent }} onClick={() => updateBlock(block.id, { color: p.bg })} />
@@ -2342,10 +2385,10 @@ export function CanvasEditor({ content, onChange, nodeId }: Props) {
     if (block.type === "checklist") {
       const done = block.items.filter(i => i.checked).length;
       return (
-        <div className="canvas-block-header" onMouseDown={e => onHeaderMouseDown(e, block)}>
+        <div className="canvas-block-header" onPointerDown={e => onHeaderPointerDown(e, block)}>
           <span className="canvas-block-drag">⠿</span>
           <input className="canvas-checklist-title-input" value={block.title}
-            onMouseDown={e => e.stopPropagation()} onChange={e => updateBlock(block.id, { title: e.target.value })} />
+            onPointerDown={e => e.stopPropagation()} onChange={e => updateBlock(block.id, { title: e.target.value })} />
           {block.items.length > 0 && <span className="canvas-checklist-count">{done}/{block.items.length}</span>}
           {closeBtn(block.id)}
         </div>
@@ -2353,7 +2396,7 @@ export function CanvasEditor({ content, onChange, nodeId }: Props) {
     }
     if (block.type === "kanban") {
       return (
-        <div className="canvas-block-header" onMouseDown={e => onHeaderMouseDown(e, block)}>
+        <div className="canvas-block-header" onPointerDown={e => onHeaderPointerDown(e, block)}>
           <span className="canvas-block-drag">⠿</span>
           <span className="canvas-block-type-label">Kanban</span>
           {closeBtn(block.id)}
@@ -2362,7 +2405,7 @@ export function CanvasEditor({ content, onChange, nodeId }: Props) {
     }
     if (block.type === "code_cell") {
       return (
-        <div className="canvas-block-header canvas-block-header-code" onMouseDown={e => onHeaderMouseDown(e, block)}>
+        <div className="canvas-block-header canvas-block-header-code" onPointerDown={e => onHeaderPointerDown(e, block)}>
           <span className="canvas-block-drag" style={{ color: "#475569" }}>⠿</span>
           {closeBtn(block.id)}
         </div>
@@ -2370,10 +2413,10 @@ export function CanvasEditor({ content, onChange, nodeId }: Props) {
     }
     if (block.type === "html") {
       return (
-        <div className="canvas-block-header canvas-block-header-html" onMouseDown={e => onHeaderMouseDown(e, block)}>
+        <div className="canvas-block-header canvas-block-header-html" onPointerDown={e => onHeaderPointerDown(e, block)}>
           <span className="canvas-block-drag">⠿</span>
           <span className="canvas-block-type-label" style={{ color: "#ea580c" }}>HTML</span>
-          <button className="canvas-preview-toggle" onMouseDown={e => e.stopPropagation()}
+          <button className="canvas-preview-toggle" onPointerDown={e => e.stopPropagation()}
             onClick={() => updateBlock(block.id, { preview: !block.preview })}>
             {block.preview ? "Edit" : "Preview"}
           </button>
@@ -2383,7 +2426,7 @@ export function CanvasEditor({ content, onChange, nodeId }: Props) {
     }
     if (block.type === "image") {
       return (
-        <div className="canvas-block-header canvas-block-header-image" onMouseDown={e => onHeaderMouseDown(e, block)}>
+        <div className="canvas-block-header canvas-block-header-image" onPointerDown={e => onHeaderPointerDown(e, block)}>
           <span className="canvas-block-drag">⠿</span>
           <span className="canvas-block-type-label">Image</span>
           {closeBtn(block.id)}
@@ -2392,7 +2435,7 @@ export function CanvasEditor({ content, onChange, nodeId }: Props) {
     }
     if (block.type === "molecule") {
       return (
-        <div className="canvas-block-header canvas-block-header-chem" onMouseDown={e => onHeaderMouseDown(e, block)}>
+        <div className="canvas-block-header canvas-block-header-chem" onPointerDown={e => onHeaderPointerDown(e, block)}>
           <span className="canvas-block-drag">⠿</span>
           <span className="canvas-block-type-label chem-header-label">⬡ Molecule</span>
           {closeBtn(block.id)}
@@ -2401,10 +2444,10 @@ export function CanvasEditor({ content, onChange, nodeId }: Props) {
     }
     if (block.type === "chem_eq") {
       return (
-        <div className="canvas-block-header canvas-block-header-chem" onMouseDown={e => onHeaderMouseDown(e, block)}>
+        <div className="canvas-block-header canvas-block-header-chem" onPointerDown={e => onHeaderPointerDown(e, block)}>
           <span className="canvas-block-drag">⠿</span>
           <span className="canvas-block-type-label chem-header-label">⇌ Equation</span>
-          <button className="canvas-preview-toggle" onMouseDown={e => e.stopPropagation()}
+          <button className="canvas-preview-toggle" onPointerDown={e => e.stopPropagation()}
             onClick={() => updateBlock(block.id, { preview: !block.preview })}>
             {block.preview ? "Edit" : "Preview"}
           </button>
@@ -2414,7 +2457,7 @@ export function CanvasEditor({ content, onChange, nodeId }: Props) {
     }
     if (block.type === "element") {
       return (
-        <div className="canvas-block-header canvas-block-header-chem" onMouseDown={e => onHeaderMouseDown(e, block)}>
+        <div className="canvas-block-header canvas-block-header-chem" onPointerDown={e => onHeaderPointerDown(e, block)}>
           <span className="canvas-block-drag">⠿</span>
           <span className="canvas-block-type-label chem-header-label">⚛ Element</span>
           {closeBtn(block.id)}
@@ -2423,7 +2466,7 @@ export function CanvasEditor({ content, onChange, nodeId }: Props) {
     }
     if (block.type === "mol_draw") {
       return (
-        <div className="canvas-block-header canvas-block-header-chem" onMouseDown={e => onHeaderMouseDown(e, block)}>
+        <div className="canvas-block-header canvas-block-header-chem" onPointerDown={e => onHeaderPointerDown(e, block)}>
           <span className="canvas-block-drag">⠿</span>
           <span className="canvas-block-type-label chem-header-label">✏ Draw</span>
           {closeBtn(block.id)}
@@ -2432,7 +2475,7 @@ export function CanvasEditor({ content, onChange, nodeId }: Props) {
     }
     // text (default)
     return (
-      <div className="canvas-block-header" onMouseDown={e => onHeaderMouseDown(e, block)}>
+      <div className="canvas-block-header" onPointerDown={e => onHeaderPointerDown(e, block)}>
         <span className="canvas-block-drag">⠿</span>
         {previewToggle(block as TextBlock)}
         {closeBtn(block.id)}
@@ -2481,7 +2524,7 @@ export function CanvasEditor({ content, onChange, nodeId }: Props) {
         <input className={cls} value={block.text} placeholder={`Heading ${block.level}…`}
           style={block.fontSize !== undefined ? { fontSize: block.fontSize } : undefined}
           onChange={e => updateBlock(block.id, { text: e.target.value })}
-          onMouseDown={e => e.stopPropagation()} />
+          onPointerDown={e => e.stopPropagation()} />
       );
     }
     if (block.type === "table") {
@@ -2493,7 +2536,7 @@ export function CanvasEditor({ content, onChange, nodeId }: Props) {
     if (block.type === "text") {
       if (block.preview) {
         return (
-          <div className="canvas-block-md-preview" onMouseDown={e => e.stopPropagation()}>
+          <div className="canvas-block-md-preview" onPointerDown={e => e.stopPropagation()}>
             <Markdown remarkPlugins={[remarkMath]} rehypePlugins={[rehypeKatex]}>{block.content}</Markdown>
           </div>
         );
@@ -2502,7 +2545,7 @@ export function CanvasEditor({ content, onChange, nodeId }: Props) {
         <textarea className="canvas-block-text" value={block.content} placeholder="Markdown supported…"
           onChange={e => updateBlock(block.id, { content: e.target.value })}
           onPaste={handleNativePaste}
-          onMouseDown={e => e.stopPropagation()} onDoubleClick={e => e.stopPropagation()} />
+          onPointerDown={e => e.stopPropagation()} onDoubleClick={e => e.stopPropagation()} />
       );
     }
     if (block.type === "sticky") {
@@ -2512,7 +2555,7 @@ export function CanvasEditor({ content, onChange, nodeId }: Props) {
           style={{ color: accent }}
           onChange={e => updateBlock(block.id, { content: e.target.value })}
           onPaste={handleNativePaste}
-          onMouseDown={e => e.stopPropagation()} onDoubleClick={e => e.stopPropagation()} />
+          onPointerDown={e => e.stopPropagation()} onDoubleClick={e => e.stopPropagation()} />
       );
     }
     if (block.type === "checklist") return <ChecklistContent block={block} onUpdate={updateBlock} />;
@@ -2537,7 +2580,7 @@ export function CanvasEditor({ content, onChange, nodeId }: Props) {
         src={block.src}
         alt=""
         draggable={false}
-        onMouseDown={e => e.stopPropagation()}
+        onPointerDown={e => e.stopPropagation()}
       />
     );
     if (block.type === "molecule") return (
@@ -2624,13 +2667,13 @@ export function CanvasEditor({ content, onChange, nodeId }: Props) {
       <g key={arrow.id}>
         <path d={pathD} fill="none" stroke="transparent" strokeWidth={12} pointerEvents="stroke"
           style={{ cursor: sel ? "crosshair" : "pointer" }}
-          onMouseDown={e => e.stopPropagation()}
-          onMouseMove={sel ? e => {
+          onPointerDown={e => e.stopPropagation()}
+          onPointerMove={sel ? e => {
             const rect = containerRef.current!.getBoundingClientRect();
             const vp = viewportRef.current;
             setArrowHoverPos({ arrowId: arrow.id, x: (e.clientX - rect.left - vp.x) / vp.zoom, y: (e.clientY - rect.top - vp.y) / vp.zoom });
           } : undefined}
-          onMouseLeave={sel ? () => setArrowHoverPos(null) : undefined}
+          onPointerLeave={sel ? () => setArrowHoverPos(null) : undefined}
           onClick={e => {
             e.stopPropagation();
             if (selectedArrRef.current === arrow.id) {
@@ -2659,7 +2702,7 @@ export function CanvasEditor({ content, onChange, nodeId }: Props) {
           <circle key={wp.id} cx={wp.x} cy={wp.y} r={5}
             fill="var(--bg-base)" stroke="var(--border-strong)" strokeWidth={1.5}
             style={{ cursor: "grab" }}
-            onMouseDown={e => {
+            onPointerDown={e => {
               e.stopPropagation();
               preWaypointSnapshot.current = snapshotData();
               dragWaypoint.current = { arrowId: arrow.id, waypointId: wp.id, mx: e.clientX, my: e.clientY, ox: wp.x, oy: wp.y };
@@ -2698,22 +2741,22 @@ export function CanvasEditor({ content, onChange, nodeId }: Props) {
           onContextMenu={e => { e.preventDefault(); e.stopPropagation(); setSelectedId(block.id); setSelectedIds(new Set([block.id])); setContextMenu({ x: e.clientX, y: e.clientY, blockId: block.id }); }}
         >
           <div className="canvas-frame-tag" style={{ borderColor: fColor, color: fColor }}
-            onMouseDown={e => onHeaderMouseDown(e, block)}>
+            onPointerDown={e => onHeaderPointerDown(e, block)}>
             <span className="canvas-frame-drag">⠿</span>
             <input
               className="canvas-frame-label-input"
               value={block.label}
               placeholder="Group…"
               onChange={e => updateBlock(block.id, { label: e.target.value })}
-              onMouseDown={e => e.stopPropagation()}
+              onPointerDown={e => e.stopPropagation()}
             />
             {(selected || inMultiSel) && (
-              <button className="canvas-block-close" onMouseDown={e => e.stopPropagation()}
+              <button className="canvas-block-close" onPointerDown={e => e.stopPropagation()}
                 onClick={e => { e.stopPropagation(); deleteBlock(block.id); }}>×</button>
             )}
           </div>
           {(selected || inMultiSel) && (
-            <div className="canvas-frame-toolbar" onMouseDown={e => e.stopPropagation()}>
+            <div className="canvas-frame-toolbar" onPointerDown={e => e.stopPropagation()}>
               {FRAME_COLORS.map(c => (
                 <button key={c} className={`canvas-frame-color-btn${fColor === c ? " active" : ""}`}
                   style={{ background: c, outlineColor: c }}
@@ -2753,7 +2796,7 @@ export function CanvasEditor({ content, onChange, nodeId }: Props) {
               ))}
             </div>
           )}
-          <div className="canvas-block-resize" onMouseDown={e => onResizeMouseDown(e, block)} />
+          <div className="canvas-block-resize" onPointerDown={e => onResizePointerDown(e, block)} />
         </div>
       );
     }
@@ -2766,7 +2809,7 @@ export function CanvasEditor({ content, onChange, nodeId }: Props) {
         <div key={block.id}
           className={`canvas-block canvas-block-shape${selected ? " selected" : ""}${inMultiSel ? " multi-selected" : ""}`}
           style={{ left: block.x, top: block.y, width: block.width, height: block.height, zIndex: 2 }}
-          onMouseDown={e => {
+          onPointerDown={e => {
             e.stopPropagation();
             const curIds = selectedIdsRef.current;
             if (curIds.has(block.id) && curIds.size > 1) return;
@@ -2785,9 +2828,9 @@ export function CanvasEditor({ content, onChange, nodeId }: Props) {
             style={{ color: block.color === "#1e293b" ? "rgba(255,255,255,0.88)" : undefined }}
             onChange={e => updateBlock(block.id, { label: e.target.value })}
             onPaste={handleNativePaste}
-            onMouseDown={e => e.stopPropagation()} onDoubleClick={e => e.stopPropagation()} />
+            onPointerDown={e => e.stopPropagation()} onDoubleClick={e => e.stopPropagation()} />
           {(showPorts || selected || inMultiSel) && (
-            <div className="canvas-shape-toolbar" onMouseDown={e => e.stopPropagation()}>
+            <div className="canvas-shape-toolbar" onPointerDown={e => e.stopPropagation()}>
               {(Object.keys(SHAPE_ICONS) as ShapeKind[]).map(sk => (
                 <button key={sk} className={`canvas-shape-type-btn${block.shape === sk ? " active" : ""}`}
                   title={sk} onClick={() => updateBlock(block.id, { shape: sk })}>{SHAPE_ICONS[sk]}</button>
@@ -2799,15 +2842,15 @@ export function CanvasEditor({ content, onChange, nodeId }: Props) {
                   onClick={() => updateBlock(block.id, { color: c })} />
               ))}
               <div className="canvas-shape-toolbar-sep" />
-              <button className="canvas-block-close" onMouseDown={e => e.stopPropagation()}
+              <button className="canvas-block-close" onPointerDown={e => e.stopPropagation()}
                 onClick={e => { e.stopPropagation(); deleteBlock(block.id); }}>×</button>
             </div>
           )}
-          <div className="canvas-shape-drag" onMouseDown={e => onHeaderMouseDown(e, block)}>⠿</div>
-          <div className="canvas-block-resize" onMouseDown={e => onResizeMouseDown(e, block)} />
+          <div className="canvas-shape-drag" onPointerDown={e => onHeaderPointerDown(e, block)}>⠿</div>
+          <div className="canvas-block-resize" onPointerDown={e => onResizePointerDown(e, block)} />
           {showPorts && PORTS.map(port => (
             <div key={port} className="canvas-port" style={portDotStyle(port)}
-              onMouseDown={e => onPortMouseDown(e, block.id, port)} />
+              onPointerDown={e => onPortPointerDown(e, block.id, port)} />
           ))}
         </div>
       );
@@ -2821,7 +2864,7 @@ export function CanvasEditor({ content, onChange, nodeId }: Props) {
           left: block.x, top: block.y, width: block.width, height: block.height, zIndex: 2,
           ...(block.type === "sticky" ? { background: block.color, borderColor: stickyPreset(block.color).accent + "50" } : {}),
         }}
-        onMouseDown={e => {
+        onPointerDown={e => {
           e.stopPropagation();
           const curIds = selectedIdsRef.current;
           if (curIds.has(block.id) && curIds.size > 1) return;
@@ -2834,15 +2877,15 @@ export function CanvasEditor({ content, onChange, nodeId }: Props) {
       >
         {renderHeader(block)}
         {renderContent(block)}
-        <div className="canvas-block-resize" onMouseDown={e => onResizeMouseDown(e, block)} />
+        <div className="canvas-block-resize" onPointerDown={e => onResizePointerDown(e, block)} />
         {showPorts && PORTS.map(port => (
           <div key={port} className="canvas-port" style={portDotStyle(port)}
-            onMouseDown={e => onPortMouseDown(e, block.id, port)} />
+            onPointerDown={e => onPortPointerDown(e, block.id, port)} />
         ))}
       </div>
     );
   }), [data.blocks, data.arrows, selectedId, selectedIds, showPortsFor, viewport.zoom, nodeId,
-       updateBlock, deleteBlock, onHeaderMouseDown, onResizeMouseDown, onPortMouseDown]);
+       updateBlock, deleteBlock, onHeaderPointerDown, onResizePointerDown, onPortPointerDown]);
 
   const multiCount = selectedIds.size;
   const { x, y, zoom } = viewport;
@@ -2853,12 +2896,15 @@ export function CanvasEditor({ content, onChange, nodeId }: Props) {
       ref={containerRef}
       className={`canvas-editor${pendingArrow ? " canvas-connecting" : ""}${tool === "lasso" ? " canvas-lasso-mode" : ""}${tool.startsWith("draw_") ? " canvas-draw-mode" : ""}`}
       style={{ backgroundSize: `${gridSize}px ${gridSize}px`, backgroundPosition: `${x % gridSize}px ${y % gridSize}px` }}
-      onMouseDown={onBgMouseDown}
-      onMouseMove={onMouseMove}
-      onMouseUp={onMouseUp}
-      onMouseLeave={onMouseUp}
+      onPointerDown={onBgPointerDown}
+      onPointerMove={onPointerMove}
+      onPointerUp={onPointerUp}
+      onPointerCancel={onPointerUp}
       onClick={onBgClick}
       onDoubleClick={onBgDblClick}
+      onTouchStart={onTouchStart}
+      onTouchMove={onTouchMove}
+      onTouchEnd={onTouchEnd}
     >
       {/* ── Toolbar trigger strip (indicator shown when toolbar is hidden) ── */}
       <div
@@ -2871,7 +2917,7 @@ export function CanvasEditor({ content, onChange, nodeId }: Props) {
         className={`canvas-overlay-toolbar${showToolbar ? " visible" : ""}`}
         onMouseEnter={() => { if (toolbarHideTimer.current) clearTimeout(toolbarHideTimer.current); setShowToolbar(true); }}
         onMouseLeave={() => { toolbarHideTimer.current = setTimeout(() => { setShowToolbar(false); setOpenMenu(null); }, 600); }}
-        onMouseDown={e => e.stopPropagation()} onDoubleClick={e => e.stopPropagation()}
+        onPointerDown={e => e.stopPropagation()} onDoubleClick={e => e.stopPropagation()}
       >
         {/* Select toggle */}
         <button
@@ -3093,7 +3139,7 @@ export function CanvasEditor({ content, onChange, nodeId }: Props) {
                 {/* Invisible wide hit area */}
                 <line x1={da.x} y1={da.y} x2={da.x2} y2={da.y2}
                   stroke="transparent" strokeWidth={14} pointerEvents="stroke" style={{ cursor: "move" }}
-                  onMouseDown={e => onDrawArrowMouseDown(e, da)} />
+                  onPointerDown={e => onDrawArrowPointerDown(e, da)} />
                 {/* Visible line */}
                 <line x1={da.x} y1={da.y} x2={da.x2} y2={da.y2}
                   stroke={da.color} strokeWidth={sel ? da.strokeWidth + 1 : da.strokeWidth}
@@ -3105,11 +3151,11 @@ export function CanvasEditor({ content, onChange, nodeId }: Props) {
                     <circle cx={da.x} cy={da.y} r={5}
                       fill="var(--bg-base)" stroke={da.color} strokeWidth={1.5}
                       style={{ cursor: "grab" }} pointerEvents="all"
-                      onMouseDown={e => onDrawArrowEndpointMouseDown(e, da, "p1")} />
+                      onPointerDown={e => onDrawArrowEndpointPointerDown(e, da, "p1")} />
                     <circle cx={da.x2} cy={da.y2} r={5}
                       fill="var(--bg-base)" stroke={da.color} strokeWidth={1.5}
                       style={{ cursor: "grab" }} pointerEvents="all"
-                      onMouseDown={e => onDrawArrowEndpointMouseDown(e, da, "p2")} />
+                      onPointerDown={e => onDrawArrowEndpointPointerDown(e, da, "p2")} />
                   </>
                 )}
               </g>
@@ -3127,7 +3173,7 @@ export function CanvasEditor({ content, onChange, nodeId }: Props) {
                 <ellipse cx={cx} cy={cy} rx={Math.max(rx, 5)} ry={Math.max(ry, 5)}
                   fill="transparent" stroke="transparent" strokeWidth={14}
                   pointerEvents="stroke" style={{ cursor: "move" }}
-                  onMouseDown={e => onDrawShapeMouseDown(e, de)} />
+                  onPointerDown={e => onDrawShapePointerDown(e, de)} />
                 <ellipse cx={cx} cy={cy} rx={Math.max(rx, 5)} ry={Math.max(ry, 5)}
                   fill={de.fill} stroke={de.color}
                   strokeWidth={sel ? de.strokeWidth + 1 : de.strokeWidth}
@@ -3155,7 +3201,7 @@ export function CanvasEditor({ content, onChange, nodeId }: Props) {
               <g key={dp.id}>
                 <path d={d} fill="transparent" stroke="transparent" strokeWidth={14}
                   pointerEvents="stroke" style={{ cursor: "move" }}
-                  onMouseDown={e => onDrawShapeMouseDown(e, dp)} />
+                  onPointerDown={e => onDrawShapePointerDown(e, dp)} />
                 <path d={d} fill={dp.fill} stroke={dp.color}
                   strokeWidth={sel ? dp.strokeWidth + 1 : dp.strokeWidth}
                   strokeDasharray={da} strokeLinecap="round" strokeLinejoin="round"
@@ -3214,7 +3260,7 @@ export function CanvasEditor({ content, onChange, nodeId }: Props) {
               <g key={div.id}>
                 <line x1={div.x} y1={div.y} x2={div.x2} y2={div.y2}
                   stroke="transparent" strokeWidth={14} pointerEvents="stroke" style={{ cursor: "move" }}
-                  onMouseDown={e => onDividerMouseDown(e, div)} />
+                  onPointerDown={e => onDividerPointerDown(e, div)} />
                 <line x1={div.x} y1={div.y} x2={div.x2} y2={div.y2}
                   stroke={sel ? "var(--fg-secondary)" : "var(--border-strong)"}
                   strokeWidth={sel ? 2 : 1.5} strokeDasharray={da} strokeLinecap="round" pointerEvents="none" />
@@ -3223,11 +3269,11 @@ export function CanvasEditor({ content, onChange, nodeId }: Props) {
                     <circle cx={div.x} cy={div.y} r={5}
                       fill="var(--bg-base)" stroke="var(--border-strong)" strokeWidth={1.5}
                       style={{ cursor: "grab" }}
-                      onMouseDown={e => onDividerEndpointMouseDown(e, div, "p1")} />
+                      onPointerDown={e => onDividerEndpointPointerDown(e, div, "p1")} />
                     <circle cx={div.x2} cy={div.y2} r={5}
                       fill="var(--bg-base)" stroke="var(--border-strong)" strokeWidth={1.5}
                       style={{ cursor: "grab" }}
-                      onMouseDown={e => onDividerEndpointMouseDown(e, div, "p2")} />
+                      onPointerDown={e => onDividerEndpointPointerDown(e, div, "p2")} />
                   </>
                 )}
               </g>
@@ -3239,7 +3285,7 @@ export function CanvasEditor({ content, onChange, nodeId }: Props) {
         {dividerBlocks.filter(div => selectedId === div.id).map(div => (
           <div key={div.id + "-tb"} className="canvas-divider-float-toolbar"
             style={{ left: (div.x + div.x2) / 2, top: Math.min(div.y, div.y2) - 36 }}
-            onMouseDown={e => e.stopPropagation()}>
+            onPointerDown={e => e.stopPropagation()}>
             {(["solid", "dashed", "dotted"] as const).map(s => (
               <button key={s} className={`canvas-divider-style-btn${div.divStyle === s ? " active" : ""}`}
                 onClick={() => updateBlock(div.id, { divStyle: s })} title={s}>
@@ -3255,7 +3301,7 @@ export function CanvasEditor({ content, onChange, nodeId }: Props) {
         {data.blocks.filter((b): b is DrawArrowBlock => b.type === "draw_arrow" && selectedId === b.id).map(da => (
           <div key={da.id + "-tb"} className="canvas-divider-float-toolbar ds-float-toolbar"
             style={{ left: (da.x + da.x2) / 2, top: Math.min(da.y, da.y2) - 44 }}
-            onMouseDown={e => e.stopPropagation()}>
+            onPointerDown={e => e.stopPropagation()}>
             {DRAW_COLORS.map(c => (
               <button key={c} className={`ds-color-btn${da.color === c ? " active" : ""}`}
                 style={{ background: c, outlineColor: c }} onClick={() => updateBlock(da.id, { color: c })} />
@@ -3288,7 +3334,7 @@ export function CanvasEditor({ content, onChange, nodeId }: Props) {
           return (
             <div key={ds.id + "-tb"} className="canvas-divider-float-toolbar ds-float-toolbar"
               style={{ left: bMidX, top: bTop - 44 }}
-              onMouseDown={e => e.stopPropagation()}>
+              onPointerDown={e => e.stopPropagation()}>
               {DRAW_COLORS.map(c => (
                 <button key={c} className={`ds-color-btn${ds.color === c ? " active" : ""}`}
                   style={{ background: c, outlineColor: c }} onClick={() => updateBlock(ds.id, { color: c })} />
@@ -3317,7 +3363,7 @@ export function CanvasEditor({ content, onChange, nodeId }: Props) {
 
         {/* Polygon in-progress hint */}
         {tool === "draw_polygon" && polygonPts.length > 0 && (
-          <div className="ds-poly-hint" onMouseDown={e => e.stopPropagation()}>
+          <div className="ds-poly-hint" onPointerDown={e => e.stopPropagation()}>
             {polygonPts.length} pts · Enter or double-click to finish · Esc to cancel
           </div>
         )}
@@ -3339,8 +3385,8 @@ export function CanvasEditor({ content, onChange, nodeId }: Props) {
       {/* ── Context menu ── */}
       {contextMenu && (
         <>
-          <div className="canvas-context-backdrop" onMouseDown={() => setContextMenu(null)} onContextMenu={e => { e.preventDefault(); setContextMenu(null); }} />
-          <div className="canvas-context-menu" style={{ left: contextMenu.x, top: contextMenu.y }} onMouseDown={e => e.stopPropagation()}>
+          <div className="canvas-context-backdrop" onPointerDown={() => setContextMenu(null)} onContextMenu={e => { e.preventDefault(); setContextMenu(null); }} />
+          <div className="canvas-context-menu" style={{ left: contextMenu.x, top: contextMenu.y }} onPointerDown={e => e.stopPropagation()}>
             <button onClick={() => {
               const b = data.blocks.find(b => b.id === contextMenu.blockId);
               if (b) {
@@ -3385,7 +3431,7 @@ export function CanvasEditor({ content, onChange, nodeId }: Props) {
         const vpL = -viewport.x / viewport.zoom, vpT = -viewport.y / viewport.zoom;
         const vpW = cw / viewport.zoom, vpH = ch / viewport.zoom;
         return (
-          <div className={`canvas-minimap-panel${showOverview ? " visible" : ""}`} onMouseDown={e => e.stopPropagation()} onDoubleClick={e => e.stopPropagation()}>
+          <div className={`canvas-minimap-panel${showOverview ? " visible" : ""}`} onPointerDown={e => e.stopPropagation()} onDoubleClick={e => e.stopPropagation()}>
             <svg width={MW} height={MH}>
               {data.blocks.map(b => {
                 if (b.type === "divider") return (
@@ -3420,7 +3466,7 @@ export function CanvasEditor({ content, onChange, nodeId }: Props) {
         const titleBlocks = data.blocks.filter(b => b.type === "title");
         return (
           <div className="canvas-pan-overview"
-            onMouseDown={e => e.stopPropagation()} onDoubleClick={e => e.stopPropagation()}>
+            onPointerDown={e => e.stopPropagation()} onDoubleClick={e => e.stopPropagation()}>
             <svg width={OW} height={OH}>
               <defs>
                 <marker id="ov-arrow" markerWidth="4" markerHeight="4" refX="3.5" refY="2" orient="auto">
