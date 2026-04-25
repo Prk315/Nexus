@@ -1696,7 +1696,7 @@ export const getLifestyleItems = async (areaId: number | null): Promise<{ system
 export const getGames = async (): Promise<Game[]> => {
   const { data, error } = await supabase
     .from("pf_games")
-    .select("*, pf_game_features(id, done)")
+    .select("*, pf_game_features(id, status)")
     .eq("user_id", USER_ID).order("created_at", { ascending: false });
   if (error) err(error);
   return (data ?? []).map((g) => ({
@@ -1705,7 +1705,7 @@ export const getGames = async (): Promise<Game[]> => {
     target_audience: g.target_audience, inspiration: g.inspiration, color: g.color,
     created_at: g.created_at,
     feature_count: (g.pf_game_features ?? []).length,
-    done_count: (g.pf_game_features ?? []).filter((f: any) => f.done).length,
+    done_count: (g.pf_game_features ?? []).filter((f: any) => f.status === 'done').length,
   }));
 };
 
@@ -1715,7 +1715,7 @@ export const createGame = async (payload: {
   target_audience?: string | null; inspiration?: string | null; color?: string;
 }): Promise<Game> => {
   const { data, error } = await supabase
-    .from("pf_games").insert({ user_id: USER_ID, ...payload }).select("*, pf_game_features(id, done)").single();
+    .from("pf_games").insert({ user_id: USER_ID, ...payload }).select("*, pf_game_features(id, status)").single();
   if (error) err(error);
   return { id: num(data!.id), title: data!.title, genre: data!.genre, platform: data!.platform, engine: data!.engine, status: data!.status, description: data!.description, core_mechanic: data!.core_mechanic, target_audience: data!.target_audience, inspiration: data!.inspiration, color: data!.color, created_at: data!.created_at, feature_count: 0, done_count: 0 };
 };
