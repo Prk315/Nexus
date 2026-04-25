@@ -117,7 +117,7 @@ const SHAPE_TOOLS: Tool[] = ["line", "rect", "ellipse"];
 interface PdfPageProps {
   doc: PDFDocumentProxy;
   pageIdx: number;
-  zoom: number;
+  renderScale: number; // scale used for canvas rendering — never changes during pinch/zoom
   strokes: Stroke[];
   selectedStrokes: Set<string>;
   tool: Tool;
@@ -134,7 +134,7 @@ interface PdfPageProps {
 const PdfPage = memo(function PdfPage({
   doc,
   pageIdx,
-  zoom,
+  renderScale,
   strokes,
   selectedStrokes,
   tool,
@@ -191,18 +191,18 @@ const PdfPage = memo(function PdfPage({
       }
 
       if (s.tool === "line" && s.points.length >= 2) {
-        ctx.lineWidth = s.width * zoom * DPR;
+        ctx.lineWidth = s.width * renderScale * DPR;
         ctx.beginPath();
         ctx.moveTo(s.points[0].x * w, s.points[0].y * h);
         ctx.lineTo(s.points[1].x * w, s.points[1].y * h);
         ctx.stroke();
       } else if (s.tool === "rect" && s.points.length >= 2) {
-        ctx.lineWidth = s.width * zoom * DPR;
+        ctx.lineWidth = s.width * renderScale * DPR;
         const x1 = s.points[0].x * w, y1 = s.points[0].y * h;
         const x2 = s.points[1].x * w, y2 = s.points[1].y * h;
         ctx.strokeRect(Math.min(x1,x2), Math.min(y1,y2), Math.abs(x2-x1), Math.abs(y2-y1));
       } else if (s.tool === "ellipse" && s.points.length >= 2) {
-        ctx.lineWidth = s.width * zoom * DPR;
+        ctx.lineWidth = s.width * renderScale * DPR;
         const x1 = s.points[0].x * w, y1 = s.points[0].y * h;
         const x2 = s.points[1].x * w, y2 = s.points[1].y * h;
         const cx = (x1+x2)/2, cy = (y1+y2)/2;
@@ -213,7 +213,7 @@ const PdfPage = memo(function PdfPage({
       } else if (s.points.length >= 2) {
         // pen / highlighter — quadratic Bézier midpoint chaining for smooth curves
         const spts = s.points;
-        const baseWidth = s.tool === "highlighter" ? s.width * zoom * DPR * 3 : s.width * zoom * DPR;
+        const baseWidth = s.tool === "highlighter" ? s.width * renderScale * DPR * 3 : s.width * renderScale * DPR;
         // 0.5 is exactly representable in IEEE 754; equality check is safe
         const hasPressure = spts.some(p => p.pressure !== 0.5);
 
@@ -262,7 +262,7 @@ const PdfPage = memo(function PdfPage({
       ctx.strokeRect(Math.min(x1,x2), Math.min(y1,y2), Math.abs(x2-x1), Math.abs(y2-y1));
       ctx.restore();
     }
-  }, [zoom]);
+  }, [renderScale]);
 
   // ── Render the PDF page ──────────────────────────────────────────────────
   useEffect(() => {
@@ -277,7 +277,7 @@ const PdfPage = memo(function PdfPage({
       page = await doc.getPage(pageIdx + 1);
       if (cancelled) return;
 
-      const viewport = page.getViewport({ scale: zoom * DPR });
+      const viewport = page.getViewport({ scale: renderScale * DPR });
       const cssW = viewport.width  / DPR;
       const cssH = viewport.height / DPR;
 
@@ -312,7 +312,7 @@ const PdfPage = memo(function PdfPage({
   // Intentionally excluding `strokes`/`redraw` — only re-render PDF on doc/zoom change
   // `onSize` is stable (useCallback with empty deps) so safe to include
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [doc, pageIdx, zoom, onSize]);
+  }, [doc, pageIdx, renderScale, onSize]);
 
   // ── Re-draw annotations whenever strokes / selection changes ────────────
   useEffect(() => {
@@ -341,9 +341,9 @@ const PdfPage = memo(function PdfPage({
     ctx.lineJoin    = "round";
     if (tool === "highlighter") {
       ctx.globalAlpha = 0.35;
-      ctx.lineWidth   = strokeWidth * zoom * DPR * 3;
+      ctx.lineWidth   = strokeWidth * renderScale * DPR * 3;
     } else {
-      ctx.lineWidth = strokeWidth * zoom * DPR;
+      ctx.lineWidth = strokeWidth * renderScale * DPR;
     }
     ctx.beginPath();
     ctx.moveTo(a.x * canvas.width, a.y * canvas.height);
@@ -359,7 +359,7 @@ const PdfPage = memo(function PdfPage({
     const x2 = end.x   * canvas.width,  y2 = end.y   * canvas.height;
     ctx.save();
     ctx.strokeStyle = color;
-    ctx.lineWidth   = strokeWidth * zoom * DPR;
+    ctx.lineWidth   = strokeWidth * renderScale * DPR;
     ctx.lineCap     = "round";
     ctx.lineJoin    = "round";
     if (tool === "line") {
@@ -479,6 +479,9 @@ export function PdfViewer({ content: pdfPath, nodeId }: Props) {
   const [color,      setColor]      = useState("#1a1a1a");
   const [strokeWidth, setStrokeWidth] = useState(4);
   const [zoom,       setZoom]       = useState(1.0);
+  // renderScale is the canvas render scale (fit-to-width, recomputed on sidebar toggle).
+  // zoom is a pure CSS visual multiplier applied on top — never triggers a canvas re-render.
+  const [renderScale, setRenderScale] = useState(1.0);
   const [confirmClear, setConfirmClear] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [bookmarks, setBookmarks]   = useState<Set<number>>(new Set());
@@ -542,8 +545,7 @@ export function PdfViewer({ content: pdfPath, nodeId }: Props) {
         setPdfDoc(doc);
         setNumPages(doc.numPages);
 
-        // Compute fit-to-width zoom so the first page fills the scroll area.
-        // This runs after the DOM has the scroll container but before pages render.
+        // Compute fit-to-width renderScale so pages fill the scroll area on load.
         try {
           const firstPage = await doc.getPage(1);
           const baseViewport = firstPage.getViewport({ scale: 1.0 });
@@ -551,7 +553,8 @@ export function PdfViewer({ content: pdfPath, nodeId }: Props) {
           const el = scrollRef.current;
           if (el) {
             const fit = (el.clientWidth - 24) / baseViewport.width;
-            setZoom(prev => prev === 1.0 ? +Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, fit)).toFixed(2) : prev);
+            setRenderScale(+Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, fit)).toFixed(2));
+            setZoom(1.0); // start at 100% of fit-to-width
           }
         } catch { /* best-effort */ }
       } catch (err) {
@@ -929,22 +932,17 @@ export function PdfViewer({ content: pdfPath, nodeId }: Props) {
   // ── Zoom ──────────────────────────────────────────────────────────────
   function zoomIn()    { setZoom(z => Math.min(ZOOM_MAX, +(z + ZOOM_STEP).toFixed(2))); }
   function zoomOut()   { setZoom(z => Math.max(ZOOM_MIN, +(z - ZOOM_STEP).toFixed(2))); }
-  function resetZoom() {
-    const el = scrollRef.current;
-    if (!el || basePdfWidthRef.current === 0) { setZoom(1.0); return; }
-    const fit = (el.clientWidth - 24) / basePdfWidthRef.current;
-    setZoom(+Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, fit)).toFixed(2));
-  }
+  function resetZoom() { setZoom(1.0); } // 100% = fit-to-width
 
   // When the sidebar opens/closes the scroll area width changes — recompute
-  // fit-zoom after the DOM settles (50ms covers CSS transition start).
+  // renderScale after the DOM settles. zoom stays at whatever the user set.
   useEffect(() => {
     if (!pdfDoc) return;
     const timer = setTimeout(() => {
       const el = scrollRef.current;
       if (!el || basePdfWidthRef.current === 0) return;
       const fit = (el.clientWidth - 24) / basePdfWidthRef.current;
-      setZoom(+Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, fit)).toFixed(2));
+      setRenderScale(+Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, fit)).toFixed(2));
     }, 50);
     return () => clearTimeout(timer);
   }, [sidebarOpen, pdfDoc]);
@@ -1062,9 +1060,9 @@ export function PdfViewer({ content: pdfPath, nodeId }: Props) {
     wrappers.forEach(el => io.observe(el));
 
     return () => io.disconnect();
-  // Re-run when numPages or zoom changes (zoom changes page heights)
+  // Re-run when numPages or renderScale changes (renderScale changes page heights)
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [numPages, zoom]);
+  }, [numPages, renderScale]);
 
   // Track rendered page sizes so placeholder divs hold the right height.
   const handlePageSize = useCallback((pageIdx: number, w: number, h: number) => {
@@ -1083,9 +1081,9 @@ export function PdfViewer({ content: pdfPath, nodeId }: Props) {
       const avgH = known.reduce((s, p) => s + p.h, 0) / known.length;
       return { w: avgW, h: avgH };
     }
-    // A4 at 96dpi × zoom (CSS px)
-    return { w: Math.round(595 * zoom), h: Math.round(842 * zoom) };
-  }, [pageSizes, zoom]);
+    // A4 at 96dpi × renderScale (CSS px)
+    return { w: Math.round(595 * renderScale), h: Math.round(842 * renderScale) };
+  }, [pageSizes, renderScale]);
 
   // Group text annotations by page index to avoid O(N×M) filter inside the render loop.
   const textAnnotsByPage = useMemo(() => {
@@ -1411,6 +1409,9 @@ export function PdfViewer({ content: pdfPath, nodeId }: Props) {
           {/* ── Pages + scrubber ──────────────────────────────────────── */}
           <div className="pdf-scroll-wrapper">
             <div className="pdf-scroll-area" ref={scrollRef}>
+              {/* CSS zoom applies visual magnification without re-rendering canvases.
+                  zoom=1 means fit-to-width (100%), zoom=2 means 2× larger, etc. */}
+              <div style={{ zoom: zoom }}>
               {pdfDoc && Array.from({ length: numPages }, (_, i) => {
                 const size = pageSizes[i] ?? estimatedPageSize;
                 const pageAnnots = textAnnotsByPage[i] ?? [];
@@ -1422,7 +1423,7 @@ export function PdfViewer({ content: pdfPath, nodeId }: Props) {
                         <PdfPage
                           doc={pdfDoc}
                           pageIdx={i}
-                          zoom={zoom}
+                          renderScale={renderScale}
                           strokes={annotations[i] ?? []}
                           selectedStrokes={selectedPage === i ? selectedStrokes : new Set<string>()}
                           tool={tool}
@@ -1454,7 +1455,7 @@ export function PdfViewer({ content: pdfPath, nodeId }: Props) {
                             matches={matches}
                             currentMatchIdx={currentMatchIdx}
                             textItems={textItemsRef.current[i]}
-                            viewport={pageViewports.current[i].clone({ scale: zoom })}
+                            viewport={pageViewports.current[i].clone({ scale: renderScale })}
                           />
                         )}
                       </div>
@@ -1468,6 +1469,7 @@ export function PdfViewer({ content: pdfPath, nodeId }: Props) {
                   </div>
                 );
               })}
+              </div>{/* end css-zoom wrapper */}
             </div>
             {numPages > 1 && (
               <div
