@@ -43,6 +43,9 @@ targets:
         LSRequiresIPhoneOS: true
         UILaunchStoryboardName: LaunchScreen
         UIRequiredDeviceCapabilities: [arm64, metal]
+        NSLocalNetworkUsageDescription: "PathFinder needs access to the local network to connect to the Tauri development server."
+        NSBonjourServices:
+          - _http._tcp
         UISupportedInterfaceOrientations:
           - UIInterfaceOrientationPortrait
           - UIInterfaceOrientationLandscapeLeft
