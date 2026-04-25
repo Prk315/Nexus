@@ -507,6 +507,9 @@ export function PdfViewer({ content: pdfPath, nodeId }: Props) {
   const bookmarkSaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const exportErrorTimerRef  = useRef<ReturnType<typeof setTimeout> | null>(null);
   const exportingRef         = useRef(false);
+  // Base width of the PDF at scale=1 (populated after first page loads).
+  // Used to compute fit-to-width zoom so pages always fill the scroll area.
+  const basePdfWidthRef    = useRef<number>(595);
   const undoStackRef       = useRef<Array<{ pageIdx: number; strokeId: string }>>([]);
   const redoStackRef       = useRef<Array<{ pageIdx: number; strokeId: string }>>([]);
   const redoStrokesRef     = useRef<Map<string, Stroke>>(new Map());
@@ -538,6 +541,19 @@ export function PdfViewer({ content: pdfPath, nodeId }: Props) {
         const doc = await task.promise;
         setPdfDoc(doc);
         setNumPages(doc.numPages);
+
+        // Compute fit-to-width zoom so the first page fills the scroll area.
+        // This runs after the DOM has the scroll container but before pages render.
+        try {
+          const firstPage = await doc.getPage(1);
+          const baseViewport = firstPage.getViewport({ scale: 1.0 });
+          basePdfWidthRef.current = baseViewport.width;
+          const el = scrollRef.current;
+          if (el) {
+            const fit = (el.clientWidth - 24) / baseViewport.width;
+            setZoom(prev => prev === 1.0 ? +Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, fit)).toFixed(2) : prev);
+          }
+        } catch { /* best-effort */ }
       } catch (err) {
         // eslint-disable-next-line no-console
         console.error("[PdfViewer] failed to load PDF:", err);
@@ -913,7 +929,25 @@ export function PdfViewer({ content: pdfPath, nodeId }: Props) {
   // ── Zoom ──────────────────────────────────────────────────────────────
   function zoomIn()    { setZoom(z => Math.min(ZOOM_MAX, +(z + ZOOM_STEP).toFixed(2))); }
   function zoomOut()   { setZoom(z => Math.max(ZOOM_MIN, +(z - ZOOM_STEP).toFixed(2))); }
-  function resetZoom() { setZoom(1.0); }
+  function resetZoom() {
+    const el = scrollRef.current;
+    if (!el || basePdfWidthRef.current === 0) { setZoom(1.0); return; }
+    const fit = (el.clientWidth - 24) / basePdfWidthRef.current;
+    setZoom(+Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, fit)).toFixed(2));
+  }
+
+  // When the sidebar opens/closes the scroll area width changes — recompute
+  // fit-zoom after the DOM settles (50ms covers CSS transition start).
+  useEffect(() => {
+    if (!pdfDoc) return;
+    const timer = setTimeout(() => {
+      const el = scrollRef.current;
+      if (!el || basePdfWidthRef.current === 0) return;
+      const fit = (el.clientWidth - 24) / basePdfWidthRef.current;
+      setZoom(+Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, fit)).toFixed(2));
+    }, 50);
+    return () => clearTimeout(timer);
+  }, [sidebarOpen, pdfDoc]);
 
   useEffect(() => {
     const el = scrollRef.current;
@@ -1406,6 +1440,7 @@ export function PdfViewer({ content: pdfPath, nodeId }: Props) {
                           annotations={pageAnnots}
                           pageWidth={size.w}
                           pageHeight={size.h}
+                          zoom={zoom}
                           tool={tool}
                           selectedId={selectedTextId}
                           onSelect={setSelectedTextId}

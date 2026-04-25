@@ -20,6 +20,7 @@ interface SingleAnnotationProps {
   annot: TextAnnotation;
   pageWidth: number;
   pageHeight: number;
+  zoom: number;
   isSelected: boolean;
   onSelect: (id: string | null) => void;
   onChange: (updated: TextAnnotation) => void;
@@ -30,6 +31,7 @@ function SingleAnnotation({
   annot,
   pageWidth,
   pageHeight,
+  zoom,
   isSelected,
   onSelect,
   onChange,
@@ -116,10 +118,11 @@ function SingleAnnotation({
     return () => window.removeEventListener("keydown", onKey);
   }, [isSelected, editing, annot.id, onDelete]);
 
+  const scaledFontSize = annot.fontSize * zoom;
   const style: React.CSSProperties = {
     left:     `${annot.x * 100}%`,
     top:      `${annot.y * 100}%`,
-    fontSize: annot.fontSize,
+    fontSize: scaledFontSize,
     color:    annot.color,
   };
 
@@ -158,7 +161,7 @@ function SingleAnnotation({
           onPointerDown={e => e.stopPropagation()}
         />
       ) : (
-        <div className="pdf-text-annot-display" style={{ fontSize: annot.fontSize, color: annot.color }}>
+        <div className="pdf-text-annot-display" style={{ fontSize: scaledFontSize, color: annot.color }}>
           {annot.text || <span style={{ opacity: 0.4 }}>Type…</span>}
         </div>
       )}
@@ -173,6 +176,7 @@ interface Props {
   annotations: TextAnnotation[];
   pageWidth: number;
   pageHeight: number;
+  zoom: number;
   tool: string;
   selectedId: string | null;
   onSelect: (id: string | null) => void;
@@ -186,6 +190,7 @@ export function PdfTextAnnotationLayer({
   annotations,
   pageWidth,
   pageHeight,
+  zoom,
   tool,
   selectedId,
   onSelect,
@@ -238,6 +243,7 @@ export function PdfTextAnnotationLayer({
           annot={annot}
           pageWidth={pageWidth}
           pageHeight={pageHeight}
+          zoom={zoom}
           isSelected={selectedId === annot.id}
           onSelect={onSelect}
           onChange={onChange}
