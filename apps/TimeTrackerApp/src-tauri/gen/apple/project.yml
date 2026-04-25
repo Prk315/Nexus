@@ -30,6 +30,8 @@ targets:
     sources:
       - path: Sources
       - path: ../../ios
+        excludes:
+          - "SafariBlockerExtension/**"
       - path: Assets.xcassets
       - path: Externals
       - path: timetracker-app_iOS
@@ -97,6 +99,8 @@ targets:
     platform: iOS
     sources:
       - path: ../../ios/SafariBlockerExtension
+        excludes:
+          - "Info.plist"
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.bastianthomsen.timetracker.SafariBlocker
