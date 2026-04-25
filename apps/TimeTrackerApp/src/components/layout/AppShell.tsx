@@ -13,9 +13,9 @@ import TimeKeeperPage from "../../pages/TimeKeeperPage";
 const IS_IOS = /iPhone|iPad|iPod/.test(navigator.userAgent);
 
 const ALL_TABS = ["Dashboard", "History", "Reports", "Focus", "Settings"] as const;
-// On iOS: "Dashboard" becomes the primary timer tab; "Focus" (app/site blocker) is hidden
-// since iOS sandboxing prevents blocking other apps or editing /etc/hosts.
-const MOBILE_TABS = ["Dashboard", "History", "Reports", "Settings"] as const;
+// On iOS: "Dashboard" becomes the primary timer tab; "Focus" tab is shown because
+// site blocking works via Safari Content Blocker (app blocking is hidden within the page).
+const MOBILE_TABS = ["Dashboard", "History", "Reports", "Focus", "Settings"] as const;
 type Tab = (typeof ALL_TABS)[number];
 
 const TABS: readonly Tab[] = IS_IOS ? MOBILE_TABS : ALL_TABS;
