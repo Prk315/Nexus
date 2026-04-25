@@ -1,7 +1,7 @@
 import { useState, useMemo, useRef } from "react";
-import { invoke } from "@tauri-apps/api/core";
 import { VaultGraph } from "../types";
 import { buildKind } from "../nodeUtils";
+import * as api from "../lib/api";
 
 export function useGraph() {
   const [graph, setGraph] = useState<VaultGraph>({ nodes: {}, edges: {}, back_edges: {}, tag_colors: {} });
@@ -30,58 +30,58 @@ export function useGraph() {
   }
 
   async function loadGraph() {
-    const g = await invoke<VaultGraph>("get_graph");
+    const g = await api.loadGraph();
     setGraph(g);
   }
 
   async function createNode(name: string, kind: string) {
-    const g = await invoke<VaultGraph>("create_node", { name, kind: buildKind(kind) });
+    const g = await api.createNode(name, buildKind(kind));
     setGraph(g);
     return g;
   }
 
   async function deleteNode(id: string) {
-    const g = await invoke<VaultGraph>("delete_node", { id });
+    const g = await api.deleteNode(id);
     setGraph(g);
   }
 
   async function addEdge(fromId: string, toId: string) {
-    const g = await invoke<VaultGraph>("add_edge", { fromId, toId });
+    const g = await api.addEdge(fromId, toId);
     setGraph(g);
   }
 
   async function removeEdge(fromId: string, toId: string) {
-    const g = await invoke<VaultGraph>("remove_edge", { fromId, toId });
+    const g = await api.removeEdge(fromId, toId);
     setGraph(g);
   }
 
   async function addTag(id: string, tag: string) {
-    const g = await invoke<VaultGraph>("add_tag", { id, tag });
+    const g = await api.addTag(id, tag);
     setGraph(g);
   }
 
   async function removeTag(id: string, tag: string) {
-    const g = await invoke<VaultGraph>("remove_tag", { id, tag });
+    const g = await api.removeTag(id, tag);
     setGraph(g);
   }
 
   async function setTagColor(tag: string, color: string) {
-    const g = await invoke<VaultGraph>("set_tag_color", { tag, color });
+    const g = await api.setTagColor(tag, color);
     setGraph(g);
   }
 
   async function createTag(tag: string, color: string) {
-    const g = await invoke<VaultGraph>("create_tag", { tag, color });
+    const g = await api.createTag(tag, color);
     setGraph(g);
   }
 
   async function renameTag(oldName: string, newName: string) {
-    const g = await invoke<VaultGraph>("rename_tag", { oldName, newName });
+    const g = await api.renameTag(oldName, newName);
     setGraph(g);
   }
 
   async function deleteTagGlobal(tag: string) {
-    const g = await invoke<VaultGraph>("delete_tag_global", { tag });
+    const g = await api.deleteTagGlobal(tag);
     setGraph(g);
   }
 

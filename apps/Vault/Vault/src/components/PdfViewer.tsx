@@ -7,7 +7,7 @@ import {
 } from "react";
 import * as pdfjs from "pdfjs-dist";
 import type { PDFDocumentProxy, PDFPageProxy } from "pdfjs-dist";
-import { invoke, convertFileSrc } from "@tauri-apps/api/core";
+import * as api from "../lib/api";
 
 // Vite ?url import for the PDF.js worker
 import workerUrl from "pdfjs-dist/build/pdf.worker.mjs?url";
@@ -264,7 +264,7 @@ const PdfPage = memo(function PdfPage({
 // ─── PdfViewer ───────────────────────────────────────────────────────────────
 
 interface Props {
-  content: string;  // filesystem path to the PDF
+  content: string;  // Supabase Storage public URL for the PDF
   nodeId:  string;
 }
 
@@ -292,16 +292,15 @@ export function PdfViewer({ content: pdfPath, nodeId }: Props) {
     let task: ReturnType<typeof pdfjs.getDocument> | null = null;
 
     async function load() {
-      // Load PDF document
-      const url = convertFileSrc(pdfPath);
-      task = pdfjs.getDocument(url);
+      // Load PDF document — pdfPath is now a Supabase Storage public URL
+      task = pdfjs.getDocument(pdfPath);
       const doc = await task.promise;
       setPdfDoc(doc);
       setNumPages(doc.numPages);
 
       // Load saved annotations
       try {
-        const raw = await invoke<string>("read_content", { id: nodeId + "_annot" });
+        const raw = await api.readContent(nodeId + "_annot");
         if (raw) {
           const parsed = JSON.parse(raw) as Annotations;
           setAnnotations(parsed);
@@ -324,10 +323,7 @@ export function PdfViewer({ content: pdfPath, nodeId }: Props) {
     if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
     saveTimerRef.current = setTimeout(async () => {
       try {
-        await invoke("save_content", {
-          id:      nodeIdRef.current + "_annot",
-          content: JSON.stringify(next),
-        });
+        await api.saveContent(nodeIdRef.current + "_annot", JSON.stringify(next));
       } catch (err) {
         console.error("Failed to save PDF annotations:", err);
       }

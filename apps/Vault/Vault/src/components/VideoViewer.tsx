@@ -1,11 +1,9 @@
-import { convertFileSrc } from "@tauri-apps/api/core";
-
 interface Props {
-  content: string;
+  content: string; // Supabase Storage public URL for the video
 }
 
 export function VideoViewer({ content }: Props) {
-  const src = convertFileSrc(content);
+  const src = content;
   if (!content) {
     return (
       <div className="video-empty">

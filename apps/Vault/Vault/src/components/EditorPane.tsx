@@ -7,7 +7,7 @@ import React, {
   useImperativeHandle,
   Component,
 } from "react";
-import { invoke } from "@tauri-apps/api/core";
+import * as api from "../lib/api";
 import { TagBar } from "./TagBar";
 import { NoteEditor } from "./NoteEditor";
 import { CanvasEditor } from "./CanvasEditor";
@@ -200,7 +200,7 @@ export const EditorPane = forwardRef<EditorPaneHandle, EditorPaneProps>(
         return;
       setSaveStatus("saving");
       const timer = setTimeout(async () => {
-        await invoke("save_content", { id: selectedId, content });
+        await api.saveContent(selectedId, content);
         setSaveStatus("saved");
         setTimeout(() => setSaveStatus(""), 1500);
       }, 400);
@@ -230,8 +230,6 @@ export const EditorPane = forwardRef<EditorPaneHandle, EditorPaneProps>(
       if (!node) return;
       const isFolder = node.kind.type === "Folder";
       const isJournal = node.kind.type === "Journal";
-      const isPdf = node.kind.type === "Pdf";
-      const isVideo = node.kind.type === "Video";
 
       if (selectedId && selectedId !== id) {
         globalContentCache.set(selectedId, content);
@@ -244,14 +242,9 @@ export const EditorPane = forwardRef<EditorPaneHandle, EditorPaneProps>(
         text = globalContentCache.get(id)!;
       } else {
         setIsLoading(true);
-        if (isPdf) {
-          text = await invoke<string>("get_pdf_path", { id });
-        } else if (isVideo) {
-          // ext is determined at import time; pass empty string so Rust scans assets dir
-          text = await invoke<string>("get_video_path", { id, ext: "" });
-        } else {
-          text = await invoke<string>("read_content", { id });
-        }
+        // For PDF/Video nodes the stored content is the Supabase Storage public URL.
+        // For all other types it is the text/JSON content string.
+        text = await api.readContent(id);
         globalContentCache.set(id, text);
         setIsLoading(false);
       }
@@ -277,7 +270,7 @@ export const EditorPane = forwardRef<EditorPaneHandle, EditorPaneProps>(
             setSelectedId(nextId);
             setContent(cached ?? "");
             if (!isFolder && cached === undefined) {
-              invoke<string>("read_content", { id: nextId }).then((t) => {
+              api.readContent(nextId).then((t) => {
                 globalContentCache.set(nextId, t);
                 setContent(t);
               });

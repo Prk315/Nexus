@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect } from "react";
-import { invoke } from "@tauri-apps/api/core";
+import * as api from "../lib/api";
 
 // ── Data types ──────────────────────────────────────────────────────────────
 
@@ -183,14 +183,14 @@ export function JournalEditor({ nodeId }: Props) {
   function scheduleSave(d: JournalData) {
     clearTimeout(saveTimerRef.current);
     saveTimerRef.current = setTimeout(() => {
-      invoke("save_journal", { id: nodeId, data: JSON.stringify(d) });
+      api.saveJournal(nodeId, JSON.stringify(d));
     }, 600);
   }
 
   // Load on mount / nodeId change
   useEffect(() => {
     setLoaded(false);
-    invoke<string>("read_journal", { id: nodeId }).then(raw => {
+    api.readJournal(nodeId).then(raw => {
       try {
         const parsed = JSON.parse(raw) as JournalData;
         setData(parsed);

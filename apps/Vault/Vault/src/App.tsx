@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef, useMemo } from "react";
 import { useNexusRegistration, NexusHeader } from "@nexus/core";
-import { invoke } from "@tauri-apps/api/core";
+import * as api from "./lib/api";
 import ForceGraph2D from "react-force-graph-2d";
 import ForceGraph3D from "react-force-graph-3d";
 import * as THREE from "three";
@@ -317,17 +317,11 @@ function App() {
     const file = e.target.files?.[0];
     if (!file) return;
     const name = file.name.replace(/\.pdf$/i, "");
-    const dataUrl = await new Promise<string>((resolve) => {
-      const reader = new FileReader();
-      reader.onload = () => resolve(reader.result as string);
-      reader.readAsDataURL(file);
-    });
-    const b64 = dataUrl.replace(/^data:application\/pdf;base64,/, "");
     const oldIds = new Set(Object.keys(graph.nodes));
     const g = await createNode(name, "Pdf");
     const newId = Object.keys(g.nodes).find(id => !oldIds.has(id));
     if (newId) {
-      await invoke("save_pdf_file", { id: newId, dataB64: b64 });
+      await api.uploadAsset(newId, file);
       selectNode(newId);
     }
     e.target.value = "";
@@ -337,18 +331,11 @@ function App() {
     const file = e.target.files?.[0];
     if (!file) return;
     const name = file.name.replace(/\.[^.]+$/, "");
-    const ext = file.name.split(".").pop()?.toLowerCase() ?? "mp4";
-    const dataUrl = await new Promise<string>((resolve) => {
-      const reader = new FileReader();
-      reader.onload = () => resolve(reader.result as string);
-      reader.readAsDataURL(file);
-    });
-    const b64 = dataUrl.replace(/^data:[^;]+;base64,/, "");
     const oldIds = new Set(Object.keys(graph.nodes));
     const g = await createNode(name, "Video");
     const newId = Object.keys(g.nodes).find(id => !oldIds.has(id));
     if (newId) {
-      await invoke("save_video_file", { id: newId, ext, dataB64: b64 });
+      await api.uploadAsset(newId, file);
       selectNode(newId);
     }
     e.target.value = "";
