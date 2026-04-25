@@ -1,259 +1,1973 @@
-import { invoke } from "@tauri-apps/api/core";
-import type { Goal, Plan, Task, TaskWithContext, SystemEntry, TodayFocus, SearchResult, DailyPlan, TimeBlock, Routines, WeekItems, Reminder, QuickNote, BrainEntry, CalEvent, Deadline, Agreement, DailyGoals, DailySecGoal, CalBlock, RecurringCalBlock, CourseAssignment, CaSubtask, LifestyleArea, PipelineTemplate, PipelineStep, PipelineRun, PipelineStepSubtask, ProjectGoal, Game, GameFeature, GameDevlogEntry, RoadmapItem } from "../types";
+import { supabase } from "./supabase";
+import type {
+  Goal, Plan, Task, TaskWithContext, SystemEntry, TodayFocus, SearchResult,
+  DailyPlan, DailySection, DailyItemWithStatus, TimeBlock, Routines, RoutineItem,
+  WeekItems, Reminder, QuickNote, BrainEntry, CalEvent, Deadline, Agreement,
+  DailyGoals, DailySecGoal, CalBlock, RecurringCalBlock, CourseAssignment,
+  CaSubtask, LifestyleArea, PipelineTemplate, PipelineStep, PipelineRun,
+  PipelineRunStep, PipelineStepSubtask, ProjectGoal, Game, GameFeature,
+  GameDevlogEntry, RoadmapItem, CourseBook, BookSection, BookReadingLog,
+  HabitWithCompletion, DailyHabit, RunLog, WorkoutLog, WorkoutExercise,
+  SubtaskToggleResult, SystemSubtask, GoalGroup,
+} from "../types";
 
-// Goal Groups
-export const getGoalGroups    = () => invoke<import("../types").GoalGroup[]>("get_goal_groups");
-export const createGoalGroup  = (name: string, color: string) => invoke<import("../types").GoalGroup>("create_goal_group", { name, color });
-export const updateGoalGroup  = (id: number, name: string, color: string) => invoke<import("../types").GoalGroup>("update_goal_group", { id, name, color });
-export const deleteGoalGroup  = (id: number) => invoke<void>("delete_goal_group", { id });
+const USER_ID = "default";
 
-// Goals
-export const getGoals = () => invoke<Goal[]>("get_goals");
-export const createGoal = (payload: { title: string; description?: string | null; deadline?: string | null; priority?: string; group_id?: number | null }) =>
-  invoke<Goal>("create_goal", { payload });
-export const updateGoal = (id: number, payload: { title: string; description?: string | null; deadline?: string | null; status: string; priority: string; group_id?: number | null }) =>
-  invoke<Goal>("update_goal", { id, payload });
-export const deleteGoal = (id: number) => invoke<void>("delete_goal", { id });
+// ─── helpers ────────────────────────────────────────────────────────────────
 
-// Plans
-export const getPlans = () => invoke<Plan[]>("get_plans");
-export const createPlan = (payload: { goal_id?: number | null; title: string; description?: string | null; deadline?: string | null; tags?: string | null; is_course?: boolean; is_lifestyle?: boolean; lifestyle_area_id?: number | null; purpose?: string | null; problem?: string | null; solution?: string | null }) =>
-  invoke<Plan>("create_plan", { payload });
-export const updatePlan = (id: number, payload: { goal_id?: number | null; title: string; description?: string | null; deadline?: string | null; status: string; tags?: string | null; is_course?: boolean; is_lifestyle?: boolean; lifestyle_area_id?: number | null; purpose?: string | null; problem?: string | null; solution?: string | null }) =>
-  invoke<Plan>("update_plan", { id, payload });
-export const deletePlan = (id: number) => invoke<void>("delete_plan", { id });
+function err(e: any): never {
+  throw e?.message ?? String(e);
+}
 
-// Tasks
-export const getTasks = (planId: number) => invoke<Task[]>("get_tasks", { planId });
-export const getAllTasks = () => invoke<TaskWithContext[]>("get_all_tasks");
-export const createTask = (payload: { plan_id?: number | null; title: string; priority?: string; due_date?: string | null; time_estimate?: number | null }) =>
-  invoke<Task>("create_task", { payload });
-export const updateTask = (id: number, payload: { title: string; priority: string; due_date?: string | null; time_estimate?: number | null }) =>
-  invoke<Task>("update_task", { id, payload });
-export const toggleTask = (id: number) => invoke<Task>("toggle_task", { id });
-export const deleteTask = (id: number) => invoke<void>("delete_task", { id });
-export const setTaskKanbanStatus = (id: number, status: string) => invoke<Task>("set_task_kanban_status", { id, status });
+function num(v: any): number {
+  return Number(v);
+}
 
-// Project Goals
-export const getProjectGoals   = (planId: number) => invoke<ProjectGoal[]>("get_project_goals", { planId });
-export const addProjectGoal    = (payload: { plan_id: number; title: string }) => invoke<ProjectGoal>("add_project_goal", { payload });
-export const toggleProjectGoal = (id: number) => invoke<ProjectGoal>("toggle_project_goal", { id });
-export const deleteProjectGoal = (id: number) => invoke<void>("delete_project_goal", { id });
+// ─── mappers ────────────────────────────────────────────────────────────────
 
-// Systems
-export const getSystems = () => invoke<SystemEntry[]>("get_systems");
-export const createSystem = (payload: { title: string; description?: string | null; frequency: string; days_of_week?: string | null; start_time?: string | null; end_time?: string | null; is_lifestyle?: boolean; lifestyle_area_id?: number | null }) =>
-  invoke<SystemEntry>("create_system", { payload });
-export const updateSystem = (id: number, payload: { title: string; description?: string | null; frequency: string; days_of_week?: string | null; start_time?: string | null; end_time?: string | null; is_lifestyle?: boolean; lifestyle_area_id?: number | null }) =>
-  invoke<SystemEntry>("update_system", { id, payload });
-export const deleteSystem = (id: number) => invoke<void>("delete_system", { id });
-export const markSystemDone     = (id: number) => invoke<SystemEntry>("mark_system_done",     { id });
-export const unmarkSystemDone   = (id: number) => invoke<SystemEntry>("unmark_system_done",   { id });
-export const getSystemSubtasks  = (systemId: number, date: string) => invoke<import("../types").SystemSubtask[]>("get_system_subtasks", { systemId, date });
-export const addSystemSubtask   = (systemId: number, title: string) => invoke<import("../types").SystemSubtask[]>("add_system_subtask", { systemId, title });
-export const deleteSystemSubtask = (id: number) => invoke<void>("delete_system_subtask", { id });
-export const toggleSystemSubtask = (subtaskId: number, date: string) => invoke<import("../types").SubtaskToggleResult>("toggle_system_subtask", { subtaskId, date });
+function mapGoal(
+  r: any,
+  taskCount = 0,
+  doneCount = 0,
+): Goal {
+  return {
+    id: num(r.id),
+    group_id: r.group_id ? num(r.group_id) : null,
+    group_name: r.pf_goal_groups?.name ?? null,
+    group_color: r.pf_goal_groups?.color ?? null,
+    title: r.title,
+    description: r.description,
+    deadline: r.deadline,
+    status: r.status,
+    priority: r.priority,
+    created_at: r.created_at,
+    task_count: taskCount,
+    done_count: doneCount,
+  };
+}
 
-// Dashboard
-export const getTodayFocus = () => invoke<TodayFocus>("get_today_focus");
+function mapPlan(r: any, taskCount = 0, doneCount = 0): Plan {
+  return {
+    id: num(r.id),
+    goal_id: r.goal_id ? num(r.goal_id) : null,
+    title: r.title,
+    description: r.description,
+    deadline: r.deadline,
+    status: r.status,
+    created_at: r.created_at,
+    task_count: taskCount,
+    done_count: doneCount,
+    tags: r.tags,
+    is_course: r.is_course,
+    is_lifestyle: r.is_lifestyle,
+    lifestyle_area_id: r.lifestyle_area_id ? num(r.lifestyle_area_id) : null,
+    purpose: r.purpose,
+    problem: r.problem,
+    solution: r.solution,
+  };
+}
 
-// Search
-export const search = (query: string) => invoke<SearchResult[]>("search", { query });
+function mapTask(r: any): Task {
+  return {
+    id: num(r.id),
+    plan_id: r.plan_id ? num(r.plan_id) : null,
+    title: r.title,
+    done: r.done,
+    sort_order: r.sort_order,
+    priority: r.priority,
+    due_date: r.due_date,
+    time_estimate: r.time_estimate,
+    kanban_status: r.kanban_status ?? "backlog",
+    created_at: r.created_at,
+  };
+}
 
-// Week view
-export const getWeekItems = (startDate: string, endDate: string) =>
-  invoke<WeekItems>("get_week_items", { startDate, endDate });
+function mapTaskWithContext(r: any, plansMap?: Map<number, any>): TaskWithContext {
+  const plan = plansMap?.get(num(r.plan_id)) ?? r.pf_plans;
+  return {
+    id: num(r.id),
+    plan_id: r.plan_id ? num(r.plan_id) : null,
+    plan_title: plan?.title ?? null,
+    goal_id: plan?.goal_id ? num(plan.goal_id) : null,
+    goal_title: plan?.pf_goals?.title ?? null,
+    title: r.title,
+    done: r.done,
+    sort_order: r.sort_order,
+    priority: r.priority,
+    due_date: r.due_date,
+    created_at: r.created_at,
+    time_estimate: r.time_estimate,
+  };
+}
 
-// Routines
-export const getRoutines       = (date: string) => invoke<Routines>("get_routines", { date });
-export const toggleRoutine     = (id: number, date: string) => invoke<boolean>("toggle_routine", { id, date });
-export const addRoutineItem    = (kind: string, title: string) => invoke<void>("add_routine_item", { kind, title });
-export const deleteRoutineItem = (id: number) => invoke<void>("delete_routine_item", { id });
+function mapSystem(r: any): SystemEntry {
+  return {
+    id: num(r.id),
+    title: r.title,
+    description: r.description,
+    frequency: r.frequency,
+    days_of_week: r.days_of_week,
+    last_done: r.last_done,
+    streak_count: r.streak_count,
+    streak_updated: r.streak_updated,
+    created_at: r.created_at,
+    start_time: r.start_time,
+    end_time: r.end_time,
+    is_lifestyle: r.is_lifestyle,
+    lifestyle_area_id: r.lifestyle_area_id ? num(r.lifestyle_area_id) : null,
+  };
+}
 
-// Time Blocks
-export const getTimeBlocks = (date: string) => invoke<TimeBlock[]>("get_time_blocks", { date });
-export const saveTimeBlock = (date: string, slot: string, label: string) =>
-  invoke<void>("save_time_block", { date, slot, label });
+function mapReminder(r: any): Reminder {
+  return {
+    id: num(r.id),
+    title: r.title,
+    done: r.done,
+    due_date: r.due_date,
+    created_at: r.created_at,
+  };
+}
 
-// Daily Template
-export const getDailyPlan = (date: string) => invoke<DailyPlan>("get_daily_plan", { date });
-export const toggleDailyCompletion = (itemId: number, date: string) =>
-  invoke<boolean>("toggle_daily_completion", { itemId, date });
-export const createDailySection = (payload: { title: string; color?: string | null }) =>
-  invoke<void>("create_daily_section", { payload });
-export const updateDailySection = (id: number, payload: { title: string; color: string; sort_order: number }) =>
-  invoke<void>("update_daily_section", { id, payload });
-export const deleteDailySection = (id: number) => invoke<void>("delete_daily_section", { id });
-export const createDailyItem = (payload: { section_id: number; title: string }) =>
-  invoke<void>("create_daily_item", { payload });
-export const updateDailyItem = (id: number, payload: { title: string; sort_order: number }) =>
-  invoke<void>("update_daily_item", { id, payload });
-export const deleteDailyItem = (id: number) => invoke<void>("delete_daily_item", { id });
+function mapDeadline(r: any): Deadline {
+  return {
+    id: num(r.id),
+    title: r.title,
+    due_date: r.due_date,
+    done: r.done,
+    created_at: r.created_at,
+  };
+}
 
-// Daily Goals
-export const getDailyGoals             = (date: string) => invoke<DailyGoals>("get_daily_goals", { date });
-export const setDailyPrimaryGoal       = (date: string, text: string) => invoke<void>("set_daily_primary_goal", { date, text });
-export const clearDailyPrimaryGoal     = (date: string) => invoke<void>("clear_daily_primary_goal", { date });
-export const addDailySecondaryGoal     = (date: string, text: string) => invoke<DailySecGoal>("add_daily_secondary_goal", { date, text });
-export const deleteDailySecondaryGoal  = (id: number) => invoke<void>("delete_daily_secondary_goal", { id });
+function mapCourseAssignment(r: any): CourseAssignment {
+  return {
+    id: num(r.id),
+    plan_id: num(r.plan_id),
+    plan_title: r.pf_plans?.title ?? "",
+    title: r.title,
+    assignment_type: r.assignment_type,
+    due_date: r.due_date,
+    status: r.status,
+    priority: r.priority,
+    book_title: r.book_title,
+    chapter_start: r.chapter_start,
+    chapter_end: r.chapter_end,
+    page_start: r.page_start,
+    page_end: r.page_end,
+    page_current: r.page_current,
+    notes: r.notes,
+    created_at: r.created_at,
+    start_time: r.start_time,
+    end_time: r.end_time,
+    time_estimate: r.time_estimate,
+  };
+}
 
-// Reminders
-export const getReminders    = () => invoke<Reminder[]>("get_reminders");
-export const addReminder     = (title: string, dueDate?: string | null) => invoke<Reminder>("add_reminder", { title, dueDate: dueDate ?? null });
-export const toggleReminder  = (id: number) => invoke<Reminder>("toggle_reminder", { id });
-export const deleteReminder  = (id: number) => invoke<void>("delete_reminder", { id });
+function mapCourseBook(r: any): CourseBook {
+  return {
+    id: num(r.id),
+    plan_id: num(r.plan_id),
+    title: r.title,
+    author: r.author,
+    total_pages: r.total_pages,
+    total_chapters: r.total_chapters,
+    current_page: r.current_page,
+    current_chapter: r.current_chapter,
+    daily_pages_goal: r.daily_pages_goal,
+    weekly_chapters_goal: r.weekly_chapters_goal,
+    created_at: r.created_at,
+    sections: (r.pf_book_sections ?? [])
+      .sort((a: any, b: any) => a.sort_order - b.sort_order)
+      .map(mapBookSection),
+    log: (r.pf_book_reading_log ?? [])
+      .sort((a: any, b: any) => b.date.localeCompare(a.date))
+      .map(mapBookReadingLog),
+  };
+}
 
-// Quick Notes
-export const getQuickNotes   = () => invoke<QuickNote[]>("get_quick_notes");
-export const addQuickNote    = (title: string, body?: string | null) => invoke<QuickNote>("add_quick_note", { title, body: body ?? null });
-export const deleteQuickNote = (id: number) => invoke<void>("delete_quick_note", { id });
+function mapBookSection(r: any): BookSection {
+  return {
+    id: num(r.id),
+    book_id: num(r.book_id),
+    title: r.title,
+    kind: r.kind,
+    sort_order: r.sort_order,
+    page_start: r.page_start,
+    page_end: r.page_end,
+    due_date: r.due_date,
+    time_estimate: r.time_estimate,
+    done: r.done,
+    done_at: r.done_at,
+    notes: r.notes,
+    created_at: r.created_at,
+  };
+}
 
-// Brain Dump
-export const getBrainDump    = () => invoke<BrainEntry[]>("get_brain_dump");
-export const addBrainEntry   = (content: string) => invoke<BrainEntry>("add_brain_entry", { content });
-export const deleteBrainEntry= (id: number) => invoke<void>("delete_brain_entry", { id });
+function mapBookReadingLog(r: any): BookReadingLog {
+  return {
+    id: num(r.id),
+    book_id: num(r.book_id),
+    date: r.date,
+    pages_read: r.pages_read,
+    chapters_read: r.chapters_read,
+    note: r.note,
+  };
+}
 
-// Events
-export const getEvents       = () => invoke<CalEvent[]>("get_events");
-export const addEvent        = (title: string, date: string, description?: string | null) => invoke<CalEvent>("add_event", { title, date, description: description ?? null });
-export const deleteEvent     = (id: number) => invoke<void>("delete_event", { id });
+function mapPipelineStep(r: any): PipelineStep {
+  return {
+    id: num(r.id),
+    template_id: num(r.template_id),
+    title: r.title,
+    description: r.description,
+    sort_order: r.sort_order,
+    time_estimate: r.time_estimate,
+    step_type: r.step_type,
+    attend_type: r.attend_type,
+  };
+}
 
-// Deadlines
-export const getDeadlines    = () => invoke<Deadline[]>("get_deadlines");
-export const addDeadline     = (title: string, due_date: string) => invoke<Deadline>("add_deadline", { title, dueDate: due_date });
-export const toggleDeadline  = (id: number) => invoke<Deadline>("toggle_deadline", { id });
-export const deleteDeadline  = (id: number) => invoke<void>("delete_deadline", { id });
+function mapRoadmapItem(r: any): RoadmapItem {
+  return {
+    id: num(r.id),
+    plan_id: num(r.plan_id),
+    title: r.title,
+    description: r.description,
+    due_date: r.due_date,
+    status: r.status,
+    sort_order: r.sort_order,
+    created_at: r.created_at,
+  };
+}
 
-// Agreements
-export const getAgreements   = () => invoke<Agreement[]>("get_agreements");
-export const addAgreement    = (title: string, notes?: string | null) => invoke<Agreement>("add_agreement", { title, notes: notes ?? null });
-export const deleteAgreement = (id: number) => invoke<void>("delete_agreement", { id });
+/** Expands a recurring cal block into virtual CalBlock entries for a date range. */
+function expandRecurring(block: any, startDate: string, endDate: string): CalBlock[] {
+  const result: CalBlock[] = [];
+  const rangeStart = new Date(startDate + "T00:00:00Z");
+  const rangeEnd   = new Date(endDate   + "T00:00:00Z");
+  const seriesStart = new Date(block.start_date + "T00:00:00Z");
+  const seriesEnd   = block.end_date ? new Date(block.end_date + "T00:00:00Z") : null;
 
-// Course Assignments
-type CAPayload = { plan_id: number; title: string; assignment_type: string; due_date?: string | null; status: string; priority: string; book_title?: string | null; chapter_start?: string | null; chapter_end?: string | null; page_start?: number | null; page_end?: number | null; page_current?: number | null; notes?: string | null; start_time?: string | null; end_time?: string | null; time_estimate?: number | null };
-export const getCourseAssignments      = () => invoke<CourseAssignment[]>("get_course_assignments");
-export const createCourseAssignment    = (payload: CAPayload) => invoke<CourseAssignment>("create_course_assignment", { payload });
-export const updateCourseAssignment    = (id: number, payload: CAPayload) => invoke<CourseAssignment>("update_course_assignment", { id, payload });
-export const deleteCourseAssignment    = (id: number) => invoke<void>("delete_course_assignment", { id });
+  const daysOfWeek: number[] = block.days_of_week
+    ? block.days_of_week.split(",").map(Number)
+    : [];
 
-// CA Subtasks
-export const getCaSubtasks    = (assignmentId: number) => invoke<CaSubtask[]>("get_ca_subtasks", { assignmentId });
-export const addCaSubtask     = (assignmentId: number, title: string) => invoke<CaSubtask>("add_ca_subtask", { assignmentId, title });
-export const toggleCaSubtask  = (id: number) => invoke<CaSubtask>("toggle_ca_subtask", { id });
-export const deleteCaSubtask  = (id: number) => invoke<void>("delete_ca_subtask", { id });
+  const epoch = new Date("2020-01-01T00:00:00Z").getTime();
+  const cursor = new Date(Math.max(rangeStart.getTime(), seriesStart.getTime()));
 
-// Pipelines
-type PipelineTemplatePayload = { plan_id: number; title: string; description?: string | null; color?: string };
-type PipelineStepInput = { id?: number | null; title: string; description?: string | null; sort_order: number; time_estimate?: number | null; step_type?: string | null; attend_type?: string | null };
-type PipelineRunPayload = { template_id: number; title: string; notes?: string | null; scheduled_date?: string | null };
-type PipelineRunUpdatePayload = { title: string; notes?: string | null; scheduled_date?: string | null };
+  while (cursor <= rangeEnd && (!seriesEnd || cursor <= seriesEnd)) {
+    const dow = cursor.getUTCDay();
+    const matches =
+      block.recurrence === "daily" ||
+      (block.recurrence === "weekly" && daysOfWeek.includes(dow));
 
-export const getPipelineTemplates    = (planId: number) => invoke<PipelineTemplate[]>("get_pipeline_templates", { planId });
-export const createPipelineTemplate  = (payload: PipelineTemplatePayload) => invoke<PipelineTemplate>("create_pipeline_template", { payload });
-export const updatePipelineTemplate  = (id: number, payload: { title: string; description?: string | null; color: string }) => invoke<PipelineTemplate>("update_pipeline_template", { id, payload });
-export const deletePipelineTemplate  = (id: number) => invoke<void>("delete_pipeline_template", { id });
-export const upsertPipelineSteps     = (templateId: number, steps: PipelineStepInput[]) => invoke<PipelineStep[]>("upsert_pipeline_steps", { templateId, steps });
-export const getPipelineRuns         = (templateId: number) => invoke<PipelineRun[]>("get_pipeline_runs", { templateId });
-export const createPipelineRun       = (payload: PipelineRunPayload) => invoke<PipelineRun>("create_pipeline_run", { payload });
-export const updatePipelineRun       = (id: number, payload: PipelineRunUpdatePayload) => invoke<PipelineRun>("update_pipeline_run", { id, payload });
-export const deletePipelineRun       = (id: number) => invoke<void>("delete_pipeline_run", { id });
-export const togglePipelineRunStep   = (runId: number, stepId: number) => invoke<PipelineRun>("toggle_pipeline_run_step", { runId, stepId });
-export const updatePipelineRunStep   = (runId: number, stepId: number, payload: { notes: string | null; due_date: string | null; due_date_2: string | null; chapter_ref: string | null; page_start: number | null; page_end: number | null; start_time: string | null; end_time: string | null; location: string | null; time_estimate: number | null }) => invoke<PipelineRun>("update_pipeline_run_step", { runId, stepId, payload });
+    if (matches) {
+      const dateStr    = cursor.toISOString().split("T")[0];
+      const dayOffset  = Math.floor((cursor.getTime() - epoch) / 86_400_000);
+      result.push({
+        id: -(num(block.id) * 100_000 + dayOffset),
+        date: dateStr,
+        title: block.title,
+        start_time: block.start_time,
+        end_time: block.end_time,
+        color: block.color,
+        description: block.description,
+        location: block.location,
+        created_at: block.created_at,
+        is_recurring: true,
+        recurring_id: num(block.id),
+        recurrence: block.recurrence,
+        days_of_week: block.days_of_week,
+        series_start_date: block.start_date,
+        series_end_date: block.end_date,
+      });
+    }
+    cursor.setUTCDate(cursor.getUTCDate() + 1);
+  }
+  return result;
+}
 
-// Pipeline Step Subtasks
-export const getPipelineStepSubtasks    = (runId: number, stepId: number) => invoke<PipelineStepSubtask[]>("get_pipeline_step_subtasks", { runId, stepId });
-export const addPipelineStepSubtask     = (runId: number, stepId: number, title: string) => invoke<PipelineStepSubtask>("add_pipeline_step_subtask", { runId, stepId, title });
-export const togglePipelineStepSubtask  = (id: number) => invoke<PipelineStepSubtask>("toggle_pipeline_step_subtask", { id });
-export const deletePipelineStepSubtask  = (id: number) => invoke<void>("delete_pipeline_step_subtask", { id });
+// ═══════════════════════════════════════════════════════════════════════════
+// GOAL GROUPS
+// ═══════════════════════════════════════════════════════════════════════════
 
-// Course Books
+export const getGoalGroups = async (): Promise<GoalGroup[]> => {
+  const { data, error } = await supabase
+    .from("pf_goal_groups")
+    .select("*")
+    .eq("user_id", USER_ID)
+    .order("sort_order");
+  if (error) err(error);
+  return (data ?? []).map((r) => ({
+    id: num(r.id), name: r.name, color: r.color, sort_order: r.sort_order,
+  }));
+};
+
+export const createGoalGroup = async (name: string, color: string): Promise<GoalGroup> => {
+  const { data, error } = await supabase
+    .from("pf_goal_groups")
+    .insert({ user_id: USER_ID, name, color })
+    .select()
+    .single();
+  if (error) err(error);
+  return { id: num(data!.id), name: data!.name, color: data!.color, sort_order: data!.sort_order };
+};
+
+export const updateGoalGroup = async (id: number, name: string, color: string): Promise<GoalGroup> => {
+  const { data, error } = await supabase
+    .from("pf_goal_groups")
+    .update({ name, color })
+    .eq("id", id)
+    .select()
+    .single();
+  if (error) err(error);
+  return { id: num(data!.id), name: data!.name, color: data!.color, sort_order: data!.sort_order };
+};
+
+export const deleteGoalGroup = async (id: number): Promise<void> => {
+  const { error } = await supabase.from("pf_goal_groups").delete().eq("id", id);
+  if (error) err(error);
+};
+
+// ═══════════════════════════════════════════════════════════════════════════
+// GOALS
+// ═══════════════════════════════════════════════════════════════════════════
+
+export const getGoals = async (): Promise<Goal[]> => {
+  const { data: goals, error: gErr } = await supabase
+    .from("pf_goals")
+    .select("*, pf_goal_groups(name, color)")
+    .eq("user_id", USER_ID)
+    .order("created_at", { ascending: false });
+  if (gErr) err(gErr);
+  if (!goals?.length) return [];
+
+  // Compute task_count / done_count through plans → tasks
+  const goalIds = goals.map((g) => num(g.id));
+  const { data: plans } = await supabase
+    .from("pf_plans")
+    .select("id, goal_id")
+    .eq("user_id", USER_ID)
+    .in("goal_id", goalIds);
+
+  const planIds = (plans ?? []).map((p) => num(p.id));
+  const counts: Record<number, { total: number; done: number }> = {};
+
+  if (planIds.length > 0) {
+    const { data: tasks } = await supabase
+      .from("pf_tasks")
+      .select("id, done, plan_id")
+      .in("plan_id", planIds);
+    for (const t of tasks ?? []) {
+      const plan = (plans ?? []).find((p) => num(p.id) === num(t.plan_id));
+      if (plan?.goal_id) {
+        const gid = num(plan.goal_id);
+        if (!counts[gid]) counts[gid] = { total: 0, done: 0 };
+        counts[gid].total++;
+        if (t.done) counts[gid].done++;
+      }
+    }
+  }
+
+  return goals.map((g) =>
+    mapGoal(g, counts[num(g.id)]?.total ?? 0, counts[num(g.id)]?.done ?? 0)
+  );
+};
+
+export const createGoal = async (payload: {
+  title: string; description?: string | null; deadline?: string | null;
+  priority?: string; group_id?: number | null;
+}): Promise<Goal> => {
+  const { data, error } = await supabase
+    .from("pf_goals")
+    .insert({ user_id: USER_ID, ...payload })
+    .select("*, pf_goal_groups(name, color)")
+    .single();
+  if (error) err(error);
+  return mapGoal(data!);
+};
+
+export const updateGoal = async (id: number, payload: {
+  title: string; description?: string | null; deadline?: string | null;
+  status: string; priority: string; group_id?: number | null;
+}): Promise<Goal> => {
+  const { data, error } = await supabase
+    .from("pf_goals")
+    .update(payload)
+    .eq("id", id)
+    .select("*, pf_goal_groups(name, color)")
+    .single();
+  if (error) err(error);
+  return mapGoal(data!);
+};
+
+export const deleteGoal = async (id: number): Promise<void> => {
+  const { error } = await supabase.from("pf_goals").delete().eq("id", id);
+  if (error) err(error);
+};
+
+// ═══════════════════════════════════════════════════════════════════════════
+// PLANS
+// ═══════════════════════════════════════════════════════════════════════════
+
+export const getPlans = async (): Promise<Plan[]> => {
+  const { data: plans, error } = await supabase
+    .from("pf_plans")
+    .select("*")
+    .eq("user_id", USER_ID)
+    .order("created_at", { ascending: false });
+  if (error) err(error);
+  if (!plans?.length) return [];
+
+  const planIds = plans.map((p) => num(p.id));
+  const { data: tasks } = await supabase
+    .from("pf_tasks")
+    .select("id, done, plan_id")
+    .in("plan_id", planIds);
+
+  const counts: Record<number, { total: number; done: number }> = {};
+  for (const t of tasks ?? []) {
+    const pid = num(t.plan_id);
+    if (!counts[pid]) counts[pid] = { total: 0, done: 0 };
+    counts[pid].total++;
+    if (t.done) counts[pid].done++;
+  }
+
+  return plans.map((p) =>
+    mapPlan(p, counts[num(p.id)]?.total ?? 0, counts[num(p.id)]?.done ?? 0)
+  );
+};
+
+export const createPlan = async (payload: {
+  goal_id?: number | null; title: string; description?: string | null;
+  deadline?: string | null; tags?: string | null; is_course?: boolean;
+  is_lifestyle?: boolean; lifestyle_area_id?: number | null;
+  purpose?: string | null; problem?: string | null; solution?: string | null;
+}): Promise<Plan> => {
+  const { data, error } = await supabase
+    .from("pf_plans")
+    .insert({ user_id: USER_ID, ...payload })
+    .select()
+    .single();
+  if (error) err(error);
+  return mapPlan(data!);
+};
+
+export const updatePlan = async (id: number, payload: {
+  goal_id?: number | null; title: string; description?: string | null;
+  deadline?: string | null; status: string; tags?: string | null;
+  is_course?: boolean; is_lifestyle?: boolean; lifestyle_area_id?: number | null;
+  purpose?: string | null; problem?: string | null; solution?: string | null;
+}): Promise<Plan> => {
+  const { data, error } = await supabase
+    .from("pf_plans")
+    .update(payload)
+    .eq("id", id)
+    .select()
+    .single();
+  if (error) err(error);
+  return mapPlan(data!);
+};
+
+export const deletePlan = async (id: number): Promise<void> => {
+  const { error } = await supabase.from("pf_plans").delete().eq("id", id);
+  if (error) err(error);
+};
+
+// ═══════════════════════════════════════════════════════════════════════════
+// TASKS
+// ═══════════════════════════════════════════════════════════════════════════
+
+export const getTasks = async (planId: number): Promise<Task[]> => {
+  const { data, error } = await supabase
+    .from("pf_tasks")
+    .select("*")
+    .eq("plan_id", planId)
+    .order("sort_order");
+  if (error) err(error);
+  return (data ?? []).map(mapTask);
+};
+
+export const getAllTasks = async (): Promise<TaskWithContext[]> => {
+  const { data, error } = await supabase
+    .from("pf_tasks")
+    .select("*, pf_plans(id, title, goal_id, pf_goals(id, title))")
+    .eq("user_id", USER_ID)
+    .order("created_at", { ascending: false });
+  if (error) err(error);
+  return (data ?? []).map((r) => mapTaskWithContext(r));
+};
+
+export const createTask = async (payload: {
+  plan_id?: number | null; title: string; priority?: string;
+  due_date?: string | null; time_estimate?: number | null;
+}): Promise<Task> => {
+  const { data, error } = await supabase
+    .from("pf_tasks")
+    .insert({ user_id: USER_ID, ...payload })
+    .select()
+    .single();
+  if (error) err(error);
+  return mapTask(data!);
+};
+
+export const updateTask = async (id: number, payload: {
+  title: string; priority: string; due_date?: string | null; time_estimate?: number | null;
+}): Promise<Task> => {
+  const { data, error } = await supabase
+    .from("pf_tasks")
+    .update(payload)
+    .eq("id", id)
+    .select()
+    .single();
+  if (error) err(error);
+  return mapTask(data!);
+};
+
+export const toggleTask = async (id: number): Promise<Task> => {
+  const { data: cur, error: e1 } = await supabase
+    .from("pf_tasks").select("done").eq("id", id).single();
+  if (e1) err(e1);
+  const { data, error } = await supabase
+    .from("pf_tasks")
+    .update({ done: !cur!.done })
+    .eq("id", id)
+    .select()
+    .single();
+  if (error) err(error);
+  return mapTask(data!);
+};
+
+export const deleteTask = async (id: number): Promise<void> => {
+  const { error } = await supabase.from("pf_tasks").delete().eq("id", id);
+  if (error) err(error);
+};
+
+export const setTaskKanbanStatus = async (id: number, status: string): Promise<Task> => {
+  const { data, error } = await supabase
+    .from("pf_tasks")
+    .update({ kanban_status: status })
+    .eq("id", id)
+    .select()
+    .single();
+  if (error) err(error);
+  return mapTask(data!);
+};
+
+// ═══════════════════════════════════════════════════════════════════════════
+// PROJECT GOALS
+// ═══════════════════════════════════════════════════════════════════════════
+
+export const getProjectGoals = async (planId: number): Promise<ProjectGoal[]> => {
+  const { data, error } = await supabase
+    .from("pf_project_goals")
+    .select("*")
+    .eq("plan_id", planId)
+    .order("sort_order");
+  if (error) err(error);
+  return (data ?? []).map((r) => ({ id: num(r.id), plan_id: num(r.plan_id), title: r.title, done: r.done, sort_order: r.sort_order }));
+};
+
+export const addProjectGoal = async (payload: { plan_id: number; title: string }): Promise<ProjectGoal> => {
+  const { data, error } = await supabase
+    .from("pf_project_goals").insert(payload).select().single();
+  if (error) err(error);
+  return { id: num(data!.id), plan_id: num(data!.plan_id), title: data!.title, done: data!.done, sort_order: data!.sort_order };
+};
+
+export const toggleProjectGoal = async (id: number): Promise<ProjectGoal> => {
+  const { data: cur } = await supabase.from("pf_project_goals").select("done").eq("id", id).single();
+  const { data, error } = await supabase
+    .from("pf_project_goals").update({ done: !cur!.done }).eq("id", id).select().single();
+  if (error) err(error);
+  return { id: num(data!.id), plan_id: num(data!.plan_id), title: data!.title, done: data!.done, sort_order: data!.sort_order };
+};
+
+export const deleteProjectGoal = async (id: number): Promise<void> => {
+  const { error } = await supabase.from("pf_project_goals").delete().eq("id", id);
+  if (error) err(error);
+};
+
+// ═══════════════════════════════════════════════════════════════════════════
+// SYSTEMS
+// ═══════════════════════════════════════════════════════════════════════════
+
+export const getSystems = async (): Promise<SystemEntry[]> => {
+  const { data, error } = await supabase
+    .from("pf_systems").select("*").eq("user_id", USER_ID).order("created_at");
+  if (error) err(error);
+  return (data ?? []).map(mapSystem);
+};
+
+export const createSystem = async (payload: {
+  title: string; description?: string | null; frequency: string;
+  days_of_week?: string | null; start_time?: string | null; end_time?: string | null;
+  is_lifestyle?: boolean; lifestyle_area_id?: number | null;
+}): Promise<SystemEntry> => {
+  const { data, error } = await supabase
+    .from("pf_systems").insert({ user_id: USER_ID, ...payload }).select().single();
+  if (error) err(error);
+  return mapSystem(data!);
+};
+
+export const updateSystem = async (id: number, payload: {
+  title: string; description?: string | null; frequency: string;
+  days_of_week?: string | null; start_time?: string | null; end_time?: string | null;
+  is_lifestyle?: boolean; lifestyle_area_id?: number | null;
+}): Promise<SystemEntry> => {
+  const { data, error } = await supabase
+    .from("pf_systems").update(payload).eq("id", id).select().single();
+  if (error) err(error);
+  return mapSystem(data!);
+};
+
+export const deleteSystem = async (id: number): Promise<void> => {
+  const { error } = await supabase.from("pf_systems").delete().eq("id", id);
+  if (error) err(error);
+};
+
+export const markSystemDone = async (id: number): Promise<SystemEntry> => {
+  const { data: sys, error } = await supabase
+    .from("pf_systems").select("*").eq("id", id).single();
+  if (error) err(error);
+
+  const today     = new Date().toISOString().split("T")[0];
+  const yesterday = new Date(Date.now() - 86_400_000).toISOString().split("T")[0];
+
+  if (sys!.last_done === today) return mapSystem(sys!);
+
+  const newStreak = sys!.last_done === yesterday ? sys!.streak_count + 1 : 1;
+  const { data, error: e2 } = await supabase
+    .from("pf_systems")
+    .update({ last_done: today, streak_count: newStreak, streak_updated: today })
+    .eq("id", id).select().single();
+  if (e2) err(e2);
+  return mapSystem(data!);
+};
+
+export const unmarkSystemDone = async (id: number): Promise<SystemEntry> => {
+  const today = new Date().toISOString().split("T")[0];
+  const { data: sys } = await supabase.from("pf_systems").select("*").eq("id", id).single();
+  const updates: any = {};
+  if (sys!.last_done === today) {
+    updates.last_done = null;
+    updates.streak_count = Math.max(0, sys!.streak_count - 1);
+  }
+  if (Object.keys(updates).length === 0) return mapSystem(sys!);
+  const { data, error } = await supabase
+    .from("pf_systems").update(updates).eq("id", id).select().single();
+  if (error) err(error);
+  return mapSystem(data!);
+};
+
+export const getSystemSubtasks = async (systemId: number, date: string): Promise<SystemSubtask[]> => {
+  const { data: subtasks, error } = await supabase
+    .from("pf_system_subtasks").select("*").eq("system_id", systemId).order("sort_order");
+  if (error) err(error);
+  if (!subtasks?.length) return [];
+
+  const ids = subtasks.map((s) => num(s.id));
+  const { data: completions } = await supabase
+    .from("pf_system_subtask_completions").select("subtask_id")
+    .in("subtask_id", ids).eq("date", date);
+  const doneSet = new Set((completions ?? []).map((c) => num(c.subtask_id)));
+
+  return subtasks.map((s) => ({
+    id: num(s.id), system_id: num(s.system_id),
+    title: s.title, sort_order: s.sort_order, done: doneSet.has(num(s.id)),
+  }));
+};
+
+export const addSystemSubtask = async (systemId: number, title: string): Promise<SystemSubtask[]> => {
+  const { error } = await supabase
+    .from("pf_system_subtasks").insert({ system_id: systemId, title });
+  if (error) err(error);
+  return getSystemSubtasks(systemId, new Date().toISOString().split("T")[0]);
+};
+
+export const deleteSystemSubtask = async (id: number): Promise<void> => {
+  const { error } = await supabase.from("pf_system_subtasks").delete().eq("id", id);
+  if (error) err(error);
+};
+
+export const toggleSystemSubtask = async (subtaskId: number, date: string): Promise<SubtaskToggleResult> => {
+  const { data: existing } = await supabase
+    .from("pf_system_subtask_completions").select("id")
+    .eq("subtask_id", subtaskId).eq("date", date).maybeSingle();
+
+  if (existing) {
+    await supabase.from("pf_system_subtask_completions").delete().eq("id", existing.id);
+  } else {
+    await supabase.from("pf_system_subtask_completions").insert({ subtask_id: subtaskId, date });
+  }
+
+  const { data: subtask } = await supabase
+    .from("pf_system_subtasks").select("system_id").eq("id", subtaskId).single();
+  const systemId = num(subtask!.system_id);
+
+  const [subtasks, { data: sys }] = await Promise.all([
+    getSystemSubtasks(systemId, date),
+    supabase.from("pf_systems").select("*").eq("id", systemId).single(),
+  ]);
+  return { subtasks, system: mapSystem(sys!) };
+};
+
+// ═══════════════════════════════════════════════════════════════════════════
+// DASHBOARD
+// ═══════════════════════════════════════════════════════════════════════════
+
+export const getTodayFocus = async (): Promise<TodayFocus> => {
+  const today = new Date().toISOString().split("T")[0];
+
+  const [{ data: plans }, { data: tasks }, { data: systems }] = await Promise.all([
+    supabase.from("pf_plans").select("id, title, goal_id, pf_goals(id, title)").eq("user_id", USER_ID),
+    supabase.from("pf_tasks").select("*").eq("user_id", USER_ID).eq("done", false)
+      .not("due_date", "is", null).lte("due_date", today),
+    supabase.from("pf_systems").select("*").eq("user_id", USER_ID),
+  ]);
+
+  const plansMap = new Map((plans ?? []).map((p) => [num(p.id), p]));
+  const allTasks = (tasks ?? []).map((t) => mapTaskWithContext(t, plansMap));
+
+  const systemsDue = (systems ?? []).filter((s) => {
+    if (s.last_done === today) return false;
+    if (s.frequency === "daily") return true;
+    if (s.frequency === "weekly") {
+      if (!s.days_of_week) return false;
+      const todayDow = new Date().getDay();
+      return s.days_of_week.split(",").map(Number).includes(todayDow);
+    }
+    return false;
+  }).map(mapSystem);
+
+  return {
+    tasks_due_today: allTasks.filter((t) => t.due_date === today),
+    overdue_tasks:   allTasks.filter((t) => t.due_date! < today),
+    systems_due:     systemsDue,
+  };
+};
+
+// ═══════════════════════════════════════════════════════════════════════════
+// SEARCH
+// ═══════════════════════════════════════════════════════════════════════════
+
+export const search = async (query: string): Promise<SearchResult[]> => {
+  const q = `%${query}%`;
+  const [{ data: goals }, { data: plans }, { data: tasks }, { data: systems }] =
+    await Promise.all([
+      supabase.from("pf_goals").select("id, title, status").eq("user_id", USER_ID).ilike("title", q).limit(5),
+      supabase.from("pf_plans").select("id, title, status").eq("user_id", USER_ID).ilike("title", q).limit(5),
+      supabase.from("pf_tasks").select("id, title, pf_plans(title)").eq("user_id", USER_ID).ilike("title", q).limit(5),
+      supabase.from("pf_systems").select("id, title, frequency").eq("user_id", USER_ID).ilike("title", q).limit(5),
+    ]);
+
+  return [
+    ...(goals   ?? []).map((g) => ({ kind: "goal"   as const, id: num(g.id), title: g.title, subtitle: g.status })),
+    ...(plans   ?? []).map((p) => ({ kind: "plan"   as const, id: num(p.id), title: p.title, subtitle: p.status })),
+    ...(tasks   ?? []).map((t) => ({ kind: "task"   as const, id: num(t.id), title: t.title, subtitle: (t as any).pf_plans?.title ?? null })),
+    ...(systems ?? []).map((s) => ({ kind: "system" as const, id: num(s.id), title: s.title, subtitle: s.frequency })),
+  ];
+};
+
+// ═══════════════════════════════════════════════════════════════════════════
+// WEEK VIEW
+// ═══════════════════════════════════════════════════════════════════════════
+
+export const getWeekItems = async (startDate: string, endDate: string): Promise<WeekItems> => {
+  const [
+    { data: tasks },
+    { data: plans },
+    { data: goals },
+    { data: deadlines },
+    { data: reminders },
+    { data: assignments },
+  ] = await Promise.all([
+    supabase.from("pf_tasks")
+      .select("*, pf_plans(id, title, goal_id, pf_goals(id, title))")
+      .eq("user_id", USER_ID).eq("done", false)
+      .gte("due_date", startDate).lte("due_date", endDate),
+    supabase.from("pf_plans")
+      .select("*").eq("user_id", USER_ID).eq("status", "active")
+      .not("deadline", "is", null).gte("deadline", startDate).lte("deadline", endDate),
+    supabase.from("pf_goals")
+      .select("*, pf_goal_groups(name, color)").eq("user_id", USER_ID).eq("status", "active"),
+    supabase.from("pf_deadlines")
+      .select("*").eq("user_id", USER_ID).gte("due_date", startDate).lte("due_date", endDate),
+    supabase.from("pf_reminders")
+      .select("*").eq("user_id", USER_ID).not("due_date", "is", null)
+      .gte("due_date", startDate).lte("due_date", endDate),
+    supabase.from("pf_course_assignments")
+      .select("*, pf_plans(title)").not("due_date", "is", null)
+      .gte("due_date", startDate).lte("due_date", endDate),
+  ]);
+
+  return {
+    tasks:              (tasks       ?? []).map((t) => mapTaskWithContext(t)),
+    goals:              (goals       ?? []).map((g) => mapGoal(g)),
+    plans:              (plans       ?? []).map((p) => mapPlan(p)),
+    deadlines:          (deadlines   ?? []).map(mapDeadline),
+    reminders:          (reminders   ?? []).map(mapReminder),
+    course_assignments: (assignments ?? []).map(mapCourseAssignment),
+  };
+};
+
+// ═══════════════════════════════════════════════════════════════════════════
+// ROUTINES
+// ═══════════════════════════════════════════════════════════════════════════
+
+export const getRoutines = async (date: string): Promise<Routines> => {
+  const { data: routines, error } = await supabase
+    .from("pf_routines").select("*").eq("user_id", USER_ID).order("sort_order");
+  if (error) err(error);
+  if (!routines?.length) return { morning: [], evening: [] };
+
+  const ids = routines.map((r) => num(r.id));
+  const { data: completions } = await supabase
+    .from("pf_routine_completions").select("routine_id").in("routine_id", ids).eq("date", date);
+  const doneSet = new Set((completions ?? []).map((c) => num(c.routine_id)));
+
+  const mapItem = (r: any): RoutineItem => ({
+    id: num(r.id), kind: r.kind, title: r.title, sort_order: r.sort_order,
+    done: doneSet.has(num(r.id)),
+  });
+
+  return {
+    morning: routines.filter((r) => r.kind === "morning").map(mapItem),
+    evening: routines.filter((r) => r.kind === "evening").map(mapItem),
+  };
+};
+
+export const toggleRoutine = async (id: number, date: string): Promise<boolean> => {
+  const { data: existing } = await supabase
+    .from("pf_routine_completions").select("id")
+    .eq("routine_id", id).eq("date", date).maybeSingle();
+  if (existing) {
+    await supabase.from("pf_routine_completions").delete().eq("id", existing.id);
+    return false;
+  }
+  await supabase.from("pf_routine_completions").insert({ routine_id: id, date });
+  return true;
+};
+
+export const addRoutineItem = async (kind: string, title: string): Promise<void> => {
+  const { error } = await supabase
+    .from("pf_routines").insert({ user_id: USER_ID, kind, title });
+  if (error) err(error);
+};
+
+export const deleteRoutineItem = async (id: number): Promise<void> => {
+  const { error } = await supabase.from("pf_routines").delete().eq("id", id);
+  if (error) err(error);
+};
+
+// ═══════════════════════════════════════════════════════════════════════════
+// TIME BLOCKS
+// ═══════════════════════════════════════════════════════════════════════════
+
+export const getTimeBlocks = async (date: string): Promise<TimeBlock[]> => {
+  const { data, error } = await supabase
+    .from("pf_time_blocks").select("*").eq("user_id", USER_ID).eq("date", date);
+  if (error) err(error);
+  return (data ?? []).map((r) => ({ id: num(r.id), date: r.date, slot: r.slot, label: r.label }));
+};
+
+export const saveTimeBlock = async (date: string, slot: string, label: string): Promise<void> => {
+  const { error } = await supabase
+    .from("pf_time_blocks")
+    .upsert({ user_id: USER_ID, date, slot, label }, { onConflict: "user_id,date,slot" });
+  if (error) err(error);
+};
+
+// ═══════════════════════════════════════════════════════════════════════════
+// DAILY TEMPLATE
+// ═══════════════════════════════════════════════════════════════════════════
+
+export const getDailyPlan = async (date: string): Promise<DailyPlan> => {
+  const { data: sections, error } = await supabase
+    .from("pf_daily_sections")
+    .select("*, pf_daily_items(*)")
+    .eq("user_id", USER_ID)
+    .order("sort_order");
+  if (error) err(error);
+
+  const allItems = (sections ?? []).flatMap((s: any) => s.pf_daily_items ?? []);
+  const itemIds  = allItems.map((i: any) => num(i.id));
+  let doneSet: Set<number> = new Set();
+
+  if (itemIds.length > 0) {
+    const { data: completions } = await supabase
+      .from("pf_daily_completions").select("item_id").in("item_id", itemIds).eq("date", date);
+    doneSet = new Set((completions ?? []).map((c: any) => num(c.item_id)));
+  }
+
+  const mappedSections: DailySection[] = (sections ?? []).map((s: any) => ({
+    id: num(s.id), title: s.title, color: s.color, sort_order: s.sort_order,
+    items: (s.pf_daily_items ?? [])
+      .sort((a: any, b: any) => a.sort_order - b.sort_order)
+      .map((item: any): DailyItemWithStatus => ({
+        id: num(item.id), section_id: num(item.section_id),
+        title: item.title, sort_order: item.sort_order, done: doneSet.has(num(item.id)),
+      })),
+  }));
+
+  return {
+    date,
+    sections: mappedSections,
+    total_items: allItems.length,
+    done_items:  doneSet.size,
+  };
+};
+
+export const toggleDailyCompletion = async (itemId: number, date: string): Promise<boolean> => {
+  const { data: existing } = await supabase
+    .from("pf_daily_completions").select("id").eq("item_id", itemId).eq("date", date).maybeSingle();
+  if (existing) {
+    await supabase.from("pf_daily_completions").delete().eq("id", existing.id);
+    return false;
+  }
+  await supabase.from("pf_daily_completions").insert({ item_id: itemId, date });
+  return true;
+};
+
+export const createDailySection = async (payload: { title: string; color?: string | null }): Promise<void> => {
+  const { error } = await supabase
+    .from("pf_daily_sections").insert({ user_id: USER_ID, ...payload });
+  if (error) err(error);
+};
+
+export const updateDailySection = async (id: number, payload: { title: string; color: string; sort_order: number }): Promise<void> => {
+  const { error } = await supabase.from("pf_daily_sections").update(payload).eq("id", id);
+  if (error) err(error);
+};
+
+export const deleteDailySection = async (id: number): Promise<void> => {
+  const { error } = await supabase.from("pf_daily_sections").delete().eq("id", id);
+  if (error) err(error);
+};
+
+export const createDailyItem = async (payload: { section_id: number; title: string }): Promise<void> => {
+  const { error } = await supabase.from("pf_daily_items").insert(payload);
+  if (error) err(error);
+};
+
+export const updateDailyItem = async (id: number, payload: { title: string; sort_order: number }): Promise<void> => {
+  const { error } = await supabase.from("pf_daily_items").update(payload).eq("id", id);
+  if (error) err(error);
+};
+
+export const deleteDailyItem = async (id: number): Promise<void> => {
+  const { error } = await supabase.from("pf_daily_items").delete().eq("id", id);
+  if (error) err(error);
+};
+
+// ═══════════════════════════════════════════════════════════════════════════
+// DAILY GOALS
+// ═══════════════════════════════════════════════════════════════════════════
+
+export const getDailyGoals = async (date: string): Promise<DailyGoals> => {
+  const [{ data: primary }, { data: secondary }] = await Promise.all([
+    supabase.from("pf_daily_primary_goal").select("text").eq("user_id", USER_ID).eq("date", date).maybeSingle(),
+    supabase.from("pf_daily_secondary_goals").select("*").eq("user_id", USER_ID).eq("date", date).order("sort_order"),
+  ]);
+  return {
+    primary: primary?.text ?? null,
+    secondary: (secondary ?? []).map((r): DailySecGoal => ({
+      id: num(r.id), date: r.date, text: r.text, sort_order: r.sort_order,
+    })),
+  };
+};
+
+export const setDailyPrimaryGoal = async (date: string, text: string): Promise<void> => {
+  const { error } = await supabase
+    .from("pf_daily_primary_goal")
+    .upsert({ user_id: USER_ID, date, text }, { onConflict: "user_id,date" });
+  if (error) err(error);
+};
+
+export const clearDailyPrimaryGoal = async (date: string): Promise<void> => {
+  const { error } = await supabase
+    .from("pf_daily_primary_goal").delete().eq("user_id", USER_ID).eq("date", date);
+  if (error) err(error);
+};
+
+export const addDailySecondaryGoal = async (date: string, text: string): Promise<DailySecGoal> => {
+  const { data, error } = await supabase
+    .from("pf_daily_secondary_goals").insert({ user_id: USER_ID, date, text }).select().single();
+  if (error) err(error);
+  return { id: num(data!.id), date: data!.date, text: data!.text, sort_order: data!.sort_order };
+};
+
+export const deleteDailySecondaryGoal = async (id: number): Promise<void> => {
+  const { error } = await supabase.from("pf_daily_secondary_goals").delete().eq("id", id);
+  if (error) err(error);
+};
+
+// ═══════════════════════════════════════════════════════════════════════════
+// REMINDERS
+// ═══════════════════════════════════════════════════════════════════════════
+
+export const getReminders = async (): Promise<Reminder[]> => {
+  const { data, error } = await supabase
+    .from("pf_reminders").select("*").eq("user_id", USER_ID).order("created_at", { ascending: false });
+  if (error) err(error);
+  return (data ?? []).map(mapReminder);
+};
+
+export const addReminder = async (title: string, dueDate?: string | null): Promise<Reminder> => {
+  const { data, error } = await supabase
+    .from("pf_reminders").insert({ user_id: USER_ID, title, due_date: dueDate ?? null }).select().single();
+  if (error) err(error);
+  return mapReminder(data!);
+};
+
+export const toggleReminder = async (id: number): Promise<Reminder> => {
+  const { data: cur } = await supabase.from("pf_reminders").select("done").eq("id", id).single();
+  const { data, error } = await supabase
+    .from("pf_reminders").update({ done: !cur!.done }).eq("id", id).select().single();
+  if (error) err(error);
+  return mapReminder(data!);
+};
+
+export const deleteReminder = async (id: number): Promise<void> => {
+  const { error } = await supabase.from("pf_reminders").delete().eq("id", id);
+  if (error) err(error);
+};
+
+// ═══════════════════════════════════════════════════════════════════════════
+// QUICK NOTES
+// ═══════════════════════════════════════════════════════════════════════════
+
+export const getQuickNotes = async (): Promise<QuickNote[]> => {
+  const { data, error } = await supabase
+    .from("pf_quick_notes").select("*").eq("user_id", USER_ID).order("created_at", { ascending: false });
+  if (error) err(error);
+  return (data ?? []).map((r) => ({ id: num(r.id), title: r.title, body: r.body, created_at: r.created_at }));
+};
+
+export const addQuickNote = async (title: string, body?: string | null): Promise<QuickNote> => {
+  const { data, error } = await supabase
+    .from("pf_quick_notes").insert({ user_id: USER_ID, title, body: body ?? null }).select().single();
+  if (error) err(error);
+  return { id: num(data!.id), title: data!.title, body: data!.body, created_at: data!.created_at };
+};
+
+export const deleteQuickNote = async (id: number): Promise<void> => {
+  const { error } = await supabase.from("pf_quick_notes").delete().eq("id", id);
+  if (error) err(error);
+};
+
+// ═══════════════════════════════════════════════════════════════════════════
+// BRAIN DUMP
+// ═══════════════════════════════════════════════════════════════════════════
+
+export const getBrainDump = async (): Promise<BrainEntry[]> => {
+  const { data, error } = await supabase
+    .from("pf_brain_dump").select("*").eq("user_id", USER_ID).order("created_at", { ascending: false });
+  if (error) err(error);
+  return (data ?? []).map((r) => ({ id: num(r.id), content: r.content, created_at: r.created_at }));
+};
+
+export const addBrainEntry = async (content: string): Promise<BrainEntry> => {
+  const { data, error } = await supabase
+    .from("pf_brain_dump").insert({ user_id: USER_ID, content }).select().single();
+  if (error) err(error);
+  return { id: num(data!.id), content: data!.content, created_at: data!.created_at };
+};
+
+export const deleteBrainEntry = async (id: number): Promise<void> => {
+  const { error } = await supabase.from("pf_brain_dump").delete().eq("id", id);
+  if (error) err(error);
+};
+
+// ═══════════════════════════════════════════════════════════════════════════
+// EVENTS
+// ═══════════════════════════════════════════════════════════════════════════
+
+export const getEvents = async (): Promise<CalEvent[]> => {
+  const { data, error } = await supabase
+    .from("pf_events").select("*").eq("user_id", USER_ID).order("date");
+  if (error) err(error);
+  return (data ?? []).map((r) => ({ id: num(r.id), title: r.title, date: r.date, description: r.description, created_at: r.created_at }));
+};
+
+export const addEvent = async (title: string, date: string, description?: string | null): Promise<CalEvent> => {
+  const { data, error } = await supabase
+    .from("pf_events").insert({ user_id: USER_ID, title, date, description: description ?? null }).select().single();
+  if (error) err(error);
+  return { id: num(data!.id), title: data!.title, date: data!.date, description: data!.description, created_at: data!.created_at };
+};
+
+export const deleteEvent = async (id: number): Promise<void> => {
+  const { error } = await supabase.from("pf_events").delete().eq("id", id);
+  if (error) err(error);
+};
+
+// ═══════════════════════════════════════════════════════════════════════════
+// DEADLINES
+// ═══════════════════════════════════════════════════════════════════════════
+
+export const getDeadlines = async (): Promise<Deadline[]> => {
+  const { data, error } = await supabase
+    .from("pf_deadlines").select("*").eq("user_id", USER_ID).order("due_date");
+  if (error) err(error);
+  return (data ?? []).map(mapDeadline);
+};
+
+export const addDeadline = async (title: string, due_date: string): Promise<Deadline> => {
+  const { data, error } = await supabase
+    .from("pf_deadlines").insert({ user_id: USER_ID, title, due_date }).select().single();
+  if (error) err(error);
+  return mapDeadline(data!);
+};
+
+export const toggleDeadline = async (id: number): Promise<Deadline> => {
+  const { data: cur } = await supabase.from("pf_deadlines").select("done").eq("id", id).single();
+  const { data, error } = await supabase
+    .from("pf_deadlines").update({ done: !cur!.done }).eq("id", id).select().single();
+  if (error) err(error);
+  return mapDeadline(data!);
+};
+
+export const deleteDeadline = async (id: number): Promise<void> => {
+  const { error } = await supabase.from("pf_deadlines").delete().eq("id", id);
+  if (error) err(error);
+};
+
+// ═══════════════════════════════════════════════════════════════════════════
+// AGREEMENTS
+// ═══════════════════════════════════════════════════════════════════════════
+
+export const getAgreements = async (): Promise<Agreement[]> => {
+  const { data, error } = await supabase
+    .from("pf_agreements").select("*").eq("user_id", USER_ID).order("created_at");
+  if (error) err(error);
+  return (data ?? []).map((r) => ({ id: num(r.id), title: r.title, notes: r.notes, created_at: r.created_at }));
+};
+
+export const addAgreement = async (title: string, notes?: string | null): Promise<Agreement> => {
+  const { data, error } = await supabase
+    .from("pf_agreements").insert({ user_id: USER_ID, title, notes: notes ?? null }).select().single();
+  if (error) err(error);
+  return { id: num(data!.id), title: data!.title, notes: data!.notes, created_at: data!.created_at };
+};
+
+export const deleteAgreement = async (id: number): Promise<void> => {
+  const { error } = await supabase.from("pf_agreements").delete().eq("id", id);
+  if (error) err(error);
+};
+
+// ═══════════════════════════════════════════════════════════════════════════
+// CALENDAR BLOCKS
+// ═══════════════════════════════════════════════════════════════════════════
+
+export const getCalBlocks = async (startDate: string, endDate: string): Promise<CalBlock[]> => {
+  const [{ data: regular }, { data: recurring }] = await Promise.all([
+    supabase.from("pf_cal_blocks").select("*").eq("user_id", USER_ID)
+      .gte("date", startDate).lte("date", endDate).order("start_time"),
+    supabase.from("pf_recurring_cal_blocks").select("*").eq("user_id", USER_ID)
+      .lte("start_date", endDate)
+      .or(`end_date.is.null,end_date.gte.${startDate}`),
+  ]);
+
+  const regularMapped: CalBlock[] = (regular ?? []).map((b) => ({
+    id: num(b.id), date: b.date, title: b.title, start_time: b.start_time,
+    end_time: b.end_time, color: b.color, description: b.description,
+    location: b.location, created_at: b.created_at,
+    is_recurring: false, recurring_id: null, recurrence: null,
+    days_of_week: null, series_start_date: null, series_end_date: null,
+  }));
+
+  const virtual = (recurring ?? []).flatMap((r) => expandRecurring(r, startDate, endDate));
+
+  return [...regularMapped, ...virtual].sort(
+    (a, b) => a.date.localeCompare(b.date) || a.start_time.localeCompare(b.start_time)
+  );
+};
+
+export const createCalBlock = async (
+  date: string, title: string, startTime: string, endTime: string,
+  color: string, description: string | null, location: string | null,
+): Promise<CalBlock> => {
+  const { data, error } = await supabase
+    .from("pf_cal_blocks")
+    .insert({ user_id: USER_ID, date, title, start_time: startTime, end_time: endTime, color, description, location })
+    .select().single();
+  if (error) err(error);
+  return { id: num(data!.id), date: data!.date, title: data!.title, start_time: data!.start_time, end_time: data!.end_time, color: data!.color, description: data!.description, location: data!.location, created_at: data!.created_at, is_recurring: false, recurring_id: null, recurrence: null, days_of_week: null, series_start_date: null, series_end_date: null };
+};
+
+export const updateCalBlock = async (
+  id: number, title: string, startTime: string, endTime: string,
+  color: string, description: string | null, location: string | null,
+): Promise<CalBlock> => {
+  const { data, error } = await supabase
+    .from("pf_cal_blocks")
+    .update({ title, start_time: startTime, end_time: endTime, color, description, location })
+    .eq("id", id).select().single();
+  if (error) err(error);
+  return { id: num(data!.id), date: data!.date, title: data!.title, start_time: data!.start_time, end_time: data!.end_time, color: data!.color, description: data!.description, location: data!.location, created_at: data!.created_at, is_recurring: false, recurring_id: null, recurrence: null, days_of_week: null, series_start_date: null, series_end_date: null };
+};
+
+export const deleteCalBlock = async (id: number): Promise<void> => {
+  const { error } = await supabase.from("pf_cal_blocks").delete().eq("id", id);
+  if (error) err(error);
+};
+
+// ─── Recurring calendar blocks ──────────────────────────────────────────────
+
+export const createRecurringCalBlock = async (
+  title: string, startTime: string, endTime: string, color: string,
+  recurrence: string, daysOfWeek: string | null, startDate: string,
+  endDate: string | null, description: string | null, location: string | null,
+): Promise<RecurringCalBlock> => {
+  const { data, error } = await supabase
+    .from("pf_recurring_cal_blocks")
+    .insert({ user_id: USER_ID, title, start_time: startTime, end_time: endTime, color, recurrence, days_of_week: daysOfWeek, start_date: startDate, end_date: endDate, description, location })
+    .select().single();
+  if (error) err(error);
+  return data! as RecurringCalBlock;
+};
+
+export const updateRecurringCalBlock = async (
+  id: number, title: string, startTime: string, endTime: string, color: string,
+  recurrence: string, daysOfWeek: string | null, endDate: string | null,
+  description: string | null, location: string | null,
+): Promise<void> => {
+  const { error } = await supabase
+    .from("pf_recurring_cal_blocks")
+    .update({ title, start_time: startTime, end_time: endTime, color, recurrence, days_of_week: daysOfWeek, end_date: endDate, description, location })
+    .eq("id", id);
+  if (error) err(error);
+};
+
+export const deleteRecurringCalBlock = async (id: number): Promise<void> => {
+  const { error } = await supabase.from("pf_recurring_cal_blocks").delete().eq("id", id);
+  if (error) err(error);
+};
+
+// ═══════════════════════════════════════════════════════════════════════════
+// JOURNAL
+// ═══════════════════════════════════════════════════════════════════════════
+
+export const getJournalEntry = async (date: string): Promise<string> => {
+  const { data } = await supabase
+    .from("pf_journal_entries").select("content").eq("user_id", USER_ID).eq("date", date).maybeSingle();
+  return data?.content ?? "";
+};
+
+export const saveJournalEntry = async (date: string, content: string): Promise<void> => {
+  const { error } = await supabase
+    .from("pf_journal_entries")
+    .upsert({ user_id: USER_ID, date, content, updated_at: new Date().toISOString() }, { onConflict: "user_id,date" });
+  if (error) err(error);
+};
+
+// ═══════════════════════════════════════════════════════════════════════════
+// COURSE ASSIGNMENTS
+// ═══════════════════════════════════════════════════════════════════════════
+
+type CAPayload = {
+  plan_id: number; title: string; assignment_type: string; due_date?: string | null;
+  status: string; priority: string; book_title?: string | null;
+  chapter_start?: string | null; chapter_end?: string | null;
+  page_start?: number | null; page_end?: number | null; page_current?: number | null;
+  notes?: string | null; start_time?: string | null; end_time?: string | null;
+  time_estimate?: number | null;
+};
+
+export const getCourseAssignments = async (): Promise<CourseAssignment[]> => {
+  const { data, error } = await supabase
+    .from("pf_course_assignments").select("*, pf_plans(title)").order("created_at", { ascending: false });
+  if (error) err(error);
+  return (data ?? []).map(mapCourseAssignment);
+};
+
+export const createCourseAssignment = async (payload: CAPayload): Promise<CourseAssignment> => {
+  const { data, error } = await supabase
+    .from("pf_course_assignments").insert(payload).select("*, pf_plans(title)").single();
+  if (error) err(error);
+  return mapCourseAssignment(data!);
+};
+
+export const updateCourseAssignment = async (id: number, payload: CAPayload): Promise<CourseAssignment> => {
+  const { data, error } = await supabase
+    .from("pf_course_assignments").update(payload).eq("id", id).select("*, pf_plans(title)").single();
+  if (error) err(error);
+  return mapCourseAssignment(data!);
+};
+
+export const deleteCourseAssignment = async (id: number): Promise<void> => {
+  const { error } = await supabase.from("pf_course_assignments").delete().eq("id", id);
+  if (error) err(error);
+};
+
+// ─── CA subtasks ────────────────────────────────────────────────────────────
+
+export const getCaSubtasks = async (assignmentId: number): Promise<CaSubtask[]> => {
+  const { data, error } = await supabase
+    .from("pf_ca_subtasks").select("*").eq("assignment_id", assignmentId).order("sort_order");
+  if (error) err(error);
+  return (data ?? []).map((r) => ({ id: num(r.id), assignment_id: num(r.assignment_id), title: r.title, done: r.done, sort_order: r.sort_order }));
+};
+
+export const addCaSubtask = async (assignmentId: number, title: string): Promise<CaSubtask> => {
+  const { data, error } = await supabase
+    .from("pf_ca_subtasks").insert({ assignment_id: assignmentId, title }).select().single();
+  if (error) err(error);
+  return { id: num(data!.id), assignment_id: num(data!.assignment_id), title: data!.title, done: data!.done, sort_order: data!.sort_order };
+};
+
+export const toggleCaSubtask = async (id: number): Promise<CaSubtask> => {
+  const { data: cur } = await supabase.from("pf_ca_subtasks").select("done").eq("id", id).single();
+  const { data, error } = await supabase
+    .from("pf_ca_subtasks").update({ done: !cur!.done }).eq("id", id).select().single();
+  if (error) err(error);
+  return { id: num(data!.id), assignment_id: num(data!.assignment_id), title: data!.title, done: data!.done, sort_order: data!.sort_order };
+};
+
+export const deleteCaSubtask = async (id: number): Promise<void> => {
+  const { error } = await supabase.from("pf_ca_subtasks").delete().eq("id", id);
+  if (error) err(error);
+};
+
+// ═══════════════════════════════════════════════════════════════════════════
+// PIPELINES
+// ═══════════════════════════════════════════════════════════════════════════
+
+type PipelineStepInput = {
+  id?: number | null; title: string; description?: string | null;
+  sort_order: number; time_estimate?: number | null;
+  step_type?: string | null; attend_type?: string | null;
+};
+
+async function fetchPipelineRuns(templateId: number): Promise<PipelineRun[]> {
+  const { data: runs, error } = await supabase
+    .from("pf_pipeline_runs").select("*").eq("template_id", templateId).order("sort_order");
+  if (error) err(error);
+  if (!runs?.length) return [];
+
+  const { data: steps } = await supabase
+    .from("pf_pipeline_steps").select("*").eq("template_id", templateId).order("sort_order");
+
+  const runIds = runs.map((r) => num(r.id));
+  const { data: runSteps } = await supabase
+    .from("pf_pipeline_run_steps").select("*").in("run_id", runIds);
+
+  return runs.map((run): PipelineRun => ({
+    id: num(run.id), template_id: num(run.template_id),
+    title: run.title, notes: run.notes,
+    scheduled_date: run.scheduled_date, sort_order: run.sort_order, created_at: run.created_at,
+    steps: (steps ?? []).map((step): PipelineRunStep => {
+      const rs = (runSteps ?? []).find(
+        (x) => num(x.run_id) === num(run.id) && num(x.step_id) === num(step.id)
+      );
+      return {
+        step_id: num(step.id), step_title: step.title,
+        step_sort_order: step.sort_order, step_type: step.step_type,
+        done: rs?.done ?? false, done_at: rs?.done_at ?? null,
+        notes: rs?.notes ?? null, due_date: rs?.due_date ?? null,
+        chapter_ref: rs?.chapter_ref ?? null,
+        page_start: rs?.page_start ?? null, page_end: rs?.page_end ?? null,
+        start_time: rs?.start_time ?? null, end_time: rs?.end_time ?? null,
+        location: rs?.location ?? null, time_estimate: rs?.time_estimate ?? null,
+        assignment_id: rs?.assignment_id ? num(rs.assignment_id) : null,
+        due_date_2: rs?.due_date_2 ?? null,
+      };
+    }),
+  }));
+}
+
+export const getPipelineTemplates = async (planId: number): Promise<PipelineTemplate[]> => {
+  const { data: templates, error } = await supabase
+    .from("pf_pipeline_templates").select("*").eq("plan_id", planId).order("created_at");
+  if (error) err(error);
+  if (!templates?.length) return [];
+
+  const templateIds = templates.map((t) => num(t.id));
+  const [{ data: steps }, { data: runs }, { data: runSteps }] = await Promise.all([
+    supabase.from("pf_pipeline_steps").select("*").in("template_id", templateIds).order("sort_order"),
+    supabase.from("pf_pipeline_runs").select("id, template_id").in("template_id", templateIds),
+    supabase.from("pf_pipeline_run_steps").select("run_id, done"),
+  ]);
+
+  return templates.map((t): PipelineTemplate => {
+    const tSteps = (steps ?? []).filter((s) => num(s.template_id) === num(t.id));
+    const tRuns  = (runs  ?? []).filter((r) => num(r.template_id) === num(t.id));
+    const doneRunCount = tRuns.filter((run) => {
+      const rs = (runSteps ?? []).filter((x) => num(x.run_id) === num(run.id));
+      return rs.length > 0 && rs.every((x) => x.done);
+    }).length;
+
+    return {
+      id: num(t.id), plan_id: num(t.plan_id), title: t.title,
+      description: t.description, color: t.color, created_at: t.created_at,
+      steps: tSteps.map(mapPipelineStep),
+      run_count: tRuns.length, done_run_count: doneRunCount,
+    };
+  });
+};
+
+export const createPipelineTemplate = async (payload: {
+  plan_id: number; title: string; description?: string | null; color?: string;
+}): Promise<PipelineTemplate> => {
+  const { data, error } = await supabase
+    .from("pf_pipeline_templates").insert(payload).select().single();
+  if (error) err(error);
+  return { id: num(data!.id), plan_id: num(data!.plan_id), title: data!.title, description: data!.description, color: data!.color, created_at: data!.created_at, steps: [], run_count: 0, done_run_count: 0 };
+};
+
+export const updatePipelineTemplate = async (id: number, payload: { title: string; description?: string | null; color: string }): Promise<PipelineTemplate> => {
+  const { data, error } = await supabase
+    .from("pf_pipeline_templates").update(payload).eq("id", id).select().single();
+  if (error) err(error);
+  const [full] = await getPipelineTemplates(num(data!.plan_id));
+  return full;
+};
+
+export const deletePipelineTemplate = async (id: number): Promise<void> => {
+  const { error } = await supabase.from("pf_pipeline_templates").delete().eq("id", id);
+  if (error) err(error);
+};
+
+export const upsertPipelineSteps = async (templateId: number, steps: PipelineStepInput[]): Promise<PipelineStep[]> => {
+  const { data: existing } = await supabase
+    .from("pf_pipeline_steps").select("id").eq("template_id", templateId);
+  const existingIds = new Set((existing ?? []).map((s) => num(s.id)));
+  const keepIds     = new Set(steps.filter((s) => s.id).map((s) => s.id!));
+  const toDelete    = [...existingIds].filter((id) => !keepIds.has(id));
+
+  if (toDelete.length > 0) {
+    await supabase.from("pf_pipeline_steps").delete().in("id", toDelete);
+  }
+
+  for (const step of steps) {
+    const row = {
+      title: step.title, description: step.description ?? null,
+      sort_order: step.sort_order, time_estimate: step.time_estimate ?? null,
+      step_type: step.step_type ?? "generic", attend_type: step.attend_type ?? null,
+    };
+    if (step.id) {
+      await supabase.from("pf_pipeline_steps").update(row).eq("id", step.id);
+    } else {
+      await supabase.from("pf_pipeline_steps").insert({ template_id: templateId, ...row });
+    }
+  }
+
+  const { data } = await supabase
+    .from("pf_pipeline_steps").select("*").eq("template_id", templateId).order("sort_order");
+  return (data ?? []).map(mapPipelineStep);
+};
+
+export const getPipelineRuns = async (templateId: number): Promise<PipelineRun[]> => {
+  return fetchPipelineRuns(templateId);
+};
+
+export const createPipelineRun = async (payload: {
+  template_id: number; title: string; notes?: string | null; scheduled_date?: string | null;
+}): Promise<PipelineRun> => {
+  const { data: run, error } = await supabase
+    .from("pf_pipeline_runs").insert(payload).select().single();
+  if (error) err(error);
+
+  // Auto-initialise run_steps for every step in the template
+  const { data: steps } = await supabase
+    .from("pf_pipeline_steps").select("id").eq("template_id", payload.template_id);
+  if (steps?.length) {
+    await supabase.from("pf_pipeline_run_steps").insert(
+      steps.map((s) => ({ run_id: num(run!.id), step_id: num(s.id) }))
+    );
+  }
+
+  const runs = await fetchPipelineRuns(payload.template_id);
+  return runs.find((r) => r.id === num(run!.id))!;
+};
+
+export const updatePipelineRun = async (id: number, payload: { title: string; notes?: string | null; scheduled_date?: string | null }): Promise<PipelineRun> => {
+  const { data, error } = await supabase
+    .from("pf_pipeline_runs").update(payload).eq("id", id).select().single();
+  if (error) err(error);
+  const runs = await fetchPipelineRuns(num(data!.template_id));
+  return runs.find((r) => r.id === id)!;
+};
+
+export const deletePipelineRun = async (id: number): Promise<void> => {
+  const { error } = await supabase.from("pf_pipeline_runs").delete().eq("id", id);
+  if (error) err(error);
+};
+
+export const togglePipelineRunStep = async (runId: number, stepId: number): Promise<PipelineRun> => {
+  const { data: existing } = await supabase
+    .from("pf_pipeline_run_steps").select("done").eq("run_id", runId).eq("step_id", stepId).maybeSingle();
+
+  if (existing) {
+    const nowDone = !existing.done;
+    await supabase.from("pf_pipeline_run_steps")
+      .update({ done: nowDone, done_at: nowDone ? new Date().toISOString() : null })
+      .eq("run_id", runId).eq("step_id", stepId);
+  } else {
+    await supabase.from("pf_pipeline_run_steps")
+      .insert({ run_id: runId, step_id: stepId, done: true, done_at: new Date().toISOString() });
+  }
+
+  const { data: run } = await supabase.from("pf_pipeline_runs").select("template_id").eq("id", runId).single();
+  const runs = await fetchPipelineRuns(num(run!.template_id));
+  return runs.find((r) => r.id === runId)!;
+};
+
+export const updatePipelineRunStep = async (
+  runId: number, stepId: number,
+  payload: { notes: string | null; due_date: string | null; due_date_2: string | null; chapter_ref: string | null; page_start: number | null; page_end: number | null; start_time: string | null; end_time: string | null; location: string | null; time_estimate: number | null },
+): Promise<PipelineRun> => {
+  await supabase.from("pf_pipeline_run_steps").update(payload).eq("run_id", runId).eq("step_id", stepId);
+  const { data: run } = await supabase.from("pf_pipeline_runs").select("template_id").eq("id", runId).single();
+  const runs = await fetchPipelineRuns(num(run!.template_id));
+  return runs.find((r) => r.id === runId)!;
+};
+
+// ─── Pipeline step subtasks ──────────────────────────────────────────────────
+
+export const getPipelineStepSubtasks = async (runId: number, stepId: number): Promise<PipelineStepSubtask[]> => {
+  const { data, error } = await supabase
+    .from("pf_pipeline_step_subtasks").select("*").eq("run_id", runId).eq("step_id", stepId).order("sort_order");
+  if (error) err(error);
+  return (data ?? []).map((r) => ({ id: num(r.id), run_id: num(r.run_id), step_id: num(r.step_id), title: r.title, done: r.done, sort_order: r.sort_order }));
+};
+
+export const addPipelineStepSubtask = async (runId: number, stepId: number, title: string): Promise<PipelineStepSubtask> => {
+  const { data, error } = await supabase
+    .from("pf_pipeline_step_subtasks").insert({ run_id: runId, step_id: stepId, title }).select().single();
+  if (error) err(error);
+  return { id: num(data!.id), run_id: num(data!.run_id), step_id: num(data!.step_id), title: data!.title, done: data!.done, sort_order: data!.sort_order };
+};
+
+export const togglePipelineStepSubtask = async (id: number): Promise<PipelineStepSubtask> => {
+  const { data: cur } = await supabase.from("pf_pipeline_step_subtasks").select("done").eq("id", id).single();
+  const { data, error } = await supabase
+    .from("pf_pipeline_step_subtasks").update({ done: !cur!.done }).eq("id", id).select().single();
+  if (error) err(error);
+  return { id: num(data!.id), run_id: num(data!.run_id), step_id: num(data!.step_id), title: data!.title, done: data!.done, sort_order: data!.sort_order };
+};
+
+export const deletePipelineStepSubtask = async (id: number): Promise<void> => {
+  const { error } = await supabase.from("pf_pipeline_step_subtasks").delete().eq("id", id);
+  if (error) err(error);
+};
+
+// ═══════════════════════════════════════════════════════════════════════════
+// COURSE BOOKS
+// ═══════════════════════════════════════════════════════════════════════════
+
 type CreateCourseBookPayload = { plan_id: number; title: string; author?: string | null; total_pages?: number | null; total_chapters?: number | null; daily_pages_goal?: number; weekly_chapters_goal?: number };
 type UpdateCourseBookPayload = { title: string; author?: string | null; total_pages?: number | null; total_chapters?: number | null; current_page: number; current_chapter: number; daily_pages_goal: number; weekly_chapters_goal: number };
 type CreateBookReadingLogPayload = { book_id: number; date: string; pages_read: number; chapters_read: number; note?: string | null };
-
-export const getCourseBooks        = (planId: number) => invoke<import("../types").CourseBook[]>("get_course_books", { planId });
-export const createCourseBook      = (payload: CreateCourseBookPayload) => invoke<import("../types").CourseBook>("create_course_book", { payload });
-export const updateCourseBook      = (id: number, payload: UpdateCourseBookPayload) => invoke<import("../types").CourseBook>("update_course_book", { id, payload });
-export const deleteCourseBook      = (id: number) => invoke<void>("delete_course_book", { id });
-export const addBookReadingLog     = (payload: CreateBookReadingLogPayload) => invoke<import("../types").CourseBook>("add_book_reading_log", { payload });
-export const deleteBookReadingLog  = (logId: number, bookId: number) => invoke<import("../types").CourseBook>("delete_book_reading_log", { logId, bookId });
-
-// Book Sections
 type BookSectionInput = { id?: number | null; title: string; kind: string; sort_order: number; page_start?: number | null; page_end?: number | null; due_date?: string | null; time_estimate?: number | null };
-export const upsertBookSections  = (bookId: number, sections: BookSectionInput[]) => invoke<import("../types").CourseBook>("upsert_book_sections", { bookId, sections });
-export const toggleBookSection   = (bookId: number, sectionId: number) => invoke<import("../types").CourseBook>("toggle_book_section", { bookId, sectionId });
-export const updateBookSection   = (sectionId: number, notes: string | null, dueDate: string | null) => invoke<import("../types").BookSection>("update_book_section", { sectionId, notes, dueDate });
 
-// Export / Backup
-export const exportData = () => invoke<string>("export_data");
-export const getDbPath  = () => invoke<string>("get_db_path");
+async function fetchCourseBook(id: number): Promise<CourseBook> {
+  const { data, error } = await supabase
+    .from("pf_course_books")
+    .select("*, pf_book_sections(*), pf_book_reading_log(*)")
+    .eq("id", id).single();
+  if (error) err(error);
+  return mapCourseBook(data!);
+}
 
-// Lifestyle Areas
-export const getLifestyleAreas   = () => invoke<LifestyleArea[]>("get_lifestyle_areas");
-export const createLifestyleArea = (name: string, color: string) => invoke<LifestyleArea>("create_lifestyle_area", { name, color });
-export const updateLifestyleArea = (id: number, name: string, color: string, sortOrder: number) => invoke<LifestyleArea>("update_lifestyle_area", { id, name, color, sortOrder });
-export const deleteLifestyleArea = (id: number) => invoke<void>("delete_lifestyle_area", { id });
-export const getLifestyleItems   = (areaId: number | null) => invoke<{ systems: SystemEntry[]; plans: Plan[] }>("get_lifestyle_items", { areaId });
+export const getCourseBooks = async (planId: number): Promise<CourseBook[]> => {
+  const { data, error } = await supabase
+    .from("pf_course_books")
+    .select("*, pf_book_sections(*), pf_book_reading_log(*)")
+    .eq("plan_id", planId).order("created_at");
+  if (error) err(error);
+  return (data ?? []).map(mapCourseBook);
+};
 
-// Journal
-export const getJournalEntry  = (date: string) => invoke<string>("get_journal_entry", { date });
-export const saveJournalEntry = (date: string, content: string) => invoke<void>("save_journal_entry", { date, content });
+export const createCourseBook = async (payload: CreateCourseBookPayload): Promise<CourseBook> => {
+  const { data, error } = await supabase
+    .from("pf_course_books").insert(payload).select().single();
+  if (error) err(error);
+  return fetchCourseBook(num(data!.id));
+};
 
-// Calendar Blocks
-export const getCalBlocks    = (startDate: string, endDate: string) => invoke<CalBlock[]>("get_cal_blocks", { startDate, endDate });
-export const createCalBlock  = (date: string, title: string, startTime: string, endTime: string, color: string, description: string | null, location: string | null) => invoke<CalBlock>("create_cal_block", { date, title, startTime, endTime, color, description, location });
-export const updateCalBlock  = (id: number, title: string, startTime: string, endTime: string, color: string, description: string | null, location: string | null) => invoke<CalBlock>("update_cal_block", { id, title, startTime, endTime, color, description, location });
-export const deleteCalBlock  = (id: number) => invoke<void>("delete_cal_block", { id });
+export const updateCourseBook = async (id: number, payload: UpdateCourseBookPayload): Promise<CourseBook> => {
+  const { error } = await supabase.from("pf_course_books").update(payload).eq("id", id);
+  if (error) err(error);
+  return fetchCourseBook(id);
+};
 
-// Recurring Calendar Blocks
-export const createRecurringCalBlock = (title: string, startTime: string, endTime: string, color: string, recurrence: string, daysOfWeek: string | null, startDate: string, endDate: string | null, description: string | null, location: string | null) =>
-  invoke<RecurringCalBlock>("create_recurring_cal_block", { title, startTime, endTime, color, recurrence, daysOfWeek, startDate, endDate, description, location });
-export const updateRecurringCalBlock = (id: number, title: string, startTime: string, endTime: string, color: string, recurrence: string, daysOfWeek: string | null, endDate: string | null, description: string | null, location: string | null) =>
-  invoke<void>("update_recurring_cal_block", { id, title, startTime, endTime, color, recurrence, daysOfWeek, endDate, description, location });
-export const deleteRecurringCalBlock = (id: number) => invoke<void>("delete_recurring_cal_block", { id });
+export const deleteCourseBook = async (id: number): Promise<void> => {
+  const { error } = await supabase.from("pf_course_books").delete().eq("id", id);
+  if (error) err(error);
+};
 
-// Games
-export const getGames      = () => invoke<Game[]>("get_games");
-export const createGame    = (payload: { title: string; genre?: string | null; platform?: string | null; engine?: string | null; status?: string; description?: string | null; core_mechanic?: string | null; target_audience?: string | null; inspiration?: string | null; color?: string }) => invoke<Game>("create_game", { payload });
-export const updateGame    = (id: number, payload: { title: string; genre?: string | null; platform?: string | null; engine?: string | null; status: string; description?: string | null; core_mechanic?: string | null; target_audience?: string | null; inspiration?: string | null; color: string }) => invoke<Game>("update_game", { id, payload });
-export const deleteGame    = (id: number) => invoke<void>("delete_game", { id });
+export const addBookReadingLog = async (payload: CreateBookReadingLogPayload): Promise<CourseBook> => {
+  const { error } = await supabase.from("pf_book_reading_log").insert(payload);
+  if (error) err(error);
+  return fetchCourseBook(payload.book_id);
+};
 
-// Game Features
-export const getGameFeatures       = (gameId: number) => invoke<GameFeature[]>("get_game_features", { gameId });
-export const createGameFeature     = (payload: { game_id: number; title: string; description?: string | null; status?: string; priority?: string }) => invoke<GameFeature>("create_game_feature", { payload });
-export const updateGameFeature     = (id: number, payload: { title: string; description?: string | null; status: string; priority: string }) => invoke<GameFeature>("update_game_feature", { id, payload });
-export const setGameFeatureStatus  = (id: number, status: string) => invoke<GameFeature>("set_game_feature_status", { id, status });
-export const deleteGameFeature     = (id: number) => invoke<void>("delete_game_feature", { id });
+export const deleteBookReadingLog = async (logId: number, bookId: number): Promise<CourseBook> => {
+  const { error } = await supabase.from("pf_book_reading_log").delete().eq("id", logId);
+  if (error) err(error);
+  return fetchCourseBook(bookId);
+};
 
-// Game Devlog
-export const getGameDevlog         = (gameId: number) => invoke<GameDevlogEntry[]>("get_game_devlog", { gameId });
-export const addGameDevlogEntry    = (payload: { game_id: number; content: string }) => invoke<GameDevlogEntry>("add_game_devlog_entry", { payload });
-export const deleteGameDevlogEntry = (id: number) => invoke<void>("delete_game_devlog_entry", { id });
+export const upsertBookSections = async (bookId: number, sections: BookSectionInput[]): Promise<CourseBook> => {
+  const { data: existing } = await supabase
+    .from("pf_book_sections").select("id").eq("book_id", bookId);
+  const existingIds = new Set((existing ?? []).map((s) => num(s.id)));
+  const keepIds     = new Set(sections.filter((s) => s.id).map((s) => s.id!));
+  const toDelete    = [...existingIds].filter((id) => !keepIds.has(id));
 
-// Daily Habits
-export const getHabitsForDate    = (date: string) => invoke<import("../types").HabitWithCompletion[]>("get_habits_for_date", { date });
-export const createDailyHabit    = (payload: { title: string; color?: string }) => invoke<import("../types").DailyHabit>("create_daily_habit", { payload });
-export const deleteDailyHabit    = (id: number) => invoke<void>("delete_daily_habit", { id });
-export const toggleHabitCompletion = (habitId: number, date: string) => invoke<boolean>("toggle_habit_completion", { habitId, date });
+  if (toDelete.length > 0) {
+    await supabase.from("pf_book_sections").delete().in("id", toDelete);
+  }
+  for (const s of sections) {
+    const row = { title: s.title, kind: s.kind, sort_order: s.sort_order, page_start: s.page_start ?? null, page_end: s.page_end ?? null, due_date: s.due_date ?? null, time_estimate: s.time_estimate ?? null };
+    if (s.id) {
+      await supabase.from("pf_book_sections").update(row).eq("id", s.id);
+    } else {
+      await supabase.from("pf_book_sections").insert({ book_id: bookId, ...row });
+    }
+  }
+  return fetchCourseBook(bookId);
+};
 
-// Run Logs
-export const getRunLogs    = () => invoke<import("../types").RunLog[]>("get_run_logs");
-export const createRunLog  = (payload: { date: string; distance_km?: number | null; duration_min?: number | null; notes?: string | null }) => invoke<import("../types").RunLog>("create_run_log", { payload });
-export const deleteRunLog  = (id: number) => invoke<void>("delete_run_log", { id });
+export const toggleBookSection = async (bookId: number, sectionId: number): Promise<CourseBook> => {
+  const { data: cur } = await supabase.from("pf_book_sections").select("done").eq("id", sectionId).single();
+  const nowDone = !cur!.done;
+  await supabase.from("pf_book_sections")
+    .update({ done: nowDone, done_at: nowDone ? new Date().toISOString() : null })
+    .eq("id", sectionId);
+  return fetchCourseBook(bookId);
+};
 
-// Workout Logs
-export const getWorkoutLogs       = () => invoke<import("../types").WorkoutLog[]>("get_workout_logs");
-export const createWorkoutLog     = (payload: { date: string; name: string; notes?: string | null }) => invoke<import("../types").WorkoutLog>("create_workout_log", { payload });
-export const deleteWorkoutLog     = (id: number) => invoke<void>("delete_workout_log", { id });
-export const addWorkoutExercise   = (payload: { workout_id: number; name: string; sets?: number | null; reps?: number | null; weight_kg?: number | null; notes?: string | null }) => invoke<import("../types").WorkoutLog>("add_workout_exercise", { payload });
-export const deleteWorkoutExercise = (id: number, workoutId: number) => invoke<import("../types").WorkoutLog>("delete_workout_exercise", { id, workoutId });
+export const updateBookSection = async (sectionId: number, notes: string | null, dueDate: string | null): Promise<BookSection> => {
+  const { data, error } = await supabase
+    .from("pf_book_sections")
+    .update({ notes, due_date: dueDate })
+    .eq("id", sectionId).select().single();
+  if (error) err(error);
+  return mapBookSection(data!);
+};
 
-// Roadmap
-export const getRoadmapItems = (planId: number) => invoke<RoadmapItem[]>("get_roadmap_items", { planId });
-export const createRoadmapItem = (payload: { plan_id: number; title: string; description?: string | null; due_date?: string | null }) =>
-  invoke<RoadmapItem>("create_roadmap_item", { payload });
-export const updateRoadmapItem = (id: number, payload: { title: string; description?: string | null; due_date?: string | null; status: string }) =>
-  invoke<RoadmapItem>("update_roadmap_item", { id, payload });
-export const deleteRoadmapItem = (id: number) => invoke<void>("delete_roadmap_item", { id });
-export const setRoadmapItemStatus = (id: number, status: string) =>
-  invoke<RoadmapItem>("set_roadmap_item_status", { id, status });
+// ═══════════════════════════════════════════════════════════════════════════
+// LIFESTYLE AREAS
+// ═══════════════════════════════════════════════════════════════════════════
+
+export const getLifestyleAreas = async (): Promise<LifestyleArea[]> => {
+  const { data, error } = await supabase
+    .from("pf_lifestyle_areas").select("*").eq("user_id", USER_ID).order("sort_order");
+  if (error) err(error);
+  return (data ?? []).map((r) => ({ id: num(r.id), name: r.name, color: r.color, sort_order: r.sort_order }));
+};
+
+export const createLifestyleArea = async (name: string, color: string): Promise<LifestyleArea> => {
+  const { data, error } = await supabase
+    .from("pf_lifestyle_areas").insert({ user_id: USER_ID, name, color }).select().single();
+  if (error) err(error);
+  return { id: num(data!.id), name: data!.name, color: data!.color, sort_order: data!.sort_order };
+};
+
+export const updateLifestyleArea = async (id: number, name: string, color: string, sortOrder: number): Promise<LifestyleArea> => {
+  const { data, error } = await supabase
+    .from("pf_lifestyle_areas").update({ name, color, sort_order: sortOrder }).eq("id", id).select().single();
+  if (error) err(error);
+  return { id: num(data!.id), name: data!.name, color: data!.color, sort_order: data!.sort_order };
+};
+
+export const deleteLifestyleArea = async (id: number): Promise<void> => {
+  const { error } = await supabase.from("pf_lifestyle_areas").delete().eq("id", id);
+  if (error) err(error);
+};
+
+export const getLifestyleItems = async (areaId: number | null): Promise<{ systems: SystemEntry[]; plans: Plan[] }> => {
+  let sQ = supabase.from("pf_systems").select("*").eq("user_id", USER_ID).eq("is_lifestyle", true);
+  let pQ = supabase.from("pf_plans").select("*").eq("user_id", USER_ID).eq("is_lifestyle", true);
+  if (areaId !== null) {
+    sQ = sQ.eq("lifestyle_area_id", areaId);
+    pQ = pQ.eq("lifestyle_area_id", areaId);
+  }
+  const [{ data: systems }, { data: plans }] = await Promise.all([sQ, pQ]);
+  return { systems: (systems ?? []).map(mapSystem), plans: (plans ?? []).map((p) => mapPlan(p)) };
+};
+
+// ═══════════════════════════════════════════════════════════════════════════
+// GAMES
+// ═══════════════════════════════════════════════════════════════════════════
+
+export const getGames = async (): Promise<Game[]> => {
+  const { data, error } = await supabase
+    .from("pf_games")
+    .select("*, pf_game_features(id, done)")
+    .eq("user_id", USER_ID).order("created_at", { ascending: false });
+  if (error) err(error);
+  return (data ?? []).map((g) => ({
+    id: num(g.id), title: g.title, genre: g.genre, platform: g.platform, engine: g.engine,
+    status: g.status, description: g.description, core_mechanic: g.core_mechanic,
+    target_audience: g.target_audience, inspiration: g.inspiration, color: g.color,
+    created_at: g.created_at,
+    feature_count: (g.pf_game_features ?? []).length,
+    done_count: (g.pf_game_features ?? []).filter((f: any) => f.done).length,
+  }));
+};
+
+export const createGame = async (payload: {
+  title: string; genre?: string | null; platform?: string | null; engine?: string | null;
+  status?: string; description?: string | null; core_mechanic?: string | null;
+  target_audience?: string | null; inspiration?: string | null; color?: string;
+}): Promise<Game> => {
+  const { data, error } = await supabase
+    .from("pf_games").insert({ user_id: USER_ID, ...payload }).select("*, pf_game_features(id, done)").single();
+  if (error) err(error);
+  return { id: num(data!.id), title: data!.title, genre: data!.genre, platform: data!.platform, engine: data!.engine, status: data!.status, description: data!.description, core_mechanic: data!.core_mechanic, target_audience: data!.target_audience, inspiration: data!.inspiration, color: data!.color, created_at: data!.created_at, feature_count: 0, done_count: 0 };
+};
+
+export const updateGame = async (id: number, payload: {
+  title: string; genre?: string | null; platform?: string | null; engine?: string | null;
+  status: string; description?: string | null; core_mechanic?: string | null;
+  target_audience?: string | null; inspiration?: string | null; color: string;
+}): Promise<Game> => {
+  const { error } = await supabase.from("pf_games").update(payload).eq("id", id);
+  if (error) err(error);
+  const games = await getGames();
+  return games.find((g) => g.id === id)!;
+};
+
+export const deleteGame = async (id: number): Promise<void> => {
+  const { error } = await supabase.from("pf_games").delete().eq("id", id);
+  if (error) err(error);
+};
+
+// ─── Game features ───────────────────────────────────────────────────────────
+
+export const getGameFeatures = async (gameId: number): Promise<GameFeature[]> => {
+  const { data, error } = await supabase
+    .from("pf_game_features").select("*").eq("game_id", gameId).order("sort_order");
+  if (error) err(error);
+  return (data ?? []).map((r) => ({ id: num(r.id), game_id: num(r.game_id), title: r.title, description: r.description, status: r.status, priority: r.priority, sort_order: r.sort_order, created_at: r.created_at }));
+};
+
+export const createGameFeature = async (payload: { game_id: number; title: string; description?: string | null; status?: string; priority?: string }): Promise<GameFeature> => {
+  const { data, error } = await supabase.from("pf_game_features").insert(payload).select().single();
+  if (error) err(error);
+  return { id: num(data!.id), game_id: num(data!.game_id), title: data!.title, description: data!.description, status: data!.status, priority: data!.priority, sort_order: data!.sort_order, created_at: data!.created_at };
+};
+
+export const updateGameFeature = async (id: number, payload: { title: string; description?: string | null; status: string; priority: string }): Promise<GameFeature> => {
+  const { data, error } = await supabase.from("pf_game_features").update(payload).eq("id", id).select().single();
+  if (error) err(error);
+  return { id: num(data!.id), game_id: num(data!.game_id), title: data!.title, description: data!.description, status: data!.status, priority: data!.priority, sort_order: data!.sort_order, created_at: data!.created_at };
+};
+
+export const setGameFeatureStatus = async (id: number, status: string): Promise<GameFeature> => {
+  const { data, error } = await supabase.from("pf_game_features").update({ status }).eq("id", id).select().single();
+  if (error) err(error);
+  return { id: num(data!.id), game_id: num(data!.game_id), title: data!.title, description: data!.description, status: data!.status, priority: data!.priority, sort_order: data!.sort_order, created_at: data!.created_at };
+};
+
+export const deleteGameFeature = async (id: number): Promise<void> => {
+  const { error } = await supabase.from("pf_game_features").delete().eq("id", id);
+  if (error) err(error);
+};
+
+// ─── Game devlog ─────────────────────────────────────────────────────────────
+
+export const getGameDevlog = async (gameId: number): Promise<GameDevlogEntry[]> => {
+  const { data, error } = await supabase
+    .from("pf_game_devlog").select("*").eq("game_id", gameId).order("created_at", { ascending: false });
+  if (error) err(error);
+  return (data ?? []).map((r) => ({ id: num(r.id), game_id: num(r.game_id), content: r.content, created_at: r.created_at }));
+};
+
+export const addGameDevlogEntry = async (payload: { game_id: number; content: string }): Promise<GameDevlogEntry> => {
+  const { data, error } = await supabase.from("pf_game_devlog").insert(payload).select().single();
+  if (error) err(error);
+  return { id: num(data!.id), game_id: num(data!.game_id), content: data!.content, created_at: data!.created_at };
+};
+
+export const deleteGameDevlogEntry = async (id: number): Promise<void> => {
+  const { error } = await supabase.from("pf_game_devlog").delete().eq("id", id);
+  if (error) err(error);
+};
+
+// ═══════════════════════════════════════════════════════════════════════════
+// DAILY HABITS
+// ═══════════════════════════════════════════════════════════════════════════
+
+export const getHabitsForDate = async (date: string): Promise<HabitWithCompletion[]> => {
+  const { data: habits, error } = await supabase
+    .from("pf_daily_habits").select("*").eq("user_id", USER_ID).order("sort_order");
+  if (error) err(error);
+  if (!habits?.length) return [];
+
+  const habitIds = habits.map((h) => num(h.id));
+  // Fetch last 60 days for streak + recent_dates
+  const since = new Date(date);
+  since.setDate(since.getDate() - 59);
+  const sinceStr = since.toISOString().split("T")[0];
+
+  const { data: completions } = await supabase
+    .from("pf_habit_completions").select("habit_id, date")
+    .in("habit_id", habitIds).gte("date", sinceStr);
+
+  return habits.map((h): HabitWithCompletion => {
+    const hc = (completions ?? []).filter((c) => num(c.habit_id) === num(h.id));
+    const doneSet = new Set(hc.map((c) => c.date));
+    const recent_dates = hc.filter((c) => {
+      const d = new Date(date);
+      d.setDate(d.getDate() - 6);
+      return c.date >= d.toISOString().split("T")[0];
+    }).map((c) => c.date).sort();
+
+    let streak = 0;
+    let cur = new Date(date + "T00:00:00Z");
+    while (doneSet.has(cur.toISOString().split("T")[0])) {
+      streak++;
+      cur.setUTCDate(cur.getUTCDate() - 1);
+    }
+
+    return { id: num(h.id), title: h.title, color: h.color, sort_order: h.sort_order, done: doneSet.has(date), streak, recent_dates };
+  });
+};
+
+export const createDailyHabit = async (payload: { title: string; color?: string }): Promise<DailyHabit> => {
+  const { data, error } = await supabase
+    .from("pf_daily_habits").insert({ user_id: USER_ID, ...payload }).select().single();
+  if (error) err(error);
+  return { id: num(data!.id), title: data!.title, color: data!.color, sort_order: data!.sort_order };
+};
+
+export const deleteDailyHabit = async (id: number): Promise<void> => {
+  const { error } = await supabase.from("pf_daily_habits").delete().eq("id", id);
+  if (error) err(error);
+};
+
+export const toggleHabitCompletion = async (habitId: number, date: string): Promise<boolean> => {
+  const { data: existing } = await supabase
+    .from("pf_habit_completions").select("id").eq("habit_id", habitId).eq("date", date).maybeSingle();
+  if (existing) {
+    await supabase.from("pf_habit_completions").delete().eq("id", existing.id);
+    return false;
+  }
+  await supabase.from("pf_habit_completions").insert({ habit_id: habitId, date });
+  return true;
+};
+
+// ═══════════════════════════════════════════════════════════════════════════
+// RUN LOGS
+// ═══════════════════════════════════════════════════════════════════════════
+
+export const getRunLogs = async (): Promise<RunLog[]> => {
+  const { data, error } = await supabase
+    .from("pf_run_logs").select("*").eq("user_id", USER_ID).order("date", { ascending: false });
+  if (error) err(error);
+  return (data ?? []).map((r) => ({ id: num(r.id), date: r.date, distance_km: r.distance_km, duration_min: r.duration_min, notes: r.notes, created_at: r.created_at }));
+};
+
+export const createRunLog = async (payload: { date: string; distance_km?: number | null; duration_min?: number | null; notes?: string | null }): Promise<RunLog> => {
+  const { data, error } = await supabase
+    .from("pf_run_logs").insert({ user_id: USER_ID, ...payload }).select().single();
+  if (error) err(error);
+  return { id: num(data!.id), date: data!.date, distance_km: data!.distance_km, duration_min: data!.duration_min, notes: data!.notes, created_at: data!.created_at };
+};
+
+export const deleteRunLog = async (id: number): Promise<void> => {
+  const { error } = await supabase.from("pf_run_logs").delete().eq("id", id);
+  if (error) err(error);
+};
+
+// ═══════════════════════════════════════════════════════════════════════════
+// WORKOUT LOGS
+// ═══════════════════════════════════════════════════════════════════════════
+
+export const getWorkoutLogs = async (): Promise<WorkoutLog[]> => {
+  const { data, error } = await supabase
+    .from("pf_workout_logs")
+    .select("*, pf_workout_exercises(*)")
+    .eq("user_id", USER_ID).order("date", { ascending: false });
+  if (error) err(error);
+  return (data ?? []).map((w) => ({
+    id: num(w.id), date: w.date, name: w.name, notes: w.notes, created_at: w.created_at,
+    exercises: (w.pf_workout_exercises ?? [])
+      .sort((a: any, b: any) => a.sort_order - b.sort_order)
+      .map((e: any): WorkoutExercise => ({ id: num(e.id), workout_id: num(e.workout_id), name: e.name, sets: e.sets, reps: e.reps, weight_kg: e.weight_kg, notes: e.notes, sort_order: e.sort_order })),
+  }));
+};
+
+export const createWorkoutLog = async (payload: { date: string; name: string; notes?: string | null }): Promise<WorkoutLog> => {
+  const { data, error } = await supabase
+    .from("pf_workout_logs").insert({ user_id: USER_ID, ...payload }).select().single();
+  if (error) err(error);
+  return { id: num(data!.id), date: data!.date, name: data!.name, notes: data!.notes, created_at: data!.created_at, exercises: [] };
+};
+
+export const deleteWorkoutLog = async (id: number): Promise<void> => {
+  const { error } = await supabase.from("pf_workout_logs").delete().eq("id", id);
+  if (error) err(error);
+};
+
+async function fetchWorkoutLog(id: number): Promise<WorkoutLog> {
+  const { data, error } = await supabase
+    .from("pf_workout_logs").select("*, pf_workout_exercises(*)").eq("id", id).single();
+  if (error) err(error);
+  return { id: num(data!.id), date: data!.date, name: data!.name, notes: data!.notes, created_at: data!.created_at, exercises: (data!.pf_workout_exercises ?? []).sort((a: any, b: any) => a.sort_order - b.sort_order).map((e: any): WorkoutExercise => ({ id: num(e.id), workout_id: num(e.workout_id), name: e.name, sets: e.sets, reps: e.reps, weight_kg: e.weight_kg, notes: e.notes, sort_order: e.sort_order })) };
+}
+
+export const addWorkoutExercise = async (payload: { workout_id: number; name: string; sets?: number | null; reps?: number | null; weight_kg?: number | null; notes?: string | null }): Promise<WorkoutLog> => {
+  const { error } = await supabase.from("pf_workout_exercises").insert(payload);
+  if (error) err(error);
+  return fetchWorkoutLog(payload.workout_id);
+};
+
+export const deleteWorkoutExercise = async (id: number, workoutId: number): Promise<WorkoutLog> => {
+  const { error } = await supabase.from("pf_workout_exercises").delete().eq("id", id);
+  if (error) err(error);
+  return fetchWorkoutLog(workoutId);
+};
+
+// ═══════════════════════════════════════════════════════════════════════════
+// ROADMAP
+// ═══════════════════════════════════════════════════════════════════════════
+
+export const getRoadmapItems = async (planId: number): Promise<RoadmapItem[]> => {
+  const { data, error } = await supabase
+    .from("pf_roadmap_items").select("*").eq("plan_id", planId).order("sort_order");
+  if (error) err(error);
+  return (data ?? []).map(mapRoadmapItem);
+};
+
+export const createRoadmapItem = async (payload: { plan_id: number; title: string; description?: string | null; due_date?: string | null }): Promise<RoadmapItem> => {
+  const { data, error } = await supabase.from("pf_roadmap_items").insert(payload).select().single();
+  if (error) err(error);
+  return mapRoadmapItem(data!);
+};
+
+export const updateRoadmapItem = async (id: number, payload: { title: string; description?: string | null; due_date?: string | null; status: string }): Promise<RoadmapItem> => {
+  const { data, error } = await supabase.from("pf_roadmap_items").update(payload).eq("id", id).select().single();
+  if (error) err(error);
+  return mapRoadmapItem(data!);
+};
+
+export const deleteRoadmapItem = async (id: number): Promise<void> => {
+  const { error } = await supabase.from("pf_roadmap_items").delete().eq("id", id);
+  if (error) err(error);
+};
+
+export const setRoadmapItemStatus = async (id: number, status: string): Promise<RoadmapItem> => {
+  const { data, error } = await supabase.from("pf_roadmap_items").update({ status }).eq("id", id).select().single();
+  if (error) err(error);
+  return mapRoadmapItem(data!);
+};
+
+// ═══════════════════════════════════════════════════════════════════════════
+// EXPORT / UTILITY
+// ═══════════════════════════════════════════════════════════════════════════
+
+export const exportData = async (): Promise<string> => {
+  const [goals, plans, tasks, systems] = await Promise.all([
+    getGoals(), getPlans(), getAllTasks(), getSystems(),
+  ]);
+  return JSON.stringify({ goals, plans, tasks, systems }, null, 2);
+};
+
+export const getDbPath = async (): Promise<string> => {
+  return `${import.meta.env.VITE_SUPABASE_URL}/rest/v1`;
+};

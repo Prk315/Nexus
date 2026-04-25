@@ -181,6 +181,46 @@ layer, and wrap migrations in a loop that swallows errors per statement.
 (with the phone plugged in) refreshes the install. There's no App Store or
 TestFlight path on the free tier.
 
+## Supabase: Shared Cloud Backend
+
+All apps that need cloud persistence use the single **NEXUS** Supabase project
+(`efxmzsdisaymtpebaxlp`, region `eu-north-1`). Tables are namespaced by app
+prefix to avoid collisions.
+
+| App prefix | Tables |
+|------------|--------|
+| *(none)*   | `time_entries`, `active_sessions`, `blocked_sites`, `blocked_apps`, `focus_blocks`, `unlock_rules` (TimeTracker) |
+| `pf_`      | 45 tables — goals, plans, tasks, systems, calendar, pipelines, habits, games, … (PathFinder) |
+
+**PathFinder data layer** (`apps/PathFinder/src/lib/`):
+- `supabase.ts` — creates the shared client from `VITE_SUPABASE_URL` /
+  `VITE_SUPABASE_ANON_KEY` env vars.
+- `api.ts` — every data function that previously called `invoke()` into Rust
+  now calls Supabase directly. Function signatures are **unchanged** so all
+  page components work without modification.
+
+Required `.env` file at `apps/PathFinder/.env` (gitignored):
+```
+VITE_SUPABASE_URL=https://efxmzsdisaymtpebaxlp.supabase.co
+VITE_SUPABASE_ANON_KEY=<anon key from Supabase dashboard>
+```
+
+**RLS posture**: all `pf_` tables have RLS enabled with a permissive `anon`
+policy (`USING (true)`). Tighten policies and add `auth.uid()` checks when
+Supabase Auth is introduced.
+
+**Computed fields** (`task_count`, `done_count`, `feature_count`, streaks,
+`recent_dates`): resolved client-side via parallel Supabase queries inside
+`api.ts` — no DB functions or views required.
+
+**Recurring calendar blocks**: `pf_recurring_cal_blocks` stores the rules;
+`getCalBlocks()` expands them into virtual `CalBlock` entries client-side
+(stable negative IDs derived from `recurring_id × 100 000 + dayOffset`).
+
+**`user_id` convention**: all root-level tables carry `user_id TEXT DEFAULT
+'default'`. When Supabase Auth is added, replace `'default'` with
+`auth.uid()` and update RLS policies accordingly.
+
 ## Adding a New App to the Ecosystem
 
 1. Scaffold with `npm create tauri-app` inside `apps/<AppName>/`.
