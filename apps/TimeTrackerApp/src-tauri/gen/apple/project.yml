@@ -103,6 +103,8 @@ targets:
       - path: ../../ios/SafariBlockerExtension
         excludes:
           - "Info.plist"
+    dependencies:
+      - sdk: SafariServices.framework
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.bastianthomsen.timetracker.SafariBlocker
