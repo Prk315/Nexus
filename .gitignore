@@ -14,6 +14,9 @@ target/
 
 # Tauri bundles
 **/src-tauri/gen/
+# Allow the iOS project.yml (xcodegen config) to be committed so the
+# ENABLE_USER_SCRIPT_SANDBOXING: NO fix survives tauri ios init regeneration.
+!**/src-tauri/gen/apple/project.yml
 **/*.dmg
 **/*.AppImage
 **/*.deb

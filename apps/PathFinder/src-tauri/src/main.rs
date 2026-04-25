@@ -2,5 +2,5 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 fn main() {
-    pathfinder_tmp_lib::run()
+    pathfinder_lib::run()
 }

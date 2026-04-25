@@ -4,7 +4,7 @@ import { exportData } from "../lib/api";
 
 export type Page = "dashboard" | "week" | "goals" | "plans" | "projects" | "tasks" | "systems" | "lifestyle" | "courses" | "games";
 
-const NAV: { id: Page; label: string; icon: React.ElementType }[] = [
+const NAV: { id: Page; label: string; icon: React.ComponentType<{ className?: string }> }[] = [
   { id: "dashboard", label: "Dashboard",  icon: LayoutDashboard },
   { id: "week",      label: "Week",       icon: CalendarDays },
   { id: "goals",     label: "Goals",      icon: Target },

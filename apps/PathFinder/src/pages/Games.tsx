@@ -456,7 +456,7 @@ function DevlogTab({ game }: { game: Game }) {
 
 type Tab = "overview" | "features" | "devlog";
 
-const TABS: { id: Tab; label: string; icon: React.ElementType }[] = [
+const TABS: { id: Tab; label: string; icon: React.ComponentType<{ className?: string }> }[] = [
   { id: "overview",  label: "Overview",  icon: FileText },
   { id: "features",  label: "Features",  icon: Columns3 },
   { id: "devlog",    label: "Devlog",    icon: BookOpenText },

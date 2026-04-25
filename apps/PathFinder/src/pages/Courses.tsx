@@ -46,7 +46,7 @@ import type { Plan, CourseAssignment, CaSubtask, PipelineTemplate, PipelineRun, 
 
 // ── Assignment type config ─────────────────────────────────────────────────────
 
-const TYPES: { value: string; label: string; icon: React.ElementType; color: string }[] = [
+const TYPES: { value: string; label: string; icon: React.ComponentType<{ className?: string }>; color: string }[] = [
   { value: "assignment", label: "Assignment", icon: ClipboardList,  color: "text-sky-500   bg-sky-500/10   border-sky-400/30" },
   { value: "homework",  label: "Homework",   icon: FileText,       color: "text-blue-500  bg-blue-500/10  border-blue-400/30" },
   { value: "project",   label: "Project",   icon: Layers,         color: "text-violet-500 bg-violet-500/10 border-violet-400/30" },

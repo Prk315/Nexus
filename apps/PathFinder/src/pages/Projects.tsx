@@ -931,7 +931,7 @@ function TaskSidebar({ tasks, today, onAdd, onToggle, onUpdate, onDelete }: {
 // ── Section Block (collapsible) ───────────────────────────────────────────────
 
 function SectionBlock({ title, icon: Icon, open, onToggle, onToggleWidth, fullWidth, children }: {
-  title: string; icon: React.ElementType; open: boolean;
+  title: string; icon: React.ComponentType<{ className?: string }>; open: boolean;
   onToggle: () => void; children: React.ReactNode;
   onToggleWidth?: () => void; fullWidth?: boolean;
 }) {
