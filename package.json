@@ -13,6 +13,8 @@
     "dev:vault": "npm run dev --workspace=apps/Vault/Vault",
     "dev:timetracker": "npm run dev --workspace=apps/TimeTrackerApp",
     "dev:timetracker:ios": "cd apps/TimeTrackerApp && npx tauri ios dev",
+    "dev:vault:ios": "cd apps/Vault/Vault && npx tauri ios dev",
+    "build:vault:ios": "cd apps/Vault/Vault && npx tauri ios build",
     "dev:stonks": "npm run dev --workspace=apps/Stonks",
     "build:all": "npm run build --workspaces --if-present",
     "lint:all": "npm run lint --workspaces --if-present"

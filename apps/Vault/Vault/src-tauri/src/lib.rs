@@ -1,7 +1,9 @@
 use std::collections::{HashMap, HashSet};
 use std::fs;
-use std::io::{BufRead, BufReader, Write};
 use std::path::PathBuf;
+#[cfg(not(target_os = "ios"))]
+use std::io::{BufRead, BufReader, Write};
+#[cfg(not(target_os = "ios"))]
 use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
 use std::sync::Mutex;
 use base64::{engine::general_purpose::STANDARD, Engine as _};
@@ -348,16 +350,20 @@ fn get_blanket(id: String) -> Result<Vec<String>, String> {
 
 // ── Python kernel session management ───────────────────────────────────────────
 
+#[cfg(not(target_os = "ios"))]
 const KERNEL_PY: &str = include_str!("vault_kernel.py");
 
+#[cfg(not(target_os = "ios"))]
 struct PythonSession {
     child: Child,
     stdin: ChildStdin,
     stdout: BufReader<ChildStdout>,
 }
 
+#[cfg(not(target_os = "ios"))]
 struct PythonSessions(Mutex<HashMap<String, PythonSession>>);
 
+#[cfg(not(target_os = "ios"))]
 #[derive(Serialize)]
 struct OutputChunk {
     #[serde(rename = "type")]
@@ -365,11 +371,13 @@ struct OutputChunk {
     content: String,
 }
 
+#[cfg(not(target_os = "ios"))]
 #[derive(Serialize)]
 struct RunOutput {
     chunks: Vec<OutputChunk>,
 }
 
+#[cfg(not(target_os = "ios"))]
 #[tauri::command]
 fn run_python(
     session_id: String,
@@ -413,6 +421,7 @@ fn run_python(
     Ok(RunOutput { chunks })
 }
 
+#[cfg(not(target_os = "ios"))]
 #[tauri::command]
 fn reset_python_session(
     session_id: String,
@@ -443,10 +452,14 @@ fn save_journal(id: String, data: String) -> Result<(), String> {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    tauri::Builder::default()
+    let builder = tauri::Builder::default()
         .plugin(tauri_plugin_clipboard_manager::init())
-        .plugin(tauri_plugin_opener::init())
-        .manage(PythonSessions(Mutex::new(HashMap::new())))
+        .plugin(tauri_plugin_opener::init());
+
+    #[cfg(not(target_os = "ios"))]
+    let builder = builder.manage(PythonSessions(Mutex::new(HashMap::new())));
+
+    builder
         .invoke_handler(tauri::generate_handler![
             get_graph,
             create_node,
@@ -466,7 +479,9 @@ pub fn run() {
             rename_tag,
             delete_tag_global,
             get_blanket,
+            #[cfg(not(target_os = "ios"))]
             run_python,
+            #[cfg(not(target_os = "ios"))]
             reset_python_session,
             read_journal,
             save_journal,
