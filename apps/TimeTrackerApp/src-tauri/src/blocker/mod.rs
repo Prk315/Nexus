@@ -1,4 +1,6 @@
 pub mod hosts;
+#[cfg(target_os = "ios")]
+pub mod ios_content_blocker;
 
 use crate::db::{app_blocker, schedule, site_blocker, timer, AppState};
 use chrono::Datelike;

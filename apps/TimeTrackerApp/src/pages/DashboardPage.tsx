@@ -164,7 +164,6 @@ function RecentProjectsPanel({ entries }: { entries: TimeEntry[] }) {
   const dispatch = useAppDispatch();
   const stats = useAppSelector((s) => s.entries.statistics);
   const timerStatus = useAppSelector((s) => s.timer.status);
-  const settings = useAppSelector((s) => s.settings);
 
   const latestByProject = latestEntryByProject(entries);
   const canResume = timerStatus === "idle";

@@ -29,6 +29,10 @@ import {
 } from "../store/slices/scheduleSlice";
 import Toggle from "../components/shared/Toggle";
 
+// ── Platform detection ────────────────────────────────────────────────────────
+
+const IS_IOS = /iPhone|iPad|iPod/.test(navigator.userAgent);
+
 // ── Constants ─────────────────────────────────────────────────────────────────
 
 const HOUR_H = 44; // px per hour on the timeline
@@ -150,7 +154,7 @@ function SiteBlockerSection() {
     const result = await dispatch(addBlockedSite(domain));
     if (addBlockedSite.fulfilled.match(result)) {
       setInput("");
-      if (blockerEnabled) {
+      if (!IS_IOS && blockerEnabled) {
         setSyncing(true); setSyncError(null);
         const r = await dispatch(syncBlockedSites());
         if (syncBlockedSites.rejected.match(r)) setSyncError(r.error.message ?? "Failed to update /etc/hosts");
@@ -161,24 +165,30 @@ function SiteBlockerSection() {
 
   const handleRemove = async (id: number) => {
     await dispatch(removeBlockedSite(id));
-    if (blockerEnabled) await dispatch(syncBlockedSites());
+    if (!IS_IOS && blockerEnabled) await dispatch(syncBlockedSites());
   };
 
   const handleToggle = async (id: number, enabled: boolean) => {
     await dispatch(setSiteEnabled({ id, enabled }));
-    if (blockerEnabled) await dispatch(syncBlockedSites());
+    if (!IS_IOS && blockerEnabled) await dispatch(syncBlockedSites());
   };
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-      <p style={{ fontSize: 12, color: "var(--text-muted)", margin: 0 }}>
-        Blocked sites are redirected to 127.0.0.1 via /etc/hosts. Requires your Mac password to apply.
-      </p>
+      {IS_IOS ? (
+        <p style={{ fontSize: 12, color: "var(--text-muted)", margin: 0 }}>
+          Blocked sites are enforced via Safari Content Blocker — enable in Settings › Safari › Extensions
+        </p>
+      ) : (
+        <p style={{ fontSize: 12, color: "var(--text-muted)", margin: 0 }}>
+          Blocked sites are redirected to 127.0.0.1 via /etc/hosts. Requires your Mac password to apply.
+        </p>
+      )}
       <div style={{ display: "flex", gap: 8 }}>
         <input type="text" value={input} onChange={(e) => setInput(e.target.value)} onKeyDown={(e) => e.key === "Enter" && handleAdd()} placeholder="example.com" style={{ flex: 1, padding: "6px 10px", borderRadius: 6, border: "1px solid var(--border)", background: "var(--surface)", color: "var(--text)", fontSize: 13 }} />
         <button onClick={handleAdd} style={addBtnStyle} disabled={!input.trim() || syncing}>{syncing ? "Applying…" : "Block"}</button>
       </div>
-      {syncError && <p style={{ fontSize: 12, color: "var(--danger, #e55)", margin: 0 }}>{syncError}</p>}
+      {!IS_IOS && syncError && <p style={{ fontSize: 12, color: "var(--danger, #e55)", margin: 0 }}>{syncError}</p>}
       {loading ? <p style={{ fontSize: 12, color: "var(--text-muted)" }}>Loading…</p>
         : sites.length === 0 ? <p style={{ fontSize: 12, color: "var(--text-muted)" }}>No sites blocked yet.</p>
         : (
@@ -640,10 +650,12 @@ export default function TimeKeeperPage() {
         <section style={{ flex: "1 1 320px", minWidth: 280 }}>
           <h3 style={sectionTitle}>Blockers</h3>
           <div style={{ display: "flex", flexDirection: "column", gap: 24 }}>
-            <div>
-              <div style={{ fontSize: 12, fontWeight: 600, marginBottom: 8, color: "var(--text)" }}>Apps</div>
-              <AppBlockerSection />
-            </div>
+            {!IS_IOS && (
+              <div>
+                <div style={{ fontSize: 12, fontWeight: 600, marginBottom: 8, color: "var(--text)" }}>Apps</div>
+                <AppBlockerSection />
+              </div>
+            )}
             <div>
               <div style={{ fontSize: 12, fontWeight: 600, marginBottom: 8, color: "var(--text)" }}>Websites</div>
               <SiteBlockerSection />

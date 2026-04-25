@@ -684,5 +684,11 @@ pub async fn sync_all_blocking(
     merge!(pull_focus_blocks(state, config));
     merge!(pull_unlock_rules(state, config));
 
+    // After a successful pull, reload the Safari Content Blocker on iOS.
+    #[cfg(target_os = "ios")]
+    if let Ok(db) = state.db.lock() {
+        let _ = crate::blocker::ios_content_blocker::write_and_reload(&db);
+    }
+
     Ok(total)
 }

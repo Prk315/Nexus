@@ -1714,263 +1714,10 @@ export function Week() {
     }
   }, [isMobile, selectedDay]);
 
-  // ── Mobile week view ──────────────────────────────────────────────────────────
-  if (isMobile) {
-    const selBlocks = blocksFor(selectedDay);
-    const selSystems = systems.filter((s) => s.start_time && systemScheduledFor(s, selectedDay));
-    const selCAs = items.course_assignments.filter((a) => a.due_date === selectedDay && a.start_time);
-    const selGoals = goalsFor(selectedDay);
-    const selTasks = tasksFor(selectedDay);
-    const selDL = deadlinesFor(selectedDay);
-    const selRM = remindersFor(selectedDay);
-    const selCAAll = courseAssignmentsFor(selectedDay);
-
-    const now = new Date();
-    const nowMin = now.getHours() * 60 + now.getMinutes();
-    const nowPx = minutesToPx(nowMin);
-    const showNow = selectedDay === today && nowMin >= HOUR_START * 60 && nowMin <= HOUR_END * 60;
-
-    type MEvt =
-      | { kind: "sys"; startMin: number; endMin: number; s: SystemEntry }
-      | { kind: "ca";  startMin: number; endMin: number; a: CourseAssignment }
-      | { kind: "blk"; startMin: number; endMin: number; b: CalBlock };
-
-    const mEvts: MEvt[] = [
-      ...selSystems.map((s) => ({
-        kind: "sys" as const,
-        startMin: timeToMinutes(s.start_time!),
-        endMin: s.end_time ? timeToMinutes(s.end_time) : timeToMinutes(s.start_time!) + 60,
-        s,
-      })),
-      ...selCAs.map((a) => ({
-        kind: "ca" as const,
-        startMin: timeToMinutes(a.start_time!),
-        endMin: a.end_time ? timeToMinutes(a.end_time) : timeToMinutes(a.start_time!) + 60,
-        a,
-      })),
-      ...selBlocks.map((b) => ({
-        kind: "blk" as const,
-        startMin: timeToMinutes(b.start_time),
-        endMin: timeToMinutes(b.end_time),
-        b,
-      })),
-    ];
-
-    const selectedDate = new Date(selectedDay + "T00:00:00");
-    const selectedLabel = `${DAY_NAMES[selectedDate.getDay()]}, ${MONTHS[selectedDate.getMonth()]} ${selectedDate.getDate()}`;
-
+  // Shared modal JSX used by both mobile and desktop branches
+  function renderModals() {
     return (
-      <div className="flex flex-col h-[calc(100vh-2.5rem)] overflow-hidden">
-
-        {/* Mobile nav header */}
-        <div className="h-11 flex items-center justify-between px-4 border-b border-border shrink-0 bg-background">
-          <button onClick={prevWeek} className="p-1 rounded hover:bg-accent">
-            <ChevronLeft className="h-5 w-5" />
-          </button>
-          <span className="text-sm font-medium">{headerLabel}</span>
-          <button onClick={nextWeek} className="p-1 rounded hover:bg-accent">
-            <ChevronRight className="h-5 w-5" />
-          </button>
-        </div>
-
-        {/* Day strip */}
-        <div className="flex border-b border-border shrink-0 bg-card">
-          {Array.from({ length: 7 }, (_, i) => {
-            const iso = toISO(addDays(sun, i));
-            const d = new Date(iso + "T00:00:00");
-            const isToday = iso === today;
-            const isSelected = iso === selectedDay;
-            const dayAbbr = ["Su", "Mo", "Tu", "We", "Th", "Fr", "Sa"][d.getDay()];
-            const dayNum = d.getDate();
-            return (
-              <button
-                key={iso}
-                onClick={() => setSelectedDay(iso)}
-                className={`flex-1 flex flex-col items-center py-2 gap-0.5 transition-colors ${
-                  isSelected ? "text-primary-foreground" : "text-muted-foreground"
-                }`}
-              >
-                <span className="text-[11px] font-medium">{dayAbbr}</span>
-                <span className={`w-7 h-7 flex items-center justify-center rounded-full text-sm font-semibold ${
-                  isSelected
-                    ? "bg-primary text-primary-foreground"
-                    : isToday
-                    ? "text-primary font-bold"
-                    : ""
-                }`}>{dayNum}</span>
-                {isToday && !isSelected && (
-                  <span className="w-1 h-1 rounded-full bg-primary" />
-                )}
-              </button>
-            );
-          })}
-        </div>
-
-        {/* Selected day label */}
-        <div className="shrink-0 px-4 py-1.5 border-b border-border/40 bg-card/50">
-          <span className="text-xs font-medium text-muted-foreground">{selectedLabel}</span>
-        </div>
-
-        {/* All-day items for selected day */}
-        {(selGoals.length + selTasks.length + selDL.length + selRM.length + selCAAll.length) > 0 && (
-          <div className="shrink-0 px-3 py-2 border-b border-border bg-card/30 flex flex-col gap-1 max-h-28 overflow-y-auto">
-            {selGoals.map((g) => (
-              <button key={`g-${g.id}`} onClick={() => setModal({ kind: "edit-goal", goal: g })}
-                className="flex items-center gap-1.5 px-2 py-1 rounded text-left w-full bg-blue-500/10 border border-blue-500/20 transition-colors">
-                <Target className="h-3 w-3 text-blue-500 shrink-0" />
-                <span className="text-xs text-foreground truncate">{g.title}</span>
-              </button>
-            ))}
-            {selTasks.map((t) => (
-              <TaskPopupChip key={`t-${t.id}`} t={t}
-                onToggle={() => handleToggleTask(t.id)}
-                onEdit={() => setModal({ kind: "edit-task", task: t })} />
-            ))}
-            {selDL.map((d) => (
-              <div key={`dl-${d.id}`}
-                className={cn("flex items-center gap-1.5 px-2 py-1 rounded border",
-                  d.done ? "bg-secondary/40 border-border/40" : "bg-red-500/10 border-red-400/40")}>
-                <Flag className={cn("h-3 w-3 shrink-0", d.done ? "text-muted-foreground" : "text-red-500")} />
-                <span className={cn("text-xs truncate", d.done ? "line-through text-muted-foreground" : "text-foreground")}>{d.title}</span>
-              </div>
-            ))}
-            {selRM.map((r) => (
-              <div key={`rm-${r.id}`}
-                className={cn("flex items-center gap-1.5 px-2 py-1 rounded border",
-                  r.done ? "bg-secondary/40 border-border/40" : "bg-amber-500/10 border-amber-400/40")}>
-                <Bell className={cn("h-3 w-3 shrink-0", r.done ? "text-muted-foreground" : "text-amber-500")} />
-                <span className={cn("text-xs truncate", r.done ? "line-through text-muted-foreground" : "text-foreground")}>{r.title}</span>
-              </div>
-            ))}
-            {selCAAll.filter((a) => !a.start_time).map((a) => (
-              <div key={`ca-${a.id}`}
-                className="flex items-center gap-1.5 px-2 py-1 rounded border bg-indigo-500/10 border-indigo-400/40">
-                <GraduationCap className="h-3 w-3 shrink-0 text-indigo-500" />
-                <span className="text-xs truncate text-foreground">{a.title}</span>
-              </div>
-            ))}
-          </div>
-        )}
-
-        {/* Scrollable time grid */}
-        <div ref={mobileTimelineRef} className="flex-1 overflow-y-auto">
-          <div className="flex" style={{ height: HOURS.length * HOUR_PX + 1 }}>
-
-            {/* Time labels */}
-            <div className="w-12 shrink-0 relative select-none">
-              {HOURS.map((h, i) => (
-                <div key={h} className="absolute right-2 text-[10px] text-muted-foreground/60 tabular-nums"
-                  style={{ top: i * HOUR_PX - 6 }}>
-                  {h}:00
-                </div>
-              ))}
-            </div>
-
-            {/* Single day column */}
-            <div className="flex-1 relative border-l border-border"
-              onClick={(e) => {
-                const rect = e.currentTarget.getBoundingClientRect();
-                const y = e.clientY - rect.top;
-                const time = pxToTime(y, HOURS.length * HOUR_PX);
-                setModal({ kind: "create-block", date: selectedDay, startTime: time });
-              }}
-              style={{ cursor: "crosshair" }}
-            >
-              {/* Hour lines */}
-              {HOURS.map((h, i) => (
-                <div key={h} className="absolute left-0 right-0 border-t border-border/30"
-                  style={{ top: i * HOUR_PX }} />
-              ))}
-              {/* Half-hour lines */}
-              {HOURS.slice(0, -1).map((h, i) => (
-                <div key={`${h}h`} className="absolute left-0 right-0 border-t border-border/10 border-dashed"
-                  style={{ top: i * HOUR_PX + HOUR_PX / 2 }} />
-              ))}
-
-              {/* Current time indicator */}
-              {showNow && (
-                <div className="absolute left-0 right-0 z-10 flex items-center pointer-events-none"
-                  style={{ top: nowPx }}>
-                  <div className="h-2 w-2 rounded-full bg-primary shrink-0 -ml-1" />
-                  <div className="flex-1 border-t-2 border-primary" />
-                </div>
-              )}
-
-              {/* Timed events */}
-              {layoutCalItems(mEvts).map(({ item, col, totalCols }) => {
-                const top = minutesToPx(item.startMin);
-                const height = Math.max(20, minutesToPx(item.endMin) - top);
-                const left = `calc(${(col / totalCols) * 100}% + 1px)`;
-                const right = `calc(${((totalCols - col - 1) / totalCols) * 100}% + 1px)`;
-
-                if (item.kind === "sys") {
-                  const { s } = item;
-                  return (
-                    <div key={`sys-${s.id}`}
-                      className="absolute rounded border px-1.5 py-0.5 overflow-hidden bg-emerald-500/15 border-emerald-400/40 pointer-events-none"
-                      style={{ top, height, left, right }}
-                    >
-                      <div className="flex items-center gap-1">
-                        <RefreshCw className="h-2.5 w-2.5 shrink-0 text-emerald-600 dark:text-emerald-400 opacity-70" />
-                        <p className="text-[11px] font-semibold leading-tight truncate text-emerald-700 dark:text-emerald-300">{s.title}</p>
-                      </div>
-                      {height > 30 && (
-                        <p className="text-[10px] leading-tight opacity-70 text-emerald-700 dark:text-emerald-300">
-                          {s.start_time}{s.end_time ? `–${s.end_time}` : ""}
-                        </p>
-                      )}
-                    </div>
-                  );
-                }
-
-                if (item.kind === "ca") {
-                  const { a } = item;
-                  const isTheory = a.assignment_type === "theory";
-                  const caBg  = isTheory ? "bg-orange-500/15 border-orange-400/40" : "bg-indigo-500/15 border-indigo-400/40";
-                  const caTxt = isTheory ? "text-orange-700 dark:text-orange-300"  : "text-indigo-700 dark:text-indigo-300";
-                  const caIcon = isTheory ? "text-orange-600 dark:text-orange-400" : "text-indigo-600 dark:text-indigo-400";
-                  return (
-                    <div key={`ca-${a.id}`}
-                      className={cn("absolute rounded border px-1.5 py-0.5 overflow-hidden pointer-events-none", caBg)}
-                      style={{ top, height, left, right }}
-                    >
-                      <div className="flex items-center gap-1">
-                        <GraduationCap className={cn("h-2.5 w-2.5 shrink-0 opacity-70", caIcon)} />
-                        <p className={cn("text-[11px] font-semibold leading-tight truncate", caTxt)}>{a.title}</p>
-                      </div>
-                      {height > 30 && (
-                        <p className={cn("text-[10px] leading-tight opacity-70", caTxt)}>
-                          {a.start_time}{a.end_time ? `–${a.end_time}` : ""}
-                        </p>
-                      )}
-                    </div>
-                  );
-                }
-
-                // cal block
-                const { b } = item;
-                const clr = BLOCK_COLORS[b.color] ?? BLOCK_COLORS.blue;
-                return (
-                  <div key={`${b.is_recurring ? "r" : "b"}-${b.recurring_id ?? b.id}-${b.date}`}
-                    className={cn("absolute rounded border px-1.5 py-0.5 cursor-pointer overflow-hidden", clr.bg, clr.border)}
-                    style={{ top, height, left, right }}
-                    onClick={(e) => { e.stopPropagation(); setModal({ kind: "edit-block", block: b }); }}
-                  >
-                    <div className="flex items-center gap-1">
-                      {b.is_recurring && <Repeat2 className={cn("h-2.5 w-2.5 shrink-0 opacity-70", clr.text)} />}
-                      <p className={cn("text-[11px] font-semibold leading-tight truncate", clr.text)}>{b.title}</p>
-                    </div>
-                    {height > 30 && (
-                      <p className={cn("text-[10px] leading-tight opacity-70", clr.text)}>{b.start_time}–{b.end_time}</p>
-                    )}
-                  </div>
-                );
-              })}
-            </div>
-          </div>
-        </div>
-
-        {/* Modals */}
+      <>
         {modal?.kind === "pick" && (
           <TypePickerModal date={modal.date}
             onPick={(type) => setModal({ kind: `create-${type}` as "create-task" | "create-goal" | "create-plan", date: modal.date })}
@@ -2022,6 +1769,131 @@ export function Week() {
             onDelete={() => handleDeleteSystem(modal.system.id)}
             onClose={() => setModal(null)} />
         )}
+      </>
+    );
+  }
+
+  // ── Mobile week view ──────────────────────────────────────────────────────────
+  if (isMobile) {
+    const selDate   = new Date(selectedDay + "T00:00:00");
+    const selGoals  = goalsFor(selectedDay);
+    const selTasks  = tasksFor(selectedDay);
+    const selDL     = deadlinesFor(selectedDay);
+    const selRM     = remindersFor(selectedDay);
+    const selCAAll  = courseAssignmentsFor(selectedDay);
+    const selCAAllDay = selCAAll.filter((a) => !a.start_time);
+    const selectedLabel = `${DAY_NAMES[selDate.getDay()]}, ${MONTHS[selDate.getMonth()]} ${selDate.getDate()}`;
+    const hasAllDay = selGoals.length + selTasks.length + selDL.length + selRM.length + selCAAll.length > 0;
+
+    return (
+      <div className="flex flex-col h-[calc(100vh-2.5rem)] overflow-hidden">
+
+        {/* Mobile nav header */}
+        <div className="h-11 flex items-center justify-between px-4 border-b border-border shrink-0 bg-background">
+          <button onClick={prevWeek} className="p-1 rounded hover:bg-accent">
+            <ChevronLeft className="h-5 w-5" />
+          </button>
+          <span className="text-sm font-medium">{headerLabel}</span>
+          <button onClick={nextWeek} className="p-1 rounded hover:bg-accent">
+            <ChevronRight className="h-5 w-5" />
+          </button>
+        </div>
+
+        {/* Day strip */}
+        <div className="flex border-b border-border shrink-0 bg-card">
+          {days.map((day) => {
+            const iso = toISO(day);
+            const isToday    = iso === today;
+            const isSelected = iso === selectedDay;
+            const dayAbbr = ["Su", "Mo", "Tu", "We", "Th", "Fr", "Sa"][day.getDay()];
+            return (
+              <button
+                key={iso}
+                onClick={() => setSelectedDay(iso)}
+                className={`flex-1 flex flex-col items-center py-2 gap-0.5 transition-colors ${
+                  isSelected ? "text-primary-foreground" : "text-muted-foreground"
+                }`}
+              >
+                <span className="text-[11px] font-medium">{dayAbbr}</span>
+                <span className={`w-7 h-7 flex items-center justify-center rounded-full text-sm font-semibold ${
+                  isSelected ? "bg-primary text-primary-foreground" : isToday ? "text-primary font-bold" : ""
+                }`}>{day.getDate()}</span>
+                {isToday && !isSelected && <span className="w-1 h-1 rounded-full bg-primary" />}
+              </button>
+            );
+          })}
+        </div>
+
+        {/* Selected day label */}
+        <div className="shrink-0 px-4 py-1.5 border-b border-border/40 bg-card/50">
+          <span className="text-xs font-medium text-muted-foreground">{selectedLabel}</span>
+        </div>
+
+        {/* All-day items for selected day */}
+        {hasAllDay && (
+          <div className="shrink-0 px-3 py-2 border-b border-border bg-card/30 flex flex-col gap-1 max-h-28 overflow-y-auto">
+            {selGoals.map((g) => (
+              <button key={`g-${g.id}`} onClick={() => setModal({ kind: "edit-goal", goal: g })}
+                className="flex items-center gap-1.5 px-2 py-1 rounded text-left w-full bg-blue-500/10 border border-blue-500/20 transition-colors">
+                <Target className="h-3 w-3 text-blue-500 shrink-0" />
+                <span className="text-xs text-foreground truncate">{g.title}</span>
+              </button>
+            ))}
+            {selTasks.map((t) => (
+              <TaskPopupChip key={`t-${t.id}`} t={t}
+                onToggle={() => handleToggleTask(t.id)}
+                onEdit={() => setModal({ kind: "edit-task", task: t })} />
+            ))}
+            {selDL.map((d) => (
+              <div key={`dl-${d.id}`}
+                className={cn("flex items-center gap-1.5 px-2 py-1 rounded border",
+                  d.done ? "bg-secondary/40 border-border/40" : "bg-red-500/10 border-red-400/40")}>
+                <Flag className={cn("h-3 w-3 shrink-0", d.done ? "text-muted-foreground" : "text-red-500")} />
+                <span className={cn("text-xs truncate", d.done ? "line-through text-muted-foreground" : "text-foreground")}>{d.title}</span>
+              </div>
+            ))}
+            {selRM.map((r) => (
+              <div key={`rm-${r.id}`}
+                className={cn("flex items-center gap-1.5 px-2 py-1 rounded border",
+                  r.done ? "bg-secondary/40 border-border/40" : "bg-amber-500/10 border-amber-400/40")}>
+                <Bell className={cn("h-3 w-3 shrink-0", r.done ? "text-muted-foreground" : "text-amber-500")} />
+                <span className={cn("text-xs truncate", r.done ? "line-through text-muted-foreground" : "text-foreground")}>{r.title}</span>
+              </div>
+            ))}
+            {selCAAllDay.map((a) => (
+              <div key={`ca-${a.id}`}
+                className="flex items-center gap-1.5 px-2 py-1 rounded border bg-indigo-500/10 border-indigo-400/40">
+                <GraduationCap className="h-3 w-3 shrink-0 text-indigo-500" />
+                <span className="text-xs truncate text-foreground">{a.title}</span>
+              </div>
+            ))}
+          </div>
+        )}
+
+        {/* Scrollable time grid — reuses TimeColumn for event rendering */}
+        <div ref={mobileTimelineRef} className="flex-1 overflow-y-auto">
+          <div className="flex" style={{ height: HOURS.length * HOUR_PX + 1 }}>
+            <div className="w-12 shrink-0 relative select-none">
+              {HOURS.map((h, i) => (
+                <div key={h} className="absolute right-2 text-[10px] text-muted-foreground/60 tabular-nums"
+                  style={{ top: i * HOUR_PX - 6 }}>
+                  {h}:00
+                </div>
+              ))}
+            </div>
+            <TimeColumn
+              date={selDate}
+              isToday={selectedDay === today}
+              blocks={blocksFor(selectedDay)}
+              systems={systems}
+              courseAssignments={selCAAll}
+              onClickSlot={(date, time) => setModal({ kind: "create-block", date, startTime: time })}
+              onClickBlock={(b) => setModal({ kind: "edit-block", block: b })}
+            />
+          </div>
+        </div>
+
+        {renderModals()}
       </div>
     );
   }
@@ -2252,63 +2124,7 @@ export function Week() {
         />
       )}
 
-      {/* ── Modals ───────────────────────────────────────────────────────── */}
-      {modal?.kind === "pick" && (
-        <TypePickerModal date={modal.date}
-          onPick={(type) => setModal({ kind: `create-${type}` as "create-task" | "create-goal" | "create-plan", date: modal.date })}
-          onClose={() => setModal(null)} />
-      )}
-
-      {modal?.kind === "create-block" && (
-        <CalBlockModal date={modal.date} startTime={modal.startTime}
-          onSave={handleCreateBlock} onClose={() => setModal(null)} />
-      )}
-      {modal?.kind === "edit-block" && (
-        <CalBlockModal initial={modal.block} date={modal.block.date} startTime={modal.block.start_time}
-          onSave={(d) => handleEditBlock(modal.block, d)}
-          onDelete={() => handleDeleteBlock(modal.block)}
-          onClose={() => setModal(null)} />
-      )}
-
-      {modal?.kind === "create-task" && (
-        <TaskModal date={modal.date} plans={allPlans} onSave={handleCreateTask} onClose={() => setModal(null)} />
-      )}
-      {modal?.kind === "edit-task" && (
-        <TaskModal initial={modal.task} date={modal.task.due_date ?? today} plans={allPlans}
-          onSave={(d) => handleEditTask(modal.task, d)}
-          onDelete={() => handleDeleteTask(modal.task.id)}
-          onClose={() => setModal(null)} />
-      )}
-
-      {modal?.kind === "create-goal" && (
-        <GoalModal date={modal.date} onSave={handleCreateGoal} onClose={() => setModal(null)} />
-      )}
-      {modal?.kind === "edit-goal" && (
-        <GoalModal initial={modal.goal} date={modal.goal.deadline ?? today}
-          onSave={(d) => handleEditGoal(modal.goal, d)}
-          onDelete={() => handleDeleteGoal(modal.goal.id)}
-          onClose={() => setModal(null)} />
-      )}
-
-      {modal?.kind === "create-plan" && (
-        <PlanModal date={modal.date} goals={allGoals} onSave={handleCreatePlan} onClose={() => setModal(null)} />
-      )}
-      {modal?.kind === "edit-plan" && (
-        <PlanModal initial={modal.plan} date={modal.plan.deadline ?? today} goals={allGoals}
-          onSave={(d) => handleEditPlan(modal.plan, d)}
-          onDelete={() => handleDeletePlan(modal.plan.id)}
-          onClose={() => setModal(null)} />
-      )}
-
-      {modal?.kind === "create-system" && (
-        <SystemModal onSave={handleCreateSystem} onClose={() => setModal(null)} />
-      )}
-      {modal?.kind === "edit-system" && (
-        <SystemModal initial={modal.system}
-          onSave={(d) => handleEditSystem(modal.system, d)}
-          onDelete={() => handleDeleteSystem(modal.system.id)}
-          onClose={() => setModal(null)} />
-      )}
+      {renderModals()}
     </div>
   );
 }

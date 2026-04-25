@@ -17,6 +17,7 @@ target/
 # Allow the iOS project.yml (xcodegen config) to be committed so the
 # ENABLE_USER_SCRIPT_SANDBOXING: NO fix survives tauri ios init regeneration.
 !**/src-tauri/gen/apple/project.yml
+!**/src-tauri/gen/apple/timetracker-app_iOS/timetracker-app_iOS.entitlements
 **/*.dmg
 **/*.AppImage
 **/*.deb
