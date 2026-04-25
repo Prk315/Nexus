@@ -13,6 +13,25 @@ import * as api from "../lib/api";
 import workerUrl from "pdfjs-dist/build/pdf.worker.mjs?url";
 pdfjs.GlobalWorkerOptions.workerSrc = workerUrl;
 
+// pdfjs-dist v5+ needs three URL params on every getDocument call:
+//   - wasmUrl: directory holding jbig2.wasm / openjpeg.wasm / qcms_bg.wasm,
+//     used for image decoding. Without it, pages with JBig2 images render blank.
+//   - standardFontDataUrl: directory holding the 14 PDF base fonts (.pfb), used
+//     when a PDF references a built-in font without embedding it. Without it
+//     pdfjs spams "Ensure that the `standardFontDataUrl` API parameter is provided".
+//   - useSystemFonts: false — the Tauri webview can't reach the OS font dir,
+//     so leaving this on just floods the console with "Cannot load system font".
+// All asset directories are copied from node_modules/pdfjs-dist/{wasm,standard_fonts}
+// into apps/Vault/Vault/public/pdfjs-{wasm,fonts}/ so they're served at the
+// dev/build root.
+// Note: these are getDocument() options, NOT GlobalWorkerOptions — setting them
+// on the global does nothing.
+const PDF_DOC_OPTIONS = {
+  wasmUrl: "/pdfjs-wasm/",
+  standardFontDataUrl: "/pdfjs-fonts/",
+  useSystemFonts: false,
+} as const;
+
 // ─── Types ──────────────────────────────────────────────────────────────────
 
 interface Point { x: number; y: number; } // normalised 0..1 within page
@@ -137,8 +156,9 @@ const PdfPage = memo(function PdfPage({
       annotCanvas.style.width  = `${cssW}px`;
       annotCanvas.style.height = `${cssH}px`;
 
-      const ctx = pdfCanvas.getContext("2d")!;
-      await page.render({ canvasContext: ctx, viewport }).promise;
+      // pdfjs-dist v5+ wants `canvas` directly; `canvasContext` is deprecated
+      // and silently no-ops on some pages.
+      await page.render({ canvas: pdfCanvas, viewport }).promise;
       if (cancelled) return;
 
       // Restore any existing annotations after re-render
@@ -293,11 +313,17 @@ export function PdfViewer({ content: pdfPath, nodeId }: Props) {
     let task: ReturnType<typeof pdfjs.getDocument> | null = null;
 
     async function load() {
-      // Load PDF document — pdfPath is now a Supabase Storage public URL
-      task = pdfjs.getDocument(pdfPath);
-      const doc = await task.promise;
-      setPdfDoc(doc);
-      setNumPages(doc.numPages);
+      try {
+        // Load PDF document — pdfPath is now a Supabase Storage public URL
+        task = pdfjs.getDocument({ url: pdfPath, ...PDF_DOC_OPTIONS });
+        const doc = await task.promise;
+        setPdfDoc(doc);
+        setNumPages(doc.numPages);
+      } catch (err) {
+        // eslint-disable-next-line no-console
+        console.error("[PdfViewer] failed to load PDF:", err);
+        return;
+      }
 
       // Load saved annotations
       try {

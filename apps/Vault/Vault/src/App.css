@@ -762,21 +762,25 @@ body {
   flex: 1;
   min-height: 0;
   overflow: auto;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 16px;
+  /* Plain block layout. A flex column with align-items: center collapses
+     inline-block children to 0 height inside an overflow:auto container in
+     Chromium (WebView2), making the rendered PDF pages invisible even though
+     the canvases are correctly drawn. */
   padding: 20px 12px;
   background: var(--bg-subtle);
 }
 
 .pdf-page-wrapper {
   position: relative;
-  display: inline-block;
+  /* Block-level wrapper that hugs the canvas width and centers inside the
+     scroll area. width: max-content matches the canvas's intrinsic CSS size
+     (set inline by PdfViewer based on viewport). */
+  display: block;
+  width: max-content;
+  margin: 0 auto 16px auto;
   box-shadow: 0 2px 12px rgba(0,0,0,0.25);
   border-radius: 2px;
   overflow: hidden;
-  line-height: 0;
 }
 
 .pdf-page-canvas {
