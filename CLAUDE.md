@@ -191,6 +191,7 @@ prefix to avoid collisions.
 |------------|--------|
 | *(none)*   | `time_entries`, `active_sessions`, `blocked_sites`, `blocked_apps`, `focus_blocks`, `unlock_rules` (TimeTracker) |
 | `pf_`      | 45 tables — goals, plans, tasks, systems, calendar, pipelines, habits, games, … (PathFinder) |
+| `vault_`   | `vault_nodes`, `vault_edges`, `vault_tag_colors`, `vault_content`, `vault_journals` + Storage bucket `vault-assets` (Vault) |
 
 **PathFinder data layer** (`apps/PathFinder/src/lib/`):
 - `supabase.ts` — creates the shared client from `VITE_SUPABASE_URL` /
@@ -220,6 +221,24 @@ Supabase Auth is introduced.
 **`user_id` convention**: all root-level tables carry `user_id TEXT DEFAULT
 'default'`. When Supabase Auth is added, replace `'default'` with
 `auth.uid()` and update RLS policies accordingly.
+
+**Vault data layer** (`apps/Vault/Vault/src/lib/`):
+- `supabase.ts` — shared client from `VITE_SUPABASE_URL` / `VITE_SUPABASE_ANON_KEY`.
+- `api.ts` — all graph operations (loadGraph, createNode, deleteNode, addEdge,
+  removeEdge, tag CRUD) plus `readContent`, `saveContent`, `readJournal`,
+  `saveJournal`, and `uploadAsset` (→ Supabase Storage bucket `vault-assets`).
+- The `VaultGraph` structure (nodes, edges, back_edges, tag_colors) is
+  assembled client-side on every mutating call via a single `loadGraph()` pass.
+- PDF/Video binaries live in Storage; `vault_content` stores their public URL.
+- `vault_content.node_id` has no FK so annotation keys (`{id}_annot`) work.
+- Two Postgres helper functions handle bulk array operations:
+  `vault_rename_tag(user_id, old, new)` and `vault_delete_tag(user_id, tag)`.
+
+Required `.env` at `apps/Vault/Vault/.env` (gitignored):
+```
+VITE_SUPABASE_URL=https://efxmzsdisaymtpebaxlp.supabase.co
+VITE_SUPABASE_ANON_KEY=<anon key>
+```
 
 ## Adding a New App to the Ecosystem
 
