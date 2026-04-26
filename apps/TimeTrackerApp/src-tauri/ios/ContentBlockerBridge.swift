@@ -35,7 +35,16 @@ public func applyContentBlockerRules() {
         withIdentifier: "com.bastianthomsen.timetracker.SafariBlocker"
     ) { error in
         log += error.map { "FAIL: reload error: \($0)\n" } ?? "Reload OK\n"
-        writeDebugLog(log)
+        // After a short delay, also capture what the extension wrote
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
+            let extLogURL = containerURL.appendingPathComponent("ext_debug.txt")
+            if let extLog = try? String(contentsOf: extLogURL) {
+                log += "\n--- Extension log ---\n\(extLog)"
+            } else {
+                log += "\nExtension log not found (beginRequest never called?)\n"
+            }
+            writeDebugLog(log)
+        }
     }
 }
 

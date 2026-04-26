@@ -1,11 +1,9 @@
 import Foundation
 import SafariServices
 
-// SFContentBlockerRequestHandler was removed from iOS 26 SDK public headers but
-// still exists at runtime (SafariServices.tbd). Declare it ourselves.
-// IMPORTANT: The ObjC selector Safari calls is `beginRequestWithExtensionContext:`
-// (from the original ObjC definition). Without the explicit @objc name annotation,
-// Swift would generate `beginRequestWith:` instead — a selector Safari never calls.
+// SFContentBlockerRequestHandler was removed from iOS 26 SDK public headers.
+// Test: return hardcoded rules for youtube.com — if this blocks youtube in Safari
+// then beginRequest IS being called and the handler mechanism works on iOS 26.
 @objc protocol SFContentBlockerRequestHandler: NSObjectProtocol {
     @objc(beginRequestWithExtensionContext:)
     func beginRequest(with context: NSExtensionContext)
@@ -16,23 +14,23 @@ final class SafariContentBlockerHandler: NSObject, SFContentBlockerRequestHandle
 
     @objc(beginRequestWithExtensionContext:)
     func beginRequest(with context: NSExtensionContext) {
-        let fm = FileManager.default
-        let rulesURL: URL
+        // Hardcoded test rule — blocks youtube.com regardless of App Group
+        let testRules = """
+        [{"trigger":{"url-filter":".*youtube\\\\.com.*"},"action":{"type":"block"}}]
+        """
 
-        if let containerURL = fm.containerURL(
-            forSecurityApplicationGroupIdentifier: "group.com.bastianthomsen.timetracker"
-        ) {
-            rulesURL = containerURL.appendingPathComponent("blockerRules.json")
-        } else {
-            rulesURL = fm.temporaryDirectory.appendingPathComponent("blockerRules.json")
+        // Write sentinel so we know beginRequest was called
+        if let g = FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: "group.com.bastianthomsen.timetracker") {
+            try? "beginRequest called with hardcoded rules".data(using: .utf8)?
+                .write(to: g.appendingPathComponent("ext_debug.txt"), options: .atomic)
         }
 
-        if !fm.fileExists(atPath: rulesURL.path) {
-            try? Data("[]".utf8).write(to: rulesURL, options: .atomic)
-        }
+        let tmpURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("test_rules.json")
+        try? testRules.data(using: .utf8)?.write(to: tmpURL, options: .atomic)
 
         let item = NSExtensionItem()
-        if let attachment = NSItemProvider(contentsOf: rulesURL) {
+        if let attachment = NSItemProvider(contentsOf: tmpURL) {
             item.attachments = [attachment]
         }
         context.completeRequest(returningItems: [item])

@@ -1,0 +1,1 @@
+[{"trigger":{"url-filter":".*youtube\\.com.*"},"action":{"type":"block"}}]
