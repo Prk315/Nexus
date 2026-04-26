@@ -15,7 +15,7 @@
         <key>NSExtensionPointIdentifier</key>
         <string>com.apple.Safari.content-blocker</string>
         <key>NSExtensionPrincipalClass</key>
-        <string>SafariContentBlockerHandler</string>
+        <string>$(PRODUCT_MODULE_NAME).SafariContentBlockerHandler</string>
     </dict>
 </dict>
 </plist>

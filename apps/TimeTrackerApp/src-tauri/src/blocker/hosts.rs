@@ -104,3 +104,73 @@ pub fn apply(domains: &[String]) -> Result<(), String> {
 pub fn clear() -> Result<(), String> {
     apply(&[])
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn s(v: &[&str]) -> Vec<String> {
+        v.iter().map(|s| s.to_string()).collect()
+    }
+
+    // ── build_block ─────────────────────────────────────────────────────────
+
+    #[test]
+    fn empty_domains_produces_empty_block() {
+        assert_eq!(build_block(&[]), "");
+    }
+
+    #[test]
+    fn single_domain_adds_www_variant() {
+        let block = build_block(&s(&["youtube.com"]));
+        assert!(block.contains("127.0.0.1 youtube.com"), "bare domain missing");
+        assert!(block.contains("127.0.0.1 www.youtube.com"), "www variant missing");
+    }
+
+    #[test]
+    fn www_domain_not_doubled() {
+        let block = build_block(&s(&["www.youtube.com"]));
+        assert!(block.contains("127.0.0.1 www.youtube.com"));
+        // Should NOT add www.www.youtube.com
+        assert!(!block.contains("127.0.0.1 www.www.youtube.com"));
+    }
+
+    #[test]
+    fn block_wrapped_in_markers() {
+        let block = build_block(&s(&["example.com"]));
+        assert!(block.starts_with(MARKER_BEGIN));
+        assert!(block.ends_with(MARKER_END));
+    }
+
+    // ── strip_block ─────────────────────────────────────────────────────────
+
+    #[test]
+    fn strip_block_removes_marker_section() {
+        let content = "# user stuff\n\
+                       # BEGIN TimeTracker-Block\n\
+                       127.0.0.1 youtube.com\n\
+                       # END TimeTracker-Block\n\
+                       # more user stuff";
+        let stripped = strip_block(content);
+        assert!(!stripped.contains("youtube.com"));
+        assert!(stripped.contains("# user stuff"));
+        assert!(stripped.contains("# more user stuff"));
+    }
+
+    #[test]
+    fn strip_block_is_idempotent_when_no_block_present() {
+        let content = "127.0.0.1 localhost\n# nothing here";
+        assert_eq!(strip_block(content), content);
+    }
+
+    #[test]
+    fn roundtrip_apply_then_strip() {
+        let domains = s(&["reddit.com", "twitter.com"]);
+        let block = build_block(&domains);
+        let combined = format!("# pre-existing\n\n{block}\n");
+        let stripped = strip_block(&combined);
+        assert!(!stripped.contains("reddit.com"));
+        assert!(!stripped.contains("twitter.com"));
+        assert!(stripped.contains("# pre-existing"));
+    }
+}

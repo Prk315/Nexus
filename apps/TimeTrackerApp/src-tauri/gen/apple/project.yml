@@ -108,6 +108,7 @@ targets:
         buildPhase: resources
     dependencies:
       - sdk: SafariServices.framework
+      - sdk: WebKit.framework
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.bastianthomsen.timetracker.SafariBlocker

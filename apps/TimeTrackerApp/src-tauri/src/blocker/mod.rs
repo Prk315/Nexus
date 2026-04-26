@@ -1,5 +1,8 @@
 pub mod hosts;
-#[cfg(target_os = "ios")]
+// Include ios_content_blocker during normal iOS builds AND during `cargo test`
+// on any platform, so the pure helper functions (url pattern generation) can be
+// tested without a connected device.
+#[cfg(any(target_os = "ios", test))]
 pub mod ios_content_blocker;
 
 use crate::db::{app_blocker, schedule, site_blocker, timer, AppState};

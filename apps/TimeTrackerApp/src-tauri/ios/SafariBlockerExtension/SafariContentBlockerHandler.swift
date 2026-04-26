@@ -1,38 +1,45 @@
 import Foundation
-import SafariServices
 
-// SFContentBlockerRequestHandler was removed from iOS 26 SDK public headers.
-// Test: return hardcoded rules for youtube.com — if this blocks youtube in Safari
-// then beginRequest IS being called and the handler mechanism works on iOS 26.
-@objc protocol SFContentBlockerRequestHandler: NSObjectProtocol {
-    @objc(beginRequestWithExtensionContext:)
-    func beginRequest(with context: NSExtensionContext)
-}
+// iOS 26 removed SFContentBlockerRequestHandler from SafariServices entirely.
+// Declaring a local version of that protocol risks breaking extension validation
+// on iOS 26 (the system may reject extensions claiming conformance to a protocol
+// it no longer recognises). Instead we conform directly to NSExtensionRequestHandling,
+// which is the actual base protocol that all extension handlers implement.
+// If iOS 26 ever resumes calling the handler, it will land here.
+final class SafariContentBlockerHandler: NSObject, NSExtensionRequestHandling {
 
-@objc(SafariContentBlockerHandler)
-final class SafariContentBlockerHandler: NSObject, SFContentBlockerRequestHandler {
-
-    @objc(beginRequestWithExtensionContext:)
     func beginRequest(with context: NSExtensionContext) {
-        // Hardcoded test rule — blocks youtube.com regardless of App Group
-        let testRules = """
-        [{"trigger":{"url-filter":".*youtube\\\\.com.*"},"action":{"type":"block"}}]
-        """
+        let kAppGroup = "group.com.bastianthomsen.timetracker"
 
-        // Write sentinel so we know beginRequest was called
-        if let g = FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: "group.com.bastianthomsen.timetracker") {
-            try? "beginRequest called with hardcoded rules".data(using: .utf8)?
+        // Sentinel so we can detect if this method is ever called.
+        if let g = FileManager.default.containerURL(
+            forSecurityApplicationGroupIdentifier: kAppGroup
+        ) {
+            try? "beginRequest called (NSExtensionRequestHandling)".data(using: .utf8)?
                 .write(to: g.appendingPathComponent("ext_debug.txt"), options: .atomic)
+
+            // Serve rules that the main app wrote to the App Group.
+            let rulesURL = g.appendingPathComponent("blockerRules.json")
+            if FileManager.default.fileExists(atPath: rulesURL.path) {
+                let item = NSExtensionItem()
+                if let attachment = NSItemProvider(contentsOf: rulesURL) {
+                    item.attachments = [attachment]
+                    context.completeRequest(returningItems: [item])
+                    return
+                }
+            }
         }
 
-        let tmpURL = FileManager.default.temporaryDirectory
-            .appendingPathComponent("test_rules.json")
-        try? testRules.data(using: .utf8)?.write(to: tmpURL, options: .atomic)
-
-        let item = NSExtensionItem()
-        if let attachment = NSItemProvider(contentsOf: tmpURL) {
-            item.attachments = [attachment]
+        // Final fallback: static bundle rules.
+        if let bundleURL = Bundle.main.url(forResource: "blockerList", withExtension: "json") {
+            let item = NSExtensionItem()
+            if let attachment = NSItemProvider(contentsOf: bundleURL) {
+                item.attachments = [attachment]
+                context.completeRequest(returningItems: [item])
+                return
+            }
         }
-        context.completeRequest(returningItems: [item])
+
+        context.completeRequest(returningItems: [])
     }
 }
