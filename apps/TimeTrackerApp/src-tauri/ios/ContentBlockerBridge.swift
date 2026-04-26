@@ -4,26 +4,43 @@ import SafariServices
 // Called from Rust via extern "C" after blocked sites change.
 @_silgen_name("apply_content_blocker_rules_c")
 public func applyContentBlockerRules() {
+    var log = "apply_content_blocker_rules_c called\n"
+
     let tmp = FileManager.default.temporaryDirectory
         .appendingPathComponent("blockerRules.json")
+    log += "tmp exists: \(FileManager.default.fileExists(atPath: tmp.path))\n"
 
     guard let containerURL = FileManager.default.containerURL(
         forSecurityApplicationGroupIdentifier: "group.com.bastianthomsen.timetracker"
     ) else {
+        log += "FAIL: App Group container is nil\n"
+        writeDebugLog(log)
         return
     }
 
+    log += "App Group OK: \(containerURL.path)\n"
     let destURL = containerURL.appendingPathComponent("blockerRules.json")
 
     do {
-        // removeItem throws NSFileNoSuchFileError if absent — that's fine, copyItem needs a clear path
         try? FileManager.default.removeItem(at: destURL)
         try FileManager.default.copyItem(at: tmp, to: destURL)
+        log += "File copy OK\n"
     } catch {
+        log += "FAIL: copy error: \(error)\n"
+        writeDebugLog(log)
         return
     }
 
     SFContentBlockerManager.reloadContentBlocker(
         withIdentifier: "com.bastianthomsen.timetracker.SafariBlocker"
-    ) { _ in }
+    ) { error in
+        log += error.map { "FAIL: reload error: \($0)\n" } ?? "Reload OK\n"
+        writeDebugLog(log)
+    }
+}
+
+private func writeDebugLog(_ content: String) {
+    guard let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first else { return }
+    let url = docs.appendingPathComponent("content_blocker_debug.txt")
+    try? content.data(using: .utf8)?.write(to: url, options: .atomic)
 }
