@@ -103,6 +103,9 @@ targets:
       - path: ../../ios/SafariBlockerExtension
         excludes:
           - "Info.plist"
+          - "blockerList.json"
+      - path: ../../ios/SafariBlockerExtension/blockerList.json
+        buildPhase: resources
     dependencies:
       - sdk: SafariServices.framework
     settings:
