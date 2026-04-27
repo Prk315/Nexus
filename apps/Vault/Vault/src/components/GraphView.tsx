@@ -45,6 +45,43 @@ export function GraphView({
     drawNode(node, ctx, globalScale, graph.tag_colors, node.id === selectedId, node.id === linkSource, linkMode);
   }
 
+  // Custom link renderer — bypasses the library's hasOwnProperty('x') guard which
+  // silently skips all links & arrows when source/target haven't been resolved yet.
+  function paintLink(link: any, ctx: CanvasRenderingContext2D, globalScale: number) {
+    const start = typeof link.source === "object" ? link.source : null;
+    const end   = typeof link.target === "object" ? link.target : null;
+    if (!start || !end || start.x == null || end.x == null) return;
+
+    const dx = end.x - start.x;
+    const dy = end.y - start.y;
+    const len = Math.sqrt(dx * dx + dy * dy);
+    if (len === 0) return;
+
+    const lw = 1.5 / globalScale;
+
+    // Line
+    ctx.beginPath();
+    ctx.moveTo(start.x, start.y);
+    ctx.lineTo(end.x, end.y);
+    ctx.strokeStyle = "#9ca3af";
+    ctx.lineWidth = lw;
+    ctx.stroke();
+
+    // Arrow head at 88% along the line
+    const angle = Math.atan2(dy, dx);
+    const arrowLen = 5 / globalScale;
+    const spread = Math.PI * 0.38;
+    const tx = start.x + dx * 0.88;
+    const ty = start.y + dy * 0.88;
+    ctx.beginPath();
+    ctx.moveTo(tx + arrowLen * Math.cos(angle), ty + arrowLen * Math.sin(angle));
+    ctx.lineTo(tx + arrowLen * Math.cos(angle + Math.PI - spread), ty + arrowLen * Math.sin(angle + Math.PI - spread));
+    ctx.lineTo(tx + arrowLen * Math.cos(angle + Math.PI + spread), ty + arrowLen * Math.sin(angle + Math.PI + spread));
+    ctx.closePath();
+    ctx.fillStyle = "#9ca3af";
+    ctx.fill();
+  }
+
   function paintNodePointerArea(node: any, color: string, ctx: CanvasRenderingContext2D) {
     ctx.fillStyle = color;
     ctx.beginPath();
@@ -135,12 +172,8 @@ export function GraphView({
         nodeCanvasObject={paintNode}
         nodeCanvasObjectMode={() => "replace" as const}
         nodeRelSize={5}
-        linkColor={() => "#d1d5db"}
-        linkWidth={0.8}
-        linkCurvature={0.08}
-        linkDirectionalArrowLength={3}
-        linkDirectionalArrowRelPos={0.88}
-        linkDirectionalArrowColor={() => "#c9cdd4"}
+        linkCanvasObject={paintLink}
+        linkCanvasObjectMode={() => "replace" as const}
         warmupTicks={40}
         cooldownTime={3000}
         d3VelocityDecay={0.35}

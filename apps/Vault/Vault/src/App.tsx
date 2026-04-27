@@ -425,6 +425,35 @@ function App() {
   const fullGraphPaint = (node: any, ctx: CanvasRenderingContext2D, globalScale: number) =>
     drawNode(node, ctx, globalScale, graph.tag_colors, node.id === selectedId, node.id === linkSource, linkMode, graphFilters.fontSize);
 
+  function fullGraphPaintLink(link: any, ctx: CanvasRenderingContext2D, globalScale: number) {
+    const start = typeof link.source === "object" ? link.source : null;
+    const end   = typeof link.target === "object" ? link.target : null;
+    if (!start || !end || start.x == null || end.x == null) return;
+    const dx = end.x - start.x;
+    const dy = end.y - start.y;
+    const len = Math.sqrt(dx * dx + dy * dy);
+    if (len === 0) return;
+    const lw = 1.5 / globalScale;
+    ctx.beginPath();
+    ctx.moveTo(start.x, start.y);
+    ctx.lineTo(end.x, end.y);
+    ctx.strokeStyle = "#9ca3af";
+    ctx.lineWidth = lw;
+    ctx.stroke();
+    const angle = Math.atan2(dy, dx);
+    const arrowLen = 5 / globalScale;
+    const spread = Math.PI * 0.38;
+    const tx = start.x + dx * 0.88;
+    const ty = start.y + dy * 0.88;
+    ctx.beginPath();
+    ctx.moveTo(tx + arrowLen * Math.cos(angle), ty + arrowLen * Math.sin(angle));
+    ctx.lineTo(tx + arrowLen * Math.cos(angle + Math.PI - spread), ty + arrowLen * Math.sin(angle + Math.PI - spread));
+    ctx.lineTo(tx + arrowLen * Math.cos(angle + Math.PI + spread), ty + arrowLen * Math.sin(angle + Math.PI + spread));
+    ctx.closePath();
+    ctx.fillStyle = "#9ca3af";
+    ctx.fill();
+  }
+
   // Updates cluster bubble meshes and labels — driven by a rAF loop (see effect below)
   function updateClusterMeshes() {
     if (!fullGraphRef.current) return;
@@ -544,12 +573,12 @@ function App() {
               nodeLabel={(node: any) => node.name}
               nodeColor={(node: any) => resolveNodeColor(node, graph.tag_colors)}
               nodeRelSize={5}
-              linkColor={() => "#d1d5db"}
-              linkWidth={0.8}
+              linkColor={() => "#9ca3af"}
+              linkWidth={1.5}
               linkCurvature={0.08}
               linkDirectionalArrowLength={4}
               linkDirectionalArrowRelPos={0.88}
-              linkDirectionalArrowColor={() => "#c9cdd4"}
+              linkDirectionalArrowColor={() => "#9ca3af"}
               warmupTicks={60}
               cooldownTime={4000}
               d3VelocityDecay={0.35}
@@ -570,12 +599,8 @@ function App() {
               nodeCanvasObject={fullGraphPaint}
               nodeCanvasObjectMode={() => "replace" as const}
               nodeRelSize={5}
-              linkColor={() => "#d1d5db"}
-              linkWidth={0.8}
-              linkCurvature={0.08}
-              linkDirectionalArrowLength={3}
-              linkDirectionalArrowRelPos={0.88}
-              linkDirectionalArrowColor={() => "#c9cdd4"}
+              linkCanvasObject={fullGraphPaintLink}
+              linkCanvasObjectMode={() => "replace" as const}
               warmupTicks={60}
               cooldownTime={4000}
               d3VelocityDecay={0.35}

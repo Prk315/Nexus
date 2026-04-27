@@ -3101,7 +3101,7 @@ export function CanvasEditor({ content, onChange, nodeId }: Props) {
       {/* ── Canvas world ── */}
       <div className="canvas-world" style={{ transform: `translate(${x}px, ${y}px) scale(${zoom})`, transformOrigin: "0 0" }}>
         {/* Arrow + Divider SVG layer */}
-        <svg style={{ position: "absolute", top: 0, left: 0, width: 0, height: 0, overflow: "visible", zIndex: 1 }}>
+        <svg width={1} height={1} style={{ position: "absolute", top: 0, left: 0, overflow: "visible", zIndex: 1 }}>
           <defs>
             <marker id="ah"     markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
               <polygon points="0 0, 8 3, 0 6" fill="var(--fg-ghost)" />
