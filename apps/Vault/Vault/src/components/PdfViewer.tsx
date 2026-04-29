@@ -123,6 +123,7 @@ interface PdfPageProps {
   tool: Tool;
   color: string;
   strokeWidth: number;
+  touchEnabled: boolean; // when false, finger touches scroll (pen-only mode)
   onStrokeAdded: (pageIdx: number, stroke: Stroke) => void;
   onErase: (pageIdx: number, updatedStrokes: Stroke[]) => void;
   onSize: (pageIdx: number, w: number, h: number) => void;
@@ -140,6 +141,7 @@ const PdfPage = memo(function PdfPage({
   tool,
   color,
   strokeWidth,
+  touchEnabled,
   onStrokeAdded,
   onErase,
   onSize,
@@ -376,7 +378,7 @@ const PdfPage = memo(function PdfPage({
 
   // ── Pointer events ───────────────────────────────────────────────────────
   function handlePointerDown(e: React.PointerEvent<HTMLCanvasElement>) {
-    if (e.pointerType === "touch" && tool !== "text" && tool !== "lasso") return;
+    if (!touchEnabled && e.pointerType === "touch" && tool !== "text" && tool !== "lasso") return;
     e.currentTarget.setPointerCapture(e.pointerId);
     capturedRectRef.current = e.currentTarget.getBoundingClientRect();
     const pt = normalise(e.currentTarget, e);
@@ -395,7 +397,7 @@ const PdfPage = memo(function PdfPage({
   }
 
   function handlePointerMove(e: React.PointerEvent<HTMLCanvasElement>) {
-    if (e.pointerType === "touch" && tool !== "text" && tool !== "lasso") return;
+    if (!touchEnabled && e.pointerType === "touch" && tool !== "text" && tool !== "lasso") return;
     const canvas = e.currentTarget;
     if (tool === "lasso") {
       if (isDraggingSelectionRef.current && dragStartRef.current) {
@@ -453,7 +455,7 @@ const PdfPage = memo(function PdfPage({
       <canvas
         ref={annotCanvasRef}
         className="pdf-annot-canvas"
-        style={{ cursor }}
+        style={{ cursor, touchAction: touchEnabled ? "none" : "pan-y pinch-zoom" }}
         onPointerDown={handlePointerDown}
         onPointerMove={handlePointerMove}
         onPointerUp={handlePointerUp}
@@ -499,6 +501,8 @@ export function PdfViewer({ content: pdfPath, nodeId }: Props) {
   const [selectedPage, setSelectedPage]       = useState<number | null>(null);
   const [exporting, setExporting]             = useState(false);
   const [exportError, setExportError]           = useState<string | null>(null);
+  // Touch toggle: false = pen-only (fingers scroll), true = touch also draws
+  const [touchEnabled, setTouchEnabled]       = useState(false);
 
   // ── Search state ─────────────────────────────────────────────────────────
   const [searchOpen, setSearchOpen]           = useState(false);
@@ -521,7 +525,6 @@ export function PdfViewer({ content: pdfPath, nodeId }: Props) {
   const redoStackRef       = useRef<Array<{ pageIdx: number; strokeId: string }>>([]);
   const redoStrokesRef     = useRef<Map<string, Stroke>>(new Map());
   const scrollRef          = useRef<HTMLDivElement>(null);
-  const scrubberRef        = useRef<HTMLDivElement>(null);
   // Which pages are currently intersecting the scroll viewport.
   // Off-screen pages render as placeholder divs (no canvases) to cap memory.
   const [visiblePages, setVisiblePages] = useState<Set<number>>(new Set([0, 1, 2]));
@@ -990,14 +993,16 @@ export function PdfViewer({ content: pdfPath, nodeId }: Props) {
 
     function onTouchMove(e: TouchEvent) {
       if (e.touches.length !== 2 || lastDist === 0) return;
-      e.preventDefault();
       const t0 = e.touches[0], t1 = e.touches[1];
       const dist = Math.hypot(t0.clientX - t1.clientX, t0.clientY - t1.clientY);
       const rawRatio = dist / lastDist;
       lastDist = dist;
 
-      // Skip micro-movements to avoid jitter
+      // Skip micro-movements — also lets two-finger pan fall through to native scroll
       if (Math.abs(rawRatio - 1) < 0.004) return;
+
+      // Real pinch detected — prevent native scroll/zoom and handle ourselves
+      e.preventDefault();
 
       // Dampen: pull ratio toward 1 so zoom is slower and smoother
       const ratio = 1 + (rawRatio - 1) * 0.55;
@@ -1025,35 +1030,6 @@ export function PdfViewer({ content: pdfPath, nodeId }: Props) {
       el.removeEventListener("touchmove", onTouchMove);
     };
   }, []);
-
-  // ── Scrubber pointer interaction ──────────────────────────────────────
-  // Pointer capture routes all move/up events to the scrubber element,
-  // so React onPointerMove/onPointerUp on the div handle the full drag.
-  const scrubberRectRef = useRef<DOMRect | null>(null);
-
-  function onScrubberPointerDown(e: React.PointerEvent<HTMLDivElement>) {
-    if (numPages <= 1) return;
-    e.currentTarget.setPointerCapture(e.pointerId);
-    // Snapshot rect once at drag start to avoid forced layout on every move.
-    scrubberRectRef.current = e.currentTarget.getBoundingClientRect();
-    jumpScrubberToY(e.clientY);
-  }
-
-  function jumpScrubberToY(clientY: number) {
-    const rect = scrubberRectRef.current;
-    if (!rect) return;
-    const ratio = Math.max(0, Math.min(1, (clientY - rect.top) / rect.height));
-    scrollToPage(Math.round(ratio * (numPages - 1)));
-  }
-
-  function onScrubberPointerMove(e: React.PointerEvent<HTMLDivElement>) {
-    if (e.buttons === 0) return;
-    jumpScrubberToY(e.clientY);
-  }
-
-  function onScrubberPointerUp() {
-    scrubberRectRef.current = null;
-  }
 
   function commitPageInput() {
     const val = parseInt(pageInputValue ?? "", 10);
@@ -1393,6 +1369,19 @@ export function PdfViewer({ content: pdfPath, nodeId }: Props) {
 
         <div className="pdf-tb-sep" />
 
+        {/* Touch toggle — pen-only vs touch+pen input */}
+        <div className="pdf-toolbar-group">
+          <button
+            className={`pdf-tb-btn${touchEnabled ? " active" : ""}`}
+            onClick={() => setTouchEnabled(t => !t)}
+            title={touchEnabled ? "Touch ON — finger draws (tap to disable)" : "Touch OFF — finger scrolls only (tap to enable)"}
+          >
+            ☝
+          </button>
+        </div>
+
+        <div className="pdf-tb-sep" />
+
         {/* Export PDF */}
         <div className="pdf-toolbar-group">
           {exportError && <span className="pdf-export-error">{exportError}</span>}
@@ -1469,6 +1458,7 @@ export function PdfViewer({ content: pdfPath, nodeId }: Props) {
                           tool={tool}
                           color={color}
                           strokeWidth={strokeWidth}
+                          touchEnabled={touchEnabled}
                           onStrokeAdded={handleStrokeAdded}
                           onErase={handleErase}
                           onSize={handlePageSize}
@@ -1511,22 +1501,6 @@ export function PdfViewer({ content: pdfPath, nodeId }: Props) {
               })}
               </div>{/* end css-zoom wrapper */}
             </div>
-            {numPages > 1 && (
-              <div
-                className="pdf-scrubber"
-                ref={scrubberRef}
-                onPointerDown={onScrubberPointerDown}
-                onPointerMove={onScrubberPointerMove}
-                onPointerUp={onScrubberPointerUp}
-              >
-                <div
-                  className="pdf-scrubber-thumb"
-                  style={{ top: `${(currentPage / Math.max(1, numPages - 1)) * 100}%` }}
-                >
-                  <span className="pdf-scrubber-label">{currentPage + 1}</span>
-                </div>
-              </div>
-            )}
           </div>
         </div>
       </div>

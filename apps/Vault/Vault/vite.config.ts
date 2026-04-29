@@ -27,6 +27,7 @@ export default defineConfig(async () => ({
   optimizeDeps: {
     include: [
       'smiles-drawer',
+      'sql.js',
       'three',
       'three-spritetext',
       'react-force-graph-2d',

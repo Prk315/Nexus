@@ -812,7 +812,8 @@ body {
   position: absolute;
   top: 0;
   left: 0;
-  touch-action: none;
+  /* touch-action is set dynamically via inline style:
+     "none" when touch draws (touchEnabled), "pan-y pinch-zoom" in pen-only mode */
   -webkit-user-select: none;
   user-select: none;
 }
@@ -898,12 +899,8 @@ body {
   outline: 1px solid rgba(255, 140, 0, 0.8);
 }
 
-/* ── PDF scroll wrapper + scrubber ─────────────────────────────────────── */
+/* ── PDF scroll wrapper ─────────────────────────────────────────────────── */
 .pdf-scroll-wrapper { flex: 1; display: flex; flex-direction: row; min-height: 0; overflow: hidden; }
-.pdf-scrubber { width: 20px; flex-shrink: 0; background: var(--bg-deep); border-left: 1px solid var(--border-faint); position: relative; cursor: pointer; }
-.pdf-scrubber-thumb { position: absolute; left: 2px; right: 2px; height: 32px; background: var(--bg-raised); border: 1px solid var(--border-faint); border-radius: 4px; transform: translateY(-50%); display: flex; align-items: center; justify-content: center; transition: background 0.1s; }
-.pdf-scrubber-thumb:hover { background: var(--accent, #4f8ef7); }
-.pdf-scrubber-label { font-size: 9px; color: var(--fg-muted); writing-mode: vertical-rl; line-height: 1; }
 
 /* ── PDF page indicator (jump-to-page) ──────────────────────────────────── */
 .pdf-page-indicator { background: none; border: none; cursor: pointer; font-size: 11px; font-variant-numeric: tabular-nums; color: var(--fg-muted); padding: 0 4px; font-family: inherit; }
@@ -2886,6 +2883,56 @@ body {
   border-radius: 4px;
   flex-shrink: 0;
 }
+.code-cell-lang { font-size: 10px; color: #475569; margin-left: auto; letter-spacing: 0.5px; }
+.code-cell-lang-btn {
+  font-size: 10px;
+  color: #475569;
+  margin-left: auto;
+  letter-spacing: 0.5px;
+  background: none;
+  border: 1px solid transparent;
+  cursor: pointer;
+  padding: 1px 6px;
+  border-radius: 3px;
+  font-family: inherit;
+  transition: background 120ms, color 120ms, border-color 120ms;
+}
+.code-cell-lang-btn:hover { background: rgba(99,102,241,0.10); color: #818cf8; border-color: rgba(99,102,241,0.2); }
+.code-cell-lang-btn.sql { color: #60a5fa; border-color: rgba(96,165,250,0.25); background: rgba(96,165,250,0.06); }
+.code-cell-lang-btn.sql:hover { background: rgba(96,165,250,0.15); border-color: rgba(96,165,250,0.4); }
+.code-cell-sql-ok { color: #a6e3a1; margin: 0; }
+
+/* ── SQL result table ─────────────────────────────────────────────────────── */
+.sql-result-set { display: flex; flex-direction: column; gap: 4px; flex-shrink: 0; }
+.sql-table-scroll { overflow-x: auto; }
+.sql-result-table {
+  border-collapse: collapse;
+  font-size: 12px;
+  font-family: "Menlo", "JetBrains Mono", "Fira Code", monospace;
+  width: 100%;
+  min-width: max-content;
+}
+.sql-result-table th {
+  background: #1e2a3a;
+  color: #89b4fa;
+  padding: 5px 12px;
+  text-align: left;
+  border: 1px solid #2a3550;
+  font-weight: 600;
+  white-space: nowrap;
+  letter-spacing: 0.3px;
+}
+.sql-result-table td {
+  padding: 4px 12px;
+  border: 1px solid #1e2535;
+  color: #cdd6f4;
+  white-space: pre;
+}
+.sql-result-table tbody tr:nth-child(odd) td  { background: #0e0e1a; }
+.sql-result-table tbody tr:nth-child(even) td { background: #131321; }
+.sql-result-table tbody tr:hover td { background: #1e2535; }
+.sql-null { color: #45475a; font-style: italic; }
+.sql-row-count { font-size: 10px; color: #45475a; }
 
 /* ── Frame style toolbar ────────────────────────────────────────────────── */
 .canvas-frame-toolbar {

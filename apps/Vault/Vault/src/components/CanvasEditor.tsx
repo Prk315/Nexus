@@ -3,6 +3,9 @@ import { MatrixBlockContent, MatrixBlockData } from "./MatrixBlock";
 import { GraphBlockContent, GraphBlockData } from "./GraphBlock";
 import { GridBlockContent, GridBlockData } from "./GridBlock";
 import { invoke } from "@tauri-apps/api/core";
+import initSqlJs from 'sql.js';
+import type { SqlJsStatic, Database } from 'sql.js';
+import sqlWasmUrl from 'sql.js/dist/sql-wasm.wasm?url';
 import { readText as clipboardReadText } from "@tauri-apps/plugin-clipboard-manager";
 import Markdown from "react-markdown";
 import remarkMath from "remark-math";
@@ -29,8 +32,8 @@ interface KanbanBlock    extends BaseBlock { type: "kanban"; columns: KanbanColu
 type ShapeKind = "rect" | "rounded" | "ellipse" | "diamond";
 interface ShapeBlock     extends BaseBlock { type: "shape"; shape: ShapeKind; label: string; color?: string; }
 interface FrameBlock     extends BaseBlock { type: "frame"; label: string; color?: string; borderStyle?: "solid" | "dashed" | "dotted"; borderWidth?: number; radius?: number; fill?: string; }
-interface OutputChunk    { type: "text" | "image" | "error" | "html"; content: string; }
-interface CodeCellBlock  extends BaseBlock { type: "code_cell"; code: string; outputs: OutputChunk[]; running: boolean; }
+interface OutputChunk    { type: "text" | "image" | "error" | "html" | "table"; content: string; }
+interface CodeCellBlock  extends BaseBlock { type: "code_cell"; code: string; outputs: OutputChunk[]; running: boolean; language?: "python" | "sql"; }
 interface HtmlBlock      extends BaseBlock { type: "html"; code: string; preview: boolean; }
 interface ImageBlock     extends BaseBlock { type: "image"; src: string; }
 interface MoleculeBlock  extends BaseBlock { type: "molecule"; smiles: string; label: string; }
@@ -90,7 +93,7 @@ function migrateBlock(b: any): CanvasBlock {
   if (b.type === "code_cell" && !Array.isArray(b.outputs)) {
     const outputs: OutputChunk[] = [];
     if (b.output != null) outputs.push({ type: b.outputType ?? "text", content: b.output });
-    return { ...b, outputs, running: false } as CodeCellBlock;
+    return { ...b, outputs, running: false, language: b.language ?? "python" } as CodeCellBlock;
   }
   return b as CanvasBlock;
 }
@@ -150,7 +153,7 @@ function mkFrame(x: number, y: number): FrameBlock {
   return { id: uid(), type: "frame", x, y, width: 480, height: 320, label: "Group", color: "#94a3b8", borderStyle: "dashed", borderWidth: 2, radius: 10, fill: "transparent" };
 }
 function mkCodeCell(x: number, y: number): CodeCellBlock {
-  return { id: uid(), type: "code_cell", x, y, width: 440, height: 260, code: "", outputs: [], running: false };
+  return { id: uid(), type: "code_cell", x, y, width: 440, height: 260, code: "", outputs: [], running: false, language: "python" };
 }
 function mkHtml(x: number, y: number): HtmlBlock {
   return { id: uid(), type: "html", x, y, width: 560, height: 400, code: "", preview: false };
@@ -1051,6 +1054,78 @@ function ElementContent({ block, onUpdate, onSelect }: {
   );
 }
 
+// ── SQL engine (sql.js / SQLite WASM) ───────────────────────────────────────────
+// One in-memory SQLite database per session ID — mirrors the Python session model.
+// Sessions survive re-renders and accumulate schema/data until explicitly reset.
+
+let _sqlJs: SqlJsStatic | null = null;
+const _sqlSessions = new Map<string, Database>();
+
+interface SqlTableData { columns: string[]; rows: (string | null)[][]; rowCount: number; }
+
+async function _getSqlJs(): Promise<SqlJsStatic> {
+  if (!_sqlJs) _sqlJs = await initSqlJs({ locateFile: () => sqlWasmUrl });
+  return _sqlJs;
+}
+
+async function _getSqlDb(sessionId: string): Promise<Database> {
+  if (!_sqlSessions.has(sessionId)) {
+    const SQL = await _getSqlJs();
+    _sqlSessions.set(sessionId, new SQL.Database());
+  }
+  return _sqlSessions.get(sessionId)!;
+}
+
+function _resetSqlSession(sessionId: string) {
+  _sqlSessions.get(sessionId)?.close();
+  _sqlSessions.delete(sessionId);
+}
+
+async function runSqlCode(sessionId: string, sql: string): Promise<OutputChunk[]> {
+  try {
+    const db = await _getSqlDb(sessionId);
+    const results = db.exec(sql);
+    const data: SqlTableData[] = results.map(({ columns, values }) => ({
+      columns,
+      rows: values.map(row => row.map(v => (v == null ? null : String(v)))),
+      rowCount: values.length,
+    }));
+    return [{ type: "table", content: JSON.stringify(data) }];
+  } catch (err: unknown) {
+    return [{ type: "error", content: err instanceof Error ? err.message : String(err) }];
+  }
+}
+
+function SqlResultTable({ content }: { content: string }) {
+  const data: SqlTableData[] = JSON.parse(content);
+  if (data.length === 0) return <pre className="code-cell-sql-ok">✓ OK</pre>;
+  return (
+    <>
+      {data.map((res, ri) => (
+        <div key={ri} className="sql-result-set">
+          <div className="sql-table-scroll">
+            <table className="sql-result-table">
+              <thead>
+                <tr>{res.columns.map((c, ci) => <th key={ci}>{c}</th>)}</tr>
+              </thead>
+              <tbody>
+                {res.rows.map((row, rowIdx) => (
+                  <tr key={rowIdx}>
+                    {row.map((v, ci) => (
+                      <td key={ci}>{v === null ? <span className="sql-null">NULL</span> : v}</td>
+                    ))}
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          <span className="sql-row-count">{res.rowCount} row{res.rowCount !== 1 ? 's' : ''}</span>
+        </div>
+      ))}
+    </>
+  );
+}
+
 // ── CodeCellContent ─────────────────────────────────────────────────────────────
 
 interface CodeCellProps {
@@ -1066,6 +1141,8 @@ function CodeCellContent({ block, sessionId, onUpdate, onRunAll, onRestart, onSe
   const [codeHeight, setCodeHeight] = useState(120);
   const splitterDrag = useRef<{ startY: number; startH: number } | null>(null);
 
+  const lang = block.language ?? "python";
+
   async function runSingle() {
     if (!sessionId) {
       onUpdate({ outputs: [{ type: "error", content: "No session ID — open this canvas from a saved note." }] });
@@ -1073,10 +1150,16 @@ function CodeCellContent({ block, sessionId, onUpdate, onRunAll, onRestart, onSe
     }
     onUpdate({ running: true, outputs: [] });
     try {
-      const result = await invoke<{ chunks: { type: string; content: string }[] }>(
-        "run_python", { sessionId, code: block.code }
-      );
-      onUpdate({ running: false, outputs: result.chunks as OutputChunk[] });
+      let outputs: OutputChunk[];
+      if (lang === "sql") {
+        outputs = await runSqlCode(sessionId, block.code);
+      } else {
+        const result = await invoke<{ chunks: { type: string; content: string }[] }>(
+          "run_python", { sessionId, code: block.code }
+        );
+        outputs = result.chunks as OutputChunk[];
+      }
+      onUpdate({ running: false, outputs });
     } catch (e) {
       onUpdate({ running: false, outputs: [{ type: "error", content: String(e) }] });
     }
@@ -1109,7 +1192,13 @@ function CodeCellContent({ block, sessionId, onUpdate, onRunAll, onRestart, onSe
         <button className="code-cell-btn code-cell-run" onClick={e => { e.stopPropagation(); runSingle(); }} disabled={block.running} title="Run cell (Shift+Enter)">▶</button>
         <button className="code-cell-btn code-cell-run-all" onClick={e => { e.stopPropagation(); onRunAll(); }} disabled={block.running} title="Run all cells in order">⏩</button>
         <button className="code-cell-btn code-cell-restart" onClick={e => { e.stopPropagation(); onRestart(); }} title="Restart kernel — clears all variables">↺</button>
-        <span className="code-cell-lang">Python</span>
+        <button
+          className={`code-cell-lang-btn${lang === "sql" ? " sql" : ""}`}
+          onClick={e => { e.stopPropagation(); onUpdate({ language: lang === "python" ? "sql" : "python", outputs: [] }); }}
+          title={lang === "sql" ? "SQL (SQLite) — click to switch to Python" : "Python — click to switch to SQL"}
+        >
+          {lang === "sql" ? "SQL" : "Python"}
+        </button>
         {block.running && <span className="code-cell-spinner">⬤</span>}
       </div>
       <textarea
@@ -1124,19 +1213,23 @@ function CodeCellContent({ block, sessionId, onUpdate, onRunAll, onRestart, onSe
           if (e.key === "Enter" && e.shiftKey) { e.preventDefault(); runSingle(); }
         }}
         spellCheck={false}
-        placeholder="# Python…  Shift+Enter to run"
+        placeholder={lang === "sql"
+          ? "-- SQL (SQLite)…  Shift+Enter to run\n-- e.g. CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT);"
+          : "# Python…  Shift+Enter to run"}
       />
       {hasOutput && (
         <>
           <div className="code-cell-splitter" onPointerDown={onSplitterPointerDown} />
           <div className="code-cell-output">
             {outputs.map((chunk, i) =>
-              chunk.type === "image"
-                ? <img key={i} src={`data:image/png;base64,${chunk.content}`} alt="cell output" className="code-cell-img" />
-                : chunk.type === "html"
-                  ? <iframe key={i} srcDoc={chunk.content} sandbox="allow-scripts"
-                      className="code-cell-html-frame" title="output" />
-                  : <pre key={i} className={chunk.type === "error" ? "code-cell-error-text" : ""}>{chunk.content}</pre>
+              chunk.type === "table"
+                ? <SqlResultTable key={i} content={chunk.content} />
+                : chunk.type === "image"
+                  ? <img key={i} src={`data:image/png;base64,${chunk.content}`} alt="cell output" className="code-cell-img" />
+                  : chunk.type === "html"
+                    ? <iframe key={i} srcDoc={chunk.content} sandbox="allow-scripts"
+                        className="code-cell-html-frame" title="output" />
+                    : <pre key={i} className={chunk.type === "error" ? "code-cell-error-text" : ""}>{chunk.content}</pre>
             )}
           </div>
         </>
@@ -2582,12 +2675,19 @@ export function CanvasEditor({ content, onChange, nodeId }: Props) {
       const block = blocks.find(b => b.id === id) as CodeCellBlock | undefined;
       if (!block) continue;
       const sessionId = getComponentSessionId(id, nodeId, blocks, arrows);
+      const lang = block.language ?? "python";
       updateBlock(id, { running: true, outputs: [] });
       try {
-        const result = await invoke<{ chunks: { type: string; content: string }[] }>(
-          "run_python", { sessionId, code: block.code }
-        );
-        updateBlock(id, { running: false, outputs: result.chunks as OutputChunk[] });
+        let outputs: OutputChunk[];
+        if (lang === "sql") {
+          outputs = await runSqlCode(sessionId, block.code);
+        } else {
+          const result = await invoke<{ chunks: { type: string; content: string }[] }>(
+            "run_python", { sessionId, code: block.code }
+          );
+          outputs = result.chunks as OutputChunk[];
+        }
+        updateBlock(id, { running: false, outputs });
       } catch (e) {
         updateBlock(id, { running: false, outputs: [{ type: "error", content: String(e) }] });
       }
@@ -2598,8 +2698,21 @@ export function CanvasEditor({ content, onChange, nodeId }: Props) {
     const blocks = dataRef.current.blocks;
     const arrows = dataRef.current.arrows;
     const cellIds = blocks.filter(b => b.type === "code_cell").map(b => b.id);
-    const sessionIds = new Set(cellIds.map(id => getComponentSessionId(id, nodeId, blocks, arrows)));
-    await Promise.all([...sessionIds].map(sid => invoke("reset_python_session", { sessionId: sid })));
+
+    const pythonSessionIds = new Set(
+      cellIds
+        .filter(id => ((blocks.find(b => b.id === id) as CodeCellBlock)?.language ?? "python") === "python")
+        .map(id => getComponentSessionId(id, nodeId, blocks, arrows))
+    );
+    const sqlSessionIds = new Set(
+      cellIds
+        .filter(id => (blocks.find(b => b.id === id) as CodeCellBlock)?.language === "sql")
+        .map(id => getComponentSessionId(id, nodeId, blocks, arrows))
+    );
+
+    await Promise.all([...pythonSessionIds].map(sid => invoke("reset_python_session", { sessionId: sid })));
+    sqlSessionIds.forEach(sid => _resetSqlSession(sid));
+
     setData(d => ({
       ...d,
       blocks: d.blocks.map(b => b.type === "code_cell"
