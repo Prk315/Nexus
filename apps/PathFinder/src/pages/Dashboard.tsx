@@ -836,9 +836,11 @@ function TodayPie({ doneMin, pendingMin, freeMin, capTotal, items }: {
 
 function WelcomeBox({
   goals, plans, tasks, systems, dailyGoals, courseAssignments, date,
+  goalPrimaryDone, goalSecDone,
 }: {
   goals: Goal[]; plans: Plan[]; tasks: TaskWithContext[]; systems: SystemEntry[];
   dailyGoals: DailyGoals; courseAssignments: CourseAssignment[]; date: string;
+  goalPrimaryDone: boolean; goalSecDone: Set<number>;
 }) {
   const hour     = new Date().getHours();
   const greeting = hour < 12 ? "Good morning" : hour < 18 ? "Good afternoon" : "Good evening";
@@ -881,23 +883,15 @@ function WelcomeBox({
     ca.status === "done" ? (doneMin += min) : (pendingMin += min);
   }
 
-  // Read goal completion state from localStorage (same key as DailyGoalsSection)
-  const goalDoneState = (() => {
-    try { return JSON.parse(localStorage.getItem(`daily_goals_done_${date}`) ?? "{}"); }
-    catch { return {}; }
-  })();
-  const primaryDoneInPie = goalDoneState.primary === true;
-  const secDoneInPie = new Set<number>(goalDoneState.secondary ?? []);
-
   const goalPieItems: PieItem[] = [];
   if (dailyGoals.primary?.time_estimate_min) {
     const min = dailyGoals.primary.time_estimate_min;
-    primaryDoneInPie ? (doneMin += min) : (pendingMin += min);
-    goalPieItems.push({ id: 0, label: dailyGoals.primary.text, subtitle: "Primary goal", minutes: min, done: primaryDoneInPie, kind: "goal" });
+    goalPrimaryDone ? (doneMin += min) : (pendingMin += min);
+    goalPieItems.push({ id: 0, label: dailyGoals.primary.text, subtitle: "Primary goal", minutes: min, done: goalPrimaryDone, kind: "goal" });
   }
   for (const g of dailyGoals.secondary) {
     if (!g.time_estimate_min) continue;
-    const isDone = secDoneInPie.has(g.id);
+    const isDone = goalSecDone.has(g.id);
     isDone ? (doneMin += g.time_estimate_min) : (pendingMin += g.time_estimate_min);
     goalPieItems.push({ id: g.id, label: g.text, subtitle: "Secondary goal", minutes: g.time_estimate_min, done: isDone, kind: "goal" });
   }
@@ -1052,9 +1046,12 @@ function TimeEstimateInput({ value, onChange, onBlur, className }: {
   );
 }
 
-function DailyGoalsSection({ date, goals, onSetPrimary, onClearPrimary, onAddSecondary, onUpdateSecondaryEstimate, onDeleteSecondary }: {
-  date: string;
+function DailyGoalsSection({ goals, primaryDone, secDone, onTogglePrimaryDone, onToggleSecDone, onSetPrimary, onClearPrimary, onAddSecondary, onUpdateSecondaryEstimate, onDeleteSecondary }: {
   goals: DailyGoals;
+  primaryDone: boolean;
+  secDone: Set<number>;
+  onTogglePrimaryDone: () => void;
+  onToggleSecDone: (id: number) => void;
   onSetPrimary: (payload: DailyPrimaryGoal) => void;
   onClearPrimary: () => void;
   onAddSecondary: (text: string) => void;
@@ -1067,34 +1064,6 @@ function DailyGoalsSection({ date, goals, onSetPrimary, onClearPrimary, onAddSec
   const [secDraft, setSecDraft] = useState("");
   const [editingEstId, setEditingEstId] = useState<number | null>(null);
   const [estDraft, setEstDraft] = useState("");
-
-  // Completion state — persisted per-day in localStorage
-  const lsKey = `daily_goals_done_${date}`;
-  const [primaryDone, setPrimaryDone] = useState<boolean>(() => {
-    try { return JSON.parse(localStorage.getItem(lsKey) ?? "{}").primary === true; }
-    catch { return false; }
-  });
-  const [secDone, setSecDone] = useState<Set<number>>(() => {
-    try { return new Set<number>(JSON.parse(localStorage.getItem(lsKey) ?? "{}").secondary ?? []); }
-    catch { return new Set(); }
-  });
-
-  function persistDone(primary: boolean, sec: Set<number>) {
-    localStorage.setItem(lsKey, JSON.stringify({ primary, secondary: [...sec] }));
-  }
-
-  function togglePrimaryDone() {
-    const next = !primaryDone;
-    setPrimaryDone(next);
-    persistDone(next, secDone);
-  }
-
-  function toggleSecDone(id: number) {
-    const next = new Set(secDone);
-    next.has(id) ? next.delete(id) : next.add(id);
-    setSecDone(next);
-    persistDone(primaryDone, next);
-  }
 
   function commitPrimary() {
     const text = primaryDraft.trim();
@@ -1167,7 +1136,7 @@ function DailyGoalsSection({ date, goals, onSetPrimary, onClearPrimary, onAddSec
               : "bg-yellow-500/10 border-yellow-500/20 hover:border-yellow-500/40"
           )}>
             <button
-              onClick={togglePrimaryDone}
+              onClick={onTogglePrimaryDone}
               className={cn(
                 "h-4 w-4 shrink-0 rounded border-2 flex items-center justify-center transition-colors",
                 primaryDone
@@ -1209,7 +1178,7 @@ function DailyGoalsSection({ date, goals, onSetPrimary, onClearPrimary, onAddSec
             return (
               <div key={g.id} className="flex items-center gap-2 group py-0.5 pl-1">
                 <button
-                  onClick={() => toggleSecDone(g.id)}
+                  onClick={() => onToggleSecDone(g.id)}
                   className={cn(
                     "h-3.5 w-3.5 shrink-0 rounded border flex items-center justify-center transition-colors",
                     done
@@ -2357,6 +2326,32 @@ export function Dashboard() {
 
   const date = todayDate();
 
+  // Goal done-state — lifted here so WelcomeBox pie chart stays in sync
+  const lsKey = `daily_goals_done_${date}`;
+  const [goalPrimaryDone, setGoalPrimaryDone] = useState<boolean>(() => {
+    try { return JSON.parse(localStorage.getItem(`daily_goals_done_${todayDate()}`) ?? "{}").primary === true; }
+    catch { return false; }
+  });
+  const [goalSecDone, setGoalSecDone] = useState<Set<number>>(() => {
+    try { return new Set<number>(JSON.parse(localStorage.getItem(`daily_goals_done_${todayDate()}`) ?? "{}").secondary ?? []); }
+    catch { return new Set(); }
+  });
+
+  function persistGoalDone(primary: boolean, sec: Set<number>) {
+    localStorage.setItem(lsKey, JSON.stringify({ primary, secondary: [...sec] }));
+  }
+  function handleTogglePrimaryDone() {
+    const next = !goalPrimaryDone;
+    setGoalPrimaryDone(next);
+    persistGoalDone(next, goalSecDone);
+  }
+  function handleToggleSecDone(id: number) {
+    const next = new Set(goalSecDone);
+    next.has(id) ? next.delete(id) : next.add(id);
+    setGoalSecDone(next);
+    persistGoalDone(goalPrimaryDone, next);
+  }
+
   const loadSubtasks = useCallback(async (sysList: SystemEntry[]) => {
     const entries = await Promise.all(
       sysList.map(async (s) => [s.id, await getSystemSubtasks(s.id, date)] as [number, SystemSubtask[]])
@@ -2539,7 +2534,8 @@ export function Dashboard() {
     <div className="flex flex-col h-[calc(100dvh-2.75rem-5.5rem)] md:h-[calc(100vh-2.5rem)] overflow-hidden">
 
       <WelcomeBox goals={goals} plans={plans} tasks={tasks} systems={systems}
-        dailyGoals={dailyGoals} courseAssignments={courseAssignments} date={date} />
+        dailyGoals={dailyGoals} courseAssignments={courseAssignments} date={date}
+        goalPrimaryDone={goalPrimaryDone} goalSecDone={goalSecDone} />
 
       <div className="flex-1 min-h-0 flex flex-col md:flex-row overflow-hidden">
 
@@ -2548,8 +2544,11 @@ export function Dashboard() {
 
           {/* Daily Goals */}
           <DailyGoalsSection
-            date={date}
             goals={dailyGoals}
+            primaryDone={goalPrimaryDone}
+            secDone={goalSecDone}
+            onTogglePrimaryDone={handleTogglePrimaryDone}
+            onToggleSecDone={handleToggleSecDone}
             onSetPrimary={handleSetPrimary}
             onClearPrimary={handleClearPrimary}
             onAddSecondary={handleAddSecondary}
