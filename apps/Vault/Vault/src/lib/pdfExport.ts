@@ -11,7 +11,7 @@ interface Point {
 
 interface Stroke {
   id: string;
-  tool: "pen" | "highlighter" | "eraser" | "line" | "rect" | "ellipse";
+  tool: "pen" | "highlighter" | "eraser" | "line" | "rect" | "ellipse" | "text_highlight";
   color: string;
   width: number;
   points: Point[];
@@ -76,7 +76,21 @@ export async function exportAnnotatedPdf(
       const color = hexToRgb(stroke.color);
       const opacity = stroke.tool === "highlighter" ? 0.4 : 1;
 
-      if (stroke.tool === "line" && stroke.points.length >= 2) {
+      if (stroke.tool === "text_highlight") {
+        // Points are pairs: [topLeft, bottomRight] per highlighted line rect
+        for (let i = 0; i + 1 < stroke.points.length; i += 2) {
+          const a = px(stroke.points[i]);
+          const b = px(stroke.points[i + 1]);
+          page.drawRectangle({
+            x:      Math.min(a.x, b.x),
+            y:      Math.min(a.y, b.y),
+            width:  Math.abs(b.x - a.x),
+            height: Math.abs(b.y - a.y),
+            color,
+            opacity: 0.32,
+          });
+        }
+      } else if (stroke.tool === "line" && stroke.points.length >= 2) {
         const start = px(stroke.points[0]);
         const end   = px(stroke.points[1]);
         page.drawLine({ start, end, thickness: stroke.width, color, opacity });

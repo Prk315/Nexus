@@ -45,15 +45,15 @@ interface Point { x: number; y: number; pressure: number; } // normalised 0..1 w
 
 interface Stroke {
   id: string;
-  tool: "pen" | "highlighter" | "eraser" | "line" | "rect" | "ellipse";
+  tool: "pen" | "highlighter" | "eraser" | "line" | "rect" | "ellipse" | "text_highlight";
   color: string;
   width: number; // base logical px (at zoom 1)
-  points: Point[];
+  points: Point[]; // for text_highlight: consecutive pairs [topLeft, bottomRight] per highlight rect
 }
 
 type Annotations = Record<number, Stroke[]>; // page index → strokes
 
-type Tool = "pen" | "highlighter" | "eraser" | "text" | "line" | "rect" | "ellipse" | "lasso";
+type Tool = "pen" | "highlighter" | "eraser" | "text" | "line" | "rect" | "ellipse" | "lasso" | "mark";
 
 interface LassoRect { x1: number; y1: number; x2: number; y2: number; }
 
@@ -124,7 +124,10 @@ interface PdfPageProps {
   color: string;
   strokeWidth: number;
   touchEnabled: boolean; // when false, finger touches scroll (pen-only mode)
+  textItems: TextItem[]; // pre-filtered text items for this page (for mark tool)
+  pageViewport: PageViewport | null; // scale=1 viewport for coordinate mapping
   onStrokeAdded: (pageIdx: number, stroke: Stroke) => void;
+  onMarkHighlight: (pageIdx: number, stroke: Stroke) => void;
   onErase: (pageIdx: number, updatedStrokes: Stroke[]) => void;
   onSize: (pageIdx: number, w: number, h: number) => void;
   onLassoSelect: (pageIdx: number, ids: Set<string>) => void;
@@ -142,7 +145,10 @@ const PdfPage = memo(function PdfPage({
   color,
   strokeWidth,
   touchEnabled,
+  textItems,
+  pageViewport,
   onStrokeAdded,
+  onMarkHighlight,
   onErase,
   onSize,
   onLassoSelect,
@@ -169,6 +175,115 @@ const PdfPage = memo(function PdfPage({
   const selectedStrokesRef = useRef<Set<string>>(selectedStrokes);
   useEffect(() => { selectedStrokesRef.current = selectedStrokes; }, [selectedStrokes]);
 
+  // ── Mark tool state ──────────────────────────────────────────────────────
+  const markStartRef  = useRef<{ pt: Point; cx: number; cy: number } | null>(null);
+  const markRangeRef  = useRef<{ s: number; e: number } | null>(null);
+  const markActiveRef = useRef(false);
+  const markTimerRef  = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // Convert a PDF TextItem to a normalised (0..1) rect using the scale=1 viewport.
+  // PdfSearchOverlay uses the same pdfjs.Util.transform pattern.
+  function getItemRect(item: TextItem, vp: PageViewport): { x: number; y: number; w: number; h: number } | null {
+    const [x, y] = pdfjs.Util.transform(vp.transform, [1, 0, 0, 1, item.transform[4], item.transform[5]]);
+    const w = item.width * vp.scale;
+    // item.height is often 0 in practice; fall back to the font scale component
+    const h = item.height > 0 ? item.height * vp.scale : Math.abs(item.transform[3]) * vp.scale;
+    if (w <= 0 || h <= 0) return null;
+    return { x: x / vp.width, y: (y - h) / vp.height, w: w / vp.width, h: h / vp.height };
+  }
+
+  // Return the index of the text item nearest to point pt (normalised coords).
+  function findTextItem(pt: Point): number {
+    if (!pageViewport || !textItems.length) return -1;
+    let bestIdx = -1, bestDist = Infinity;
+    const PAD = 0.007;
+    for (let i = 0; i < textItems.length; i++) {
+      const item = textItems[i];
+      if (!item.str.trim()) continue;
+      const r = getItemRect(item, pageViewport);
+      if (!r) continue;
+      const inX = pt.x >= r.x - PAD && pt.x <= r.x + r.w + PAD;
+      const inY = pt.y >= r.y - PAD && pt.y <= r.y + r.h + PAD;
+      if (inX && inY) {
+        const d = Math.abs(pt.x - (r.x + r.w / 2)) + Math.abs(pt.y - (r.y + r.h / 2));
+        if (d < bestDist) { bestDist = d; bestIdx = i; }
+      }
+    }
+    if (bestIdx >= 0) return bestIdx;
+    // Fallback: closest item on the same visual line
+    for (let i = 0; i < textItems.length; i++) {
+      const item = textItems[i];
+      if (!item.str.trim()) continue;
+      const r = getItemRect(item, pageViewport);
+      if (!r) continue;
+      if (Math.abs(pt.y - (r.y + r.h / 2)) < r.h * 1.2) {
+        const d = Math.abs(pt.x - (r.x + r.w / 2));
+        if (d < bestDist && d < 0.15) { bestDist = d; bestIdx = i; }
+      }
+    }
+    return bestIdx;
+  }
+
+  // Group a slice of text items into per-line bounding rects (sorted, normalised).
+  function groupIntoLines(
+    items: TextItem[], vp: PageViewport
+  ): { x: number; y: number; w: number; h: number }[] {
+    const rects = items
+      .map(it => getItemRect(it, vp))
+      .filter((r): r is NonNullable<typeof r> => r !== null && r.w > 0);
+    if (!rects.length) return [];
+    rects.sort((a, b) => Math.abs(a.y - b.y) > 0.003 ? a.y - b.y : a.x - b.x);
+    const avgH = rects.reduce((s, r) => s + r.h, 0) / rects.length;
+    const groups: typeof rects[] = [];
+    let grp = [rects[0]];
+    for (let i = 1; i < rects.length; i++) {
+      if (Math.abs(rects[i].y - grp[0].y) <= avgH * 0.65) { grp.push(rects[i]); }
+      else { groups.push(grp); grp = [rects[i]]; }
+    }
+    groups.push(grp);
+    return groups.map(g => {
+      const x = Math.min(...g.map(r => r.x));
+      const y = Math.min(...g.map(r => r.y));
+      const r = Math.max(...g.map(r => r.x + r.w));
+      const b = Math.max(...g.map(r => r.y + r.h));
+      return { x, y, w: r - x, h: b - y };
+    });
+  }
+
+  // Build a text_highlight stroke from a start/end item index range.
+  function buildHighlightStroke(sIdx: number, eIdx: number): Stroke | null {
+    if (!pageViewport || !textItems.length) return null;
+    const lo = Math.min(sIdx, eIdx), hi = Math.max(sIdx, eIdx);
+    const items = textItems.slice(lo, hi + 1).filter(it => it.str.trim());
+    if (!items.length) return null;
+    const lineRects = groupIntoLines(items, pageViewport);
+    if (!lineRects.length) return null;
+    const points: Point[] = [];
+    for (const r of lineRects) {
+      points.push({ x: r.x, y: r.y, pressure: 0.5 });
+      points.push({ x: r.x + r.w, y: r.y + r.h, pressure: 0.5 });
+    }
+    return { id: Math.random().toString(36).slice(2), tool: "text_highlight", color, width: 0, points };
+  }
+
+  // Draw a live preview of a text highlight on the annotation canvas.
+  function drawMarkPreview(canvas: HTMLCanvasElement, sIdx: number, eIdx: number) {
+    const stroke = buildHighlightStroke(sIdx, eIdx);
+    if (!stroke) return;
+    redraw(canvas, strokesRef.current, selectedStrokesRef.current, null);
+    const ctx = canvas.getContext("2d")!;
+    const w = canvas.width, h = canvas.height;
+    ctx.save();
+    ctx.globalAlpha = 0.32;
+    ctx.fillStyle = color;
+    for (let i = 0; i + 1 < stroke.points.length; i += 2) {
+      const x1 = stroke.points[i].x * w,  y1 = stroke.points[i].y * h;
+      const x2 = stroke.points[i+1].x * w, y2 = stroke.points[i+1].y * h;
+      ctx.fillRect(x1, y1, x2 - x1, y2 - y1);
+    }
+    ctx.restore();
+  }
+
   // ── Draw annotations on the annotation canvas ───────────────────────────
   const redraw = useCallback((canvas: HTMLCanvasElement, stks: Stroke[], selIds?: Set<string>, lassoRect?: LassoRect | null) => {
     const ctx = canvas.getContext("2d")!;
@@ -192,7 +307,16 @@ const PdfPage = memo(function PdfPage({
         ctx.globalAlpha = 0.35;
       }
 
-      if (s.tool === "line" && s.points.length >= 2) {
+      if (s.tool === "text_highlight") {
+        // Points are pairs: [topLeft, bottomRight] per highlighted line rect
+        ctx.globalAlpha = 0.32;
+        ctx.fillStyle = s.color;
+        for (let i = 0; i + 1 < s.points.length; i += 2) {
+          const x1 = s.points[i].x * w,  y1 = s.points[i].y * h;
+          const x2 = s.points[i+1].x * w, y2 = s.points[i+1].y * h;
+          ctx.fillRect(x1, y1, x2 - x1, y2 - y1);
+        }
+      } else if (s.tool === "line" && s.points.length >= 2) {
         ctx.lineWidth = s.width * renderScale * DPR;
         ctx.beginPath();
         ctx.moveTo(s.points[0].x * w, s.points[0].y * h);
@@ -378,7 +502,7 @@ const PdfPage = memo(function PdfPage({
 
   // ── Pointer events ───────────────────────────────────────────────────────
   function handlePointerDown(e: React.PointerEvent<HTMLCanvasElement>) {
-    if (!touchEnabled && e.pointerType === "touch" && tool !== "text" && tool !== "lasso") return;
+    if (!touchEnabled && e.pointerType === "touch" && tool !== "text" && tool !== "lasso" && tool !== "mark") return;
     e.currentTarget.setPointerCapture(e.pointerId);
     capturedRectRef.current = e.currentTarget.getBoundingClientRect();
     const pt = normalise(e.currentTarget, e);
@@ -392,13 +516,52 @@ const PdfPage = memo(function PdfPage({
       }
       lassoStartRef.current = pt; lassoRectRef.current = { x1: pt.x, y1: pt.y, x2: pt.x, y2: pt.y }; isDrawingRef.current = true; return;
     }
+    if (tool === "mark") {
+      markStartRef.current = { pt, cx: e.clientX, cy: e.clientY };
+      markRangeRef.current  = null;
+      markActiveRef.current = false;
+      if (markTimerRef.current) clearTimeout(markTimerRef.current);
+      // After 180ms stationary → activate highlight mode at the nearest word
+      markTimerRef.current = setTimeout(() => {
+        if (!markStartRef.current) return;
+        const idx = findTextItem(markStartRef.current.pt);
+        if (idx < 0) return;
+        markActiveRef.current = true;
+        markRangeRef.current  = { s: idx, e: idx };
+        const canvas = annotCanvasRef.current;
+        if (canvas) drawMarkPreview(canvas, idx, idx);
+      }, 180);
+      return;
+    }
     if (tool === "eraser" || tool === "text") return;
     isDrawingRef.current = true; currentPtsRef.current = [pt];
   }
 
   function handlePointerMove(e: React.PointerEvent<HTMLCanvasElement>) {
-    if (!touchEnabled && e.pointerType === "touch" && tool !== "text" && tool !== "lasso") return;
+    if (!touchEnabled && e.pointerType === "touch" && tool !== "text" && tool !== "lasso" && tool !== "mark") return;
     const canvas = e.currentTarget;
+    if (tool === "mark") {
+      if (!markStartRef.current) return;
+      const dist = Math.hypot(e.clientX - markStartRef.current.cx, e.clientY - markStartRef.current.cy);
+      if (dist > 6 && !markActiveRef.current) {
+        // Dragging before hold timer — activate immediately on the start point
+        if (markTimerRef.current) { clearTimeout(markTimerRef.current); markTimerRef.current = null; }
+        const startIdx = findTextItem(markStartRef.current.pt);
+        if (startIdx < 0) return;
+        markActiveRef.current = true;
+        markRangeRef.current  = { s: startIdx, e: startIdx };
+      }
+      if (!markActiveRef.current) return;
+      const pt = normalise(canvas, e);
+      const curIdx = findTextItem(pt);
+      if (curIdx < 0) return;
+      const s = markRangeRef.current!.s;
+      if (markRangeRef.current!.e !== curIdx) {
+        markRangeRef.current = { s, e: curIdx };
+        drawMarkPreview(canvas, s, curIdx);
+      }
+      return;
+    }
     if (tool === "lasso") {
       if (isDraggingSelectionRef.current && dragStartRef.current) {
         const pt = normalise(canvas, e);
@@ -414,7 +577,17 @@ const PdfPage = memo(function PdfPage({
     if (tool === "eraser") {
       if (e.buttons === 0) return;
       const pt = normalise(canvas, e);
-      const after = strokesRef.current.filter(s => !s.points.some(p => { const dx = p.x - pt.x, dy = p.y - pt.y; return Math.sqrt(dx*dx+dy*dy) < ERASER_RADIUS; }));
+      const after = strokesRef.current.filter(s => {
+        if (s.tool === "text_highlight") {
+          for (let i = 0; i + 1 < s.points.length; i += 2) {
+            const x1 = s.points[i].x - 0.005, y1 = s.points[i].y - 0.005;
+            const x2 = s.points[i+1].x + 0.005, y2 = s.points[i+1].y + 0.005;
+            if (pt.x >= x1 && pt.x <= x2 && pt.y >= y1 && pt.y <= y2) return false;
+          }
+          return true;
+        }
+        return !s.points.some(p => { const dx = p.x - pt.x, dy = p.y - pt.y; return Math.sqrt(dx*dx+dy*dy) < ERASER_RADIUS; });
+      });
       if (after.length !== strokesRef.current.length) { onErase(pageIdx, after); redraw(canvas, after, selectedStrokesRef.current, null); } return;
     }
     if (!isDrawingRef.current) return;
@@ -426,6 +599,20 @@ const PdfPage = memo(function PdfPage({
 
   function handlePointerUp(e: React.PointerEvent<HTMLCanvasElement>) {
     const canvas = e.currentTarget;
+    if (tool === "mark") {
+      if (markTimerRef.current) { clearTimeout(markTimerRef.current); markTimerRef.current = null; }
+      capturedRectRef.current = null;
+      if (markActiveRef.current && markRangeRef.current) {
+        const { s, e: eIdx } = markRangeRef.current;
+        const stroke = buildHighlightStroke(s, eIdx);
+        if (stroke) onMarkHighlight(pageIdx, stroke);
+        else redraw(canvas, strokesRef.current, selectedStrokesRef.current, null);
+      }
+      markStartRef.current  = null;
+      markRangeRef.current  = null;
+      markActiveRef.current = false;
+      return;
+    }
     if (tool === "lasso") {
       if (isDraggingSelectionRef.current) { isDraggingSelectionRef.current = false; dragStartRef.current = null; capturedRectRef.current = null; return; }
       if (!isDrawingRef.current) return;
@@ -447,7 +634,7 @@ const PdfPage = memo(function PdfPage({
     onStrokeAdded(pageIdx, { id: Math.random().toString(36).slice(2), tool, color, width: strokeWidth, points: pts });
   }
 
-  const cursor = tool === "eraser" ? "cell" : tool === "text" ? "default" : tool === "lasso" ? (selectedStrokes.size > 0 ? "grab" : "crosshair") : "crosshair";
+  const cursor = tool === "eraser" ? "cell" : tool === "text" ? "default" : tool === "lasso" ? (selectedStrokes.size > 0 ? "grab" : "crosshair") : tool === "mark" ? "text" : "crosshair";
 
   return (
     <div className="pdf-page-wrapper">
@@ -885,6 +1072,10 @@ export function PdfViewer({ content: pdfPath, nodeId }: Props) {
     scheduleSave(next);
   }, [scheduleSave]);
 
+  const handleMarkHighlight = useCallback((pIdx: number, stroke: Stroke) => {
+    handleStrokeAdded(pIdx, stroke);
+  }, [handleStrokeAdded]);
+
   const handleErase = useCallback((pageIdx: number, updated: Stroke[]) => {
     const next = { ...annotationsRef.current, [pageIdx]: updated };
     setAnnotations(next);
@@ -1233,8 +1424,19 @@ export function PdfViewer({ content: pdfPath, nodeId }: Props) {
           </button>
         </div>
 
-        {/* Colors — hidden while eraser/lasso/text active */}
-        {tool !== "eraser" && tool !== "text" && tool !== "lasso" && (
+        {/* Mark / text-highlight tool */}
+        <div className="pdf-toolbar-group">
+          <button
+            className={`pdf-tb-btn pdf-tool-btn ${tool === "mark" ? "active" : ""}`}
+            onClick={() => { setTool("mark"); setColor(c => ["#f1c40f","#27ae60","#2980b9","#e74c3c","#8e44ad","#e67e22"].includes(c) ? c : "#f1c40f"); }}
+            title="Mark text (hold briefly on text, then drag to extend selection)"
+          >
+            <span className="pdf-mark-btn-icon">aB</span>
+          </button>
+        </div>
+
+        {/* Colors — hidden while eraser/lasso/text/mark active */}
+        {tool !== "eraser" && tool !== "text" && tool !== "lasso" && tool !== "mark" && (
           <>
             <div className="pdf-tb-sep" />
             <div className="pdf-toolbar-group">
@@ -1251,8 +1453,26 @@ export function PdfViewer({ content: pdfPath, nodeId }: Props) {
           </>
         )}
 
-        {/* Stroke sizes — hidden while eraser/lasso/text tool active */}
-        {tool !== "eraser" && tool !== "text" && tool !== "lasso" && (
+        {/* Mark tool color picker — show all colors but default to yellow highlight */}
+        {tool === "mark" && (
+          <>
+            <div className="pdf-tb-sep" />
+            <div className="pdf-toolbar-group">
+              {["#f1c40f", "#27ae60", "#2980b9", "#e74c3c", "#8e44ad", "#e67e22"].map(c => (
+                <button
+                  key={c}
+                  className={`pdf-color-swatch ${color === c ? "active" : ""}`}
+                  style={{ background: c }}
+                  onClick={() => setColor(c)}
+                  title={c}
+                />
+              ))}
+            </div>
+          </>
+        )}
+
+        {/* Stroke sizes — hidden while eraser/lasso/text/mark tool active */}
+        {tool !== "eraser" && tool !== "text" && tool !== "lasso" && tool !== "mark" && (
           <>
             <div className="pdf-tb-sep" />
             <div className="pdf-toolbar-group">
@@ -1459,7 +1679,10 @@ export function PdfViewer({ content: pdfPath, nodeId }: Props) {
                           color={color}
                           strokeWidth={strokeWidth}
                           touchEnabled={touchEnabled}
+                          textItems={textItemsRef.current[i] ?? []}
+                          pageViewport={pageViewports.current[i] ?? null}
                           onStrokeAdded={handleStrokeAdded}
+                          onMarkHighlight={handleMarkHighlight}
                           onErase={handleErase}
                           onSize={handlePageSize}
                           onLassoSelect={handleLassoSelect}
