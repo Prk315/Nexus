@@ -2161,6 +2161,18 @@ body {
   cursor: crosshair;
 }
 
+.canvas-editor.canvas-build-mode {
+  cursor: cell;
+}
+.canvas-editor.canvas-build-mode .canvas-block,
+.canvas-editor.canvas-build-mode .canvas-block-shape {
+  cursor: pointer;
+}
+
+.canvas-editor.canvas-ink-mode {
+  cursor: crosshair;
+}
+
 .canvas-tool-active {
   background: var(--bg-raised) !important;
   color: var(--fg-primary) !important;

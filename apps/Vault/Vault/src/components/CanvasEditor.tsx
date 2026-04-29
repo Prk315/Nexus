@@ -43,11 +43,12 @@ interface MolDrawBlock   extends BaseBlock { type: "mol_draw"; atoms: MolAtom[];
 interface DrawArrowBlock  extends BaseBlock { type: "draw_arrow";   x2: number; y2: number; color: string; strokeWidth: number; dashed: boolean; headEnd: boolean; headStart: boolean; }
 interface DrawEllipseBlock extends BaseBlock { type: "draw_ellipse"; color: string; fill: string; strokeWidth: number; dashed: boolean; }
 interface DrawPolygonBlock extends BaseBlock { type: "draw_polygon"; points: { x: number; y: number }[]; closed: boolean; color: string; fill: string; strokeWidth: number; dashed: boolean; }
+interface InkStrokeBlock  extends BaseBlock { type: "ink_stroke";  points: { x: number; y: number }[]; color: string; strokeWidth: number; }
 
 type CanvasBlock = TextBlock | StickyBlock | TitleBlock | DividerBlock | TableBlock | MathBlock
                 | ChecklistBlock | KanbanBlock | ShapeBlock | FrameBlock | CodeCellBlock | HtmlBlock | ImageBlock
                 | MoleculeBlock | ChemEqBlock | ElementBlock | MolDrawBlock | MatrixBlockData | GraphBlockData | GridBlockData
-                | DrawArrowBlock | DrawEllipseBlock | DrawPolygonBlock;
+                | DrawArrowBlock | DrawEllipseBlock | DrawPolygonBlock | InkStrokeBlock;
 type Patch = Record<string, unknown>;
 type Port = "top" | "right" | "bottom" | "left";
 interface Arrow { id: string; fromId: string; fromPort: Port; toId: string; toPort: Port; waypoints?: { id: string; x: number; y: number }[]; }
@@ -180,6 +181,27 @@ function mkDrawPolygon(points: { x: number; y: number }[], closed: boolean): Dra
   const bx = Math.min(...xs), by = Math.min(...ys);
   return { id: uid(), type: "draw_polygon", x: bx, y: by, width: Math.max(...xs) - bx || 10, height: Math.max(...ys) - by || 10, points, closed, color: "#64748b", fill: "none", strokeWidth: 2, dashed: false };
 }
+function pointsToSmoothPath(pts: { x: number; y: number }[]): string {
+  if (pts.length < 2) return "";
+  if (pts.length === 2) return `M ${pts[0].x} ${pts[0].y} L ${pts[1].x} ${pts[1].y}`;
+  let d = `M ${pts[0].x} ${pts[0].y}`;
+  for (let i = 0; i < pts.length - 1; i++) {
+    const mx = (pts[i].x + pts[i + 1].x) / 2;
+    const my = (pts[i].y + pts[i + 1].y) / 2;
+    d += ` Q ${pts[i].x} ${pts[i].y} ${mx} ${my}`;
+  }
+  const last = pts[pts.length - 1];
+  d += ` L ${last.x} ${last.y}`;
+  return d;
+}
+function mkInkStroke(points: { x: number; y: number }[], color: string, strokeWidth: number): InkStrokeBlock {
+  const xs = points.map(p => p.x), ys = points.map(p => p.y);
+  const bx = Math.min(...xs), by = Math.min(...ys);
+  return { id: uid(), type: "ink_stroke", x: bx, y: by,
+    width: Math.max(...xs) - bx || 1, height: Math.max(...ys) - by || 1,
+    points, color, strokeWidth };
+}
+
 function mkSimpleGrid(x: number, y: number): GridBlockData {
   return {
     id: uid(), type: "simple_grid", x, y, width: 260, height: 160,
@@ -801,6 +823,7 @@ function miniBlockFill(b: CanvasBlock): string {
   if (b.type === "graph_theory") return "#d1fae5";
   if (b.type === "draw_ellipse") return "#ede9fe";
   if (b.type === "draw_polygon") return "#fce7f3";
+  if (b.type === "ink_stroke")  return b.color + "33";
   if (b.type === "checklist") return "#dcfce7";
   if (b.type === "kanban")    return "#fce7f3";
   if (b.type === "code_cell") return "#1e1e2e";
@@ -1538,6 +1561,7 @@ export function CanvasEditor({ content, onChange, nodeId }: Props) {
   const [pendingArrow,   setPendingArrow]   = useState<PendingArrow | null>(null);
   const [previewPos,     setPreviewPos]     = useState<{ x: number; y: number } | null>(null);
   const [tool,           setTool]           = useState<"pan" | "lasso" | "draw_arrow" | "draw_ellipse" | "draw_polygon">("pan");
+  const [buildMode,      setBuildMode]      = useState(false);
   const [lassoRect,      setLassoRect]      = useState<{ x1: number; y1: number; x2: number; y2: number } | null>(null);
   const [snapGuides,     setSnapGuides]     = useState<SnapGuide[]>([]);
   const [showOverview,   setShowOverview]   = useState(false);
@@ -1597,6 +1621,15 @@ export function CanvasEditor({ content, onChange, nodeId }: Props) {
   selectedArrRef.current = selectedArrowId;
   const pendingRef       = useRef(pendingArrow);
   pendingRef.current     = pendingArrow;
+  const buildModeRef     = useRef(buildMode);
+  buildModeRef.current   = buildMode;
+  const [inkMode,        setInkMode]        = useState(false);
+  const inkModeRef       = useRef(inkMode);
+  inkModeRef.current     = inkMode;
+  const [inkColor,       setInkColor]       = useState(DRAW_COLORS[0]);
+  const [inkWidth,       setInkWidth]       = useState(2.5);
+  const inkActive        = useRef<{ x: number; y: number }[] | null>(null);
+  const [inkPreview,     setInkPreview]     = useState<string | null>(null);
   const dataRef          = useRef(data);
   dataRef.current        = data;
   const lastSaved        = useRef(content);
@@ -1723,6 +1756,8 @@ export function CanvasEditor({ content, onChange, nodeId }: Props) {
         drawStart.current = null;
         setDrawCurrent(null);
         setPolygonPts([]);
+        inkActive.current = null;
+        setInkPreview(null);
         if (selectedIdsRef.current.size > 1) { setSelectedIds(new Set()); setSelectedId(null); }
         return;
       }
@@ -1914,7 +1949,22 @@ export function CanvasEditor({ content, onChange, nodeId }: Props) {
     if (!e.isPrimary) return;
     e.currentTarget.setPointerCapture(e.pointerId);
     setOpenMenu(null);
+    // ── Ink mode routing ──
+    if (inkModeRef.current) {
+      if (e.pointerType === "touch") return; // suppress single-finger touch
+      if (e.pointerType === "pen") {
+        const rect = containerRef.current!.getBoundingClientRect();
+        const vp = viewportRef.current;
+        const cx = (e.clientX - rect.left - vp.x) / vp.zoom;
+        const cy = (e.clientY - rect.top  - vp.y) / vp.zoom;
+        inkActive.current = [{ x: cx, y: cy }];
+        setInkPreview(pointsToSmoothPath([{ x: cx, y: cy }]));
+        return;
+      }
+      // mouse: fall through to normal pan/lasso
+    }
     if (pendingRef.current) { setPendingArrow(null); setPreviewPos(null); return; }
+    if (buildModeRef.current) return; // build mode: handle in onBgClick, suppress pan/deselect
     setSelectedId(null); setSelectedArrowId(null); setSelectedIds(new Set());
     const rect = containerRef.current!.getBoundingClientRect();
     const vp = viewportRef.current;
@@ -1939,6 +1989,11 @@ export function CanvasEditor({ content, onChange, nodeId }: Props) {
 
   function onBgClick(e: React.MouseEvent) {
     if (e.detail !== 1) return; // only single clicks
+    if (buildModeRef.current) {
+      const rect = containerRef.current!.getBoundingClientRect();
+      addBlock(mkShape, e.clientX - rect.left, e.clientY - rect.top);
+      return;
+    }
     if (tool !== "draw_polygon") return;
     const rect = containerRef.current!.getBoundingClientRect();
     const vp = viewportRef.current;
@@ -1948,6 +2003,7 @@ export function CanvasEditor({ content, onChange, nodeId }: Props) {
   }
 
   function onBgDblClick(e: React.MouseEvent) {
+    if (buildModeRef.current) return;
     if (tool === "draw_polygon") {
       // finish polygon on double-click (remove the duplicate point added by the two single-click events)
       setPolygonPts(pts => {
@@ -2044,6 +2100,12 @@ export function CanvasEditor({ content, onChange, nodeId }: Props) {
     setSelectedId(b.id); setSelectedIds(new Set([b.id])); setSelectedArrowId(null);
     dragDrawArrow.current = { id: b.id, mode: which, mx: e.clientX, my: e.clientY, ox: b.x, oy: b.y, ox2: b.x2, oy2: b.y2 };
   }
+  function onInkStrokePointerDown(e: React.PointerEvent, ib: InkStrokeBlock) {
+    if (inkModeRef.current && e.pointerType === "pen") return;
+    e.stopPropagation();
+    preDrawSnapshot.current = snapshotData();
+    setSelectedId(ib.id); setSelectedIds(new Set([ib.id])); setSelectedArrowId(null);
+  }
   function onDrawShapePointerDown(e: React.PointerEvent, b: DrawEllipseBlock | DrawPolygonBlock) {
     e.stopPropagation();
     preDrawSnapshot.current = snapshotData();
@@ -2056,6 +2118,15 @@ export function CanvasEditor({ content, onChange, nodeId }: Props) {
 
   function onPointerMove(e: React.PointerEvent) {
     const vp = viewportRef.current;
+    // ── Ink mode: accumulate pen points ──
+    if (inkModeRef.current && e.pointerType === "pen" && inkActive.current) {
+      const rect = containerRef.current!.getBoundingClientRect();
+      const cx = (e.clientX - rect.left - vp.x) / vp.zoom;
+      const cy = (e.clientY - rect.top  - vp.y) / vp.zoom;
+      inkActive.current.push({ x: cx, y: cy });
+      setInkPreview(pointsToSmoothPath(inkActive.current));
+      return;
+    }
     if (pendingRef.current) {
       const rect = containerRef.current!.getBoundingClientRect();
       setPreviewPos({ x: (e.clientX - rect.left - vp.x) / vp.zoom, y: (e.clientY - rect.top - vp.y) / vp.zoom });
@@ -2196,7 +2267,18 @@ export function CanvasEditor({ content, onChange, nodeId }: Props) {
     }
   }
 
-  function onPointerUp() {
+  function onPointerUp(e?: React.PointerEvent) {
+    // ── Commit ink stroke ──
+    if (inkModeRef.current && e?.pointerType === "pen" && inkActive.current) {
+      const pts = inkActive.current;
+      if (pts.length >= 2) {
+        pushUndo();
+        setData(d => ({ ...d, blocks: [...d.blocks, mkInkStroke(pts, inkColor, inkWidth)] }));
+      }
+      inkActive.current = null;
+      setInkPreview(null);
+      return;
+    }
     if (lassoStart.current) {
       const ls = lassoStart.current;
       const le = lassoEnd.current ?? ls;
@@ -2294,11 +2376,20 @@ export function CanvasEditor({ content, onChange, nodeId }: Props) {
     const panDx = midX - prev.midX;
     const panDy = midY - prev.midY;
     if (!dragBlock.current) {
-      setViewport(vp => ({
-        x: vp.x + panDx,
-        y: vp.y + panDy,
-        zoom: Math.min(4, Math.max(0.15, vp.zoom * scaleRatio)),
-      }));
+      const rect = containerRef.current?.getBoundingClientRect();
+      // Anchor point in container-local coordinates (where the fingers currently are)
+      const ox = rect ? midX - rect.left : midX;
+      const oy = rect ? midY - rect.top  : midY;
+      setViewport(vp => {
+        const newZoom = Math.min(4, Math.max(0.15, vp.zoom * scaleRatio));
+        const zf = newZoom / vp.zoom;
+        // Keep the canvas point under the pinch midpoint fixed, then apply pan delta
+        return {
+          x: ox + (vp.x - ox) * zf + panDx,
+          y: oy + (vp.y - oy) * zf + panDy,
+          zoom: newZoom,
+        };
+      });
     }
     touchStartRef.current = { dist, midX, midY };
   }
@@ -2652,6 +2743,7 @@ export function CanvasEditor({ content, onChange, nodeId }: Props) {
   const drawArrowBlocks   = useMemo(() => data.blocks.filter((b): b is DrawArrowBlock   => b.type === "draw_arrow"),  [data.blocks]);
   const drawEllipseBlocks = useMemo(() => data.blocks.filter((b): b is DrawEllipseBlock => b.type === "draw_ellipse"), [data.blocks]);
   const drawPolygonBlocks = useMemo(() => data.blocks.filter((b): b is DrawPolygonBlock => b.type === "draw_polygon"), [data.blocks]);
+  const inkStrokeBlocks   = useMemo(() => data.blocks.filter((b): b is InkStrokeBlock   => b.type === "ink_stroke"),   [data.blocks]);
 
   // ── Memoized arrow JSX — avoids bezier recompute on snap-guide / hover changes ─
   const arrowElements = useMemo(() => data.arrows.map(arrow => {
@@ -2810,7 +2902,20 @@ export function CanvasEditor({ content, onChange, nodeId }: Props) {
           className={`canvas-block canvas-block-shape${selected ? " selected" : ""}${inMultiSel ? " multi-selected" : ""}`}
           style={{ left: block.x, top: block.y, width: block.width, height: block.height, zIndex: 2 }}
           onPointerDown={e => {
+            if (inkModeRef.current && e.pointerType === "pen") return;
             e.stopPropagation();
+            if (buildModeRef.current) {
+              if (e.shiftKey) {
+                const fromId = selectedIdRef.current;
+                if (fromId && fromId !== block.id) {
+                  pushUndo();
+                  setData(d => ({ ...d, arrows: [...d.arrows, { id: uid(), fromId, fromPort: "right", toId: block.id, toPort: "left" }] }));
+                }
+                return; // keep current active node
+              }
+              setSelectedId(block.id); setSelectedIds(new Set([block.id])); setSelectedArrowId(null);
+              return;
+            }
             const curIds = selectedIdsRef.current;
             if (curIds.has(block.id) && curIds.size > 1) return;
             setSelectedId(block.id); setSelectedIds(new Set([block.id])); setSelectedArrowId(null);
@@ -2865,7 +2970,20 @@ export function CanvasEditor({ content, onChange, nodeId }: Props) {
           ...(block.type === "sticky" ? { background: block.color, borderColor: stickyPreset(block.color).accent + "50" } : {}),
         }}
         onPointerDown={e => {
+          if (inkModeRef.current && e.pointerType === "pen") return;
           e.stopPropagation();
+          if (buildModeRef.current) {
+            if (e.shiftKey) {
+              const fromId = selectedIdRef.current;
+              if (fromId && fromId !== block.id) {
+                pushUndo();
+                setData(d => ({ ...d, arrows: [...d.arrows, { id: uid(), fromId, fromPort: "right", toId: block.id, toPort: "left" }] }));
+              }
+              return;
+            }
+            setSelectedId(block.id); setSelectedIds(new Set([block.id])); setSelectedArrowId(null);
+            return;
+          }
           const curIds = selectedIdsRef.current;
           if (curIds.has(block.id) && curIds.size > 1) return;
           setSelectedId(block.id); setSelectedIds(new Set([block.id])); setSelectedArrowId(null);
@@ -2894,7 +3012,7 @@ export function CanvasEditor({ content, onChange, nodeId }: Props) {
   return (
     <div
       ref={containerRef}
-      className={`canvas-editor${pendingArrow ? " canvas-connecting" : ""}${tool === "lasso" ? " canvas-lasso-mode" : ""}${tool.startsWith("draw_") ? " canvas-draw-mode" : ""}`}
+      className={`canvas-editor${pendingArrow ? " canvas-connecting" : ""}${tool === "lasso" ? " canvas-lasso-mode" : ""}${tool.startsWith("draw_") ? " canvas-draw-mode" : ""}${buildMode ? " canvas-build-mode" : ""}${inkMode ? " canvas-ink-mode" : ""}`}
       style={{ backgroundSize: `${gridSize}px ${gridSize}px`, backgroundPosition: `${x % gridSize}px ${y % gridSize}px` }}
       onPointerDown={onBgPointerDown}
       onPointerMove={onPointerMove}
@@ -2925,6 +3043,32 @@ export function CanvasEditor({ content, onChange, nodeId }: Props) {
           title="Select / Lasso (drag to multi-select)"
           onClick={() => setTool(t => t === "lasso" ? "pan" : "lasso")}
         >Select</button>
+
+        {/* Build mode toggle */}
+        <button
+          className={`canvas-tool-btn${buildMode ? " canvas-tool-active" : ""}`}
+          title="Build Mode — click canvas to create shapes; click node to make active; Shift+click node to connect from active"
+          onClick={() => { setBuildMode(m => !m); setTool("pan"); setOpenMenu(null); setInkMode(false); inkActive.current = null; setInkPreview(null); }}
+        >⊕ Build</button>
+
+        {/* Ink / Draw mode toggle */}
+        <button
+          className={`canvas-tool-btn${inkMode ? " canvas-tool-active" : ""}`}
+          title="Ink Mode — Apple Pencil draws freely anywhere; single-finger touch suppressed; two-finger pan/zoom still works"
+          onClick={() => {
+            const next = !inkMode;
+            setInkMode(next);
+            if (next) {
+              setBuildMode(false);
+              setTool("pan");
+              setPolygonPts([]);
+              drawStart.current = null; setDrawCurrent(null);
+              setOpenMenu(null);
+            }
+            inkActive.current = null;
+            setInkPreview(null);
+          }}
+        >✏ Ink</button>
         <div className="canvas-toolbar-sep" />
 
         {/* Text group */}
@@ -3215,6 +3359,40 @@ export function CanvasEditor({ content, onChange, nodeId }: Props) {
             );
           })}
 
+          {/* ── Ink strokes ──────────────────────────────────────────── */}
+          {inkStrokeBlocks.map(ib => {
+            const sel = selectedId === ib.id || selectedIds.has(ib.id);
+            const d = pointsToSmoothPath(ib.points);
+            if (!d) return null;
+            return (
+              <g key={ib.id}>
+                <path d={d} fill="none" stroke="transparent"
+                  strokeWidth={Math.max(ib.strokeWidth + 8, 12)}
+                  pointerEvents="stroke" style={{ cursor: "default" }}
+                  onPointerDown={e => onInkStrokePointerDown(e, ib)} />
+                <path d={d} fill="none" stroke={ib.color}
+                  strokeWidth={sel ? ib.strokeWidth + 1 : ib.strokeWidth}
+                  strokeLinecap="round" strokeLinejoin="round"
+                  pointerEvents="none" />
+                {sel && (
+                  <rect x={ib.x - 4} y={ib.y - 4}
+                    width={ib.width + 8} height={ib.height + 8}
+                    fill="none" stroke="var(--border-strong)"
+                    strokeWidth={1} strokeDasharray="4 3" rx={2}
+                    pointerEvents="none" />
+                )}
+              </g>
+            );
+          })}
+
+          {/* ── Ink live preview ─────────────────────────────────────── */}
+          {inkPreview && (
+            <path d={inkPreview} fill="none"
+              stroke={inkColor} strokeWidth={inkWidth}
+              strokeLinecap="round" strokeLinejoin="round"
+              pointerEvents="none" />
+          )}
+
           {/* ── Draw preview (in-progress arrow / ellipse) ────────────── */}
           {drawStart.current && drawCurrent && (() => {
             const { cx: sx, cy: sy } = drawStart.current!;
@@ -3360,6 +3538,28 @@ export function CanvasEditor({ content, onChange, nodeId }: Props) {
             </div>
           );
         })}
+
+        {/* Ink stroke floating toolbar */}
+        {inkStrokeBlocks.filter(ib => selectedId === ib.id).map(ib => (
+          <div key={ib.id + "-tb"} className="canvas-divider-float-toolbar ds-float-toolbar"
+            style={{ left: ib.x + ib.width / 2, top: ib.y - 44 }}
+            onPointerDown={e => e.stopPropagation()}>
+            {DRAW_COLORS.map(c => (
+              <button key={c} className={`ds-color-btn${ib.color === c ? " active" : ""}`}
+                style={{ background: c, outlineColor: c }}
+                onClick={() => updateBlock(ib.id, { color: c })} />
+            ))}
+            <div className="canvas-divider-float-sep" />
+            {[1.5, 2.5, 4].map(w => (
+              <button key={w} className={`canvas-divider-style-btn${ib.strokeWidth === w ? " active" : ""}`}
+                onClick={() => updateBlock(ib.id, { strokeWidth: w })}>
+                <span style={{ display:"block", height: w < 2 ? "1.5px" : w < 3 ? "2.5px" : "4px", width:14, background:"currentColor", borderRadius:1 }} />
+              </button>
+            ))}
+            <div className="canvas-divider-float-sep" />
+            <button className="canvas-block-close" onClick={() => deleteBlock(ib.id)}>×</button>
+          </div>
+        ))}
 
         {/* Polygon in-progress hint */}
         {tool === "draw_polygon" && polygonPts.length > 0 && (

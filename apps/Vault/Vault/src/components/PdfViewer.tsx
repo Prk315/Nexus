@@ -983,21 +983,39 @@ export function PdfViewer({ content: pdfPath, nodeId }: Props) {
 
     function onTouchStart(e: TouchEvent) {
       if (e.touches.length === 2) {
-        const dx = e.touches[0].clientX - e.touches[1].clientX;
-        const dy = e.touches[0].clientY - e.touches[1].clientY;
-        lastDist = Math.hypot(dx, dy);
+        const t0 = e.touches[0], t1 = e.touches[1];
+        lastDist = Math.hypot(t0.clientX - t1.clientX, t0.clientY - t1.clientY);
       }
     }
 
     function onTouchMove(e: TouchEvent) {
       if (e.touches.length !== 2 || lastDist === 0) return;
       e.preventDefault();
-      const dx = e.touches[0].clientX - e.touches[1].clientX;
-      const dy = e.touches[0].clientY - e.touches[1].clientY;
-      const dist = Math.hypot(dx, dy);
-      const ratio = dist / lastDist;
+      const t0 = e.touches[0], t1 = e.touches[1];
+      const dist = Math.hypot(t0.clientX - t1.clientX, t0.clientY - t1.clientY);
+      const rawRatio = dist / lastDist;
       lastDist = dist;
-      setZoom(z => Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, +(z * ratio).toFixed(2))));
+
+      // Skip micro-movements to avoid jitter
+      if (Math.abs(rawRatio - 1) < 0.004) return;
+
+      // Dampen: pull ratio toward 1 so zoom is slower and smoother
+      const ratio = 1 + (rawRatio - 1) * 0.55;
+
+      // Pinch midpoint Y relative to the scroll area's visible top
+      const midY = (t0.clientY + t1.clientY) / 2;
+      const rect = el.getBoundingClientRect();
+      const viewY = midY - rect.top;
+
+      const z = zoomRef.current;
+      const newZoom = Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, +(z * ratio).toFixed(3)));
+      if (newZoom === z) return;
+
+      // Keep the canvas point under the pinch midpoint fixed.
+      // With transformOrigin "top center", docY = (scrollTop + viewY) / z,
+      // so after zoom: newScrollTop = docY * newZoom - viewY
+      el.scrollTop = Math.max(0, (el.scrollTop + viewY) * (newZoom / z) - viewY);
+      setZoom(newZoom);
     }
 
     el.addEventListener("touchstart", onTouchStart, { passive: true });
