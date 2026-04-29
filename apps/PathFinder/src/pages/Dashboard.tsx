@@ -216,6 +216,9 @@ function HabitsStrip({ habits, stacks, onToggle }: {
   stacks: HabitStack[];
   onToggle: (id: number) => void;
 }) {
+  const [collapsed, setCollapsed] = useState(false);
+  const [collapsedStacks, setCollapsedStacks] = useState<Set<number>>(new Set());
+
   if (!habits.length) return null;
   const done  = habits.filter((h) => h.done).length;
   const total = habits.length;
@@ -225,6 +228,9 @@ function HabitsStrip({ habits, stacks, onToggle }: {
   const grouped = stacks
     .map((s) => ({ stack: s, habits: habits.filter((h) => h.stack_id === s.id) }))
     .filter((g) => g.habits.length > 0);
+
+  const toggleStack = (id: number) =>
+    setCollapsedStacks((prev) => { const n = new Set(prev); n.has(id) ? n.delete(id) : n.add(id); return n; });
 
   const renderHabitRow = (h: HabitWithCompletion) => (
     <button
@@ -251,52 +257,69 @@ function HabitsStrip({ habits, stacks, onToggle }: {
 
   return (
     <div className="shrink-0 flex flex-col gap-2 pb-2 border-b border-border">
-      {/* Header */}
-      <div className="flex items-center justify-between px-1">
-        <span className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider">
-          Habits
-        </span>
+      {/* Header — click to collapse the whole strip */}
+      <button
+        onClick={() => setCollapsed((v) => !v)}
+        className="flex items-center justify-between px-1 w-full hover:opacity-80 transition-opacity"
+      >
+        <div className="flex items-center gap-1">
+          <ChevronRight className={cn("h-3 w-3 text-muted-foreground transition-transform", !collapsed && "rotate-90")} />
+          <span className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider">
+            Habits
+          </span>
+        </div>
         <span className="text-[10px] tabular-nums text-muted-foreground">
           {done}/{total}
         </span>
-      </div>
+      </button>
 
-      {/* Progress bar */}
-      <div className="h-1 bg-secondary rounded-full overflow-hidden mx-1">
-        <div
-          className={cn("h-full rounded-full transition-all duration-500", pct === 100 ? "bg-emerald-500" : "bg-primary")}
-          style={{ width: `${pct}%` }}
-        />
-      </div>
-
-      {/* Stacked groups */}
-      {grouped.map(({ stack, habits: sh }) => {
-        const stackColor = HABIT_COLOR_DOT[stack.color] ?? "bg-blue-500";
-        const stackDone = sh.filter((h) => h.done).length;
-        return (
-          <div key={stack.id} className="flex flex-col gap-0">
-            <div className="flex items-center gap-1.5 px-1.5 py-0.5">
-              <span className={cn("w-1.5 h-1.5 rounded-full flex-shrink-0", stackColor)} />
-              <span className="text-[9px] font-semibold text-muted-foreground uppercase tracking-wider flex-1 truncate">{stack.title}</span>
-              <span className="text-[9px] tabular-nums text-muted-foreground">{stackDone}/{sh.length}</span>
-            </div>
-            <div className="flex flex-col gap-0.5 pl-1">
-              {sh.map(renderHabitRow)}
-            </div>
+      {!collapsed && (
+        <>
+          {/* Progress bar */}
+          <div className="h-1 bg-secondary rounded-full overflow-hidden mx-1">
+            <div
+              className={cn("h-full rounded-full transition-all duration-500", pct === 100 ? "bg-emerald-500" : "bg-primary")}
+              style={{ width: `${pct}%` }}
+            />
           </div>
-        );
-      })}
 
-      {/* Ungrouped */}
-      {ungrouped.length > 0 && (
-        <div className="flex flex-col gap-0.5">
-          {grouped.length > 0 && ungrouped.length > 0 && (
-            <div className="flex items-center gap-1.5 px-1.5 py-0.5">
-              <span className="text-[9px] font-semibold text-muted-foreground uppercase tracking-wider">Other</span>
+          {/* Stacked groups — each collapsible */}
+          {grouped.map(({ stack, habits: sh }) => {
+            const stackColor = HABIT_COLOR_DOT[stack.color] ?? "bg-blue-500";
+            const stackDone = sh.filter((h) => h.done).length;
+            const stackCollapsed = collapsedStacks.has(stack.id);
+            return (
+              <div key={stack.id} className="flex flex-col gap-0">
+                <button
+                  onClick={() => toggleStack(stack.id)}
+                  className="flex items-center gap-1.5 px-1.5 py-0.5 w-full hover:opacity-80 transition-opacity"
+                >
+                  <ChevronRight className={cn("h-2.5 w-2.5 text-muted-foreground transition-transform flex-shrink-0", !stackCollapsed && "rotate-90")} />
+                  <span className={cn("w-1.5 h-1.5 rounded-full flex-shrink-0", stackColor)} />
+                  <span className="text-[9px] font-semibold text-muted-foreground uppercase tracking-wider flex-1 truncate text-left">{stack.title}</span>
+                  <span className="text-[9px] tabular-nums text-muted-foreground">{stackDone}/{sh.length}</span>
+                </button>
+                {!stackCollapsed && (
+                  <div className="flex flex-col gap-0.5 pl-1">
+                    {sh.map(renderHabitRow)}
+                  </div>
+                )}
+              </div>
+            );
+          })}
+
+          {/* Ungrouped */}
+          {ungrouped.length > 0 && (
+            <div className="flex flex-col gap-0.5">
+              {grouped.length > 0 && (
+                <div className="flex items-center gap-1.5 px-1.5 py-0.5">
+                  <span className="text-[9px] font-semibold text-muted-foreground uppercase tracking-wider">Other</span>
+                </div>
+              )}
+              {ungrouped.map(renderHabitRow)}
             </div>
           )}
-          {ungrouped.map(renderHabitRow)}
-        </div>
+        </>
       )}
     </div>
   );
