@@ -2665,9 +2665,11 @@ export const updateTrainingSession = async (id: number, payload: {
 };
 
 export const toggleTrainingSession = async (id: number): Promise<TrainingSession> => {
-  const { data: cur } = await supabase.from("pf_training_sessions").select("completed").eq("id", id).single();
+  // Virtual recurring instances have negative synthetic IDs; resolve to the real row ID.
+  const realId = id < 0 ? Math.floor(-id / 100_000) : id;
+  const { data: cur } = await supabase.from("pf_training_sessions").select("completed").eq("id", realId).single();
   const { data, error } = await supabase
-    .from("pf_training_sessions").update({ completed: !cur!.completed }).eq("id", id).select("*, pf_training_plans(title, plan_type)").single();
+    .from("pf_training_sessions").update({ completed: !cur!.completed }).eq("id", realId).select("*, pf_training_plans(title, plan_type)").single();
   if (error) err(error);
   return mapTrainingSession(data!);
 };

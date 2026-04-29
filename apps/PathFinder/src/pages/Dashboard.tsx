@@ -2730,7 +2730,14 @@ export function Dashboard() {
 
   const handleToggleSession = async (id: number) => {
     const updated = await toggleTrainingSession(id);
-    setTodaySessions((prev) => prev.map((s) => s.id === id ? { ...s, completed: updated.completed } : s));
+    const realId = id < 0 ? Math.floor(-id / 100_000) : id;
+    setTodaySessions((prev) =>
+      prev.map((s) => {
+        // match the exact id OR any virtual instance of the same recurring series
+        const sRealId = s.id < 0 ? Math.floor(-s.id / 100_000) : s.id;
+        return sRealId === realId ? { ...s, completed: updated.completed } : s;
+      })
+    );
   };
 
   const handleCreateCalBlock = async (d: DCBlockDraft) => {
