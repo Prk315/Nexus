@@ -70,3 +70,31 @@ pub fn get_all_projects(state: State<'_, AppState>) -> Result<Vec<String>, Strin
     let db = state.db.lock().map_err(|e| e.to_string())?;
     entries::get_all_projects(&db).map_err(|e| e.to_string())
 }
+
+#[tauri::command]
+pub fn add_manual_entry(
+    state: State<'_, AppState>,
+    task_name: String,
+    project: Option<String>,
+    start_time: String,
+    end_time: String,
+    tags: Option<String>,
+    notes: Option<String>,
+    billable: bool,
+    hourly_rate: f64,
+    user_id: Option<String>,
+) -> Result<i64, String> {
+    let db = state.db.lock().map_err(|e| e.to_string())?;
+    entries::add_manual_entry(
+        &db,
+        &task_name,
+        project.as_deref(),
+        &start_time,
+        &end_time,
+        tags.as_deref(),
+        notes.as_deref(),
+        billable,
+        hourly_rate,
+        user_id.as_deref(),
+    )
+}

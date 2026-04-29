@@ -139,6 +139,99 @@ pub fn delete_entry(conn: &Connection, entry_id: i64) -> Result<bool, String> {
     Ok(rows > 0)
 }
 
+/// Insert a manually-entered time entry with an explicit start and end time.
+/// `start_time` and `end_time` must be ISO-8601 strings (local time).
+/// Returns the new row id.
+pub fn add_manual_entry(
+    conn: &Connection,
+    task_name: &str,
+    project: Option<&str>,
+    start_time: &str,
+    end_time: &str,
+    tags: Option<&str>,
+    notes: Option<&str>,
+    billable: bool,
+    hourly_rate: f64,
+    user_id: Option<&str>,
+) -> Result<i64, String> {
+    if task_name.trim().is_empty() {
+        return Err("Task name cannot be empty".into());
+    }
+
+    // Compute duration from start/end timestamps.
+    let start = parse_for_duration(start_time);
+    let end   = parse_for_duration(end_time);
+    if end <= start {
+        return Err("End time must be after start time".into());
+    }
+    let duration_seconds = (end - start).num_seconds().max(0);
+
+    conn.execute(
+        "INSERT INTO time_entries
+            (task_name, project, start_time, end_time, duration_seconds,
+             tags, notes, billable, hourly_rate, synced, user_id)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, 0, ?10)",
+        params![
+            task_name,
+            project,
+            start_time,
+            end_time,
+            duration_seconds,
+            tags,
+            notes,
+            billable as i64,
+            hourly_rate,
+            user_id,
+        ],
+    )
+    .map_err(|e| e.to_string())?;
+
+    Ok(conn.last_insert_rowid())
+}
+
+/// Fetch the N most recently used distinct (task_name, project) pairs for widget state.
+pub fn get_recent_tasks(conn: &Connection, limit: i64) -> Result<Vec<(String, String)>> {
+    let mut stmt = conn.prepare(
+        "SELECT task_name, COALESCE(project, '') AS project, MAX(start_time) AS last_used
+         FROM time_entries
+         GROUP BY task_name, COALESCE(project, '')
+         ORDER BY last_used DESC
+         LIMIT ?",
+    )?;
+    let pairs = stmt
+        .query_map(params![limit], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))?
+        .filter_map(|r| r.ok())
+        .collect();
+    Ok(pairs)
+}
+
+/// Sum of duration_seconds for entries that started today (local time).
+pub fn today_total_seconds(conn: &Connection) -> Result<i64> {
+    conn.query_row(
+        "SELECT COALESCE(SUM(duration_seconds), 0)
+         FROM time_entries
+         WHERE date(start_time) = date('now', 'localtime')",
+        [],
+        |r| r.get(0),
+    )
+}
+
+// helper for add_manual_entry duration calc
+fn parse_for_duration(s: &str) -> chrono::DateTime<chrono::Local> {
+    use chrono::{DateTime, Local, NaiveDateTime, TimeZone};
+    DateTime::parse_from_rfc3339(s)
+        .map(|dt| dt.with_timezone(&Local))
+        .or_else(|_| {
+            NaiveDateTime::parse_from_str(s, "%Y-%m-%dT%H:%M:%S%.3f")
+                .map(|ndt| ndt.and_local_timezone(Local).unwrap())
+        })
+        .or_else(|_| {
+            NaiveDateTime::parse_from_str(s, "%Y-%m-%dT%H:%M")
+                .map(|ndt| ndt.and_local_timezone(Local).unwrap())
+        })
+        .unwrap_or_else(|_| Local::now())
+}
+
 pub fn get_all_projects(conn: &Connection) -> Result<Vec<String>> {
     let mut stmt = conn.prepare(
         "SELECT DISTINCT project FROM time_entries

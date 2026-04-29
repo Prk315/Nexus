@@ -36,6 +36,13 @@
     },
     "macOSPrivateApi": true
   },
+  "plugins": {
+    "deep-link": {
+      "mobile": [
+        { "scheme": ["timetracker"] }
+      ]
+    }
+  },
   "bundle": {
     "active": true,
     "targets": "all",

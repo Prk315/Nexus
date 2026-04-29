@@ -17,7 +17,17 @@ import type {
 
 export const getStatus = () => invoke<TimerStatus>("get_status");
 
-export const startTimer = (params: {
+// Widget + Live Activity housekeeping (fire-and-forget, fail silently on non-iOS)
+const startLiveActivity = (taskName: string, projectName: string, startTimestamp: number) =>
+  invoke<void>("start_live_activity", { taskName, projectName, startTimestamp }).catch(() => {});
+
+const endLiveActivity = () =>
+  invoke<void>("end_live_activity").catch(() => {});
+
+export const syncWidgetState = () =>
+  invoke<void>("sync_widget_state").catch(() => {});
+
+export const startTimer = async (params: {
   taskName: string;
   project?: string;
   tags?: string;
@@ -25,8 +35,9 @@ export const startTimer = (params: {
   billable: boolean;
   hourlyRate: number;
   userId?: string;
-}) =>
-  invoke<void>("start_timer", {
+}) => {
+  const startTimestamp = Date.now() / 1000;
+  await invoke<void>("start_timer", {
     taskName: params.taskName,
     project: params.project ?? null,
     tags: params.tags ?? null,
@@ -35,9 +46,24 @@ export const startTimer = (params: {
     hourlyRate: params.hourlyRate,
     userId: params.userId ?? null,
   });
+  startLiveActivity(params.taskName, params.project ?? "", startTimestamp);
+  syncWidgetState();
+};
 
-export const stopTimer = () => invoke<TimeEntry>("stop_timer");
-export const pauseTimer = () => invoke<PausedSession>("pause_timer");
+export const stopTimer = async () => {
+  const entry = await invoke<TimeEntry>("stop_timer");
+  endLiveActivity();
+  syncWidgetState();
+  return entry;
+};
+
+export const pauseTimer = async () => {
+  const session = await invoke<PausedSession>("pause_timer");
+  endLiveActivity();
+  syncWidgetState();
+  return session;
+};
+
 export const resumeTimer = () => invoke<ActiveSession>("resume_timer");
 export const cancelPaused = () => invoke<boolean>("cancel_paused");
 
@@ -101,6 +127,29 @@ export const getStatistics = (params?: { startDate?: string; endDate?: string })
   });
 
 export const getAllProjects = () => invoke<string[]>("get_all_projects");
+
+export const addManualEntry = (params: {
+  taskName: string;
+  project?: string;
+  startTime: string;   // ISO-8601 local datetime, e.g. "2026-04-29T09:00"
+  endTime: string;
+  tags?: string;
+  notes?: string;
+  billable: boolean;
+  hourlyRate: number;
+  userId?: string;
+}) =>
+  invoke<number>("add_manual_entry", {
+    taskName: params.taskName,
+    project: params.project ?? null,
+    startTime: params.startTime,
+    endTime: params.endTime,
+    tags: params.tags ?? null,
+    notes: params.notes ?? null,
+    billable: params.billable,
+    hourlyRate: params.hourlyRate,
+    userId: params.userId ?? null,
+  });
 
 // ── Templates ────────────────────────────────────────────────────────────────
 

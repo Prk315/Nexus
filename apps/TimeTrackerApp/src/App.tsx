@@ -1,11 +1,13 @@
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import { useNexusRegistration } from "@nexus/core";
 import { getCurrentWindow } from "@tauri-apps/api/window";
+import { onOpenUrl, getCurrent } from "@tauri-apps/plugin-deep-link";
 import { useAppDispatch, useAppSelector } from "./hooks/useAppDispatch";
 import { fetchConfig } from "./store/slices/settingsSlice";
 import { fetchCategories } from "./store/slices/categoriesSlice";
 import { fetchBlockerState } from "./store/slices/blockerSlice";
 import { useAutoSync } from "./hooks/useAutoSync";
+import { syncWidgetState } from "./lib/tauriApi";
 import AppShell from "./components/layout/AppShell";
 import FloatingWidget from "./pages/FloatingWidget";
 
@@ -39,8 +41,9 @@ export default function App() {
   const dispatch = useAppDispatch();
   useAutoSync();
 
+  const [pendingUrl, setPendingUrl] = useState<string | null>(null);
+
   useEffect(() => {
-    // Mark the body so the widget window gets transparent CSS
     if (IS_WIDGET) {
       document.documentElement.classList.add("widget-window");
       document.body.classList.add("widget-window");
@@ -49,11 +52,36 @@ export default function App() {
     dispatch(fetchConfig());
     dispatch(fetchCategories());
     dispatch(fetchBlockerState());
+
+    // Push current timer state to WidgetKit on every app launch.
+    syncWidgetState();
+
+    // Deep link: URL that launched the app (e.g. from a widget tap).
+    getCurrent()
+      .then((urls) => { if (urls?.[0]) setPendingUrl(urls[0]); })
+      .catch(() => {});
+
+    // Deep link: URL while the app is already foregrounded.
+    let unlistenFn: (() => void) | undefined;
+    onOpenUrl((urls) => {
+      if (urls[0]) setPendingUrl(urls[0]);
+    })
+      .then((fn) => { unlistenFn = fn; })
+      .catch(() => {});
+
+    return () => { unlistenFn?.(); };
   }, [dispatch]);
 
   return (
     <ThemeWrapper>
-      {IS_WIDGET ? <FloatingWidget /> : <AppShell />}
+      {IS_WIDGET ? (
+        <FloatingWidget />
+      ) : (
+        <AppShell
+          pendingUrl={pendingUrl}
+          onUrlHandled={() => setPendingUrl(null)}
+        />
+      )}
     </ThemeWrapper>
   );
 }

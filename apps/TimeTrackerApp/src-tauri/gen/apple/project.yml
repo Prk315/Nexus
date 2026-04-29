@@ -32,6 +32,7 @@ targets:
       - path: ../../ios
         excludes:
           - "SafariBlockerExtension/**"
+          - "TimerWidgetExtension/**"
       - path: Assets.xcassets
       - path: Externals
         excludes:
@@ -58,14 +59,23 @@ targets:
           - UIInterfaceOrientationLandscapeRight
         CFBundleShortVersionString: 1.0.0
         CFBundleVersion: "1.0.0"
+        NSSupportsLiveActivities: true
+        CFBundleURLTypes:
+          - CFBundleURLSchemes:
+              - timetracker
+            CFBundleURLName: com.bastianthomsen.timetracker
     entitlements:
       path: timetracker-app_iOS/timetracker-app_iOS.entitlements
+      properties:
+        com.apple.security.application-groups:
+          - group.com.bastianthomsen.timetracker
     scheme:
       environmentVariables:
         RUST_BACKTRACE: full
         RUST_LOG: info
     settings:
       base:
+        DEVELOPMENT_TEAM: G9D6JYJSLT
         ENABLE_BITCODE: false
         ENABLE_USER_SCRIPT_SANDBOXING: NO
         ARCHS: [arm64]
@@ -86,7 +96,13 @@ targets:
       - sdk: UIKit.framework
       - sdk: WebKit.framework
       - sdk: SafariServices.framework
+      - sdk: ActivityKit.framework
+        weak: true
+      - sdk: WidgetKit.framework
+        weak: true
       - target: timetracker-app_SafariBlocker
+        embed: true
+      - target: timetracker-app_TimerWidget
         embed: true
     preBuildScripts:
       - script: node tauri ios xcode-script -v --platform ${PLATFORM_DISPLAY_NAME:?} --sdk-root ${SDKROOT:?} --framework-search-paths "${FRAMEWORK_SEARCH_PATHS:?}" --header-search-paths "${HEADER_SEARCH_PATHS:?}" --gcc-preprocessor-definitions "${GCC_PREPROCESSOR_DEFINITIONS:-}" --configuration ${CONFIGURATION:?} ${FORCE_COLOR} ${ARCHS:?}
@@ -119,3 +135,26 @@ targets:
         IPHONEOS_DEPLOYMENT_TARGET: "14.0"
         INFOPLIST_FILE: $(SRCROOT)/../../ios/SafariBlockerExtension/Info.plist
         CODE_SIGN_ENTITLEMENTS: $(SRCROOT)/../../ios/SafariBlockerExtension/SafariBlocker.entitlements
+
+  timetracker-app_TimerWidget:
+    type: app-extension
+    platform: iOS
+    sources:
+      - path: ../../ios/TimerWidgetExtension
+        excludes:
+          - "Info.plist"
+      - path: ../../ios/TimerAttributes.swift
+    dependencies:
+      - sdk: WidgetKit.framework
+      - sdk: SwiftUI.framework
+      - sdk: ActivityKit.framework
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.bastianthomsen.timetracker.TimerWidget
+        DEVELOPMENT_TEAM: G9D6JYJSLT
+        ENABLE_USER_SCRIPT_SANDBOXING: NO
+        ARCHS: [arm64]
+        VALID_ARCHS: arm64
+        IPHONEOS_DEPLOYMENT_TARGET: "16.2"
+        INFOPLIST_FILE: $(SRCROOT)/../../ios/TimerWidgetExtension/Info.plist
+        CODE_SIGN_ENTITLEMENTS: $(SRCROOT)/../../ios/TimerWidgetExtension/TimerWidget.entitlements

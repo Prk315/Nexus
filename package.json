@@ -17,7 +17,13 @@
     "build:vault:ios": "cd apps/Vault/Vault && npx tauri ios build",
     "dev:stonks": "npm run dev --workspace=apps/Stonks",
     "build:all": "npm run build --workspaces --if-present",
-    "lint:all": "npm run lint --workspaces --if-present"
+    "lint:all": "npm run lint --workspaces --if-present",
+    "ios": "./ios-build.sh",
+    "ios:clean": "./ios-build.sh --clean",
+    "ios:release": "./ios-build.sh --release",
+    "ios:logs": "./ios-build.sh --logs",
+    "ios:pathfinder": "./ios-build.sh --app pathfinder",
+    "ios:vault": "./ios-build.sh --app vault"
   },
   "devDependencies": {
     "turbo": "^2.0.0"

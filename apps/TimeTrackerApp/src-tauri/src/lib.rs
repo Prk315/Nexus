@@ -2,6 +2,7 @@ mod blocker;
 mod commands;
 mod config;
 mod db;
+mod live_activities;
 mod models;
 mod sync;
 #[cfg(not(mobile))]
@@ -16,6 +17,7 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_deep_link::init())
         .setup(|app| {
             // Load config (reads ~/.timetrackerrc)
             let config_state = ConfigState::load();
@@ -183,6 +185,12 @@ pub fn run() {
             commands::add_time_unlock_rule,
             commands::remove_time_unlock_rule,
             commands::get_today_minutes,
+            // Entries (manual add)
+            commands::add_manual_entry,
+            // Live Activities + Widget state (iOS only, no-op elsewhere)
+            live_activities::start_live_activity,
+            live_activities::end_live_activity,
+            live_activities::sync_widget_state,
         ])
         .run(tauri::generate_context!())
         .expect("Error while running TimeTracker");
