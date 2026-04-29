@@ -2,6 +2,7 @@ import { useEffect, useState, useCallback, useMemo, useRef } from "react";
 import {
   CheckCircle, Flame, RefreshCw, Target, CheckSquare, Check, ChevronDown, ChevronRight,
   Bell, Plus, X, FileText, Zap, Calendar, Clock, Handshake, Star, Pencil, BookOpen,
+  Eye, EyeOff,
 } from "lucide-react";
 import {
   getGoals, getPlans, getAllTasks, getSystems,
@@ -18,6 +19,8 @@ import {
   getAgreements, addAgreement, deleteAgreement,
   getJournalEntry, saveJournalEntry,
   getCourseAssignments, updateCourseAssignment,
+  getScheduleEntriesForDate,
+  getHabitsForDate, toggleHabitCompletion, getHabitStacks,
 } from "../lib/api";
 import { Progress } from "../components/ui/progress";
 import { Button } from "../components/ui/button";
@@ -25,7 +28,7 @@ import { Badge } from "../components/ui/badge";
 import { PriorityDot } from "../components/PriorityDot";
 import { daysUntil, deadlineLabel, deadlineVariant, cn, layoutCalItems } from "../lib/utils";
 import { isDue } from "./Systems";
-import type { Goal, GoalGroup, Plan, TaskWithContext, SystemEntry, SystemSubtask, CalBlock, DailyGoals, Reminder, QuickNote, BrainEntry, CalEvent, Deadline, Agreement, CourseAssignment } from "../types";
+import type { Goal, GoalGroup, Plan, TaskWithContext, SystemEntry, SystemSubtask, CalBlock, DailyGoals, Reminder, QuickNote, BrainEntry, CalEvent, Deadline, Agreement, CourseAssignment, ScheduleEntry, HabitWithCompletion, HabitStack } from "../types";
 
 const todayDate = () => new Date().toISOString().slice(0, 10);
 
@@ -197,16 +200,119 @@ function DayBlockModal({
   );
 }
 
+// ── Habits Strip ─────────────────────────────────────────────────────────────
+
+const HABIT_COLOR_DOT: Record<string, string> = {
+  red:    "bg-red-500",    orange: "bg-orange-500", amber:  "bg-amber-500",
+  yellow: "bg-yellow-500", lime:   "bg-lime-500",   green:  "bg-green-500",
+  emerald:"bg-emerald-500",teal:   "bg-teal-500",   cyan:   "bg-cyan-500",
+  sky:    "bg-sky-500",    blue:   "bg-blue-500",   indigo: "bg-indigo-500",
+  violet: "bg-violet-500", purple: "bg-purple-500", pink:   "bg-pink-500",
+  rose:   "bg-rose-500",   slate:  "bg-slate-500",
+};
+
+function HabitsStrip({ habits, stacks, onToggle }: {
+  habits: HabitWithCompletion[];
+  stacks: HabitStack[];
+  onToggle: (id: number) => void;
+}) {
+  if (!habits.length) return null;
+  const done  = habits.filter((h) => h.done).length;
+  const total = habits.length;
+  const pct   = total > 0 ? Math.round((done / total) * 100) : 0;
+
+  const ungrouped = habits.filter((h) => h.stack_id === null);
+  const grouped = stacks
+    .map((s) => ({ stack: s, habits: habits.filter((h) => h.stack_id === s.id) }))
+    .filter((g) => g.habits.length > 0);
+
+  const renderHabitRow = (h: HabitWithCompletion) => (
+    <button
+      key={h.id}
+      onClick={() => onToggle(h.id)}
+      className="flex items-center gap-2 px-1.5 py-1 rounded-md text-left transition-colors hover:bg-secondary/60 group"
+    >
+      <div className={cn(
+        "h-4 w-4 shrink-0 rounded-full border-2 flex items-center justify-center transition-colors",
+        h.done
+          ? `border-transparent ${HABIT_COLOR_DOT[h.color] ?? "bg-primary"}`
+          : "border-border group-hover:border-muted-foreground/50"
+      )}>
+        {h.done && <Check className="h-2.5 w-2.5 text-white" strokeWidth={3} />}
+      </div>
+      <span className={cn("flex-1 text-[11px] truncate transition-colors", h.done ? "line-through text-muted-foreground/50" : "text-foreground")}>
+        {h.title}
+      </span>
+      {h.streak > 1 && (
+        <span className="text-[9px] text-amber-500 font-semibold shrink-0">🔥{h.streak}</span>
+      )}
+    </button>
+  );
+
+  return (
+    <div className="shrink-0 flex flex-col gap-2 pb-2 border-b border-border">
+      {/* Header */}
+      <div className="flex items-center justify-between px-1">
+        <span className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider">
+          Habits
+        </span>
+        <span className="text-[10px] tabular-nums text-muted-foreground">
+          {done}/{total}
+        </span>
+      </div>
+
+      {/* Progress bar */}
+      <div className="h-1 bg-secondary rounded-full overflow-hidden mx-1">
+        <div
+          className={cn("h-full rounded-full transition-all duration-500", pct === 100 ? "bg-emerald-500" : "bg-primary")}
+          style={{ width: `${pct}%` }}
+        />
+      </div>
+
+      {/* Stacked groups */}
+      {grouped.map(({ stack, habits: sh }) => {
+        const stackColor = HABIT_COLOR_DOT[stack.color] ?? "bg-blue-500";
+        const stackDone = sh.filter((h) => h.done).length;
+        return (
+          <div key={stack.id} className="flex flex-col gap-0">
+            <div className="flex items-center gap-1.5 px-1.5 py-0.5">
+              <span className={cn("w-1.5 h-1.5 rounded-full flex-shrink-0", stackColor)} />
+              <span className="text-[9px] font-semibold text-muted-foreground uppercase tracking-wider flex-1 truncate">{stack.title}</span>
+              <span className="text-[9px] tabular-nums text-muted-foreground">{stackDone}/{sh.length}</span>
+            </div>
+            <div className="flex flex-col gap-0.5 pl-1">
+              {sh.map(renderHabitRow)}
+            </div>
+          </div>
+        );
+      })}
+
+      {/* Ungrouped */}
+      {ungrouped.length > 0 && (
+        <div className="flex flex-col gap-0.5">
+          {grouped.length > 0 && ungrouped.length > 0 && (
+            <div className="flex items-center gap-1.5 px-1.5 py-0.5">
+              <span className="text-[9px] font-semibold text-muted-foreground uppercase tracking-wider">Other</span>
+            </div>
+          )}
+          {ungrouped.map(renderHabitRow)}
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ── Day Calendar ──────────────────────────────────────────────────────────────
 
 function DayCalendar({
-  date: _date, calBlocks, systems, courseAssignments,
+  date: _date, calBlocks, systems, courseAssignments, scheduleEntries,
   onCreateBlock, onUpdateBlock, onDeleteBlock,
 }: {
   date: string;
   calBlocks: CalBlock[];
   systems: SystemEntry[];
   courseAssignments: CourseAssignment[];
+  scheduleEntries: ScheduleEntry[];
   onCreateBlock: (d: DCBlockDraft) => Promise<void>;
   onUpdateBlock: (id: number, d: DCBlockDraft) => Promise<void>;
   onDeleteBlock: (b: CalBlock) => Promise<void>;
@@ -218,6 +324,10 @@ function DayCalendar({
     startTime?: string;
     endTime?: string;
   } | null>(null);
+  const [hiddenIds, setHiddenIds] = useState<Set<string>>(new Set());
+  const toggleHidden = useCallback((id: string) => {
+    setHiddenIds(prev => { const next = new Set(prev); next.has(id) ? next.delete(id) : next.add(id); return next; });
+  }, []);
 
   const totalPx = DC_HOURS.length * DC_HOUR_PX;
 
@@ -244,6 +354,8 @@ function DayCalendar({
   const timedSystems = systems.filter((s) => s.start_time);
   // Course assignments for today with a start_time
   const timedCAs     = courseAssignments.filter((ca) => ca.start_time);
+  // Schedule entries for today with a start_time
+  const timedSEs     = scheduleEntries.filter((e) => e.start_time);
 
   return (
     <div className="flex flex-col h-full">
@@ -320,7 +432,8 @@ function DayCalendar({
               type DcEvt =
                 | { kind: "sys"; startMin: number; endMin: number; s: typeof timedSystems[number] }
                 | { kind: "ca";  startMin: number; endMin: number; ca: typeof timedCAs[number] }
-                | { kind: "blk"; startMin: number; endMin: number; b: CalBlock };
+                | { kind: "blk"; startMin: number; endMin: number; b: CalBlock }
+                | { kind: "se";  startMin: number; endMin: number; e: ScheduleEntry };
 
               const evts: DcEvt[] = [
                 ...timedSystems.map((s) => ({
@@ -341,6 +454,12 @@ function DayCalendar({
                   endMin:   dcTimeToMin(b.end_time),
                   b,
                 })),
+                ...timedSEs.map((e) => ({
+                  kind: "se" as const,
+                  startMin: dcTimeToMin(e.start_time!),
+                  endMin:   e.end_time ? dcTimeToMin(e.end_time) : dcTimeToMin(e.start_time!) + 60,
+                  e,
+                })),
               ];
 
               return layoutCalItems(evts).map(({ item, col, totalCols }) => {
@@ -352,14 +471,22 @@ function DayCalendar({
                 if (item.kind === "sys") {
                   const { s } = item;
                   const clr = DC_COLORS.emerald;
+                  const sysId = `sys-${s.id}`;
+                  const sysHidden = hiddenIds.has(sysId);
                   return (
                     <div
                       key={`sys-${s.id}`}
                       data-block="1"
                       title={s.title}
-                      className={cn("absolute rounded border px-1 py-0.5 overflow-hidden cursor-default", clr.bg, clr.border)}
+                      className={cn("absolute rounded border px-1 py-0.5 overflow-hidden cursor-default group", clr.bg, clr.border, sysHidden && "opacity-15")}
                       style={{ top, height: ht, left, right }}
                     >
+                      <button
+                        className={cn("absolute top-0.5 right-0.5 z-10 p-0.5 rounded transition-opacity", sysHidden ? "opacity-100" : "opacity-0 group-hover:opacity-100")}
+                        onClick={(e) => { e.stopPropagation(); toggleHidden(sysId); }}
+                      >
+                        {sysHidden ? <EyeOff className={cn("h-3.5 w-3.5", clr.text)} /> : <Eye className={cn("h-3.5 w-3.5", clr.text)} />}
+                      </button>
                       <p className={cn("text-[10px] font-medium leading-tight truncate", clr.text)}>{s.title}</p>
                       {ht > 26 && (
                         <p className={cn("text-[9px] leading-tight opacity-70 tabular-nums", clr.text)}>
@@ -373,14 +500,22 @@ function DayCalendar({
                 if (item.kind === "ca") {
                   const { ca } = item;
                   const clr = ca.assignment_type === "theory" ? DC_COLORS.orange : DC_COLORS.indigo;
+                  const caId = `ca-${ca.id}`;
+                  const caHidden = hiddenIds.has(caId);
                   return (
                     <div
                       key={`ca-${ca.id}`}
                       data-block="1"
                       title={ca.title}
-                      className={cn("absolute rounded border px-1 py-0.5 overflow-hidden cursor-default", clr.bg, clr.border)}
+                      className={cn("absolute rounded border px-1 py-0.5 overflow-hidden cursor-default group", clr.bg, clr.border, caHidden && "opacity-15")}
                       style={{ top, height: ht, left, right }}
                     >
+                      <button
+                        className={cn("absolute top-0.5 right-0.5 z-10 p-0.5 rounded transition-opacity", caHidden ? "opacity-100" : "opacity-0 group-hover:opacity-100")}
+                        onClick={(e) => { e.stopPropagation(); toggleHidden(caId); }}
+                      >
+                        {caHidden ? <EyeOff className={cn("h-3.5 w-3.5", clr.text)} /> : <Eye className={cn("h-3.5 w-3.5", clr.text)} />}
+                      </button>
                       <p className={cn("text-[10px] font-medium leading-tight truncate", clr.text)}>{ca.title}</p>
                       {ht > 26 && ca.end_time && (
                         <p className={cn("text-[9px] leading-tight opacity-70 tabular-nums", clr.text)}>
@@ -391,22 +526,63 @@ function DayCalendar({
                   );
                 }
 
+                if (item.kind === "se") {
+                  const { e } = item;
+                  const clr   = DC_COLORS[e.color] ?? DC_COLORS.blue;
+                  const seId  = `se-${e.recurring_id ?? e.id}-${e.date}`;
+                  const seHidden = hiddenIds.has(seId);
+                  return (
+                    <div
+                      key={seId}
+                      data-block="1"
+                      title={e.title}
+                      className={cn("absolute rounded border px-1 py-0.5 overflow-hidden cursor-default group", clr.bg, clr.border, seHidden && "opacity-15")}
+                      style={{ top, height: ht, left, right }}
+                    >
+                      <button
+                        className={cn("absolute top-0.5 right-0.5 z-10 p-0.5 rounded transition-opacity", seHidden ? "opacity-100" : "opacity-0 group-hover:opacity-100")}
+                        onClick={(e) => { e.stopPropagation(); toggleHidden(seId); }}
+                      >
+                        {seHidden ? <EyeOff className={cn("h-3.5 w-3.5", clr.text)} /> : <Eye className={cn("h-3.5 w-3.5", clr.text)} />}
+                      </button>
+                      <p className={cn("text-[10px] font-medium leading-tight truncate", clr.text)}>{e.title}</p>
+                      {ht > 26 && e.start_time && (
+                        <p className={cn("text-[9px] leading-tight opacity-70 tabular-nums", clr.text)}>
+                          {e.start_time}{e.end_time ? `–${e.end_time}` : ""}
+                        </p>
+                      )}
+                      {ht > 42 && e.location && (
+                        <p className={cn("text-[9px] leading-tight opacity-60 truncate", clr.text)}>{e.location}</p>
+                      )}
+                    </div>
+                  );
+                }
+
                 // cal block
                 const { b } = item;
                 const clr = DC_COLORS[b.color] ?? DC_COLORS.blue;
+                const cbId = `cb-${b.recurring_id ?? b.id}-${b.date}`;
+                const cbHidden = hiddenIds.has(cbId);
                 return (
                   <div
                     key={`blk-${b.id}`}
                     data-block="1"
                     className={cn(
-                      "absolute rounded border px-1 py-0.5 overflow-hidden z-20 transition-all",
+                      "absolute rounded border px-1 py-0.5 overflow-hidden z-20 transition-all group",
                       clr.bg, clr.border,
-                      b.is_recurring ? "cursor-default opacity-80" : "cursor-pointer hover:brightness-110"
+                      b.is_recurring ? "cursor-default opacity-80" : "cursor-pointer hover:brightness-110",
+                      cbHidden && "opacity-15"
                     )}
                     style={{ top, height: ht, left, right }}
                     onClick={b.is_recurring ? undefined : (e) => { e.stopPropagation(); setModal({ block: b }); }}
                     title={b.is_recurring ? `${b.title} (recurring — edit in Week view)` : b.title}
                   >
+                    <button
+                      className={cn("absolute top-0.5 right-0.5 z-10 p-0.5 rounded transition-opacity", cbHidden ? "opacity-100" : "opacity-0 group-hover:opacity-100")}
+                      onClick={(e) => { e.stopPropagation(); toggleHidden(cbId); }}
+                    >
+                      {cbHidden ? <EyeOff className={cn("h-3.5 w-3.5", clr.text)} /> : <Eye className={cn("h-3.5 w-3.5", clr.text)} />}
+                    </button>
                     <p className={cn("text-[10px] font-semibold leading-tight truncate", clr.text)}>{b.title}</p>
                     {ht > 26 && (
                       <p className={cn("text-[9px] leading-tight opacity-70 tabular-nums", clr.text)}>
@@ -434,6 +610,9 @@ function DayCalendar({
         </span>
         <span className="flex items-center gap-1 text-[9px] text-muted-foreground/60">
           <span className="h-2 w-2 rounded-sm bg-blue-500/40 border border-blue-400/50 shrink-0" />Events
+        </span>
+        <span className="flex items-center gap-1 text-[9px] text-muted-foreground/60">
+          <span className="h-2 w-2 rounded-sm bg-violet-500/40 border border-violet-400/50 shrink-0" />Schedule
         </span>
       </div>
 
@@ -1531,13 +1710,12 @@ function TopGoals({ goals, groups }: { goals: Goal[]; groups: GoalGroup[] }) {
 // ── To-Do List ────────────────────────────────────────────────────────────────
 
 function TodoList({
-  tasks, plans, systems, courseAssignments, today, onToggleTask, onCreateTask, onDeleteTask, onUpdateTask, onMarkSystem, onUnmarkSystem, onToggleSubtask, subtaskMap, onToggleAssignment,
+  tasks, plans, systems, courseAssignments, onToggleTask, onCreateTask, onDeleteTask, onUpdateTask, onMarkSystem, onUnmarkSystem, onToggleSubtask, subtaskMap, onToggleAssignment,
 }: {
   tasks: TaskWithContext[];
   plans: Plan[];
   systems: SystemEntry[];
   courseAssignments: CourseAssignment[];
-  today: string;
   onToggleTask: (id: number) => void;
   onCreateTask: (payload: { plan_id?: number | null; title: string; priority?: string; due_date?: string | null }) => void;
   onDeleteTask: (id: number) => void;
@@ -1602,18 +1780,12 @@ function TodoList({
       return next;
     });
 
-  const open = useMemo(() => [...tasks]
-    .filter((t) => !t.done)
-    .sort((a, b) => {
-      const p = { high: 0, medium: 1, low: 2 } as Record<string, number>;
-      const aOver = a.due_date && a.due_date < today ? 0 : 1;
-      const bOver = b.due_date && b.due_date < today ? 0 : 1;
-      if (aOver !== bOver) return aOver - bOver;
-      const pd = (p[a.priority] ?? 1) - (p[b.priority] ?? 1);
-      if (pd !== 0) return pd;
-      if (a.due_date && b.due_date) return a.due_date.localeCompare(b.due_date);
-      return a.due_date ? -1 : b.due_date ? 1 : 0;
-    }), [tasks, today]);
+  const open = useMemo(() => {
+    const p = { high: 0, medium: 1, low: 2 } as Record<string, number>;
+    return [...tasks]
+      .filter((t) => !t.done)
+      .sort((a, b) => (p[a.priority] ?? 1) - (p[b.priority] ?? 1));
+  }, [tasks]);
 
   // Group open tasks by plan
   const byPlan = useMemo(() => {
@@ -1718,9 +1890,15 @@ function TodoList({
 
         {!tasksCollapsed && (
           open.length === 0 ? (
-            <div className="flex items-center gap-2 text-sm text-muted-foreground">
-              <CheckCircle className="h-4 w-4 text-green-500 shrink-0" /> All tasks done!
-            </div>
+            tasks.length === 0 ? (
+              <p className="text-sm text-muted-foreground/60 italic">
+                Nothing due today — check Backlog for overdue tasks
+              </p>
+            ) : (
+              <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                <CheckCircle className="h-4 w-4 text-green-500 shrink-0" /> All tasks done!
+              </div>
+            )
           ) : (
             <div className="flex flex-col gap-2">
               {byPlan.map(([planId, group]) => {
@@ -1741,8 +1919,6 @@ function TodoList({
                     {!isPlanCollapsed && (
                       <div className="flex flex-col gap-0.5 pl-4 border-l border-border ml-1">
                         {group.tasks.map((task) => {
-                          const overdue  = task.due_date && task.due_date < today;
-                          const dueToday = task.due_date === today;
                           const isEditing = editingId === task.id;
                           return (
                             <div
@@ -1790,14 +1966,9 @@ function TodoList({
                                     onClick={() => startEdit(task)}
                                   >
                                     <PriorityDot priority={task.priority} />
-                                    <span className={cn("text-sm truncate", overdue && "text-destructive")}>
+                                    <span className="text-sm truncate">
                                       {task.title}
                                     </span>
-                                    {(overdue || dueToday) && (
-                                      <span className="text-xs text-muted-foreground shrink-0">
-                                        {overdue ? "overdue" : "today"}
-                                      </span>
-                                    )}
                                   </div>
                                 )}
                               </div>
@@ -2036,6 +2207,9 @@ export function Dashboard() {
   const [agreements, setAgreements] = useState<Agreement[]>([]);
   const [journalContent, setJournalContent] = useState("");
   const [courseAssignments, setCourseAssignments] = useState<CourseAssignment[]>([]);
+  const [scheduleEntries,  setScheduleEntries]  = useState<ScheduleEntry[]>([]);
+  const [habits,           setHabits]           = useState<HabitWithCompletion[]>([]);
+  const [habitStacks,      setHabitStacks]      = useState<HabitStack[]>([]);
 
   const date = todayDate();
 
@@ -2047,21 +2221,25 @@ export function Dashboard() {
   }, [date]);
 
   const load = useCallback(async () => {
-    const [g, gr, p, t, s, cb, dg, rem, qn, bd, ev, dl, ag, jc, cas] = await Promise.all([
+    const [g, gr, p, t, s, cb, dg, rem, qn, bd, ev, dl, ag, jc, cas, ses, hb, hs] = await Promise.all([
       getGoals(), getGoalGroups(), getPlans(), getAllTasks(), getSystems(), getCalBlocks(date, date),
       getDailyGoals(date), getReminders(), getQuickNotes(), getBrainDump(), getEvents(), getDeadlines(), getAgreements(),
-      getJournalEntry(date), getCourseAssignments(),
+      getJournalEntry(date), getCourseAssignments(), getScheduleEntriesForDate(date), getHabitsForDate(date), getHabitStacks(),
     ]);
     setGoals(g); setGroups(gr); setPlans(p); setTasks(t); setSystems(s); setCalBlocks(cb);
     setDailyGoals(dg); setReminders(rem); setNotes(qn); setBrainEntries(bd); setEvents(ev); setDeadlines(dl); setAgreements(ag);
     setJournalContent(jc);
     setCourseAssignments(cas.filter((ca) => ca.due_date === date));
+    setScheduleEntries(ses);
+    setHabits(hb);
+    setHabitStacks(hs);
     loadSubtasks(s);
   }, [date, loadSubtasks]);
 
   useEffect(() => { load(); }, [load]);
 
-  const activeGoals = goals.filter((g) => g.status === "active");
+  const activeGoals  = useMemo(() => goals.filter((g) => g.status === "active"), [goals]);
+  const todayTasks   = useMemo(() => tasks.filter((t) => t.due_date === date), [tasks, date]);
 
   const handleToggleTask = async (id: number) => {
     await toggleTask(id);
@@ -2188,6 +2366,11 @@ export function Dashboard() {
     setJournalContent(text);
   };
 
+  const handleToggleHabit = async (id: number) => {
+    const nowDone = await toggleHabitCompletion(id, date);
+    setHabits((prev) => prev.map((h) => h.id === id ? { ...h, done: nowDone } : h));
+  };
+
   const handleCreateCalBlock = async (d: DCBlockDraft) => {
     const b = await createCalBlock(date, d.title, d.start_time, d.end_time, d.color, d.description || null, d.location || null);
     setCalBlocks((prev) => [...prev, b].sort((a, x) => a.start_time.localeCompare(x.start_time)));
@@ -2243,11 +2426,10 @@ export function Dashboard() {
 
           {/* To-Do List */}
           <TodoList
-            tasks={tasks}
+            tasks={todayTasks}
             plans={plans}
             systems={systems}
             courseAssignments={courseAssignments}
-            today={date}
             onToggleTask={handleToggleTask}
             onCreateTask={handleCreateTask}
             onDeleteTask={handleDeleteTask}
@@ -2265,13 +2447,15 @@ export function Dashboard() {
           <JournalStrip date={date} content={journalContent} onSave={handleSaveJournal} />
         </div>
 
-        {/* ── Right column: Day Calendar ──────────────────────────────────── */}
-        <div className="hidden md:flex w-72 shrink-0 flex-col overflow-hidden px-3 py-3">
+        {/* ── Right column: Habits + Day Calendar ─────────────────────────── */}
+        <div className="hidden md:flex w-72 shrink-0 flex-col overflow-hidden px-3 py-3 gap-3">
+          <HabitsStrip habits={habits} stacks={habitStacks} onToggle={handleToggleHabit} />
           <DayCalendar
             date={date}
             calBlocks={calBlocks}
             systems={systems}
             courseAssignments={courseAssignments}
+            scheduleEntries={scheduleEntries}
             onCreateBlock={handleCreateCalBlock}
             onUpdateBlock={handleUpdateCalBlock}
             onDeleteBlock={handleDeleteCalBlock}

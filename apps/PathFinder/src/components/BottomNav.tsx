@@ -12,10 +12,14 @@ const PRIMARY_TABS: { page: Page; label: string; icon: ReactNode }[] = [
 ];
 
 const MORE_PAGES: { page: Page; label: string }[] = [
+  { page: "backlog",   label: "Backlog" },
+  { page: "planner",   label: "Planner" },
+  { page: "journal",   label: "Journal" },
   { page: "systems",   label: "Systems" },
   { page: "projects",  label: "Projects" },
   { page: "lifestyle", label: "Lifestyle" },
   { page: "courses",   label: "Courses" },
+  { page: "schedules", label: "Schedules" },
   { page: "games",     label: "Games" },
 ];
 

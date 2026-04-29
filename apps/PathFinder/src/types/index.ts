@@ -44,6 +44,7 @@ export interface Plan {
   tags: string | null;
   is_course: boolean;
   is_lifestyle: boolean;
+  is_schedule: boolean;
   lifestyle_area_id: number | null;
   purpose: string | null;
   problem: string | null;
@@ -142,6 +143,28 @@ export interface WeekItems {
   deadlines: Deadline[];
   reminders: Reminder[];
   course_assignments: CourseAssignment[];
+  schedule_entries: ScheduleEntry[];
+}
+
+export interface ScheduleEntry {
+  id: number;
+  plan_id: number;
+  plan_title: string;
+  title: string;
+  description: string | null;
+  location: string | null;
+  date: string | null;           // concrete date for one-off; null for raw recurring rows
+  start_time: string | null;
+  end_time: string | null;
+  color: string;
+  category: string;              // transport | medical | fitness | work | social | other
+  is_recurring: boolean;
+  recurring_id: number | null;   // original row id for expanded virtual instances
+  recurrence: string | null;
+  days_of_week: string | null;
+  series_start_date: string | null;
+  series_end_date: string | null;
+  created_at: string;
 }
 
 export interface DailyItemWithStatus {
@@ -397,11 +420,19 @@ export interface GameDevlogEntry {
   created_at: string;
 }
 
+export interface HabitStack {
+  id: number;
+  title: string;
+  color: string;
+  sort_order: number;
+}
+
 export interface HabitWithCompletion {
   id: number;
   title: string;
   color: string;
   sort_order: number;
+  stack_id: number | null;
   done: boolean;
   streak: number;
   recent_dates: string[]; // YYYY-MM-DD strings for last 7 days where completed
@@ -412,6 +443,7 @@ export interface DailyHabit {
   title: string;
   color: string;
   sort_order: number;
+  stack_id: number | null;
 }
 
 export interface RunLog {
@@ -477,6 +509,51 @@ export interface BookSection {
   done_at: string | null;
   notes: string | null;
   created_at: string;
+}
+
+export interface TrainingPlan {
+  id: number;
+  user_id: string;
+  title: string;
+  description: string | null;
+  color: string;
+  goal: string | null;
+  days_per_week: number | null;
+  created_at: string;
+}
+
+export interface TrainingSession {
+  id: number;
+  user_id: string;
+  plan_id: number | null;
+  plan_title: string | null;
+  title: string;
+  scheduled_date: string | null;
+  start_time: string | null;
+  end_time: string | null;
+  location: string | null;
+  notes: string | null;
+  completed: boolean;
+  created_at: string;
+}
+
+export interface SessionPerformance {
+  id: number;
+  user_id: string;
+  session_id: number;
+  metric_name: string;
+  value: string;
+  unit: string | null;
+  created_at: string;
+}
+
+export interface Rule {
+  id: number;
+  user_id: string;
+  title: string;
+  body: string | null;
+  sort_order: number;
+  updated_at: string;
 }
 
 export interface CourseBook {

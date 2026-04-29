@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Plus, ChevronDown, ChevronRight, Trash2, Pencil, Check, CheckCircle, X, Tag } from "lucide-react";
+import { Plus, ChevronDown, ChevronRight, Trash2, Pencil, Check, CheckCircle, X, Tag, CalendarRange } from "lucide-react";
 import {
   getGoals, getPlans, createPlan, updatePlan, deletePlan,
   getTasks, createTask, toggleTask, deleteTask,
@@ -352,6 +352,12 @@ export function Plans() {
                     <div className="flex items-center gap-2 flex-wrap">
                       <span className="text-sm font-medium text-foreground">{plan.title}</span>
                       {gName && <Badge variant="secondary">{gName}</Badge>}
+                      {plan.is_course && <Badge variant="secondary" className="bg-indigo-500/10 text-indigo-600 dark:text-indigo-400 border-indigo-400/30">Course</Badge>}
+                      {plan.is_schedule && (
+                        <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded border text-[10px] font-medium bg-teal-500/10 text-teal-600 dark:text-teal-400 border-teal-400/30">
+                          <CalendarRange className="h-2.5 w-2.5" /> Schedule
+                        </span>
+                      )}
                       {plan.status === "completed" && <Badge variant="success">Completed</Badge>}
                       {days !== null && <Badge variant={deadlineVariant(days)}>{deadlineLabel(days)}</Badge>}
                       {parseTags(plan.tags).map((t, i) => <TagChip key={t} tag={t} index={i} />)}

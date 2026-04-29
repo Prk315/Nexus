@@ -1,8 +1,8 @@
 import { useEffect, useState, useCallback } from "react";
 import {
   Plus, Trash2, Pencil, Check, X, ChevronDown, ChevronRight,
-  Calendar, MoreHorizontal, FolderOpen, Target, ListTodo,
-  Columns3, GitBranch, Map, Maximize2, Minimize2,
+  ChevronLeft, Calendar, MoreHorizontal, FolderOpen, Target, ListTodo,
+  Columns3, GitBranch, Map, Maximize2, Minimize2, PanelLeftClose, PanelLeftOpen,
 } from "lucide-react";
 import {
   getGoals, getPlans, createPlan, updatePlan, deletePlan,
@@ -733,12 +733,14 @@ function PipelineTab({ planId }: { planId: number }) {
 
 // ── Task Sidebar ──────────────────────────────────────────────────────────────
 
-function TaskSidebar({ tasks, today, onAdd, onToggle, onUpdate, onDelete }: {
+function TaskSidebar({ tasks, today, onAdd, onToggle, onUpdate, onDelete, collapsed, onToggleCollapse }: {
   tasks: Task[]; today: string;
   onAdd: (title: string, priority: Priority) => void;
   onToggle: (id: number) => void;
   onUpdate: (id: number, title: string, priority: Priority, due_date: string | null) => void;
   onDelete: (id: number) => void;
+  collapsed: boolean;
+  onToggleCollapse: () => void;
 }) {
   const [showAdd,    setShowAdd]    = useState(false);
   const [newTitle,   setNewTitle]   = useState("");
@@ -851,6 +853,26 @@ function TaskSidebar({ tasks, today, onAdd, onToggle, onUpdate, onDelete }: {
     );
   }
 
+  if (collapsed) {
+    return (
+      <div
+        className="w-8 shrink-0 border-r border-border flex flex-col items-center overflow-hidden cursor-pointer hover:bg-secondary/30"
+        onClick={onToggleCollapse}
+        title="Expand task sidebar"
+      >
+        <PanelLeftOpen className="h-3.5 w-3.5 text-muted-foreground mt-3" />
+        <div className="flex-1 flex items-center justify-center">
+          <span
+            className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wide whitespace-nowrap"
+            style={{ writingMode: "vertical-rl", transform: "rotate(180deg)" }}
+          >
+            Tasks ({open.length})
+          </span>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="w-56 shrink-0 border-r border-border flex flex-col overflow-hidden">
       {/* Sidebar header */}
@@ -862,12 +884,20 @@ function TaskSidebar({ tasks, today, onAdd, onToggle, onUpdate, onDelete }: {
             <span className="text-[10px] font-medium text-muted-foreground">({open.length})</span>
           )}
         </div>
-        <button
-          onClick={startAdd}
-          className="flex h-5 w-5 items-center justify-center rounded text-muted-foreground hover:text-foreground hover:bg-secondary transition-colors"
-          title="Add task">
-          <Plus className="h-3 w-3" />
-        </button>
+        <div className="flex items-center gap-0.5">
+          <button
+            onClick={startAdd}
+            className="flex h-5 w-5 items-center justify-center rounded text-muted-foreground hover:text-foreground hover:bg-secondary transition-colors"
+            title="Add task">
+            <Plus className="h-3 w-3" />
+          </button>
+          <button
+            onClick={onToggleCollapse}
+            className="flex h-5 w-5 items-center justify-center rounded text-muted-foreground hover:text-foreground hover:bg-secondary transition-colors"
+            title="Collapse task sidebar">
+            <PanelLeftClose className="h-3 w-3" />
+          </button>
+        </div>
       </div>
 
       {/* Add form */}
@@ -969,9 +999,10 @@ function ProjectDetail({
   project: Plan; goals: Goal[]; today: string;
   onUpdate: (p: Plan) => void; onDelete: () => void;
 }) {
-  const [editing,  setEditing]  = useState(false);
-  const [menuOpen, setMenuOpen] = useState(false);
-  const [tasks,    setTasks]    = useState<Task[]>([]);
+  const [editing,              setEditing]              = useState(false);
+  const [menuOpen,             setMenuOpen]             = useState(false);
+  const [tasks,                setTasks]                = useState<Task[]>([]);
+  const [taskSidebarCollapsed, setTaskSidebarCollapsed] = useState(false);
 
   // Section open/closed state
   const [open, setOpen] = useState({
@@ -1110,6 +1141,8 @@ function ProjectDetail({
           tasks={tasks} today={today}
           onAdd={handleAddTask} onToggle={handleToggleTask}
           onUpdate={handleUpdateTask} onDelete={handleDeleteTask}
+          collapsed={taskSidebarCollapsed}
+          onToggleCollapse={() => setTaskSidebarCollapsed((v) => !v)}
         />
 
         {/* ── Flexible grid — sections can be half or full width ── */}
@@ -1158,11 +1191,12 @@ function ProjectDetail({
 // ── Projects page ─────────────────────────────────────────────────────────────
 
 export function Projects() {
-  const [plans,        setPlans]        = useState<Plan[]>([]);
-  const [goals,        setGoals]        = useState<Goal[]>([]);
-  const [selectedId,   setSelectedId]   = useState<number | null>(null);
-  const [creating,     setCreating]     = useState(false);
-  const [statusFilter, setStatusFilter] = useState<ProjStatus | "all">("active");
+  const [plans,            setPlans]            = useState<Plan[]>([]);
+  const [goals,            setGoals]            = useState<Goal[]>([]);
+  const [selectedId,       setSelectedId]       = useState<number | null>(null);
+  const [creating,         setCreating]         = useState(false);
+  const [statusFilter,     setStatusFilter]     = useState<ProjStatus | "all">("active");
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
 
   const today = new Date().toISOString().slice(0, 10);
 
@@ -1202,70 +1236,116 @@ export function Projects() {
     <div className="flex h-[calc(100vh-2.5rem)] overflow-hidden">
 
       {/* Left sidebar */}
-      <div className="w-72 shrink-0 flex flex-col border-r border-border overflow-hidden">
-        <div className="shrink-0 flex items-center gap-2 px-3 py-3 border-b border-border">
-          <span className="text-xs font-semibold text-muted-foreground uppercase tracking-wide flex-1">Projects</span>
-          <button onClick={() => { setCreating(true); setSelectedId(null); }}
-            className="flex h-6 w-6 items-center justify-center rounded border border-border text-muted-foreground hover:text-foreground hover:bg-secondary transition-colors" title="New project">
-            <Plus className="h-3.5 w-3.5" />
-          </button>
-        </div>
-
-        <div className="shrink-0 flex border-b border-border">
-          {(["active", "all", "completed", "archived"] as const).map((s) => (
-            <button key={s} onClick={() => setStatusFilter(s)}
-              className={cn(
-                "flex-1 py-1.5 text-[10px] font-medium transition-colors capitalize",
-                statusFilter === s ? "text-foreground border-b-2 border-primary" : "text-muted-foreground hover:text-foreground"
-              )}>
-              {s}
-            </button>
-          ))}
-        </div>
-
-        <div className="flex-1 overflow-y-auto py-1">
-          {filtered.length === 0 ? (
-            <div className="flex flex-col items-center justify-center gap-2 h-32 text-center px-4">
-              <FolderOpen className="h-8 w-8 text-muted-foreground/30" />
-              <p className="text-xs text-muted-foreground">
-                {statusFilter === "active" ? "No active projects." : "Nothing here yet."}
-              </p>
+      <div className={cn(
+        "shrink-0 flex flex-col border-r border-border overflow-hidden transition-all duration-200",
+        sidebarCollapsed ? "w-12" : "w-72"
+      )}>
+        {sidebarCollapsed ? (
+          <div
+            className="flex flex-col items-center h-full cursor-pointer hover:bg-secondary/30 transition-colors"
+            onClick={() => setSidebarCollapsed(false)}
+            title="Expand project sidebar"
+          >
+            <ChevronRight className="h-3.5 w-3.5 text-muted-foreground mt-3" />
+            <div className="flex-1 flex items-center justify-center">
+              <span
+                className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wide whitespace-nowrap"
+                style={{ writingMode: "vertical-rl", transform: "rotate(180deg)" }}
+              >
+                Projects
+              </span>
             </div>
-          ) : filtered.map((p) => {
-            const pct  = p.task_count === 0 ? 0 : Math.round((p.done_count / p.task_count) * 100);
-            const days = p.deadline ? daysUntil(p.deadline) : null;
-            const tags = parseTags(p.tags);
-            return (
-              <button key={p.id} onClick={() => { setSelectedId(p.id); setCreating(false); }}
-                className={cn(
-                  "w-full text-left px-3 py-2.5 border-b border-border/50 last:border-0 transition-colors",
-                  selectedId === p.id ? "bg-sidebar-accent text-sidebar-accent-foreground" : "hover:bg-sidebar-accent/50"
-                )}>
-                <div className="flex items-start gap-2 mb-1.5">
-                  <span className="text-sm font-medium text-foreground truncate flex-1 leading-snug">{p.title}</span>
-                  {days !== null && days <= 7 && (
-                    <Badge variant={deadlineVariant(days)} className="text-[9px] shrink-0 px-1 py-0">
-                      {deadlineLabel(days)}
-                    </Badge>
+            <div className="py-3 flex flex-col items-center gap-2">
+              {filtered.map((p) => (
+                <button
+                  key={p.id}
+                  onClick={(e) => { e.stopPropagation(); setSelectedId(p.id); setCreating(false); setSidebarCollapsed(false); }}
+                  title={p.title}
+                  className={cn(
+                    "w-6 h-6 rounded-full shrink-0 flex items-center justify-center text-[9px] font-bold border transition-colors",
+                    selectedId === p.id
+                      ? "bg-primary text-primary-foreground border-primary"
+                      : `border-border text-muted-foreground hover:border-primary ${STATUS_STYLE[p.status as ProjStatus]}`
                   )}
-                </div>
-                {p.task_count > 0 && (
-                  <div className="flex items-center gap-2 mb-1.5">
-                    <Progress value={p.done_count} max={p.task_count} className="flex-1 h-1" />
-                    <span className="text-[10px] text-muted-foreground tabular-nums shrink-0">{pct}%</span>
-                  </div>
-                )}
-                <div className="flex items-center gap-1.5 flex-wrap">
-                  <span className={cn("text-[9px] px-1.5 py-0 rounded-full border font-medium", STATUS_STYLE[p.status as ProjStatus])}>
-                    {p.status}
-                  </span>
-                  {tags.slice(0, 2).map((tag, i) => <TagChip key={tag} tag={tag} index={i} />)}
-                  {tags.length > 2 && <span className="text-[9px] text-muted-foreground">+{tags.length - 2}</span>}
-                </div>
+                >
+                  {p.title.charAt(0).toUpperCase()}
+                </button>
+              ))}
+            </div>
+          </div>
+        ) : (
+          <>
+            <div className="shrink-0 flex items-center gap-2 px-3 py-3 border-b border-border">
+              <span className="text-xs font-semibold text-muted-foreground uppercase tracking-wide flex-1">Projects</span>
+              <button onClick={() => { setCreating(true); setSelectedId(null); }}
+                className="flex h-6 w-6 items-center justify-center rounded border border-border text-muted-foreground hover:text-foreground hover:bg-secondary transition-colors" title="New project">
+                <Plus className="h-3.5 w-3.5" />
               </button>
-            );
-          })}
-        </div>
+              <button
+                onClick={() => setSidebarCollapsed(true)}
+                className="flex h-6 w-6 items-center justify-center rounded border border-border text-muted-foreground hover:text-foreground hover:bg-secondary transition-colors"
+                title="Collapse sidebar">
+                <ChevronLeft className="h-3.5 w-3.5" />
+              </button>
+            </div>
+
+            <div className="shrink-0 flex border-b border-border">
+              {(["active", "all", "completed", "archived"] as const).map((s) => (
+                <button key={s} onClick={() => setStatusFilter(s)}
+                  className={cn(
+                    "flex-1 py-1.5 text-[10px] font-medium transition-colors capitalize",
+                    statusFilter === s ? "text-foreground border-b-2 border-primary" : "text-muted-foreground hover:text-foreground"
+                  )}>
+                  {s}
+                </button>
+              ))}
+            </div>
+
+            <div className="flex-1 overflow-y-auto py-1">
+              {filtered.length === 0 ? (
+                <div className="flex flex-col items-center justify-center gap-2 h-32 text-center px-4">
+                  <FolderOpen className="h-8 w-8 text-muted-foreground/30" />
+                  <p className="text-xs text-muted-foreground">
+                    {statusFilter === "active" ? "No active projects." : "Nothing here yet."}
+                  </p>
+                </div>
+              ) : filtered.map((p) => {
+                const pct  = p.task_count === 0 ? 0 : Math.round((p.done_count / p.task_count) * 100);
+                const days = p.deadline ? daysUntil(p.deadline) : null;
+                const tags = parseTags(p.tags);
+                return (
+                  <button key={p.id} onClick={() => { setSelectedId(p.id); setCreating(false); }}
+                    className={cn(
+                      "w-full text-left px-3 py-2.5 border-b border-border/50 last:border-0 transition-colors",
+                      selectedId === p.id ? "bg-sidebar-accent text-sidebar-accent-foreground" : "hover:bg-sidebar-accent/50"
+                    )}>
+                    <div className="flex items-start gap-2 mb-1.5">
+                      <span className="text-sm font-medium text-foreground truncate flex-1 leading-snug">{p.title}</span>
+                      {days !== null && days <= 7 && (
+                        <Badge variant={deadlineVariant(days)} className="text-[9px] shrink-0 px-1 py-0">
+                          {deadlineLabel(days)}
+                        </Badge>
+                      )}
+                    </div>
+                    {p.task_count > 0 && (
+                      <div className="flex items-center gap-2 mb-1.5">
+                        <Progress value={p.done_count} max={p.task_count} className="flex-1 h-1" />
+                        <span className="text-[10px] text-muted-foreground tabular-nums shrink-0">{pct}%</span>
+                      </div>
+                    )}
+                    <div className="flex items-center gap-1.5 flex-wrap">
+                      <span className={cn("text-[9px] px-1.5 py-0 rounded-full border font-medium", STATUS_STYLE[p.status as ProjStatus])}>
+                        {p.status}
+                      </span>
+                      {tags.slice(0, 2).map((tag, i) => <TagChip key={tag} tag={tag} index={i} />)}
+                      {tags.length > 2 && <span className="text-[9px] text-muted-foreground">+{tags.length - 2}</span>}
+                    </div>
+                  </button>
+                );
+              })}
+            </div>
+          </>
+        )}
       </div>
 
       {/* Main area */}

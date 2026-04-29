@@ -2,7 +2,7 @@ import { useEffect, useState, useCallback, useRef, useMemo } from "react";
 import {
   ChevronLeft, ChevronRight, ChevronDown, Plus, X, Check, Target, ListChecks,
   CheckSquare, RefreshCw, Flame, Trash2, Repeat2, MapPin, Flag, Bell, GraduationCap,
-  PanelLeft, PanelRight, PanelBottom, PanelTop,
+  PanelLeft, PanelRight, PanelBottom, PanelTop, CalendarRange, Eye, EyeOff,
 } from "lucide-react";
 import {
   getWeekItems, getGoals, getPlans, getSystems,
@@ -18,7 +18,7 @@ import {
 import { Button } from "../components/ui/button";
 import { cn, layoutCalItems } from "../lib/utils";
 import { isDue } from "./Systems";
-import type { Goal, Plan, TaskWithContext, SystemEntry, WeekItems, CalBlock, Deadline, Reminder, CourseAssignment, CaSubtask } from "../types";
+import type { Goal, Plan, TaskWithContext, SystemEntry, WeekItems, CalBlock, Deadline, Reminder, CourseAssignment, CaSubtask, ScheduleEntry } from "../types";
 
 // ── Date helpers ──────────────────────────────────────────────────────────────
 
@@ -603,16 +603,21 @@ function TaskPopupChip({ t, onToggle, onEdit }: {
 
 // ── Time column ───────────────────────────────────────────────────────────────
 
-function TimeColumn({ date, isToday, blocks, systems, courseAssignments, onClickSlot, onClickBlock }: {
+function TimeColumn({ date, isToday, blocks, systems, courseAssignments, scheduleEntries, onClickSlot, onClickBlock }: {
   date: Date; isToday: boolean;
   blocks: CalBlock[];
   systems: SystemEntry[];
   courseAssignments: CourseAssignment[];
+  scheduleEntries: ScheduleEntry[];
   onClickSlot: (date: string, time: string) => void;
   onClickBlock: (b: CalBlock) => void;
 }) {
   const iso = toISO(date);
   const colRef = useRef<HTMLDivElement>(null);
+  const [hiddenIds, setHiddenIds] = useState<Set<string>>(new Set());
+  const toggleHidden = useCallback((id: string) => {
+    setHiddenIds(prev => { const next = new Set(prev); next.has(id) ? next.delete(id) : next.add(id); return next; });
+  }, []);
 
   function handleClick(e: React.MouseEvent) {
     if (!colRef.current) return;
@@ -660,11 +665,13 @@ function TimeColumn({ date, isToday, blocks, systems, courseAssignments, onClick
         {(() => {
           const timedSys = systems.filter((s) => s.start_time && systemScheduledFor(s, iso));
           const timedCAs = courseAssignments.filter((a) => a.start_time);
+          const timedSEs = scheduleEntries.filter((e) => e.start_time);
 
           type WkEvt =
             | { kind: "sys"; startMin: number; endMin: number; s: SystemEntry }
             | { kind: "ca";  startMin: number; endMin: number; a: CourseAssignment }
-            | { kind: "blk"; startMin: number; endMin: number; b: CalBlock };
+            | { kind: "blk"; startMin: number; endMin: number; b: CalBlock }
+            | { kind: "se";  startMin: number; endMin: number; e: ScheduleEntry };
 
           const evts: WkEvt[] = [
             ...timedSys.map((s) => ({
@@ -685,6 +692,12 @@ function TimeColumn({ date, isToday, blocks, systems, courseAssignments, onClick
               endMin:   timeToMinutes(b.end_time),
               b,
             })),
+            ...timedSEs.map((e) => ({
+              kind: "se" as const,
+              startMin: timeToMinutes(e.start_time!),
+              endMin:   e.end_time ? timeToMinutes(e.end_time) : timeToMinutes(e.start_time!) + 60,
+              e,
+            })),
           ];
 
           return layoutCalItems(evts).map(({ item, col, totalCols }) => {
@@ -695,11 +708,19 @@ function TimeColumn({ date, isToday, blocks, systems, courseAssignments, onClick
 
             if (item.kind === "sys") {
               const { s } = item;
+              const sysId = `sys-${s.id}-${iso}`;
+              const sysHidden = hiddenIds.has(sysId);
               return (
                 <div key={`sys-${s.id}`}
-                  className="absolute rounded border px-1.5 py-0.5 overflow-hidden bg-emerald-500/15 border-emerald-400/40 pointer-events-none"
+                  className={cn("absolute rounded border px-1.5 py-0.5 overflow-hidden bg-emerald-500/15 border-emerald-400/40 group", sysHidden && "opacity-15")}
                   style={{ top, height, left, right }}
                 >
+                  <button
+                    className={cn("absolute top-0.5 right-0.5 z-10 p-0.5 rounded transition-opacity", sysHidden ? "opacity-100" : "opacity-0 group-hover:opacity-100")}
+                    onClick={(e) => { e.stopPropagation(); toggleHidden(sysId); }}
+                  >
+                    {sysHidden ? <EyeOff className="h-3.5 w-3.5 text-emerald-700 dark:text-emerald-300" /> : <Eye className="h-3.5 w-3.5 text-emerald-700 dark:text-emerald-300" />}
+                  </button>
                   <div className="flex items-center gap-1">
                     <RefreshCw className="h-2.5 w-2.5 shrink-0 text-emerald-600 dark:text-emerald-400 opacity-70" />
                     <p className="text-[11px] font-semibold leading-tight truncate text-emerald-700 dark:text-emerald-300">{s.title}</p>
@@ -719,11 +740,19 @@ function TimeColumn({ date, isToday, blocks, systems, courseAssignments, onClick
               const caBg   = isTheory ? "bg-orange-500/15 border-orange-400/40" : "bg-indigo-500/15 border-indigo-400/40";
               const caTxt  = isTheory ? "text-orange-700 dark:text-orange-300"  : "text-indigo-700 dark:text-indigo-300";
               const caIcon = isTheory ? "text-orange-600 dark:text-orange-400"  : "text-indigo-600 dark:text-indigo-400";
+              const caId = `ca-${a.id}-${iso}`;
+              const caHidden = hiddenIds.has(caId);
               return (
                 <div key={`ca-${a.id}`}
-                  className={cn("absolute rounded border px-1.5 py-0.5 overflow-hidden pointer-events-none", caBg)}
+                  className={cn("absolute rounded border px-1.5 py-0.5 overflow-hidden group", caBg, caHidden && "opacity-15")}
                   style={{ top, height, left, right }}
                 >
+                  <button
+                    className={cn("absolute top-0.5 right-0.5 z-10 p-0.5 rounded transition-opacity", caHidden ? "opacity-100" : "opacity-0 group-hover:opacity-100")}
+                    onClick={(e) => { e.stopPropagation(); toggleHidden(caId); }}
+                  >
+                    {caHidden ? <EyeOff className={cn("h-3.5 w-3.5", caIcon)} /> : <Eye className={cn("h-3.5 w-3.5", caIcon)} />}
+                  </button>
                   <div className="flex items-center gap-1">
                     <GraduationCap className={cn("h-2.5 w-2.5 shrink-0 opacity-70", caIcon)} />
                     <p className={cn("text-[11px] font-semibold leading-tight truncate", caTxt)}>{a.title}</p>
@@ -740,15 +769,61 @@ function TimeColumn({ date, isToday, blocks, systems, courseAssignments, onClick
               );
             }
 
+            if (item.kind === "se") {
+              const { e } = item;
+              const clr = BLOCK_COLORS[e.color] ?? BLOCK_COLORS.teal;
+              const seId = `se-${e.id}-${e.date}`;
+              const seHidden = hiddenIds.has(seId);
+              return (
+                <div key={`se-${e.id}-${e.date}`}
+                  className={cn("absolute rounded border px-1.5 py-0.5 overflow-hidden group", clr.bg, clr.border, seHidden && "opacity-15")}
+                  style={{ top, height, left, right }}
+                >
+                  <button
+                    className={cn("absolute top-0.5 right-0.5 z-10 p-0.5 rounded transition-opacity", seHidden ? "opacity-100" : "opacity-0 group-hover:opacity-100")}
+                    onClick={(ev) => { ev.stopPropagation(); toggleHidden(seId); }}
+                  >
+                    {seHidden ? <EyeOff className={cn("h-3.5 w-3.5", clr.text)} /> : <Eye className={cn("h-3.5 w-3.5", clr.text)} />}
+                  </button>
+                  <div className="flex items-center gap-1">
+                    <CalendarRange className={cn("h-2.5 w-2.5 shrink-0 opacity-70", clr.text)} />
+                    <p className={cn("text-[11px] font-semibold leading-tight truncate", clr.text)}>{e.title}</p>
+                  </div>
+                  {height > 30 && (
+                    <p className={cn("text-[10px] leading-tight opacity-70", clr.text)}>
+                      {e.start_time}{e.end_time ? `–${e.end_time}` : ""}
+                    </p>
+                  )}
+                  {height > 46 && e.location && (
+                    <div className={cn("flex items-center gap-0.5 mt-0.5", clr.text)}>
+                      <MapPin className="h-2.5 w-2.5 shrink-0 opacity-70" />
+                      <p className="text-[10px] leading-tight opacity-70 truncate">{e.location}</p>
+                    </div>
+                  )}
+                  {height > 58 && (
+                    <p className={cn("text-[10px] leading-tight opacity-60 truncate", clr.text)}>{e.plan_title}</p>
+                  )}
+                </div>
+              );
+            }
+
             // cal block
             const { b } = item;
             const clr = BLOCK_COLORS[b.color] ?? BLOCK_COLORS.blue;
+            const cbId = `cb-${b.recurring_id ?? b.id}-${b.date}`;
+            const cbHidden = hiddenIds.has(cbId);
             return (
               <div key={`${b.is_recurring ? "r" : "b"}-${b.recurring_id ?? b.id}-${b.date}`}
-                className={cn("absolute rounded border px-1.5 py-0.5 cursor-pointer overflow-hidden", clr.bg, clr.border)}
+                className={cn("absolute rounded border px-1.5 py-0.5 cursor-pointer overflow-hidden group", clr.bg, clr.border, cbHidden && "opacity-15")}
                 style={{ top, height, left, right }}
                 onClick={(e) => { e.stopPropagation(); onClickBlock(b); }}
               >
+                <button
+                  className={cn("absolute top-0.5 right-0.5 z-10 p-0.5 rounded transition-opacity", cbHidden ? "opacity-100" : "opacity-0 group-hover:opacity-100")}
+                  onClick={(e) => { e.stopPropagation(); toggleHidden(cbId); }}
+                >
+                  {cbHidden ? <EyeOff className={cn("h-3.5 w-3.5", clr.text)} /> : <Eye className={cn("h-3.5 w-3.5", clr.text)} />}
+                </button>
                 <div className="flex items-center gap-1">
                   {b.is_recurring && <Repeat2 className={cn("h-2.5 w-2.5 shrink-0 opacity-70", clr.text)} />}
                   <p className={cn("text-[11px] font-semibold leading-tight truncate", clr.text)}>{b.title}</p>
@@ -930,7 +1005,7 @@ function LeftPanel({ goals, plans, weekNote, onNoteChange, onEditGoal, onEditPla
   onEditGoal: (g: Goal) => void; onEditPlan: (p: Plan) => void;
 }) {
   const activeGoals = goals.filter((g) => g.status === "active");
-  const activePlans = plans.filter((p) => p.status === "active" && !p.is_lifestyle && !p.is_course);
+  const activePlans = plans.filter((p) => p.status === "active" && !p.is_lifestyle && !p.is_course && !p.is_schedule);
 
   return (
     <div className="w-52 shrink-0 border-r border-border bg-card/40 flex flex-col overflow-hidden">
@@ -1256,6 +1331,7 @@ function MonthView({ monthStart, calBlocks, items, today, onClickDay, onClickBlo
   const deadlinesFor         = (iso: string) => items.deadlines.filter((d) => d.due_date === iso);
   const remindersFor         = (iso: string) => items.reminders.filter((r) => r.due_date === iso);
   const courseAssignmentsFor = (iso: string) => items.course_assignments.filter((a) => a.due_date === iso);
+  const scheduleEntriesFor   = (iso: string) => items.schedule_entries.filter((e) => e.date === iso);
   const currentMonth = monthStart.getMonth();
 
   // Start grid on the Sunday of the week containing the 1st
@@ -1298,7 +1374,8 @@ function MonthView({ monthStart, calBlocks, items, today, onClickDay, onClickBlo
             const dlItems   = deadlinesFor(iso);
             const rmItems   = remindersFor(iso);
             const caItems   = courseAssignmentsFor(iso);
-            const total     = blocks.length + goals.length + tasks.length + dlItems.length + rmItems.length + caItems.length;
+            const seItems   = scheduleEntriesFor(iso);
+            const total     = blocks.length + goals.length + tasks.length + dlItems.length + rmItems.length + caItems.length + seItems.length;
             let shown       = 0;
 
             return (
@@ -1427,6 +1504,22 @@ function MonthView({ monthStart, calBlocks, items, today, onClickDay, onClickBlo
                   );
                 })}
 
+                {/* Schedule entries */}
+                {seItems.map((e) => {
+                  if (shown >= MAX_CELL_ITEMS) return null;
+                  shown++;
+                  const clr = BLOCK_COLORS[e.color] ?? BLOCK_COLORS.teal;
+                  return (
+                    <div key={`se-${e.id}-${e.date}`}
+                      className={cn("flex items-center gap-0.5 rounded px-1 py-px text-[10px] leading-tight border truncate shrink-0", clr.bg, clr.border)}
+                      onClick={(e2) => e2.stopPropagation()}
+                    >
+                      <CalendarRange className={cn("h-2 w-2 shrink-0", clr.text)} />
+                      <span className={cn("truncate", clr.text)}>{e.start_time ? `${e.start_time} ` : ""}{e.title}</span>
+                    </div>
+                  );
+                })}
+
                 {/* Overflow count */}
                 {total > MAX_CELL_ITEMS && (
                   <p className="text-[9px] text-muted-foreground px-1 shrink-0">+{total - MAX_CELL_ITEMS} more</p>
@@ -1469,7 +1562,7 @@ export function Week() {
     return () => window.removeEventListener("resize", fn);
   }, []);
   const [selectedDay, setSelectedDay] = useState(() => todayISO());
-  const [items,        setItems]       = useState<WeekItems>({ tasks: [], goals: [], plans: [], deadlines: [], reminders: [], course_assignments: [] });
+  const [items,        setItems]       = useState<WeekItems>({ tasks: [], goals: [], plans: [], deadlines: [], reminders: [], course_assignments: [], schedule_entries: [] });
   const [allPlans,     setAllPlans]    = useState<Plan[]>([]);
   const [allGoals,     setAllGoals]    = useState<Goal[]>([]);
   const [systems,      setSystems]     = useState<SystemEntry[]>([]);
@@ -1562,11 +1655,12 @@ export function Week() {
   const prevMonth = () => setMonthStart((d) => new Date(d.getFullYear(), d.getMonth() - 1, 1));
   const nextMonth = () => setMonthStart((d) => new Date(d.getFullYear(), d.getMonth() + 1, 1));
 
-  const tasksFor     = (iso: string) => items.tasks.filter((t) => t.due_date === iso);
-  const goalsFor     = (iso: string) => items.goals.filter((g) => g.deadline  === iso);
+  const tasksFor             = (iso: string) => items.tasks.filter((t) => t.due_date === iso);
+  const goalsFor             = (iso: string) => items.goals.filter((g) => g.deadline  === iso);
   const deadlinesFor         = (iso: string) => items.deadlines.filter((d) => d.due_date === iso);
   const remindersFor         = (iso: string) => items.reminders.filter((r) => r.due_date === iso);
   const courseAssignmentsFor = (iso: string) => items.course_assignments.filter((a) => a.due_date === iso);
+  const scheduleEntriesFor   = (iso: string) => items.schedule_entries.filter((e) => e.date === iso);
   const blocksFor            = (iso: string) => calBlocks.filter((b) => b.date === iso);
 
   // ── Handlers ────────────────────────────────────────────────────────────────
@@ -1887,6 +1981,7 @@ export function Week() {
               blocks={blocksFor(selectedDay)}
               systems={systems}
               courseAssignments={selCAAll}
+              scheduleEntries={scheduleEntriesFor(selectedDay)}
               onClickSlot={(date, time) => setModal({ kind: "create-block", date, startTime: time })}
               onClickBlock={(b) => setModal({ kind: "edit-block", block: b })}
             />
@@ -2011,7 +2106,8 @@ export function Week() {
                 const dayDL       = deadlinesFor(iso);
                 const dayRM       = remindersFor(iso);
                 const dayCA       = courseAssignmentsFor(iso);
-                const hasItems = dayGoals.length + dayTasks.length + dayDL.length + dayRM.length + dayCA.length > 0;
+                const daySE       = scheduleEntriesFor(iso).filter((e) => !e.start_time);
+                const hasItems = dayGoals.length + dayTasks.length + dayDL.length + dayRM.length + dayCA.length + daySE.length > 0;
                 return (
                   <div key={iso}
                     className={cn("flex-1 min-w-0 border-r border-border p-0.5 flex flex-col gap-0.5",
@@ -2056,6 +2152,16 @@ export function Week() {
                         <span className="text-[11px] truncate text-foreground">{a.title}</span>
                       </div>
                     ))}
+                    {daySE.map((e) => {
+                      const clr = BLOCK_COLORS[e.color] ?? BLOCK_COLORS.teal;
+                      return (
+                        <div key={`se-${e.id}`}
+                          className={cn("flex items-center gap-1 px-1.5 py-0.5 rounded border", clr.bg, clr.border)}>
+                          <CalendarRange className={cn("h-2.5 w-2.5 shrink-0", clr.text)} />
+                          <span className={cn("text-[11px] truncate", clr.text)}>{e.title}</span>
+                        </div>
+                      );
+                    })}
                   </div>
                 );
               })}
@@ -2086,6 +2192,7 @@ export function Week() {
                       blocks={blocksFor(iso)}
                       systems={systems}
                       courseAssignments={items.course_assignments.filter((a) => a.due_date === iso)}
+                      scheduleEntries={scheduleEntriesFor(iso)}
                       onClickSlot={(date, time) => setModal({ kind: "create-block", date, startTime: time })}
                       onClickBlock={(b) => setModal({ kind: "edit-block", block: b })}
                     />

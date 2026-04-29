@@ -40,6 +40,13 @@ export const PRIORITY_LABEL: Record<Priority, string> = {
   low: "Low",
 };
 
+// Badge classes for assignment-type chips — indigo container uses these for type labels.
+export const PRIORITY_BADGE_CLASSES: Record<string, string> = {
+  high: "bg-rose-500/10 text-rose-600 dark:text-rose-400 border-rose-400/30",
+  medium: "bg-amber-500/10 text-amber-600 dark:text-amber-400 border-amber-400/30",
+  low: "bg-slate-500/10 text-slate-600 dark:text-slate-400 border-slate-400/30",
+};
+
 // ── Calendar overlap layout ───────────────────────────────────────────────────
 // Assigns side-by-side columns to simultaneously-overlapping timed events.
 // Each item must supply startMin / endMin (minutes since midnight).
