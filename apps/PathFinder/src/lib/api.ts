@@ -860,6 +860,7 @@ export const getWeekItems = async (startDate: string, endDate: string): Promise<
     { data: seOneOff },
     { data: seRecurring },
     { data: trainingSessions },
+    { data: recurringTrainingSessions },
   ] = await Promise.all([
     supabase.from("pf_tasks")
       .select("*, pf_plans(id, title, goal_id, pf_goals(id, title))")
@@ -887,16 +888,27 @@ export const getWeekItems = async (startDate: string, endDate: string): Promise<
       .select("*, pf_plans(title)").eq("user_id", USER_ID).eq("is_recurring", true)
       .lte("series_start_date", endDate)
       .or(`series_end_date.is.null,series_end_date.gte.${startDate}`),
-    // Training sessions scheduled in range
+    // Training sessions — one-off scheduled in range
     supabase.from("pf_training_sessions")
       .select("*, pf_training_plans(title, plan_type)")
       .eq("user_id", USER_ID)
+      .eq("is_recurring", false)
       .not("scheduled_date", "is", null)
       .gte("scheduled_date", startDate).lte("scheduled_date", endDate),
+    // Training sessions — recurring (series overlaps range)
+    supabase.from("pf_training_sessions")
+      .select("*, pf_training_plans(title, plan_type)")
+      .eq("user_id", USER_ID)
+      .eq("is_recurring", true)
+      .lte("series_start_date", endDate)
+      .or(`series_end_date.is.null,series_end_date.gte.${startDate}`),
   ]);
 
   const expandedRecurring = (seRecurring ?? []).flatMap((e) =>
     expandScheduleEntries(e, startDate, endDate)
+  );
+  const expandedRecurringSessions = (recurringTrainingSessions ?? []).flatMap((r) =>
+    expandTrainingSessions(r, startDate, endDate)
   );
 
   return {
@@ -910,7 +922,10 @@ export const getWeekItems = async (startDate: string, endDate: string): Promise<
       ...(seOneOff ?? []).map((e) => mapScheduleEntry(e)),
       ...expandedRecurring,
     ],
-    training_sessions:  (trainingSessions ?? []).map((r) => mapTrainingSession(r)),
+    training_sessions:  [
+      ...(trainingSessions ?? []).map((r) => mapTrainingSession(r)),
+      ...expandedRecurringSessions,
+    ],
   };
 };
 
@@ -2461,8 +2476,60 @@ function mapTrainingSession(r: any, planTitle?: string | null): TrainingSession 
     title: r.title, scheduled_date: r.scheduled_date,
     start_time: r.start_time, end_time: r.end_time,
     location: r.location, notes: r.notes,
-    completed: r.completed, created_at: r.created_at,
+    completed: r.completed ?? false, created_at: r.created_at,
+    is_recurring: r.is_recurring ?? false,
+    recurrence: r.recurrence ?? null,
+    days_of_week: r.days_of_week ?? null,
+    series_start_date: r.series_start_date ?? null,
+    series_end_date: r.series_end_date ?? null,
+    recurring_id: r.recurring_id ?? null,
   };
+}
+
+const SESSION_EPOCH = new Date("2020-01-01T00:00:00Z").getTime();
+
+function expandTrainingSessions(r: any, startDate: string, endDate: string): TrainingSession[] {
+  const result: TrainingSession[] = [];
+  const rangeStart  = new Date(startDate + "T00:00:00Z");
+  const rangeEnd    = new Date(endDate   + "T00:00:00Z");
+  const seriesStart = new Date((r.series_start_date || startDate) + "T00:00:00Z");
+  const seriesEnd   = r.series_end_date ? new Date(r.series_end_date + "T00:00:00Z") : null;
+  const daysOfWeek: number[] = r.days_of_week ? r.days_of_week.split(",").map(Number) : [];
+
+  const cursor = new Date(Math.max(rangeStart.getTime(), seriesStart.getTime()));
+  while (cursor <= rangeEnd && (!seriesEnd || cursor <= seriesEnd)) {
+    const dow = cursor.getUTCDay();
+    const matches =
+      r.recurrence === "daily" ||
+      (r.recurrence === "weekly" && daysOfWeek.includes(dow));
+    if (matches) {
+      const dateStr   = cursor.toISOString().split("T")[0];
+      const dayOffset = Math.floor((cursor.getTime() - SESSION_EPOCH) / 86_400_000);
+      result.push({
+        id: -(num(r.id) * 100_000 + dayOffset),
+        user_id: r.user_id,
+        plan_id: r.plan_id ? num(r.plan_id) : null,
+        plan_title: r.pf_training_plans?.title ?? null,
+        plan_type: r.pf_training_plans?.plan_type ?? null,
+        title: r.title,
+        scheduled_date: dateStr,
+        start_time: r.start_time,
+        end_time: r.end_time,
+        location: r.location,
+        notes: r.notes,
+        completed: r.completed ?? false,
+        created_at: r.created_at,
+        is_recurring: true,
+        recurrence: r.recurrence,
+        days_of_week: r.days_of_week,
+        series_start_date: r.series_start_date,
+        series_end_date: r.series_end_date,
+        recurring_id: num(r.id),
+      });
+    }
+    cursor.setUTCDate(cursor.getUTCDate() + 1);
+  }
+  return result;
 }
 
 function mapSessionPerformance(r: any): SessionPerformance {
@@ -2511,7 +2578,8 @@ export const getTrainingSessions = async (planId?: number): Promise<TrainingSess
     .from("pf_training_sessions")
     .select("*, pf_training_plans(title, plan_type)")
     .eq("user_id", USER_ID)
-    .order("scheduled_date", { ascending: false })
+    .eq("is_recurring", false)
+    .order("scheduled_date", { ascending: true, nullsFirst: false })
     .order("created_at", { ascending: false });
   if (planId !== undefined) q = q.eq("plan_id", planId);
   const { data, error } = await q;
@@ -2519,21 +2587,56 @@ export const getTrainingSessions = async (planId?: number): Promise<TrainingSess
   return (data ?? []).map((r) => mapTrainingSession(r));
 };
 
-export const getTrainingSessionsForDate = async (date: string): Promise<TrainingSession[]> => {
-  const { data, error } = await supabase
+export const getRecurringTrainingSessions = async (planId?: number): Promise<TrainingSession[]> => {
+  let q = supabase
     .from("pf_training_sessions")
     .select("*, pf_training_plans(title, plan_type)")
     .eq("user_id", USER_ID)
-    .eq("scheduled_date", date)
-    .order("start_time", { ascending: true, nullsFirst: true });
+    .eq("is_recurring", true)
+    .order("series_start_date", { ascending: true });
+  if (planId !== undefined) q = q.eq("plan_id", planId);
+  const { data, error } = await q;
   if (error) err(error);
   return (data ?? []).map((r) => mapTrainingSession(r));
 };
 
+export const getTrainingSessionsForDate = async (date: string): Promise<TrainingSession[]> => {
+  const [{ data: oneOff }, { data: recurring }] = await Promise.all([
+    supabase
+      .from("pf_training_sessions")
+      .select("*, pf_training_plans(title, plan_type)")
+      .eq("user_id", USER_ID)
+      .eq("is_recurring", false)
+      .eq("scheduled_date", date)
+      .order("start_time", { ascending: true, nullsFirst: true }),
+    supabase
+      .from("pf_training_sessions")
+      .select("*, pf_training_plans(title, plan_type)")
+      .eq("user_id", USER_ID)
+      .eq("is_recurring", true)
+      .lte("series_start_date", date)
+      .or(`series_end_date.is.null,series_end_date.gte.${date}`),
+  ]);
+  const expanded = (recurring ?? []).flatMap((r) => expandTrainingSessions(r, date, date));
+  return [
+    ...(oneOff ?? []).map((r) => mapTrainingSession(r)),
+    ...expanded,
+  ].sort((a, b) => (a.start_time ?? "").localeCompare(b.start_time ?? ""));
+};
+
 export const createTrainingSession = async (payload: {
-  plan_id?: number | null; title: string; scheduled_date?: string | null;
-  start_time?: string | null; end_time?: string | null;
-  location?: string | null; notes?: string | null;
+  plan_id?: number | null;
+  title: string;
+  scheduled_date?: string | null;
+  start_time?: string | null;
+  end_time?: string | null;
+  location?: string | null;
+  notes?: string | null;
+  is_recurring?: boolean;
+  recurrence?: string | null;
+  days_of_week?: string | null;
+  series_start_date?: string | null;
+  series_end_date?: string | null;
 }): Promise<TrainingSession> => {
   const { data, error } = await supabase
     .from("pf_training_sessions").insert({ user_id: USER_ID, ...payload }).select("*, pf_training_plans(title, plan_type)").single();
@@ -2542,9 +2645,18 @@ export const createTrainingSession = async (payload: {
 };
 
 export const updateTrainingSession = async (id: number, payload: {
-  plan_id?: number | null; title?: string; scheduled_date?: string | null;
-  start_time?: string | null; end_time?: string | null;
-  location?: string | null; notes?: string | null;
+  plan_id?: number | null;
+  title?: string;
+  scheduled_date?: string | null;
+  start_time?: string | null;
+  end_time?: string | null;
+  location?: string | null;
+  notes?: string | null;
+  is_recurring?: boolean;
+  recurrence?: string | null;
+  days_of_week?: string | null;
+  series_start_date?: string | null;
+  series_end_date?: string | null;
 }): Promise<TrainingSession> => {
   const { data, error } = await supabase
     .from("pf_training_sessions").update(payload).eq("id", id).select("*, pf_training_plans(title, plan_type)").single();
@@ -2562,6 +2674,11 @@ export const toggleTrainingSession = async (id: number): Promise<TrainingSession
 
 export const deleteTrainingSession = async (id: number): Promise<void> => {
   const { error } = await supabase.from("pf_training_sessions").delete().eq("id", id);
+  if (error) err(error);
+};
+
+export const deleteTrainingSessionSeries = async (recurringId: number): Promise<void> => {
+  const { error } = await supabase.from("pf_training_sessions").delete().eq("id", recurringId);
   if (error) err(error);
 };
 

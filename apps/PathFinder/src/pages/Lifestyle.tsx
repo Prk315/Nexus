@@ -1,8 +1,8 @@
-import { useEffect, useState, useCallback } from "react";
+import React, { useEffect, useState, useCallback } from "react";
 import {
   Heart, Plus, X, Check, Trash2, ChevronDown, ChevronRight,
   Dumbbell, Footprints, Flame, Timer, Ruler, Calendar, TrendingUp, Zap,
-  CalendarDays, BarChart2, Pencil, LayoutDashboard, Activity, Target,
+  CalendarDays, BarChart2, Pencil, Activity, Target, CalendarPlus,
   Layers,
 } from "lucide-react";
 import {
@@ -27,17 +27,31 @@ import {
   updateTrainingPlan,
   deleteTrainingPlan,
   getTrainingSessions,
+  getRecurringTrainingSessions,
   createTrainingSession,
-  toggleTrainingSession,
   deleteTrainingSession,
+  deleteTrainingSessionSeries,
+  toggleTrainingSession,
   getSessionPerformance,
   addSessionPerformance,
   deleteSessionPerformance,
+  getHabitSubtasks,
+  addHabitSubtask,
+  deleteHabitSubtask,
+  toggleHabitSubtask,
 } from "../lib/api";
-import type { HabitWithCompletion, HabitStack, RunLog, WorkoutLog, TrainingPlan, TrainingSession, SessionPerformance } from "../types";
-import { cn } from "../lib/utils";
+import type { HabitWithCompletion, HabitStack, HabitSubtask, RunLog, WorkoutLog, TrainingPlan, TrainingSession, SessionPerformance } from "../types";
 
-type Tab = "overview" | "habits" | "running" | "strength" | "training";
+// ── Training plan type helpers ────────────────────────────────────────────────
+type PlanType = "running" | "strength" | "yoga" | "other";
+const PLAN_TYPES: { id: PlanType; label: string; icon: React.ReactNode; color: string; accent: string }[] = [
+  { id: "running",  label: "Running",  icon: <Footprints className="w-3.5 h-3.5" />, color: "text-emerald-600", accent: "bg-emerald-500/15 text-emerald-700 border-emerald-500/30" },
+  { id: "strength", label: "Strength", icon: <Dumbbell className="w-3.5 h-3.5" />,   color: "text-orange-600",  accent: "bg-orange-500/15 text-orange-700 border-orange-500/30" },
+  { id: "yoga",     label: "Yoga",     icon: <Activity className="w-3.5 h-3.5" />,   color: "text-violet-600",  accent: "bg-violet-500/15 text-violet-700 border-violet-500/30" },
+  { id: "other",    label: "Other",    icon: <Zap className="w-3.5 h-3.5" />,        color: "text-slate-500",   accent: "bg-slate-500/15 text-slate-700 border-slate-500/30" },
+];
+const planTypeInfo = (t: string | null) => PLAN_TYPES.find((p) => p.id === t) ?? PLAN_TYPES[3];
+import { cn } from "../lib/utils";
 
 const TODAY = new Date().toISOString().slice(0, 10);
 
@@ -111,16 +125,23 @@ function HabitRow({
   onToggle,
   onDelete,
   onMoveToStack,
+  onSubtaskChange,
   stacks,
 }: {
   habit: HabitWithCompletion;
   onToggle: (id: number) => void;
   onDelete: (id: number) => void;
   onMoveToStack: (id: number, stackId: number | null) => void;
+  onSubtaskChange?: () => void;
   stacks: HabitStack[];
 }) {
   const [hovered, setHovered] = useState(false);
   const [showStackMenu, setShowStackMenu] = useState(false);
+  const [expanded, setExpanded] = useState(false);
+  const [subtasks, setSubtasks] = useState<HabitSubtask[]>([]);
+  const [subtasksLoaded, setSubtasksLoaded] = useState(false);
+  const [newSubtaskTitle, setNewSubtaskTitle] = useState("");
+
   const color = habit.color as HabitColor;
   const weekDots = Array.from({ length: 7 }, (_, i) => {
     const d = new Date(TODAY + "T00:00:00");
@@ -128,86 +149,206 @@ function HabitRow({
     return habit.recent_dates.includes(d.toISOString().slice(0, 10));
   });
 
+  const loadSubtasks = async () => {
+    try {
+      const data = await getHabitSubtasks(habit.id, TODAY);
+      setSubtasks(data);
+      setSubtasksLoaded(true);
+    } catch (e) {
+      console.error(e);
+    }
+  };
+
+  const handleExpand = async () => {
+    const next = !expanded;
+    setExpanded(next);
+    if (next && !subtasksLoaded) await loadSubtasks();
+  };
+
+  const handleAddSubtask = async () => {
+    const title = newSubtaskTitle.trim();
+    if (!title) return;
+    try {
+      const updated = await addHabitSubtask(habit.id, title, TODAY);
+      setSubtasks(updated);
+      setSubtasksLoaded(true);
+      setNewSubtaskTitle("");
+      onSubtaskChange?.();
+    } catch (e) {
+      console.error(e);
+    }
+  };
+
+  const handleToggleSubtask = async (subtaskId: number) => {
+    try {
+      const updated = await toggleHabitSubtask(subtaskId, TODAY);
+      setSubtasks(updated);
+    } catch (e) {
+      console.error(e);
+    }
+  };
+
+  const handleDeleteSubtask = async (subtaskId: number) => {
+    try {
+      await deleteHabitSubtask(subtaskId);
+      setSubtasks((prev) => prev.filter((s) => s.id !== subtaskId));
+      onSubtaskChange?.();
+    } catch (e) {
+      console.error(e);
+    }
+  };
+
+  const hasSubtasks = habit.subtask_count > 0 || subtasks.length > 0;
+
   return (
-    <div
-      className="flex items-center gap-3 px-4 py-3 group relative"
-      onMouseEnter={() => setHovered(true)}
-      onMouseLeave={() => { setHovered(false); setShowStackMenu(false); }}
-    >
-      <button
-        onClick={() => onToggle(habit.id)}
-        className={cn(
-          "w-6 h-6 rounded-full border-2 flex items-center justify-center flex-shrink-0 transition-all",
-          habit.done
-            ? cn(COLOR_BG_CHECKED[color] ?? "bg-emerald-500", "border-transparent")
-            : cn("border-border bg-transparent", COLOR_RING[color] ?? "ring-emerald-500", "ring-2 ring-offset-1")
-        )}
+    <div>
+      <div
+        className="flex items-center gap-3 px-4 py-3 group relative"
+        onMouseEnter={() => setHovered(true)}
+        onMouseLeave={() => { setHovered(false); setShowStackMenu(false); }}
       >
-        {habit.done && <Check className="w-3 h-3 text-white" strokeWidth={3} />}
-      </button>
+        <button
+          onClick={() => onToggle(habit.id)}
+          className={cn(
+            "w-6 h-6 rounded-full border-2 flex items-center justify-center flex-shrink-0 transition-all",
+            habit.done
+              ? cn(COLOR_BG_CHECKED[color] ?? "bg-emerald-500", "border-transparent")
+              : cn("border-border bg-transparent", COLOR_RING[color] ?? "ring-emerald-500", "ring-2 ring-offset-1")
+          )}
+        >
+          {habit.done && <Check className="w-3 h-3 text-white" strokeWidth={3} />}
+        </button>
 
-      <div className="flex items-center gap-2 flex-1 min-w-0">
-        <span className={cn("w-2 h-2 rounded-full flex-shrink-0", COLOR_DOT[color] ?? "bg-emerald-500")} />
-        <span className={cn("text-sm font-medium truncate", habit.done && "line-through text-muted-foreground")}>
-          {habit.title}
-        </span>
-      </div>
-
-      <div className="flex items-center gap-0.5 flex-shrink-0">
-        {weekDots.map((done, i) => (
-          <span
-            key={i}
-            title={i === 0 ? "Today" : `${i}d ago`}
-            className={cn("w-2 h-2 rounded-full", done ? (COLOR_DOT[color] ?? "bg-emerald-500") : "bg-muted-foreground/20")}
-          />
-        ))}
-      </div>
-
-      {habit.streak > 0 && (
-        <div className="flex items-center gap-0.5 flex-shrink-0 text-orange-500">
-          <Zap className="w-3 h-3" />
-          <span className="text-xs font-semibold">{habit.streak}</span>
+        <div className="flex items-center gap-2 flex-1 min-w-0">
+          <span className={cn("w-2 h-2 rounded-full flex-shrink-0", COLOR_DOT[color] ?? "bg-emerald-500")} />
+          <span className={cn("text-sm font-medium truncate", habit.done && "line-through text-muted-foreground")}>
+            {habit.title}
+          </span>
+          {hasSubtasks && (
+            <span className="text-[10px] tabular-nums text-muted-foreground bg-secondary px-1.5 py-0.5 rounded-full flex-shrink-0">
+              {habit.subtask_done_count}/{habit.subtask_count}
+            </span>
+          )}
         </div>
-      )}
 
-      {hovered && (
         <div className="flex items-center gap-0.5 flex-shrink-0">
-          {/* Move to stack button */}
-          <div className="relative">
-            <button
-              onClick={() => setShowStackMenu((v) => !v)}
-              className="p-1 rounded hover:bg-secondary text-muted-foreground hover:text-foreground transition-colors"
-              title="Move to stack"
-            >
-              <Layers className="w-3.5 h-3.5" />
-            </button>
-            {showStackMenu && (
-              <div className="absolute right-0 top-full mt-1 z-20 bg-card border border-border rounded-lg shadow-lg py-1 min-w-32">
-                <button
-                  onClick={() => { onMoveToStack(habit.id, null); setShowStackMenu(false); }}
-                  className={cn("w-full text-left px-3 py-1.5 text-xs hover:bg-secondary transition-colors", habit.stack_id === null && "font-semibold")}
-                >
-                  No stack
-                </button>
-                {stacks.map((s) => (
+          {weekDots.map((done, i) => (
+            <span
+              key={i}
+              title={i === 0 ? "Today" : `${i}d ago`}
+              className={cn("w-2 h-2 rounded-full", done ? (COLOR_DOT[color] ?? "bg-emerald-500") : "bg-muted-foreground/20")}
+            />
+          ))}
+        </div>
+
+        {habit.streak > 0 && (
+          <div className="flex items-center gap-0.5 flex-shrink-0 text-orange-500">
+            <Zap className="w-3 h-3" />
+            <span className="text-xs font-semibold">{habit.streak}</span>
+          </div>
+        )}
+
+        <button
+          onClick={handleExpand}
+          className={cn(
+            "p-1 rounded transition-colors flex-shrink-0",
+            expanded ? "text-foreground" : "text-muted-foreground/40 hover:text-muted-foreground",
+          )}
+          title="Sub-habits"
+        >
+          <ChevronDown className={cn("w-3.5 h-3.5 transition-transform", expanded && "rotate-180")} />
+        </button>
+
+        {hovered && (
+          <div className="flex items-center gap-0.5 flex-shrink-0">
+            {/* Move to stack button */}
+            <div className="relative">
+              <button
+                onClick={() => setShowStackMenu((v) => !v)}
+                className="p-1 rounded hover:bg-secondary text-muted-foreground hover:text-foreground transition-colors"
+                title="Move to stack"
+              >
+                <Layers className="w-3.5 h-3.5" />
+              </button>
+              {showStackMenu && (
+                <div className="absolute right-0 top-full mt-1 z-20 bg-card border border-border rounded-lg shadow-lg py-1 min-w-32">
                   <button
-                    key={s.id}
-                    onClick={() => { onMoveToStack(habit.id, s.id); setShowStackMenu(false); }}
-                    className={cn("w-full text-left px-3 py-1.5 text-xs hover:bg-secondary transition-colors flex items-center gap-2", habit.stack_id === s.id && "font-semibold")}
+                    onClick={() => { onMoveToStack(habit.id, null); setShowStackMenu(false); }}
+                    className={cn("w-full text-left px-3 py-1.5 text-xs hover:bg-secondary transition-colors", habit.stack_id === null && "font-semibold")}
                   >
-                    <span className={cn("w-2 h-2 rounded-full flex-shrink-0", COLOR_DOT[s.color as HabitColor] ?? "bg-emerald-500")} />
-                    {s.title}
+                    No stack
                   </button>
-                ))}
-              </div>
+                  {stacks.map((s) => (
+                    <button
+                      key={s.id}
+                      onClick={() => { onMoveToStack(habit.id, s.id); setShowStackMenu(false); }}
+                      className={cn("w-full text-left px-3 py-1.5 text-xs hover:bg-secondary transition-colors flex items-center gap-2", habit.stack_id === s.id && "font-semibold")}
+                    >
+                      <span className={cn("w-2 h-2 rounded-full flex-shrink-0", COLOR_DOT[s.color as HabitColor] ?? "bg-emerald-500")} />
+                      {s.title}
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+            <button
+              onClick={() => onDelete(habit.id)}
+              className="p-1 rounded hover:bg-destructive/10 text-muted-foreground hover:text-destructive transition-colors"
+            >
+              <X className="w-3.5 h-3.5" />
+            </button>
+          </div>
+        )}
+      </div>
+
+      {/* Subtasks panel */}
+      {expanded && (
+        <div className="px-4 pb-3 pl-14 space-y-1.5 border-t border-border/40 pt-2 bg-secondary/10">
+          {subtasks.length === 0 && subtasksLoaded && (
+            <p className="text-xs text-muted-foreground italic">No sub-habits yet.</p>
+          )}
+          {subtasks.map((sub) => (
+            <div key={sub.id} className="flex items-center gap-2 group/sub">
+              <button
+                onClick={() => handleToggleSubtask(sub.id)}
+                className={cn(
+                  "w-4 h-4 rounded border flex items-center justify-center flex-shrink-0 transition-all",
+                  sub.done ? cn(COLOR_BG_CHECKED[color] ?? "bg-emerald-500", "border-transparent") : "border-border hover:border-muted-foreground"
+                )}
+              >
+                {sub.done && <Check className="w-2.5 h-2.5 text-white" strokeWidth={3} />}
+              </button>
+              <span className={cn("text-xs flex-1", sub.done && "line-through text-muted-foreground")}>
+                {sub.title}
+              </span>
+              <button
+                onClick={() => handleDeleteSubtask(sub.id)}
+                className="p-0.5 rounded opacity-0 group-hover/sub:opacity-100 hover:bg-destructive/10 text-muted-foreground hover:text-destructive transition-all"
+              >
+                <X className="w-3 h-3" />
+              </button>
+            </div>
+          ))}
+          {/* Add sub-habit inline */}
+          <div className="flex items-center gap-2 pt-1">
+            <div className="w-4 h-4 rounded border border-dashed border-muted-foreground/30 flex-shrink-0" />
+            <input
+              type="text"
+              value={newSubtaskTitle}
+              onChange={(e) => setNewSubtaskTitle(e.target.value)}
+              onKeyDown={(e) => e.key === "Enter" && handleAddSubtask()}
+              placeholder="Add sub-habit..."
+              className="flex-1 text-xs bg-transparent border-none outline-none placeholder:text-muted-foreground/50"
+            />
+            {newSubtaskTitle.trim() && (
+              <button
+                onClick={handleAddSubtask}
+                className="p-0.5 rounded bg-primary/10 text-primary hover:bg-primary/20 transition-colors"
+              >
+                <Plus className="w-3 h-3" />
+              </button>
             )}
           </div>
-          <button
-            onClick={() => onDelete(habit.id)}
-            className="p-1 rounded hover:bg-destructive/10 text-muted-foreground hover:text-destructive transition-colors"
-          >
-            <X className="w-3.5 h-3.5" />
-          </button>
         </div>
       )}
     </div>
@@ -315,7 +456,7 @@ function HabitsTab() {
     habits: habits.filter((h) => h.stack_id === s.id),
   })).filter((g) => g.habits.length > 0);
 
-  const habitRowProps = { onToggle: handleToggle, onDelete: handleDelete, onMoveToStack: handleMoveToStack, stacks };
+  const habitRowProps = { onToggle: handleToggle, onDelete: handleDelete, onMoveToStack: handleMoveToStack, onSubtaskChange: load, stacks };
 
   return (
     <div className="space-y-4">
@@ -479,6 +620,7 @@ function HabitsTab() {
 
 function RunningTab() {
   const [logs, setLogs] = useState<RunLog[]>([]);
+  const [plannedSessions, setPlannedSessions] = useState<TrainingSession[]>([]);
   const [date, setDate] = useState(TODAY);
   const [distance, setDistance] = useState("");
   const [duration, setDuration] = useState("");
@@ -487,7 +629,33 @@ function RunningTab() {
 
   const load = useCallback(async () => {
     try {
-      setLogs(await getRunLogs());
+      const [logsData, sessionsData, recurringData] = await Promise.all([getRunLogs(), getTrainingSessions(), getRecurringTrainingSessions()]);
+      setLogs(logsData);
+      // Combine one-off upcoming + recurring (show next 30 days of recurring)
+      const endDate = new Date(); endDate.setDate(endDate.getDate() + 30);
+      const endStr = endDate.toISOString().slice(0, 10);
+      const expandedRec = recurringData
+        .filter((s) => s.plan_type === "running")
+        .flatMap((s) => {
+          // produce one entry per occurrence in next 30 days via same expansion logic
+          const results: TrainingSession[] = [];
+          const cursor = new Date(Math.max(new Date(TODAY + "T00:00:00Z").getTime(), new Date((s.series_start_date ?? TODAY) + "T00:00:00Z").getTime()));
+          const rangeEnd = new Date(endStr + "T00:00:00Z");
+          const seriesEnd = s.series_end_date ? new Date(s.series_end_date + "T00:00:00Z") : null;
+          const dows = s.days_of_week ? s.days_of_week.split(",").map(Number) : [];
+          while (cursor <= rangeEnd && (!seriesEnd || cursor <= seriesEnd) && results.length < 4) {
+            const dow = cursor.getUTCDay();
+            if (s.recurrence === "daily" || (s.recurrence === "weekly" && dows.includes(dow))) {
+              results.push({ ...s, scheduled_date: cursor.toISOString().slice(0, 10) });
+            }
+            cursor.setUTCDate(cursor.getUTCDate() + 1);
+          }
+          return results;
+        });
+      setPlannedSessions([
+        ...sessionsData.filter((s) => s.plan_type === "running" && !s.completed && s.scheduled_date && s.scheduled_date >= TODAY),
+        ...expandedRec,
+      ].sort((a, b) => (a.scheduled_date ?? "").localeCompare(b.scheduled_date ?? "")));
     } catch (e) {
       console.error(e);
     }
@@ -651,14 +819,46 @@ function RunningTab() {
           </div>
         ))}
       </div>
+      <UpcomingSessionsPreview sessions={plannedSessions} onToggle={async (id) => { await toggleTrainingSession(id); await load(); }} />
     </div>
   );
 }
 
 // ── Strength Tab ──────────────────────────────────────────────────────────────
 
+function UpcomingSessionsPreview({ sessions, onToggle }: { sessions: TrainingSession[]; onToggle: (id: number) => void }) {
+  if (sessions.length === 0) return null;
+  return (
+    <div className="border border-border bg-card rounded-lg overflow-hidden">
+      <div className="px-4 py-2 bg-muted/30 border-b border-border flex items-center gap-2">
+        <CalendarDays className="w-3.5 h-3.5 text-muted-foreground" />
+        <span className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">Planned Sessions</span>
+      </div>
+      <div className="divide-y divide-border">
+        {sessions.map((s) => {
+          const pt = planTypeInfo(s.plan_type);
+          return (
+            <div key={s.id} className="px-4 py-2.5 flex items-center gap-3 group">
+              <button
+                onClick={() => onToggle(s.id)}
+                className="w-4 h-4 rounded-full border-2 border-border flex items-center justify-center flex-shrink-0 hover:border-emerald-400 transition-colors"
+              />
+              <span className={cn("text-[10px] px-1.5 py-0.5 rounded border font-medium flex-shrink-0", pt.accent)}>
+                {s.scheduled_date === TODAY ? "Today" : s.scheduled_date ?? "—"}
+              </span>
+              <span className="text-sm flex-1 truncate">{s.title}</span>
+              {s.start_time && <span className="text-xs text-muted-foreground flex-shrink-0">{s.start_time.slice(0, 5)}</span>}
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
 function StrengthTab() {
   const [workouts, setWorkouts] = useState<WorkoutLog[]>([]);
+  const [plannedSessions, setPlannedSessions] = useState<TrainingSession[]>([]);
   const [showForm, setShowForm] = useState(false);
   const [newDate, setNewDate] = useState(TODAY);
   const [newName, setNewName] = useState("Workout");
@@ -667,7 +867,31 @@ function StrengthTab() {
 
   const load = useCallback(async () => {
     try {
-      setWorkouts(await getWorkoutLogs());
+      const [workoutsData, sessionsData, recurringData] = await Promise.all([getWorkoutLogs(), getTrainingSessions(), getRecurringTrainingSessions()]);
+      setWorkouts(workoutsData);
+      const endDate = new Date(); endDate.setDate(endDate.getDate() + 30);
+      const endStr = endDate.toISOString().slice(0, 10);
+      const expandedRec = recurringData
+        .filter((s) => s.plan_type === "strength")
+        .flatMap((s) => {
+          const results: TrainingSession[] = [];
+          const cursor = new Date(Math.max(new Date(TODAY + "T00:00:00Z").getTime(), new Date((s.series_start_date ?? TODAY) + "T00:00:00Z").getTime()));
+          const rangeEnd = new Date(endStr + "T00:00:00Z");
+          const seriesEnd = s.series_end_date ? new Date(s.series_end_date + "T00:00:00Z") : null;
+          const dows = s.days_of_week ? s.days_of_week.split(",").map(Number) : [];
+          while (cursor <= rangeEnd && (!seriesEnd || cursor <= seriesEnd) && results.length < 4) {
+            const dow = cursor.getUTCDay();
+            if (s.recurrence === "daily" || (s.recurrence === "weekly" && dows.includes(dow))) {
+              results.push({ ...s, scheduled_date: cursor.toISOString().slice(0, 10) });
+            }
+            cursor.setUTCDate(cursor.getUTCDate() + 1);
+          }
+          return results;
+        });
+      setPlannedSessions([
+        ...sessionsData.filter((s) => s.plan_type === "strength" && !s.completed && s.scheduled_date && s.scheduled_date >= TODAY),
+        ...expandedRec,
+      ].sort((a, b) => (a.scheduled_date ?? "").localeCompare(b.scheduled_date ?? "")));
     } catch (e) {
       console.error(e);
     }
@@ -908,13 +1132,14 @@ function StrengthTab() {
           );
         })}
       </div>
+      <UpcomingSessionsPreview sessions={plannedSessions} onToggle={async (id) => { await toggleTrainingSession(id); await load(); }} />
     </div>
   );
 }
 
 // ── Training Tab ──────────────────────────────────────────────────────────────
 
-type TrainingSubTab = "plans" | "schedule" | "performance";
+type TrainingSubTab = "plans" | "performance";
 
 function TrainingTab() {
   const [subTab, setSubTab] = useState<TrainingSubTab>("plans");
@@ -940,8 +1165,7 @@ function TrainingTab() {
         </div>
         <div className="flex items-center gap-1 bg-muted/50 rounded-lg p-1">
           {([
-            { id: "plans" as const, label: "Plans", icon: <Dumbbell className="w-3.5 h-3.5" /> },
-            { id: "schedule" as const, label: "Schedule", icon: <CalendarDays className="w-3.5 h-3.5" /> },
+            { id: "plans" as const,       label: "Plans",       icon: <Dumbbell  className="w-3.5 h-3.5" /> },
             { id: "performance" as const, label: "Performance", icon: <BarChart2 className="w-3.5 h-3.5" /> },
           ]).map(({ id, label, icon }) => (
             <button
@@ -961,12 +1185,345 @@ function TrainingTab() {
       {subTab === "plans" && (
         <PlansSection plans={plans} onRefresh={loadPlans} />
       )}
-      {subTab === "schedule" && (
-        <ScheduleSection plans={plans} sessions={sessions} onRefresh={loadSessions} />
-      )}
       {subTab === "performance" && (
         <PerformanceSection plans={plans} sessions={sessions} />
       )}
+    </div>
+  );
+}
+
+// ── Plan Card List (with session scheduler + recurrence) ─────────────────────
+
+const DOW_LABELS = ["Su", "Mo", "Tu", "We", "Th", "Fr", "Sa"];
+
+type SessionDraft = {
+  title: string;
+  isRecurring: boolean;
+  recurrence: "daily" | "weekly";
+  daysOfWeek: number[];
+  seriesStart: string;
+  seriesEnd: string;
+  date: string;
+  startTime: string;
+  endTime: string;
+};
+
+function defaultDraft(planTitle: string): SessionDraft {
+  return {
+    title: planTitle,
+    isRecurring: false,
+    recurrence: "weekly",
+    daysOfWeek: [],
+    seriesStart: TODAY,
+    seriesEnd: "",
+    date: TODAY,
+    startTime: "",
+    endTime: "",
+  };
+}
+
+function SessionSchedulerForm({
+  draft, onChange, onSave, onCancel,
+}: {
+  planId?: number;
+  draft: SessionDraft;
+  onChange: (d: SessionDraft) => void;
+  onSave: () => void;
+  onCancel: () => void;
+}) {
+  const inputCls = "text-sm bg-input border border-border rounded px-2 py-1 outline-none focus:ring-1 focus:ring-ring";
+  const toggleDow = (d: number) =>
+    onChange({ ...draft, daysOfWeek: draft.daysOfWeek.includes(d) ? draft.daysOfWeek.filter((x) => x !== d) : [...draft.daysOfWeek, d].sort() });
+
+  return (
+    <div className="px-4 py-3 bg-muted/30 border-t border-border space-y-3">
+      {/* Title */}
+      <div className="flex flex-col gap-1">
+        <span className="text-[10px] uppercase tracking-wider text-muted-foreground">Session name</span>
+        <input autoFocus type="text" value={draft.title} onChange={(e) => onChange({ ...draft, title: e.target.value })}
+          onKeyDown={(e) => e.key === "Enter" && onSave()}
+          className={inputCls} />
+      </div>
+
+      {/* Recurring toggle */}
+      <div className="flex items-center gap-3">
+        <button
+          onClick={() => onChange({ ...draft, isRecurring: false })}
+          className={cn("px-3 py-1 rounded-full text-xs font-medium border transition-colors",
+            !draft.isRecurring ? "bg-emerald-600 text-white border-emerald-600" : "border-border text-muted-foreground hover:bg-muted")}
+        >One-off</button>
+        <button
+          onClick={() => onChange({ ...draft, isRecurring: true })}
+          className={cn("px-3 py-1 rounded-full text-xs font-medium border transition-colors",
+            draft.isRecurring ? "bg-violet-600 text-white border-violet-600" : "border-border text-muted-foreground hover:bg-muted")}
+        >Recurring</button>
+      </div>
+
+      {!draft.isRecurring ? (
+        /* One-off: date + times */
+        <div className="flex flex-wrap gap-2 items-end">
+          <div className="flex flex-col gap-1">
+            <span className="text-[10px] uppercase tracking-wider text-muted-foreground">Date</span>
+            <input type="date" value={draft.date} onChange={(e) => onChange({ ...draft, date: e.target.value })} className={inputCls} />
+          </div>
+          <div className="flex flex-col gap-1">
+            <span className="text-[10px] uppercase tracking-wider text-muted-foreground">Start</span>
+            <input type="time" value={draft.startTime} onChange={(e) => onChange({ ...draft, startTime: e.target.value })} className={inputCls} />
+          </div>
+          <div className="flex flex-col gap-1">
+            <span className="text-[10px] uppercase tracking-wider text-muted-foreground">End</span>
+            <input type="time" value={draft.endTime} onChange={(e) => onChange({ ...draft, endTime: e.target.value })} className={inputCls} />
+          </div>
+        </div>
+      ) : (
+        /* Recurring: pattern + days + series range + times */
+        <div className="space-y-2">
+          {/* Recurrence type */}
+          <div className="flex gap-2">
+            {(["daily", "weekly"] as const).map((r) => (
+              <button key={r} onClick={() => onChange({ ...draft, recurrence: r })}
+                className={cn("px-3 py-1 rounded text-xs font-medium border transition-colors capitalize",
+                  draft.recurrence === r ? "bg-violet-600/20 border-violet-500/50 text-violet-700 dark:text-violet-300" : "border-border text-muted-foreground hover:bg-muted")}>
+                {r}
+              </button>
+            ))}
+          </div>
+
+          {/* Day of week picker (weekly only) */}
+          {draft.recurrence === "weekly" && (
+            <div className="flex gap-1 flex-wrap">
+              {DOW_LABELS.map((label, i) => (
+                <button key={i} onClick={() => toggleDow(i)}
+                  className={cn("w-8 h-8 rounded-full text-xs font-semibold border transition-colors",
+                    draft.daysOfWeek.includes(i)
+                      ? "bg-violet-600 text-white border-violet-600"
+                      : "border-border text-muted-foreground hover:bg-muted")}>
+                  {label}
+                </button>
+              ))}
+            </div>
+          )}
+
+          {/* Series start/end + times */}
+          <div className="flex flex-wrap gap-2 items-end">
+            <div className="flex flex-col gap-1">
+              <span className="text-[10px] uppercase tracking-wider text-muted-foreground">Series start</span>
+              <input type="date" value={draft.seriesStart} onChange={(e) => onChange({ ...draft, seriesStart: e.target.value })} className={inputCls} />
+            </div>
+            <div className="flex flex-col gap-1">
+              <span className="text-[10px] uppercase tracking-wider text-muted-foreground">Series end</span>
+              <input type="date" value={draft.seriesEnd} onChange={(e) => onChange({ ...draft, seriesEnd: e.target.value })} className={inputCls}
+                placeholder="No end" />
+            </div>
+            <div className="flex flex-col gap-1">
+              <span className="text-[10px] uppercase tracking-wider text-muted-foreground">Start time</span>
+              <input type="time" value={draft.startTime} onChange={(e) => onChange({ ...draft, startTime: e.target.value })} className={inputCls} />
+            </div>
+            <div className="flex flex-col gap-1">
+              <span className="text-[10px] uppercase tracking-wider text-muted-foreground">End time</span>
+              <input type="time" value={draft.endTime} onChange={(e) => onChange({ ...draft, endTime: e.target.value })} className={inputCls} />
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Actions */}
+      <div className="flex gap-1.5">
+        <button onClick={onSave} disabled={!draft.title.trim() || (draft.isRecurring && draft.recurrence === "weekly" && draft.daysOfWeek.length === 0)}
+          className="flex items-center gap-1 px-3 py-1.5 text-xs bg-emerald-600 text-white rounded hover:bg-emerald-700 disabled:opacity-40 transition-colors">
+          <Check className="w-3 h-3" /> Schedule
+        </button>
+        <button onClick={onCancel} className="px-3 py-1.5 text-xs border border-border rounded hover:bg-muted transition-colors">Cancel</button>
+      </div>
+    </div>
+  );
+}
+
+// Upcoming sessions list embedded under each plan card
+function PlanSessions({
+  sessions, recurringSessions, onDelete, onDeleteSeries,
+}: {
+  plan?: TrainingPlan;
+  sessions: TrainingSession[];
+  recurringSessions: TrainingSession[];
+  onDelete: (id: number) => void;
+  onDeleteSeries: (id: number) => void;
+}) {
+  if (sessions.length === 0 && recurringSessions.length === 0) return null;
+  return (
+    <div className="border-t border-border bg-muted/10 divide-y divide-border/50">
+      {/* One-off upcoming */}
+      {sessions.map((s) => (
+        <div key={s.id} className="px-4 py-2 flex items-center gap-2 group text-xs">
+          <span className="w-2 h-2 rounded-full bg-emerald-500/60 flex-shrink-0" />
+          <span className="flex-1 truncate text-foreground">{s.title}</span>
+          <span className="text-muted-foreground flex-shrink-0">
+            {s.scheduled_date === TODAY ? "Today" : s.scheduled_date}
+          </span>
+          {s.start_time && <span className="text-muted-foreground flex-shrink-0">{s.start_time.slice(0,5)}</span>}
+          <button onClick={() => onDelete(s.id)}
+            className="opacity-0 group-hover:opacity-100 p-0.5 rounded hover:bg-destructive/10 text-muted-foreground hover:text-destructive transition-all">
+            <X className="w-3 h-3" />
+          </button>
+        </div>
+      ))}
+      {/* Recurring series */}
+      {recurringSessions.map((s) => {
+        const dow = s.days_of_week ? s.days_of_week.split(",").map((d) => DOW_LABELS[Number(d)]).join(" · ") : null;
+        return (
+          <div key={s.id} className="px-4 py-2 flex items-center gap-2 group text-xs">
+            <span className="w-2 h-2 rounded-full bg-violet-500/60 flex-shrink-0" />
+            <span className="flex-1 truncate text-foreground">{s.title}</span>
+            <span className="text-muted-foreground flex-shrink-0 flex items-center gap-1">
+              <span className={cn("px-1.5 py-0.5 rounded border text-[10px] font-medium",
+                "bg-violet-500/10 border-violet-500/30 text-violet-700 dark:text-violet-300")}>
+                {s.recurrence === "daily" ? "Daily" : dow ?? "Weekly"}
+              </span>
+              {s.start_time && <span>{s.start_time.slice(0,5)}</span>}
+            </span>
+            <button onClick={() => onDeleteSeries(s.id)}
+              className="opacity-0 group-hover:opacity-100 p-0.5 rounded hover:bg-destructive/10 text-muted-foreground hover:text-destructive transition-all"
+              title="Delete entire series">
+              <X className="w-3 h-3" />
+            </button>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+function PlanCardList({
+  plans, sessions, recurringSessions, onEdit, onDelete, onRefresh,
+}: {
+  plans: TrainingPlan[];
+  sessions: TrainingSession[];
+  recurringSessions: TrainingSession[];
+  onEdit: (p: TrainingPlan) => void;
+  onDelete: (id: number) => void;
+  onRefresh: () => void;
+}) {
+  const [schedulingId, setSchedulingId] = useState<number | null>(null);
+  const [draft, setDraft] = useState<SessionDraft>(defaultDraft(""));
+
+  const openScheduler = (plan: TrainingPlan) => {
+    setSchedulingId(plan.id);
+    setDraft(defaultDraft(plan.title));
+  };
+
+  const handleSave = async (planId: number) => {
+    const title = draft.title.trim();
+    if (!title) return;
+    try {
+      if (draft.isRecurring) {
+        await createTrainingSession({
+          plan_id: planId, title,
+          is_recurring: true,
+          recurrence: draft.recurrence,
+          days_of_week: draft.recurrence === "weekly" ? draft.daysOfWeek.join(",") : null,
+          series_start_date: draft.seriesStart || TODAY,
+          series_end_date: draft.seriesEnd || null,
+          start_time: draft.startTime || null,
+          end_time: draft.endTime || null,
+          scheduled_date: null,
+        });
+      } else {
+        await createTrainingSession({
+          plan_id: planId, title,
+          is_recurring: false,
+          scheduled_date: draft.date || TODAY,
+          start_time: draft.startTime || null,
+          end_time: draft.endTime || null,
+        });
+      }
+      setSchedulingId(null);
+      onRefresh();
+    } catch (e) { console.error(e); }
+  };
+
+  const handleDeleteSession = async (id: number) => {
+    try { await deleteTrainingSession(id); onRefresh(); } catch (e) { console.error(e); }
+  };
+
+  const handleDeleteSeries = async (id: number) => {
+    try { await deleteTrainingSessionSeries(id); onRefresh(); } catch (e) { console.error(e); }
+  };
+
+  return (
+    <div className="border border-border bg-card rounded-lg divide-y divide-border">
+      {plans.length === 0 && (
+        <div className="px-4 py-8 text-center text-sm text-muted-foreground">
+          No training plans yet. Create one to get started.
+        </div>
+      )}
+      {plans.map((plan) => {
+        const c = plan.color as HabitColor;
+        const pt = planTypeInfo(plan.plan_type);
+        const isScheduling = schedulingId === plan.id;
+        const planSessions = sessions.filter((s) => s.plan_id === plan.id && !s.completed && s.scheduled_date && s.scheduled_date >= TODAY);
+        const planRecurring = recurringSessions.filter((s) => s.plan_id === plan.id);
+        return (
+          <div key={plan.id}>
+            <div className="px-4 py-3 flex items-center gap-3 group">
+              <span className={cn("w-3 h-3 rounded-full flex-shrink-0", COLOR_DOT[c] ?? "bg-violet-500")} />
+              <div className="flex-1 min-w-0">
+                <div className="flex items-center gap-2 flex-wrap">
+                  <span className="text-sm font-medium">{plan.title}</span>
+                  <span className={cn("flex items-center gap-1 text-[10px] px-1.5 py-0.5 rounded border font-medium flex-shrink-0", pt.accent)}>
+                    {pt.icon}{pt.label}
+                  </span>
+                  {(planSessions.length + planRecurring.length) > 0 && (
+                    <span className="text-[10px] text-muted-foreground">
+                      {planSessions.length + planRecurring.length} session{planSessions.length + planRecurring.length !== 1 ? "s" : ""}
+                    </span>
+                  )}
+                </div>
+                {(plan.goal || plan.days_per_week) && (
+                  <div className="flex items-center gap-1 mt-0.5">
+                    {plan.goal && <span className="text-xs text-muted-foreground">{plan.goal}</span>}
+                    {plan.days_per_week && <span className="text-xs text-muted-foreground">· {plan.days_per_week}×/week</span>}
+                  </div>
+                )}
+              </div>
+              <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                <button onClick={() => isScheduling ? setSchedulingId(null) : openScheduler(plan)}
+                  title="Schedule a session"
+                  className="p-1 rounded hover:bg-muted text-muted-foreground hover:text-emerald-600 transition-colors">
+                  <CalendarPlus className="w-3.5 h-3.5" />
+                </button>
+                <button onClick={() => onEdit(plan)}
+                  className="p-1 rounded hover:bg-muted text-muted-foreground hover:text-foreground transition-colors">
+                  <Pencil className="w-3.5 h-3.5" />
+                </button>
+                <button onClick={() => onDelete(plan.id)}
+                  className="p-1 rounded hover:bg-destructive/10 text-muted-foreground hover:text-destructive transition-colors">
+                  <Trash2 className="w-3.5 h-3.5" />
+                </button>
+              </div>
+            </div>
+
+            {/* Inline session list */}
+            <PlanSessions
+              plan={plan}
+              sessions={planSessions}
+              recurringSessions={planRecurring}
+              onDelete={handleDeleteSession}
+              onDeleteSeries={handleDeleteSeries}
+            />
+
+            {/* Schedule form */}
+            {isScheduling && (
+              <SessionSchedulerForm
+                planId={plan.id}
+                draft={draft}
+                onChange={setDraft}
+                onSave={() => handleSave(plan.id)}
+                onCancel={() => setSchedulingId(null)}
+              />
+            )}
+          </div>
+        );
+      })}
     </div>
   );
 }
@@ -981,10 +1538,25 @@ function PlansSection({ plans, onRefresh }: { plans: TrainingPlan[]; onRefresh: 
   const [color, setColor] = useState<HabitColor>("violet");
   const [goal, setGoal] = useState("");
   const [daysPerWeek, setDaysPerWeek] = useState("");
+  const [planType, setPlanType] = useState<PlanType>("other");
+  const [sessions, setSessions] = useState<TrainingSession[]>([]);
+  const [recurringSessions, setRecurringSessions] = useState<TrainingSession[]>([]);
+
+  const loadSessions = useCallback(async () => {
+    try {
+      const [one, rec] = await Promise.all([getTrainingSessions(), getRecurringTrainingSessions()]);
+      setSessions(one);
+      setRecurringSessions(rec);
+    } catch (e) { console.error(e); }
+  }, []);
+
+  useEffect(() => { loadSessions(); }, [loadSessions]);
+
+  const handleRefresh = useCallback(() => { onRefresh(); loadSessions(); }, [onRefresh, loadSessions]);
 
   const resetForm = () => {
     setTitle(""); setDescription(""); setColor("violet");
-    setGoal(""); setDaysPerWeek(""); setEditing(null); setShowForm(false);
+    setGoal(""); setDaysPerWeek(""); setPlanType("other"); setEditing(null); setShowForm(false);
   };
 
   const openEdit = (p: TrainingPlan) => {
@@ -994,6 +1566,7 @@ function PlansSection({ plans, onRefresh }: { plans: TrainingPlan[]; onRefresh: 
     setColor((p.color as HabitColor) ?? "violet");
     setGoal(p.goal ?? "");
     setDaysPerWeek(p.days_per_week?.toString() ?? "");
+    setPlanType(p.plan_type ?? "other");
     setShowForm(true);
   };
 
@@ -1006,6 +1579,7 @@ function PlansSection({ plans, onRefresh }: { plans: TrainingPlan[]; onRefresh: 
       color,
       goal: goal.trim() || null,
       days_per_week: daysPerWeek ? parseInt(daysPerWeek) : null,
+      plan_type: planType,
     };
     try {
       if (editing) {
@@ -1014,12 +1588,12 @@ function PlansSection({ plans, onRefresh }: { plans: TrainingPlan[]; onRefresh: 
         await createTrainingPlan(payload);
       }
       resetForm();
-      onRefresh();
+      handleRefresh();
     } catch (e) { console.error(e); }
   };
 
   const handleDelete = async (id: number) => {
-    try { await deleteTrainingPlan(id); onRefresh(); } catch (e) { console.error(e); }
+    try { await deleteTrainingPlan(id); handleRefresh(); } catch (e) { console.error(e); }
   };
 
   return (
@@ -1039,6 +1613,21 @@ function PlansSection({ plans, onRefresh }: { plans: TrainingPlan[]; onRefresh: 
             {editing ? "Edit Plan" : "New Training Plan"}
           </div>
           <div className="space-y-2">
+            {/* Plan type selector */}
+            <div className="flex items-center gap-1.5 flex-wrap">
+              {PLAN_TYPES.map((pt) => (
+                <button
+                  key={pt.id}
+                  onClick={() => setPlanType(pt.id)}
+                  className={cn(
+                    "flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs font-medium border transition-colors",
+                    planType === pt.id ? pt.accent : "border-border text-muted-foreground hover:bg-muted"
+                  )}
+                >
+                  {pt.icon}{pt.label}
+                </button>
+              ))}
+            </div>
             <input
               type="text"
               value={title}
@@ -1107,258 +1696,7 @@ function PlansSection({ plans, onRefresh }: { plans: TrainingPlan[]; onRefresh: 
         </div>
       )}
 
-      <div className="border border-border bg-card rounded-lg divide-y divide-border">
-        {plans.length === 0 && (
-          <div className="px-4 py-8 text-center text-sm text-muted-foreground">
-            No training plans yet. Create one to get started.
-          </div>
-        )}
-        {plans.map((plan) => {
-          const c = plan.color as HabitColor;
-          return (
-            <div key={plan.id} className="px-4 py-3 flex items-center gap-3 group">
-              <span className={cn("w-3 h-3 rounded-full flex-shrink-0", COLOR_DOT[c] ?? "bg-violet-500")} />
-              <div className="flex-1 min-w-0">
-                <span className="text-sm font-medium">{plan.title}</span>
-                {plan.goal && (
-                  <span className="ml-2 text-xs text-muted-foreground">· {plan.goal}</span>
-                )}
-                {plan.days_per_week && (
-                  <span className="ml-2 text-xs text-muted-foreground">· {plan.days_per_week}×/week</span>
-                )}
-              </div>
-              <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
-                <button
-                  onClick={() => openEdit(plan)}
-                  className="p-1 rounded hover:bg-muted text-muted-foreground hover:text-foreground transition-colors"
-                >
-                  <Pencil className="w-3.5 h-3.5" />
-                </button>
-                <button
-                  onClick={() => handleDelete(plan.id)}
-                  className="p-1 rounded hover:bg-destructive/10 text-muted-foreground hover:text-destructive transition-colors"
-                >
-                  <Trash2 className="w-3.5 h-3.5" />
-                </button>
-              </div>
-            </div>
-          );
-        })}
-      </div>
-    </div>
-  );
-}
-
-// ── Session Row ───────────────────────────────────────────────────────────────
-
-function SessionRow({
-  s,
-  planMap,
-  onToggle,
-  onDelete,
-}: {
-  s: TrainingSession;
-  planMap: Map<number, TrainingPlan>;
-  onToggle: (id: number) => void;
-  onDelete: (id: number) => void;
-}) {
-  const plan = s.plan_id ? planMap.get(s.plan_id) : null;
-  const planColor = (plan?.color ?? "slate") as HabitColor;
-  return (
-    <div className="px-4 py-3 flex items-start gap-3 group">
-      <button
-        onClick={() => onToggle(s.id)}
-        className={cn(
-          "w-5 h-5 rounded-full border-2 flex items-center justify-center flex-shrink-0 mt-0.5 transition-all",
-          s.completed
-            ? "bg-violet-500 border-transparent"
-            : "border-border bg-transparent hover:border-violet-400"
-        )}
-      >
-        {s.completed && <Check className="w-3 h-3 text-white" strokeWidth={3} />}
-      </button>
-      <div className="flex-1 min-w-0">
-        <div className="flex items-center gap-2 flex-wrap">
-          <span className={cn("text-sm font-medium", s.completed && "line-through text-muted-foreground")}>
-            {s.title}
-          </span>
-          {plan && (
-            <span className={cn("px-1.5 py-0.5 text-xs rounded-full font-medium", COLOR_BADGE[planColor] ?? COLOR_BADGE.slate)}>
-              {plan.title}
-            </span>
-          )}
-        </div>
-        <div className="flex items-center gap-2 mt-0.5 flex-wrap">
-          {s.scheduled_date && (
-            <span className="text-xs text-muted-foreground">{formatDate(s.scheduled_date)}</span>
-          )}
-          {s.start_time && (
-            <span className="text-xs text-muted-foreground">
-              {s.start_time.slice(0, 5)}{s.end_time ? `–${s.end_time.slice(0, 5)}` : ""}
-            </span>
-          )}
-          {s.location && (
-            <span className="text-xs text-muted-foreground">· {s.location}</span>
-          )}
-        </div>
-      </div>
-      <button
-        onClick={() => onDelete(s.id)}
-        className="p-1 rounded hover:bg-destructive/10 text-muted-foreground hover:text-destructive opacity-0 group-hover:opacity-100 transition-all"
-      >
-        <Trash2 className="w-3.5 h-3.5" />
-      </button>
-    </div>
-  );
-}
-
-// ── Schedule Section ──────────────────────────────────────────────────────────
-
-function ScheduleSection({
-  plans, sessions, onRefresh,
-}: {
-  plans: TrainingPlan[];
-  sessions: TrainingSession[];
-  onRefresh: () => void;
-}) {
-  const [showForm, setShowForm] = useState(false);
-  const [planId, setPlanId] = useState("");
-  const [title, setTitle] = useState("");
-  const [date, setDate] = useState(TODAY);
-  const [startTime, setStartTime] = useState("");
-  const [endTime, setEndTime] = useState("");
-  const [location, setLocation] = useState("");
-  const [notes, setNotes] = useState("");
-
-  const resetForm = () => {
-    setPlanId(""); setTitle(""); setDate(TODAY);
-    setStartTime(""); setEndTime(""); setLocation(""); setNotes("");
-    setShowForm(false);
-  };
-
-  const handleCreate = async () => {
-    if (!title.trim()) return;
-    try {
-      await createTrainingSession({
-        plan_id: planId ? parseInt(planId) : null,
-        title: title.trim(),
-        scheduled_date: date || null,
-        start_time: startTime || null,
-        end_time: endTime || null,
-        location: location.trim() || null,
-        notes: notes.trim() || null,
-      });
-      resetForm();
-      onRefresh();
-    } catch (e) { console.error(e); }
-  };
-
-  const handleToggle = async (id: number) => {
-    try { await toggleTrainingSession(id); onRefresh(); } catch (e) { console.error(e); }
-  };
-
-  const handleDelete = async (id: number) => {
-    try { await deleteTrainingSession(id); onRefresh(); } catch (e) { console.error(e); }
-  };
-
-  const upcoming = sessions.filter((s) => !s.completed && (s.scheduled_date == null || s.scheduled_date >= TODAY));
-  const past = sessions.filter((s) => s.completed || (s.scheduled_date != null && s.scheduled_date < TODAY));
-
-  const planMap = new Map(plans.map((p) => [p.id, p]));
-
-  return (
-    <div className="space-y-3">
-      <div className="flex justify-end">
-        <button
-          onClick={() => setShowForm((v) => !v)}
-          className="flex items-center gap-1 px-3 py-1.5 text-sm bg-violet-600 text-white rounded hover:bg-violet-700 transition-colors"
-        >
-          <Plus className="w-4 h-4" /> Schedule Session
-        </button>
-      </div>
-
-      {showForm && (
-        <div className="border border-border bg-card rounded-lg p-4 space-y-3">
-          <div className="text-sm font-medium text-muted-foreground">New Session</div>
-          <div className="space-y-2">
-            <div className="flex flex-wrap gap-2">
-              <select
-                value={planId}
-                onChange={(e) => setPlanId(e.target.value)}
-                className="text-sm bg-input border border-border rounded px-2 py-1.5 outline-none focus:ring-1 focus:ring-ring"
-              >
-                <option value="">No plan</option>
-                {plans.map((p) => <option key={p.id} value={p.id}>{p.title}</option>)}
-              </select>
-              <input
-                type="text"
-                value={title}
-                onChange={(e) => setTitle(e.target.value)}
-                placeholder="Session title *"
-                className="flex-1 min-w-48 text-sm bg-input border border-border rounded px-2 py-1.5 outline-none focus:ring-1 focus:ring-ring"
-              />
-            </div>
-            <div className="flex flex-wrap gap-2">
-              <input type="date" value={date} onChange={(e) => setDate(e.target.value)}
-                className="text-sm bg-input border border-border rounded px-2 py-1.5 outline-none focus:ring-1 focus:ring-ring" />
-              <input type="time" value={startTime} onChange={(e) => setStartTime(e.target.value)}
-                placeholder="Start"
-                className="text-sm bg-input border border-border rounded px-2 py-1.5 outline-none focus:ring-1 focus:ring-ring" />
-              <input type="time" value={endTime} onChange={(e) => setEndTime(e.target.value)}
-                placeholder="End"
-                className="text-sm bg-input border border-border rounded px-2 py-1.5 outline-none focus:ring-1 focus:ring-ring" />
-              <input
-                type="text"
-                value={location}
-                onChange={(e) => setLocation(e.target.value)}
-                placeholder="Location"
-                className="flex-1 min-w-32 text-sm bg-input border border-border rounded px-2 py-1.5 outline-none focus:ring-1 focus:ring-ring"
-              />
-            </div>
-            <input
-              type="text"
-              value={notes}
-              onChange={(e) => setNotes(e.target.value)}
-              placeholder="Notes (optional)"
-              className="w-full text-sm bg-input border border-border rounded px-2 py-1.5 outline-none focus:ring-1 focus:ring-ring"
-            />
-          </div>
-          <div className="flex items-center gap-2">
-            <button
-              onClick={handleCreate}
-              disabled={!title.trim()}
-              className="flex items-center gap-1 px-3 py-1 text-sm bg-violet-600 text-white rounded hover:bg-violet-700 disabled:opacity-40 transition-colors"
-            >
-              <Check className="w-4 h-4" /> Create
-            </button>
-            <button onClick={resetForm} className="px-3 py-1 text-sm border border-border rounded hover:bg-muted transition-colors">
-              Cancel
-            </button>
-          </div>
-        </div>
-      )}
-
-      <div className="border border-border bg-card rounded-lg divide-y divide-border">
-        {sessions.length === 0 && (
-          <div className="px-4 py-8 text-center text-sm text-muted-foreground">No sessions scheduled yet.</div>
-        )}
-        {upcoming.length > 0 && (
-          <>
-            <div className="px-4 py-2 text-xs font-semibold text-muted-foreground uppercase tracking-wider bg-muted/30">
-              Upcoming
-            </div>
-            {upcoming.map((s) => <SessionRow key={s.id} s={s} planMap={planMap} onToggle={handleToggle} onDelete={handleDelete} />)}
-          </>
-        )}
-        {past.length > 0 && (
-          <>
-            <div className="px-4 py-2 text-xs font-semibold text-muted-foreground uppercase tracking-wider bg-muted/30">
-              Past
-            </div>
-            {past.map((s) => <SessionRow key={s.id} s={s} planMap={planMap} onToggle={handleToggle} onDelete={handleDelete} />)}
-          </>
-        )}
-      </div>
+      <PlanCardList plans={plans} sessions={sessions} recurringSessions={recurringSessions} onEdit={openEdit} onDelete={handleDelete} onRefresh={handleRefresh} />
     </div>
   );
 }
@@ -1521,206 +1859,120 @@ function PerformanceCard({
   );
 }
 
-// ── Overview Tab ──────────────────────────────────────────────────────────────
+// ── Lifestyle Header ──────────────────────────────────────────────────────────
 
-function dateOffsetStr(offsetDays: number): string {
-  const d = new Date();
-  d.setDate(d.getDate() + offsetDays);
-  return d.toISOString().slice(0, 10);
-}
-
-function OverviewCard({
-  icon,
-  title,
-  onClick,
-  children,
-}: {
-  icon: React.ReactNode;
-  title: string;
-  onClick: () => void;
-  children: React.ReactNode;
-}) {
-  return (
-    <div
-      className="rounded-xl border border-border bg-card p-4 cursor-pointer hover:bg-accent/30 transition-colors"
-      onClick={onClick}
-    >
-      <div className="flex items-center gap-2 mb-3">
-        {icon}
-        <span className="text-sm font-semibold">{title}</span>
-      </div>
-      {children}
-    </div>
-  );
-}
-
-function OverviewTab({ onNavigate }: { onNavigate: (tab: Tab) => void }) {
+function LifestyleHeader() {
   const [habits, setHabits] = useState<HabitWithCompletion[]>([]);
   const [runLogs, setRunLogs] = useState<RunLog[]>([]);
-  const [workouts, setWorkouts] = useState<WorkoutLog[]>([]);
-  const [sessions, setSessions] = useState<TrainingSession[]>([]);
-  const [plans, setPlans] = useState<TrainingPlan[]>([]);
+  const [lastWorkout, setLastWorkout] = useState<WorkoutLog | null>(null);
+  const [upcomingCount, setUpcomingCount] = useState(0);
 
   useEffect(() => {
+    const sevenDaysAgo = new Date();
+    sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 6);
+    const sevenDaysAgoStr = sevenDaysAgo.toISOString().slice(0, 10);
+
+    const endOfWeek = new Date();
+    endOfWeek.setDate(endOfWeek.getDate() + (6 - endOfWeek.getDay()));
+    const endOfWeekStr = endOfWeek.toISOString().slice(0, 10);
+
     Promise.all([
       getHabitsForDate(TODAY),
       getRunLogs(),
       getWorkoutLogs(),
       getTrainingSessions(),
-      getTrainingPlans(),
-    ]).then(([h, r, w, s, p]) => {
+    ]).then(([h, r, w, s]) => {
       setHabits(h);
-      setRunLogs(r);
-      setWorkouts(w);
-      setSessions(s);
-      setPlans(p);
+      setRunLogs(r.filter((l: RunLog) => l.date >= sevenDaysAgoStr));
+      setLastWorkout(w[0] ?? null);
+      setUpcomingCount(
+        s.filter((x: TrainingSession) => !x.completed && x.scheduled_date && x.scheduled_date >= TODAY && x.scheduled_date <= endOfWeekStr).length
+      );
     }).catch(console.error);
   }, []);
 
   const doneHabits = habits.filter((h) => h.done).length;
   const totalHabits = habits.length;
+  const weekKm = runLogs.reduce((s, r) => s + (r.distance_km ?? 0), 0);
 
-  const sevenDaysAgoStr = dateOffsetStr(-6);
-  const fourteenDaysAgoStr = dateOffsetStr(-13);
-  const endOfWeekStr = dateOffsetStr(6 - new Date().getDay());
-
-  const recentRuns = runLogs.filter((r) => r.date >= sevenDaysAgoStr);
-  const weekKm = recentRuns.reduce((s, r) => s + (r.distance_km ?? 0), 0);
-  const prevKm = runLogs
-    .filter((r) => r.date >= fourteenDaysAgoStr && r.date < sevenDaysAgoStr)
-    .reduce((s, r) => s + (r.distance_km ?? 0), 0);
-  const runTrendUp = weekKm > prevKm;
-
-  const lastWorkout = workouts[0] ?? null;
-
-  const upcomingSessions = sessions
-    .filter((s) => !s.completed && s.scheduled_date && s.scheduled_date >= TODAY && s.scheduled_date <= endOfWeekStr)
-    .slice(0, 3);
-  const planMap = new Map(plans.map((p) => [p.id, p]));
+  const stats = [
+    {
+      icon: <Zap className="w-3.5 h-3.5 text-amber-500" />,
+      label: "Habits",
+      value: totalHabits > 0 ? `${doneHabits}/${totalHabits}` : "—",
+      sub: totalHabits > 0 ? `${Math.round((doneHabits / totalHabits) * 100)}%` : undefined,
+    },
+    {
+      icon: <Activity className="w-3.5 h-3.5 text-emerald-500" />,
+      label: "This week",
+      value: `${weekKm.toFixed(1)} km`,
+      sub: `${runLogs.length} run${runLogs.length !== 1 ? "s" : ""}`,
+    },
+    {
+      icon: <Dumbbell className="w-3.5 h-3.5 text-orange-500" />,
+      label: "Last workout",
+      value: lastWorkout ? lastWorkout.name : "—",
+      sub: lastWorkout ? formatDate(lastWorkout.date) : undefined,
+    },
+    {
+      icon: <Target className="w-3.5 h-3.5 text-violet-500" />,
+      label: "Sessions",
+      value: upcomingCount > 0 ? `${upcomingCount} upcoming` : "None this week",
+      sub: undefined,
+    },
+  ];
 
   return (
-    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-      <OverviewCard icon={<Zap className="h-4 w-4 text-amber-500" />} title="Habits Today" onClick={() => onNavigate("habits")}>
-        {totalHabits === 0 ? (
-          <p className="text-xs text-muted-foreground">No habits yet.</p>
-        ) : (
-          <>
-            <div className="flex items-center justify-between mb-2">
-              <span className="text-2xl font-bold">{doneHabits}<span className="text-muted-foreground text-base font-normal">/{totalHabits}</span></span>
-              <span className="text-xs text-muted-foreground">{Math.round((doneHabits / totalHabits) * 100)}%</span>
+    <div className="flex items-center gap-2 px-5 py-3 border-b border-border flex-shrink-0 bg-card/50">
+      <div className="flex items-center gap-2 mr-4 flex-shrink-0">
+        <Flame className="w-5 h-5 text-orange-500" />
+        <span className="text-base font-bold">Lifestyle</span>
+      </div>
+      <div className="flex items-center gap-1 flex-1 overflow-x-auto">
+        {stats.map((s, i) => (
+          <div key={i} className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-secondary/40 border border-border flex-shrink-0">
+            {s.icon}
+            <div className="leading-tight">
+              <span className="text-[10px] text-muted-foreground uppercase tracking-wide block">{s.label}</span>
+              <span className="text-xs font-semibold">{s.value}</span>
+              {s.sub && <span className="text-[10px] text-muted-foreground ml-1">{s.sub}</span>}
             </div>
-            <div className="w-full h-1.5 rounded-full bg-muted overflow-hidden mb-3">
-              <div className="h-full rounded-full bg-amber-500 transition-all" style={{ width: `${(doneHabits / totalHabits) * 100}%` }} />
-            </div>
-            <div className="flex flex-wrap gap-1.5">
-              {habits.map((h) => (
-                <span key={h.id} title={h.title} className={cn("w-2 h-2 rounded-full", COLOR_DOT[(h.color as HabitColor)] ?? "bg-emerald-500", !h.done && "opacity-30")} />
-              ))}
-            </div>
-          </>
-        )}
-      </OverviewCard>
-
-      <OverviewCard icon={<Target className="h-4 w-4 text-violet-500" />} title="Training This Week" onClick={() => onNavigate("training")}>
-        {upcomingSessions.length === 0 ? (
-          <p className="text-xs text-muted-foreground">No sessions scheduled this week.</p>
-        ) : (
-          <div className="space-y-2">
-            {upcomingSessions.map((s) => {
-              const plan = s.plan_id ? planMap.get(s.plan_id) : null;
-              const planColor = (plan?.color ?? "slate") as HabitColor;
-              return (
-                <div key={s.id} className="flex items-center gap-2">
-                  <span className="text-xs font-medium truncate flex-1">{s.title}</span>
-                  {s.scheduled_date && (
-                    <span className="text-xs text-muted-foreground flex-shrink-0">{formatDate(s.scheduled_date)}</span>
-                  )}
-                  {plan && (
-                    <span className={cn("px-1.5 py-0.5 text-xs rounded-full font-medium flex-shrink-0", COLOR_BADGE[planColor] ?? COLOR_BADGE.slate)}>
-                      {plan.title}
-                    </span>
-                  )}
-                </div>
-              );
-            })}
           </div>
-        )}
-      </OverviewCard>
-
-      <OverviewCard icon={<Activity className="h-4 w-4 text-emerald-500" />} title="Running (7 days)" onClick={() => onNavigate("running")}>
-        <div className="flex items-end gap-3">
-          <span className="text-2xl font-bold">{weekKm.toFixed(1)}<span className="text-sm font-normal text-muted-foreground ml-1">km</span></span>
-          {weekKm > 0 && prevKm > 0 && (
-            <span className={cn("text-xs font-medium mb-1 flex items-center gap-0.5", runTrendUp ? "text-emerald-500" : "text-rose-500")}>
-              <TrendingUp className={cn("h-3 w-3", !runTrendUp && "rotate-180")} />
-              {runTrendUp ? "up" : "down"}
-            </span>
-          )}
-        </div>
-        <p className="text-xs text-muted-foreground mt-1">{recentRuns.length} run{recentRuns.length !== 1 ? "s" : ""} in the last 7 days</p>
-      </OverviewCard>
-
-      <OverviewCard icon={<Dumbbell className="h-4 w-4 text-orange-500" />} title="Strength" onClick={() => onNavigate("strength")}>
-        {lastWorkout ? (
-          <>
-            <p className="text-base font-semibold truncate">{lastWorkout.name}</p>
-            <p className="text-xs text-muted-foreground mt-1">{formatDate(lastWorkout.date)} · {lastWorkout.exercises.length} exercise{lastWorkout.exercises.length !== 1 ? "s" : ""}</p>
-          </>
-        ) : (
-          <p className="text-xs text-muted-foreground">No workouts logged yet.</p>
-        )}
-      </OverviewCard>
+        ))}
+      </div>
     </div>
   );
 }
 
 // ── Main Page ─────────────────────────────────────────────────────────────────
 
-const TABS: { id: Tab; label: string; icon: React.ReactNode }[] = [
-  { id: "overview", label: "Overview", icon: <LayoutDashboard className="w-3.5 h-3.5" /> },
-  { id: "habits", label: "Habits", icon: <Zap className="w-3.5 h-3.5" /> },
-  { id: "running", label: "Running", icon: <Activity className="w-3.5 h-3.5" /> },
-  { id: "strength", label: "Strength", icon: <Dumbbell className="w-3.5 h-3.5" /> },
-  { id: "training", label: "Training", icon: <Target className="w-3.5 h-3.5" /> },
-];
-
 export function Lifestyle() {
-  const [tab, setTab] = useState<Tab>("overview");
-
   return (
     <div className="flex flex-col h-full min-h-0">
-      <div className="flex gap-1 px-5 pt-4 pb-2 overflow-x-auto border-b border-border flex-shrink-0">
-        {TABS.map((t) => (
-          <button
-            key={t.id}
-            onClick={() => setTab(t.id)}
-            className={cn(
-              "flex items-center gap-1.5 px-3 h-8 rounded-lg text-xs font-medium whitespace-nowrap shrink-0 transition-all",
-              tab === t.id
-                ? "bg-foreground text-background"
-                : "text-muted-foreground hover:text-foreground hover:bg-accent"
-            )}
-          >
-            {t.icon} {t.label}
-          </button>
-        ))}
-      </div>
+      <LifestyleHeader />
 
-      <div className="flex-1 overflow-y-auto p-6 min-h-0">
-        <div className="max-w-3xl mx-auto space-y-6">
-          {tab === "overview" && (
-            <>
-              <div className="flex items-center gap-2">
-                <Flame className="w-6 h-6 text-orange-500" />
-                <h1 className="text-2xl font-bold">Lifestyle</h1>
-              </div>
-              <OverviewTab onNavigate={setTab} />
-            </>
-          )}
-          {tab === "habits" && <HabitsTab />}
-          {tab === "running" && <RunningTab />}
-          {tab === "strength" && <StrengthTab />}
-          {tab === "training" && <TrainingTab />}
+      {/* 3-column body */}
+      <div className="flex flex-1 min-h-0 overflow-hidden gap-px bg-border">
+        {/* Left column: Strength (top) + Running (bottom) */}
+        <div className="flex flex-col w-[38%] min-w-0 bg-background">
+          <div className="flex-1 min-h-0 overflow-y-auto p-4 border-b border-border">
+            <StrengthTab />
+          </div>
+          <div className="flex-1 min-h-0 overflow-y-auto p-4">
+            <RunningTab />
+          </div>
+        </div>
+
+        {/* Middle column: Habits */}
+        <div className="w-[25%] min-w-0 overflow-y-auto p-4 bg-background">
+          <HabitsTab />
+        </div>
+
+        {/* Right column: Training */}
+        <div className="flex-1 min-w-0 overflow-y-auto bg-background">
+          <div className="p-4">
+            <TrainingTab />
+          </div>
         </div>
       </div>
     </div>

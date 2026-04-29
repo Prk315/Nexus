@@ -556,6 +556,13 @@ export interface TrainingSession {
   notes: string | null;
   completed: boolean;
   created_at: string;
+  // recurrence
+  is_recurring: boolean;
+  recurrence: string | null;       // "daily" | "weekly"
+  days_of_week: string | null;     // comma-separated day ints, e.g. "1,3,5"
+  series_start_date: string | null;
+  series_end_date: string | null;
+  recurring_id: number | null;     // original row id for virtual expanded instances
 }
 
 export interface SessionPerformance {
