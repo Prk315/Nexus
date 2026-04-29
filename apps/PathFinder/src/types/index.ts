@@ -208,10 +208,16 @@ export interface DailySecGoal {
   date: string;
   text: string;
   sort_order: number;
+  time_estimate_min: number | null;
+}
+
+export interface DailyPrimaryGoal {
+  text: string;
+  time_estimate_min: number | null;
 }
 
 export interface DailyGoals {
-  primary: string | null;
+  primary: DailyPrimaryGoal | null;
   secondary: DailySecGoal[];
 }
 

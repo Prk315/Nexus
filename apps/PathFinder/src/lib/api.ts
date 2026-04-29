@@ -4,7 +4,7 @@ import type {
   DailyPlan, DailySection, DailyItemWithStatus, TimeBlock, Routines, RoutineItem,
   WeekItems, Reminder, QuickNote, BrainEntry, CalEvent, Deadline, Agreement,
   ScheduleEntry,
-  DailyGoals, DailySecGoal, CalBlock, RecurringCalBlock, CourseAssignment,
+  DailyGoals, DailySecGoal, DailyPrimaryGoal, CalBlock, RecurringCalBlock, CourseAssignment,
   CaSubtask, LifestyleArea, PipelineTemplate, PipelineStep, PipelineRun,
   PipelineRunStep, PipelineStepSubtask, ProjectGoal, Game, GameFeature,
   GameDevlogEntry, RoadmapItem, CourseBook, BookSection, BookReadingLog,
@@ -1059,21 +1059,21 @@ export const deleteDailyItem = async (id: number): Promise<void> => {
 
 export const getDailyGoals = async (date: string): Promise<DailyGoals> => {
   const [{ data: primary }, { data: secondary }] = await Promise.all([
-    supabase.from("pf_daily_primary_goal").select("text").eq("user_id", USER_ID).eq("date", date).maybeSingle(),
+    supabase.from("pf_daily_primary_goal").select("text, time_estimate_min").eq("user_id", USER_ID).eq("date", date).maybeSingle(),
     supabase.from("pf_daily_secondary_goals").select("*").eq("user_id", USER_ID).eq("date", date).order("sort_order"),
   ]);
   return {
-    primary: primary?.text ?? null,
+    primary: primary ? { text: primary.text, time_estimate_min: primary.time_estimate_min ?? null } : null,
     secondary: (secondary ?? []).map((r): DailySecGoal => ({
-      id: num(r.id), date: r.date, text: r.text, sort_order: r.sort_order,
+      id: num(r.id), date: r.date, text: r.text, sort_order: r.sort_order, time_estimate_min: r.time_estimate_min ?? null,
     })),
   };
 };
 
-export const setDailyPrimaryGoal = async (date: string, text: string): Promise<void> => {
+export const setDailyPrimaryGoal = async (date: string, payload: DailyPrimaryGoal): Promise<void> => {
   const { error } = await supabase
     .from("pf_daily_primary_goal")
-    .upsert({ user_id: USER_ID, date, text }, { onConflict: "user_id,date" });
+    .upsert({ user_id: USER_ID, date, text: payload.text, time_estimate_min: payload.time_estimate_min }, { onConflict: "user_id,date" });
   if (error) err(error);
 };
 
@@ -1083,11 +1083,16 @@ export const clearDailyPrimaryGoal = async (date: string): Promise<void> => {
   if (error) err(error);
 };
 
-export const addDailySecondaryGoal = async (date: string, text: string): Promise<DailySecGoal> => {
+export const addDailySecondaryGoal = async (date: string, text: string, time_estimate_min?: number | null): Promise<DailySecGoal> => {
   const { data, error } = await supabase
-    .from("pf_daily_secondary_goals").insert({ user_id: USER_ID, date, text }).select().single();
+    .from("pf_daily_secondary_goals").insert({ user_id: USER_ID, date, text, time_estimate_min: time_estimate_min ?? null }).select().single();
   if (error) err(error);
-  return { id: num(data!.id), date: data!.date, text: data!.text, sort_order: data!.sort_order };
+  return { id: num(data!.id), date: data!.date, text: data!.text, sort_order: data!.sort_order, time_estimate_min: data!.time_estimate_min ?? null };
+};
+
+export const updateDailySecondaryGoal = async (id: number, payload: { text?: string; time_estimate_min?: number | null }): Promise<void> => {
+  const { error } = await supabase.from("pf_daily_secondary_goals").update(payload).eq("id", id);
+  if (error) err(error);
 };
 
 export const deleteDailySecondaryGoal = async (id: number): Promise<void> => {

@@ -10,7 +10,7 @@ import {
   getCalBlocks, createCalBlock, updateCalBlock, deleteCalBlock,
   getSystemSubtasks, toggleSystemSubtask,
   getGoalGroups,
-  getDailyGoals, setDailyPrimaryGoal, clearDailyPrimaryGoal, addDailySecondaryGoal, deleteDailySecondaryGoal,
+  getDailyGoals, setDailyPrimaryGoal, clearDailyPrimaryGoal, addDailySecondaryGoal, updateDailySecondaryGoal, deleteDailySecondaryGoal,
   getReminders, addReminder, toggleReminder, deleteReminder,
   getQuickNotes, addQuickNote, deleteQuickNote,
   getBrainDump, addBrainEntry, deleteBrainEntry,
@@ -28,7 +28,7 @@ import { Badge } from "../components/ui/badge";
 import { PriorityDot } from "../components/PriorityDot";
 import { daysUntil, deadlineLabel, deadlineVariant, cn, layoutCalItems } from "../lib/utils";
 import { isDue } from "./Systems";
-import type { Goal, GoalGroup, Plan, TaskWithContext, SystemEntry, SystemSubtask, CalBlock, DailyGoals, Reminder, QuickNote, BrainEntry, CalEvent, Deadline, Agreement, CourseAssignment, ScheduleEntry, HabitWithCompletion, HabitStack } from "../types";
+import type { Goal, GoalGroup, Plan, TaskWithContext, SystemEntry, SystemSubtask, CalBlock, DailyGoals, DailyPrimaryGoal, DailySecGoal, Reminder, QuickNote, BrainEntry, CalEvent, Deadline, Agreement, CourseAssignment, ScheduleEntry, HabitWithCompletion, HabitStack } from "../types";
 
 const todayDate = () => new Date().toISOString().slice(0, 10);
 
@@ -918,7 +918,12 @@ function WelcomeBox({
         {dailyGoals.primary ? (
           <div className="flex items-center gap-1.5 min-w-0">
             <Star className="h-3.5 w-3.5 text-yellow-500 shrink-0" />
-            <span className="text-sm font-medium truncate text-foreground">{dailyGoals.primary}</span>
+            <span className="text-sm font-medium truncate text-foreground">{dailyGoals.primary.text}</span>
+            {dailyGoals.primary.time_estimate_min && (
+              <span className="inline-flex items-center gap-0.5 text-[10px] text-muted-foreground shrink-0">
+                <Clock className="h-2.5 w-2.5" />{formatMinutes(dailyGoals.primary.time_estimate_min)}
+              </span>
+            )}
           </div>
         ) : (
           <div className="flex items-center gap-1.5 text-muted-foreground/40">
@@ -971,17 +976,69 @@ function WelcomeBox({
 
 // ── Daily Goals Section ───────────────────────────────────────────────────────
 
-function DailyGoalsSection({ date, goals, onSetPrimary, onClearPrimary, onAddSecondary, onDeleteSecondary }: {
+function formatMinutes(min: number): string {
+  if (min < 60) return `${min}m`;
+  const h = Math.floor(min / 60);
+  const m = min % 60;
+  return m === 0 ? `${h}h` : `${h}h ${m}m`;
+}
+
+function parseMinutes(raw: string): number | null {
+  const s = raw.trim().toLowerCase();
+  if (!s) return null;
+  // "1h 30m", "1h30m", "1h", "90m", "90", "1.5h"
+  const hm = s.match(/^(\d+(?:\.\d+)?)\s*h(?:\s*(\d+)\s*m?)?$/);
+  if (hm) {
+    const h = parseFloat(hm[1]);
+    const m = hm[2] ? parseInt(hm[2]) : 0;
+    return Math.round(h * 60) + m;
+  }
+  const m = s.match(/^(\d+)\s*m?$/);
+  if (m) return parseInt(m[1]);
+  return null;
+}
+
+function TimeEstimateBadge({ min, className }: { min: number | null; className?: string }) {
+  if (!min) return null;
+  return (
+    <span className={cn("inline-flex items-center gap-0.5 text-[10px] font-medium text-muted-foreground shrink-0", className)}>
+      <Clock className="h-2.5 w-2.5" />
+      {formatMinutes(min)}
+    </span>
+  );
+}
+
+function TimeEstimateInput({ value, onChange, onBlur, className }: {
+  value: string; onChange: (v: string) => void; onBlur: () => void; className?: string;
+}) {
+  return (
+    <input
+      type="text"
+      value={value}
+      onChange={(e) => onChange(e.target.value)}
+      onBlur={onBlur}
+      onKeyDown={(e) => { if (e.key === "Enter" || e.key === "Escape") (e.target as HTMLInputElement).blur(); }}
+      placeholder="e.g. 30m, 1h"
+      className={cn("h-7 w-20 rounded border border-input bg-transparent px-2 text-xs focus:outline-none focus:ring-1 focus:ring-ring placeholder:text-muted-foreground/40", className)}
+    />
+  );
+}
+
+function DailyGoalsSection({ date, goals, onSetPrimary, onClearPrimary, onAddSecondary, onUpdateSecondaryEstimate, onDeleteSecondary }: {
   date: string;
   goals: DailyGoals;
-  onSetPrimary: (text: string) => void;
+  onSetPrimary: (payload: DailyPrimaryGoal) => void;
   onClearPrimary: () => void;
   onAddSecondary: (text: string) => void;
+  onUpdateSecondaryEstimate: (id: number, min: number | null) => void;
   onDeleteSecondary: (id: number) => void;
 }) {
   const [editingPrimary, setEditingPrimary] = useState(false);
-  const [primaryDraft, setPrimaryDraft] = useState(goals.primary ?? "");
+  const [primaryDraft, setPrimaryDraft] = useState(goals.primary?.text ?? "");
+  const [primaryEstDraft, setPrimaryEstDraft] = useState(goals.primary?.time_estimate_min ? formatMinutes(goals.primary.time_estimate_min) : "");
   const [secDraft, setSecDraft] = useState("");
+  const [editingEstId, setEditingEstId] = useState<number | null>(null);
+  const [estDraft, setEstDraft] = useState("");
 
   // Completion state — persisted per-day in localStorage
   const lsKey = `daily_goals_done_${date}`;
@@ -1012,14 +1069,15 @@ function DailyGoalsSection({ date, goals, onSetPrimary, onClearPrimary, onAddSec
   }
 
   function commitPrimary() {
-    const trimmed = primaryDraft.trim();
-    if (trimmed) onSetPrimary(trimmed);
+    const text = primaryDraft.trim();
+    if (text) onSetPrimary({ text, time_estimate_min: parseMinutes(primaryEstDraft) });
     else onClearPrimary();
     setEditingPrimary(false);
   }
 
   function startEditPrimary() {
-    setPrimaryDraft(goals.primary ?? "");
+    setPrimaryDraft(goals.primary?.text ?? "");
+    setPrimaryEstDraft(goals.primary?.time_estimate_min ? formatMinutes(goals.primary.time_estimate_min) : "");
     setEditingPrimary(true);
   }
 
@@ -1030,6 +1088,11 @@ function DailyGoalsSection({ date, goals, onSetPrimary, onClearPrimary, onAddSec
     }
   }
 
+  function commitSecEst(g: DailySecGoal) {
+    onUpdateSecondaryEstimate(g.id, parseMinutes(estDraft));
+    setEditingEstId(null);
+  }
+
   return (
     <div className="flex flex-col gap-3">
       {/* Primary goal */}
@@ -1038,25 +1101,35 @@ function DailyGoalsSection({ date, goals, onSetPrimary, onClearPrimary, onAddSec
           <Star className="h-3.5 w-3.5 text-yellow-500" /> Primary goal today
         </p>
         {editingPrimary ? (
-          <div className="flex items-center gap-1.5">
-            <input
-              autoFocus
-              className="flex-1 h-8 rounded-md border border-input bg-transparent px-2.5 text-sm focus:outline-none focus:ring-1 focus:ring-ring"
-              placeholder="What's your main focus today?"
-              value={primaryDraft}
-              onChange={(e) => setPrimaryDraft(e.target.value)}
-              onBlur={commitPrimary}
-              onKeyDown={(e) => {
-                if (e.key === "Enter") commitPrimary();
-                if (e.key === "Escape") setEditingPrimary(false);
-              }}
-            />
-            {goals.primary && (
-              <button onClick={() => { onClearPrimary(); setEditingPrimary(false); }}
-                className="text-muted-foreground hover:text-destructive transition-colors">
-                <X className="h-4 w-4" />
-              </button>
-            )}
+          <div className="flex flex-col gap-1.5">
+            <div className="flex items-center gap-1.5">
+              <input
+                autoFocus
+                className="flex-1 h-8 rounded-md border border-input bg-transparent px-2.5 text-sm focus:outline-none focus:ring-1 focus:ring-ring"
+                placeholder="What's your main focus today?"
+                value={primaryDraft}
+                onChange={(e) => setPrimaryDraft(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") commitPrimary();
+                  if (e.key === "Escape") setEditingPrimary(false);
+                }}
+              />
+              {goals.primary && (
+                <button onClick={() => { onClearPrimary(); setEditingPrimary(false); }}
+                  className="text-muted-foreground hover:text-destructive transition-colors">
+                  <X className="h-4 w-4" />
+                </button>
+              )}
+            </div>
+            <div className="flex items-center gap-1.5 pl-0.5">
+              <Clock className="h-3 w-3 text-muted-foreground shrink-0" />
+              <TimeEstimateInput
+                value={primaryEstDraft}
+                onChange={setPrimaryEstDraft}
+                onBlur={commitPrimary}
+              />
+              <span className="text-[10px] text-muted-foreground">time estimate</span>
+            </div>
           </div>
         ) : goals.primary ? (
           <div className={cn(
@@ -1065,7 +1138,6 @@ function DailyGoalsSection({ date, goals, onSetPrimary, onClearPrimary, onAddSec
               ? "bg-emerald-500/10 border-emerald-400/20"
               : "bg-yellow-500/10 border-yellow-500/20 hover:border-yellow-500/40"
           )}>
-            {/* Completion checkbox */}
             <button
               onClick={togglePrimaryDone}
               className={cn(
@@ -1077,14 +1149,14 @@ function DailyGoalsSection({ date, goals, onSetPrimary, onClearPrimary, onAddSec
             >
               {primaryDone && <Check className="h-2.5 w-2.5" />}
             </button>
-            {/* Edit button */}
             <button onClick={startEditPrimary} className="flex-1 flex items-center gap-2 text-left min-w-0">
               <span className={cn(
                 "text-sm font-medium flex-1 truncate",
                 primaryDone ? "line-through text-muted-foreground" : "text-foreground"
               )}>
-                {goals.primary}
+                {goals.primary.text}
               </span>
+              <TimeEstimateBadge min={goals.primary.time_estimate_min} />
               <Pencil className="h-3 w-3 text-muted-foreground opacity-0 group-hover:opacity-100 transition-opacity shrink-0" />
             </button>
           </div>
@@ -1119,12 +1191,33 @@ function DailyGoalsSection({ date, goals, onSetPrimary, onClearPrimary, onAddSec
                 >
                   {done && <Check className="h-2 w-2" />}
                 </button>
-                <span className={cn(
-                  "text-sm flex-1",
-                  done ? "line-through text-muted-foreground" : "text-foreground"
-                )}>
+                <span className={cn("text-sm flex-1", done ? "line-through text-muted-foreground" : "text-foreground")}>
                   {g.text}
                 </span>
+                {/* Time estimate */}
+                {editingEstId === g.id ? (
+                  <TimeEstimateInput
+                    value={estDraft}
+                    onChange={setEstDraft}
+                    onBlur={() => commitSecEst(g)}
+                    className="w-20"
+                  />
+                ) : (
+                  <button
+                    onClick={() => { setEditingEstId(g.id); setEstDraft(g.time_estimate_min ? formatMinutes(g.time_estimate_min) : ""); }}
+                    className={cn(
+                      "flex items-center gap-0.5 transition-colors shrink-0",
+                      g.time_estimate_min
+                        ? "text-muted-foreground hover:text-foreground"
+                        : "opacity-0 group-hover:opacity-100 text-muted-foreground/50 hover:text-muted-foreground"
+                    )}
+                    title="Set time estimate"
+                  >
+                    {g.time_estimate_min
+                      ? <TimeEstimateBadge min={g.time_estimate_min} />
+                      : <Clock className="h-3 w-3" />}
+                  </button>
+                )}
                 <button onClick={() => onDeleteSecondary(g.id)}
                   className="opacity-0 group-hover:opacity-100 transition-opacity text-muted-foreground hover:text-destructive">
                   <X className="h-3 w-3" />
@@ -2306,9 +2399,9 @@ export function Dashboard() {
     setSystems((prev) => prev.map((s) => s.id === result.system.id ? result.system : s));
   };
 
-  const handleSetPrimary = async (text: string) => {
-    await setDailyPrimaryGoal(date, text);
-    setDailyGoals((prev) => ({ ...prev, primary: text }));
+  const handleSetPrimary = async (payload: DailyPrimaryGoal) => {
+    await setDailyPrimaryGoal(date, payload);
+    setDailyGoals((prev) => ({ ...prev, primary: payload }));
   };
   const handleClearPrimary = async () => {
     await clearDailyPrimaryGoal(date);
@@ -2317,6 +2410,13 @@ export function Dashboard() {
   const handleAddSecondary = async (text: string) => {
     const g = await addDailySecondaryGoal(date, text);
     setDailyGoals((prev) => ({ ...prev, secondary: [...prev.secondary, g] }));
+  };
+  const handleUpdateSecondaryEstimate = async (id: number, min: number | null) => {
+    await updateDailySecondaryGoal(id, { time_estimate_min: min });
+    setDailyGoals((prev) => ({
+      ...prev,
+      secondary: prev.secondary.map((s) => s.id === id ? { ...s, time_estimate_min: min } : s),
+    }));
   };
   const handleDeleteSecondary = async (id: number) => {
     await deleteDailySecondaryGoal(id);
@@ -2425,6 +2525,7 @@ export function Dashboard() {
             onSetPrimary={handleSetPrimary}
             onClearPrimary={handleClearPrimary}
             onAddSecondary={handleAddSecondary}
+            onUpdateSecondaryEstimate={handleUpdateSecondaryEstimate}
             onDeleteSecondary={handleDeleteSecondary}
           />
 
