@@ -32,6 +32,13 @@ import type { Goal, GoalGroup, Plan, TaskWithContext, SystemEntry, SystemSubtask
 
 const todayDate = () => new Date().toISOString().slice(0, 10);
 
+function timeRangeMinutes(start: string | null | undefined, end: string | null | undefined): number {
+  if (!start || !end) return 0;
+  const [sh, sm] = start.split(":").map(Number);
+  const [eh, em] = end.split(":").map(Number);
+  return Math.max(0, (eh * 60 + em) - (sh * 60 + sm));
+}
+
 // ── Day Calendar constants ────────────────────────────────────────────────────
 
 const DC_HOUR_START = 5;
@@ -1024,9 +1031,10 @@ function TimeEstimateInput({ value, onChange, onBlur, className }: {
   );
 }
 
-function DailyGoalsSection({ date, goals, onSetPrimary, onClearPrimary, onAddSecondary, onUpdateSecondaryEstimate, onDeleteSecondary }: {
+function DailyGoalsSection({ date, goals, scheduledMin, onSetPrimary, onClearPrimary, onAddSecondary, onUpdateSecondaryEstimate, onDeleteSecondary }: {
   date: string;
   goals: DailyGoals;
+  scheduledMin: number;
   onSetPrimary: (payload: DailyPrimaryGoal) => void;
   onClearPrimary: () => void;
   onAddSecondary: (text: string) => void;
@@ -1093,8 +1101,51 @@ function DailyGoalsSection({ date, goals, onSetPrimary, onClearPrimary, onAddSec
     setEditingEstId(null);
   }
 
+  // Time budget derived values
+  const estimatedMin = (goals.primary?.time_estimate_min ?? 0)
+    + goals.secondary.reduce((s, g) => s + (g.time_estimate_min ?? 0), 0);
+  const doneMin = (primaryDone ? (goals.primary?.time_estimate_min ?? 0) : 0)
+    + goals.secondary.reduce((s, g) => s + (secDone.has(g.id) ? (g.time_estimate_min ?? 0) : 0), 0);
+  const totalMin = Math.max(estimatedMin, scheduledMin);
+
   return (
     <div className="flex flex-col gap-3">
+      {/* Time budget summary */}
+      {(estimatedMin > 0 || scheduledMin > 0) && (
+        <div className="flex flex-col gap-1.5 rounded-md border border-border bg-secondary/20 px-3 py-2">
+          <div className="flex items-center justify-between gap-3">
+            {[
+              { label: "Est.", value: estimatedMin, color: "text-foreground" },
+              { label: "Scheduled", value: scheduledMin, color: "text-blue-500" },
+              { label: "Done", value: doneMin, color: "text-emerald-500" },
+            ].map(({ label, value, color }) => (
+              <div key={label} className="flex flex-col items-center gap-0.5 flex-1">
+                <span className={cn("text-xs font-semibold tabular-nums", color)}>
+                  {value > 0 ? formatMinutes(value) : "—"}
+                </span>
+                <span className="text-[9px] text-muted-foreground uppercase tracking-wider">{label}</span>
+              </div>
+            ))}
+          </div>
+          {totalMin > 0 && (
+            <div className="relative h-1.5 bg-secondary rounded-full overflow-hidden">
+              {scheduledMin > 0 && (
+                <div
+                  className="absolute inset-y-0 left-0 bg-blue-500/60 rounded-full"
+                  style={{ width: `${Math.min(100, (scheduledMin / totalMin) * 100)}%` }}
+                />
+              )}
+              {doneMin > 0 && (
+                <div
+                  className="absolute inset-y-0 left-0 bg-emerald-500 rounded-full"
+                  style={{ width: `${Math.min(100, (doneMin / totalMin) * 100)}%` }}
+                />
+              )}
+            </div>
+          )}
+        </div>
+      )}
+
       {/* Primary goal */}
       <div className="flex flex-col gap-1">
         <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide flex items-center gap-1.5">
@@ -2356,6 +2407,11 @@ export function Dashboard() {
 
   const activeGoals  = useMemo(() => goals.filter((g) => g.status === "active"), [goals]);
   const todayTasks   = useMemo(() => tasks.filter((t) => t.due_date === date), [tasks, date]);
+  const scheduledMin = useMemo(() => {
+    const fromBlocks = calBlocks.reduce((s, b) => s + timeRangeMinutes(b.start_time, b.end_time), 0);
+    const fromSched  = scheduleEntries.reduce((s, e) => s + timeRangeMinutes(e.start_time, e.end_time), 0);
+    return fromBlocks + fromSched;
+  }, [calBlocks, scheduleEntries]);
 
   const handleToggleTask = async (id: number) => {
     await toggleTask(id);
@@ -2522,6 +2578,7 @@ export function Dashboard() {
           <DailyGoalsSection
             date={date}
             goals={dailyGoals}
+            scheduledMin={scheduledMin}
             onSetPrimary={handleSetPrimary}
             onClearPrimary={handleClearPrimary}
             onAddSecondary={handleAddSecondary}
