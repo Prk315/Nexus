@@ -2,11 +2,10 @@ import { useState } from "react";
 import { useNexusRegistration, NexusHeader } from "@nexus/core";
 import "./App.css";
 import { Sidebar, type Page } from "./components/Sidebar";
+import { SchedulesProvider } from "./contexts/SchedulesContext";
 import { BottomNav } from "./components/BottomNav";
 import { Dashboard } from "./pages/Dashboard";
-import { Goals } from "./pages/Goals";
-import { Plans } from "./pages/Plans";
-import { Tasks } from "./pages/Tasks";
+import { GoalHub } from "./pages/GoalHub";
 import { Systems } from "./pages/Systems";
 import { Week } from "./pages/Week";
 import { Courses } from "./pages/Courses";
@@ -45,12 +44,11 @@ function App() {
           <NexusHeader appName="PathFinder" onHome={() => setPage("dashboard")} />
         )}
 
+        <SchedulesProvider>
         <main className={`flex-1 overflow-y-auto${IS_IOS ? " pb-24" : ""}`}>
           {page === "dashboard" && <Dashboard />}
           {page === "week"      && <Week />}
-          {page === "goals"     && <Goals />}
-          {page === "plans"     && <Plans />}
-          {page === "tasks"     && <Tasks />}
+          {page === "goals"     && <GoalHub />}
           {page === "systems"   && <Systems />}
           {page === "projects"  && <Projects />}
           {page === "lifestyle" && <Lifestyle />}
@@ -61,6 +59,7 @@ function App() {
           {page === "planner"   && <Planner />}
           {page === "journal"   && <Journal />}
         </main>
+        </SchedulesProvider>
       </div>
 
       {IS_IOS && <BottomNav currentPage={page} onNavigate={setPage} />}

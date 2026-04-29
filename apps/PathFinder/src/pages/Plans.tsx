@@ -418,3 +418,6 @@ export function Plans() {
     </div>
   );
 }
+
+/** Re-exported as an embeddable panel for composite pages */
+export { Plans as PlansPanel };

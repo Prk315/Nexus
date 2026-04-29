@@ -450,3 +450,6 @@ export function Goals() {
     </div>
   );
 }
+
+/** Re-exported as an embeddable panel for composite pages */
+export { Goals as GoalsPanel };

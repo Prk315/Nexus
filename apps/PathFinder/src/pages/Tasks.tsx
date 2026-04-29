@@ -465,3 +465,6 @@ function TaskRow({ task, onToggle, onEdit, onDelete, showPlan }: {
     </div>
   );
 }
+
+/** Re-exported as an embeddable panel for composite pages */
+export { Tasks as TasksPanel };

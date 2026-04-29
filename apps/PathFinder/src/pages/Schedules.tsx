@@ -4,13 +4,10 @@ import {
   CalendarRange, Clock, Repeat2, ChevronLeft, Train, Stethoscope,
   Dumbbell, Briefcase, Users, Circle, CalendarDays, Eye, EyeOff,
 } from "lucide-react";
-import {
-  getPlans, createPlan, updatePlan, deletePlan,
-  getScheduleEntriesByPlan, createScheduleEntry, updateScheduleEntry,
-  deleteScheduleEntry, getAllScheduleEntries,
-} from "../lib/api";
+import { getScheduleEntriesByPlan } from "../lib/api";
 import { Button } from "../components/ui/button";
 import { cn, layoutCalItems } from "../lib/utils";
+import { useSchedules, type EntryDraft, type PlanDraft, type Category } from "../contexts/SchedulesContext";
 import type { Plan, ScheduleEntry } from "../types";
 
 // ── Hour grid constants ────────────────────────────────────────────────────────
@@ -44,15 +41,13 @@ function durationLabel(start: string, end: string): string {
 
 // ── Categories ─────────────────────────────────────────────────────────────────
 
-type Category = "transport" | "medical" | "fitness" | "work" | "social" | "other";
-
 const CATEGORIES: { id: Category; label: string; icon: React.ReactNode; color: string }[] = [
-  { id: "transport", label: "Transport", icon: <Train     className="h-4 w-4" />, color: "text-blue-500"    },
+  { id: "transport", label: "Transport", icon: <Train       className="h-4 w-4" />, color: "text-blue-500"    },
   { id: "medical",   label: "Medical",   icon: <Stethoscope className="h-4 w-4" />, color: "text-rose-500"   },
-  { id: "fitness",   label: "Fitness",   icon: <Dumbbell  className="h-4 w-4" />, color: "text-green-500"  },
-  { id: "work",      label: "Work",      icon: <Briefcase className="h-4 w-4" />, color: "text-amber-500"  },
-  { id: "social",    label: "Social",    icon: <Users     className="h-4 w-4" />, color: "text-violet-500" },
-  { id: "other",     label: "Other",     icon: <Circle    className="h-4 w-4" />, color: "text-slate-400"  },
+  { id: "fitness",   label: "Fitness",   icon: <Dumbbell    className="h-4 w-4" />, color: "text-green-500"  },
+  { id: "work",      label: "Work",      icon: <Briefcase   className="h-4 w-4" />, color: "text-amber-500"  },
+  { id: "social",    label: "Social",    icon: <Users       className="h-4 w-4" />, color: "text-violet-500" },
+  { id: "other",     label: "Other",     icon: <Circle      className="h-4 w-4" />, color: "text-slate-400"  },
 ];
 
 function catMeta(id: string) {
@@ -121,14 +116,11 @@ function entriesForDate(rawEntries: ScheduleEntry[], dateStr: string): ScheduleE
       const end   = e.series_end_date   ? new Date(e.series_end_date   + "T00:00:00Z") : null;
       if (start && date < start) continue;
       if (end   && date > end  ) continue;
-
       if (e.recurrence === "daily") {
         result.push({ ...e, date: dateStr });
       } else if (e.recurrence === "weekly") {
         const days = e.days_of_week ? e.days_of_week.split(",").map(Number) : [];
-        if (days.includes(dayOfWeek)) {
-          result.push({ ...e, date: dateStr, recurring_id: e.id });
-        }
+        if (days.includes(dayOfWeek)) result.push({ ...e, date: dateStr, recurring_id: e.id });
       }
     }
   }
@@ -151,9 +143,7 @@ function Modal({ title, onClose, children }: {
             <X className="h-4 w-4" />
           </button>
         </div>
-        <div className="p-5 flex flex-col gap-5">
-          {children}
-        </div>
+        <div className="p-5 flex flex-col gap-5">{children}</div>
       </div>
     </div>
   );
@@ -172,7 +162,7 @@ function Field({ label, children, hint }: { label: string; children: React.React
   );
 }
 
-function Section({ title, children }: { title: string; children: React.ReactNode }) {
+function ModalSection({ title, children }: { title: string; children: React.ReactNode }) {
   return (
     <div className="flex flex-col gap-3">
       <div className="flex items-center gap-2">
@@ -185,8 +175,6 @@ function Section({ title, children }: { title: string; children: React.ReactNode
 }
 
 // ── Plan form modal ────────────────────────────────────────────────────────────
-
-interface PlanDraft { title: string; description: string; }
 
 function PlanFormModal({ initial, onSave, onDelete, onClose }: {
   initial?: Plan;
@@ -210,7 +198,7 @@ function PlanFormModal({ initial, onSave, onDelete, onClose }: {
   return (
     <Modal title={initial ? "Edit Schedule" : "New Schedule"} onClose={onClose}>
       <form onSubmit={handleSubmit} className="flex flex-col gap-5">
-        <Section title="Details">
+        <ModalSection title="Details">
           <Field label="Name">
             <input className={inputCls} placeholder="e.g. Daily Commute, Medical, Gym"
               value={form.title} onChange={(e) => setForm((f) => ({ ...f, title: e.target.value }))} required autoFocus />
@@ -219,7 +207,7 @@ function PlanFormModal({ initial, onSave, onDelete, onClose }: {
             <textarea className={textareaCls} rows={2} placeholder="e.g. Weekday train routes, regular appointments…"
               value={form.description} onChange={(e) => setForm((f) => ({ ...f, description: e.target.value }))} />
           </Field>
-        </Section>
+        </ModalSection>
 
         <div className="flex justify-between items-center pt-1">
           {onDelete && (
@@ -241,22 +229,6 @@ function PlanFormModal({ initial, onSave, onDelete, onClose }: {
 // ── Entry form modal ───────────────────────────────────────────────────────────
 
 const DAY_LABELS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
-
-interface EntryDraft {
-  category: Category;
-  title: string;
-  location: string;
-  description: string;
-  color: string;
-  start_time: string;
-  end_time: string;
-  is_recurring: boolean;
-  date: string;
-  recurrence: "weekly" | "daily";
-  days_of_week: number[];
-  series_start_date: string;
-  series_end_date: string;
-}
 
 function defaultDraft(): EntryDraft {
   return {
@@ -292,9 +264,7 @@ function entryToDraft(e: ScheduleEntry): EntryDraft {
 
 function Toggle({ value, onChange, label }: { value: boolean; onChange: (v: boolean) => void; label: string }) {
   return (
-    <button type="button" onClick={() => onChange(!value)}
-      className="flex items-center gap-2.5 w-full group"
-    >
+    <button type="button" onClick={() => onChange(!value)} className="flex items-center gap-2.5 w-full group">
       <div className={cn(
         "relative h-5 w-9 rounded-full border-2 transition-colors shrink-0",
         value ? "bg-primary border-primary" : "bg-secondary border-border"
@@ -350,8 +320,7 @@ function EntryFormModal({ initial, onSave, onDelete, onClose }: {
     <Modal title={initial ? "Edit Activity" : "Add Activity"} onClose={onClose}>
       <form onSubmit={handleSubmit} className="flex flex-col gap-5">
 
-        {/* ── Category ── */}
-        <Section title="Category">
+        <ModalSection title="Category">
           <div className="grid grid-cols-3 gap-2">
             {CATEGORIES.map((cat) => (
               <button key={cat.id} type="button"
@@ -363,17 +332,14 @@ function EntryFormModal({ initial, onSave, onDelete, onClose }: {
                     : "border-border text-muted-foreground hover:border-border/80 hover:bg-accent"
                 )}
               >
-                <span className={form.category === cat.id ? "text-primary" : cat.color}>
-                  {cat.icon}
-                </span>
+                <span className={form.category === cat.id ? "text-primary" : cat.color}>{cat.icon}</span>
                 {cat.label}
               </button>
             ))}
           </div>
-        </Section>
+        </ModalSection>
 
-        {/* ── Basic info ── */}
-        <Section title="Activity">
+        <ModalSection title="Activity">
           <Field label="Title">
             <input className={inputCls}
               placeholder={
@@ -389,7 +355,6 @@ function EntryFormModal({ initial, onSave, onDelete, onClose }: {
               required autoFocus={!initial}
             />
           </Field>
-
           <Field label="Colour">
             <div className="flex flex-wrap gap-1.5 mt-0.5">
               {COLORS.map((c) => (
@@ -404,10 +369,9 @@ function EntryFormModal({ initial, onSave, onDelete, onClose }: {
               ))}
             </div>
           </Field>
-        </Section>
+        </ModalSection>
 
-        {/* ── Time ── */}
-        <Section title="Time">
+        <ModalSection title="Time">
           <div className="grid grid-cols-2 gap-2">
             <Field label="Start">
               <input type="time" className={inputCls} value={form.start_time}
@@ -423,10 +387,9 @@ function EntryFormModal({ initial, onSave, onDelete, onClose }: {
               <Clock className="h-3 w-3" /> Duration: <span className="font-medium text-foreground">{duration}</span>
             </p>
           )}
-        </Section>
+        </ModalSection>
 
-        {/* ── Location ── */}
-        <Section title="Location">
+        <ModalSection title="Location">
           <Field label={form.category === "transport" ? "Route" : "Location"}>
             <div className="relative">
               <MapPin className="absolute left-2.5 top-2 h-4 w-4 text-muted-foreground pointer-events-none" />
@@ -442,10 +405,9 @@ function EntryFormModal({ initial, onSave, onDelete, onClose }: {
               />
             </div>
           </Field>
-        </Section>
+        </ModalSection>
 
-        {/* ── Notes ── */}
-        <Section title="Notes">
+        <ModalSection title="Notes">
           <textarea className={textareaCls} rows={2}
             placeholder={
               form.category === "transport" ? "e.g. Platform 3, buy ticket night before" :
@@ -455,10 +417,9 @@ function EntryFormModal({ initial, onSave, onDelete, onClose }: {
             value={form.description}
             onChange={(e) => set("description", e.target.value)}
           />
-        </Section>
+        </ModalSection>
 
-        {/* ── Scheduling ── */}
-        <Section title="Scheduling">
+        <ModalSection title="Scheduling">
           <Toggle value={form.is_recurring} onChange={(v) => set("is_recurring", v)} label="Recurring activity" />
 
           {form.is_recurring ? (
@@ -470,7 +431,6 @@ function EntryFormModal({ initial, onSave, onDelete, onClose }: {
                   <option value="daily">Daily</option>
                 </select>
               </Field>
-
               {form.recurrence === "weekly" && (
                 <Field label="Days">
                   <div className="flex gap-1.5 flex-wrap mt-0.5">
@@ -490,7 +450,6 @@ function EntryFormModal({ initial, onSave, onDelete, onClose }: {
                   </div>
                 </Field>
               )}
-
               <div className="grid grid-cols-2 gap-2">
                 <Field label="Series start">
                   <input type="date" className={inputCls} value={form.series_start_date}
@@ -498,8 +457,7 @@ function EntryFormModal({ initial, onSave, onDelete, onClose }: {
                 </Field>
                 <Field label="Series end">
                   <input type="date" className={inputCls} value={form.series_end_date}
-                    onChange={(e) => set("series_end_date", e.target.value)}
-                    placeholder="No end" />
+                    onChange={(e) => set("series_end_date", e.target.value)} />
                 </Field>
               </div>
             </div>
@@ -509,7 +467,7 @@ function EntryFormModal({ initial, onSave, onDelete, onClose }: {
                 onChange={(e) => set("date", e.target.value)} required />
             </Field>
           )}
-        </Section>
+        </ModalSection>
 
         <div className="flex justify-between items-center pt-1">
           {onDelete && (
@@ -533,23 +491,23 @@ function EntryFormModal({ initial, onSave, onDelete, onClose }: {
 // ── Schedule Timetable ─────────────────────────────────────────────────────────
 
 function ScheduleTimetable({ allEntries }: { allEntries: ScheduleEntry[] }) {
-  const [date, setDate] = useState(todayISO());
+  const [date,      setDate]      = useState(todayISO());
   const [hiddenIds, setHiddenIds] = useState<Set<string>>(new Set());
+
   const toggleHidden = useCallback((id: string) => {
     setHiddenIds(prev => { const next = new Set(prev); next.has(id) ? next.delete(id) : next.add(id); return next; });
   }, []);
-  const today = todayISO();
-  const isToday = date === today;
 
+  const today    = todayISO();
+  const isToday  = date === today;
   const dayEntries = entriesForDate(allEntries, date);
 
-  const now = new Date();
-  const nowMin = now.getHours() * 60 + now.getMinutes();
-  const nowPx  = minToPx(nowMin);
+  const now     = new Date();
+  const nowMin  = now.getHours() * 60 + now.getMinutes();
+  const nowPx   = minToPx(nowMin);
   const showNow = isToday && nowMin >= HOUR_START * 60 && nowMin <= (HOUR_END + 1) * 60;
 
   type EvtItem = { startMin: number; endMin: number; entry: ScheduleEntry };
-
   const evts: EvtItem[] = dayEntries
     .filter((e) => e.start_time)
     .map((e) => ({
@@ -567,8 +525,7 @@ function ScheduleTimetable({ allEntries }: { allEntries: ScheduleEntry[] }) {
           <ChevronLeft className="h-4 w-4" />
         </button>
         <span className="flex-1 text-center text-sm font-medium">{formatDateLabel(date)}</span>
-        <button
-          onClick={() => setDate((d) => addDays(d, 1))}
+        <button onClick={() => setDate((d) => addDays(d, 1))}
           className="p-1.5 rounded-lg border border-border hover:bg-accent transition-colors">
           <ChevronLeft className="h-4 w-4 rotate-180" />
         </button>
@@ -603,18 +560,15 @@ function ScheduleTimetable({ allEntries }: { allEntries: ScheduleEntry[] }) {
 
             {/* Event column */}
             <div className="relative flex-1 border-l border-border/30">
-              {/* Hour lines */}
               {HOURS.map((h) => (
                 <div key={h} className="absolute left-0 right-0 border-t border-border/30 pointer-events-none"
                   style={{ top: (h - HOUR_START) * HOUR_PX }} />
               ))}
-              {/* Half-hour lines */}
               {HOURS.map((h) => (
                 <div key={`${h}h`} className="absolute left-0 right-0 border-t border-dashed border-border/15 pointer-events-none"
                   style={{ top: (h - HOUR_START) * HOUR_PX + HOUR_PX / 2 }} />
               ))}
 
-              {/* Now line */}
               {showNow && (
                 <div className="absolute left-0 right-0 flex items-center gap-1 pointer-events-none z-10"
                   style={{ top: nowPx }}>
@@ -623,7 +577,6 @@ function ScheduleTimetable({ allEntries }: { allEntries: ScheduleEntry[] }) {
                 </div>
               )}
 
-              {/* Events */}
               {layoutCalItems(evts).map(({ item, col, totalCols }) => {
                 const top    = minToPx(item.startMin);
                 const height = Math.max(24, minToPx(item.endMin) - top);
@@ -662,8 +615,7 @@ function ScheduleTimetable({ allEntries }: { allEntries: ScheduleEntry[] }) {
                     )}
                     {height > 52 && item.entry.location && (
                       <div className="text-[10px] opacity-60 flex items-center gap-1 truncate">
-                        <MapPin className="h-2.5 w-2.5 shrink-0" />
-                        {item.entry.location}
+                        <MapPin className="h-2.5 w-2.5 shrink-0" />{item.entry.location}
                       </div>
                     )}
                     {height > 68 && item.entry.plan_title && (
@@ -748,11 +700,8 @@ function EntryRow({ entry, onEdit, onDelete }: {
 
 type CatFilter = "all" | Category;
 
-function PlanCard({ plan, onEdit, onEntriesChange }: {
-  plan: Plan;
-  onEdit: () => void;
-  onEntriesChange?: (entries: ScheduleEntry[]) => void;
-}) {
+function PlanCard({ plan, onEdit }: { plan: Plan; onEdit: () => void }) {
+  const { addEntry, editEntry: editEntryCtx, removeEntry, mergeEntries } = useSchedules();
   const [expanded,  setExpanded]  = useState(true);
   const [entries,   setEntries]   = useState<ScheduleEntry[]>([]);
   const [loading,   setLoading]   = useState(false);
@@ -765,74 +714,21 @@ function PlanCard({ plan, onEdit, onEntriesChange }: {
     try {
       const data = await getScheduleEntriesByPlan(plan.id);
       setEntries(data);
-      onEntriesChange?.(data);
+      mergeEntries(plan.id, data);
     } finally {
       setLoading(false);
     }
-  }, [plan.id, onEntriesChange]);
+  }, [plan.id, mergeEntries]);
 
   useEffect(() => { load(); }, [load]);
 
-  // Derive which category tabs have entries
-  const presentCats = CATEGORIES.filter((c) =>
-    entries.some((e) => e.category === c.id)
-  );
-  const showTabs = presentCats.length > 1;
-
-  const visible = catFilter === "all"
-    ? entries
-    : entries.filter((e) => e.category === catFilter);
-
-  async function handleAddEntry(d: EntryDraft) {
-    await createScheduleEntry({
-      plan_id: plan.id,
-      title: d.title,
-      category: d.category,
-      description: d.description.trim() || null,
-      location: d.location.trim() || null,
-      color: d.color,
-      start_time: d.start_time || null,
-      end_time: d.end_time || null,
-      is_recurring: d.is_recurring,
-      recurrence: d.is_recurring ? d.recurrence : null,
-      days_of_week: d.is_recurring && d.recurrence === "weekly" ? d.days_of_week.join(",") : null,
-      date: d.is_recurring ? null : (d.date || null),
-      series_start_date: d.is_recurring ? (d.series_start_date || null) : null,
-      series_end_date: d.is_recurring ? (d.series_end_date || null) : null,
-    });
-    setAddOpen(false);
-    load();
-  }
-
-  async function handleEditEntry(entry: ScheduleEntry, d: EntryDraft) {
-    await updateScheduleEntry(entry.id, {
-      title: d.title,
-      category: d.category,
-      description: d.description.trim() || null,
-      location: d.location.trim() || null,
-      color: d.color,
-      start_time: d.start_time || null,
-      end_time: d.end_time || null,
-      is_recurring: d.is_recurring,
-      recurrence: d.is_recurring ? d.recurrence : null,
-      days_of_week: d.is_recurring && d.recurrence === "weekly" ? d.days_of_week.join(",") : null,
-      date: d.is_recurring ? null : (d.date || null),
-      series_start_date: d.is_recurring ? (d.series_start_date || null) : null,
-      series_end_date: d.is_recurring ? (d.series_end_date || null) : null,
-    });
-    setEditEntry(null);
-    load();
-  }
-
-  async function handleDeleteEntry(id: number) {
-    await deleteScheduleEntry(id);
-    load();
-  }
+  const presentCats = CATEGORIES.filter((c) => entries.some((e) => e.category === c.id));
+  const showTabs    = presentCats.length > 1;
+  const visible     = catFilter === "all" ? entries : entries.filter((e) => e.category === catFilter);
 
   return (
     <>
       <div className="rounded-xl border border-border bg-card overflow-hidden">
-        {/* Plan header */}
         <div className="flex items-center gap-2 px-4 py-3 border-b border-border bg-card/80">
           <button onClick={() => setExpanded((v) => !v)}
             className="text-muted-foreground hover:text-foreground transition-colors shrink-0">
@@ -852,7 +748,6 @@ function PlanCard({ plan, onEdit, onEntriesChange }: {
           </button>
         </div>
 
-        {/* Category tabs */}
         {expanded && showTabs && (
           <div className="flex gap-1 px-3 pt-3 overflow-x-auto">
             <button
@@ -863,9 +758,7 @@ function PlanCard({ plan, onEdit, onEntriesChange }: {
                   ? "bg-foreground text-background"
                   : "border border-border text-muted-foreground hover:text-foreground"
               )}
-            >
-              All
-            </button>
+            >All</button>
             {presentCats.map((cat) => (
               <button key={cat.id}
                 onClick={() => setCatFilter(cat.id)}
@@ -883,7 +776,6 @@ function PlanCard({ plan, onEdit, onEntriesChange }: {
           </div>
         )}
 
-        {/* Entries */}
         {expanded && (
           <div className="p-3 flex flex-col gap-2">
             {loading && entries.length === 0 && (
@@ -898,7 +790,7 @@ function PlanCard({ plan, onEdit, onEntriesChange }: {
             {visible.map((e) => (
               <EntryRow key={e.id} entry={e}
                 onEdit={() => setEditEntry(e)}
-                onDelete={() => handleDeleteEntry(e.id)}
+                onDelete={async () => { await removeEntry(e.id); load(); }}
               />
             ))}
             <Button variant="ghost" size="sm" className="self-start h-7 text-xs gap-1 mt-1"
@@ -910,13 +802,16 @@ function PlanCard({ plan, onEdit, onEntriesChange }: {
       </div>
 
       {addOpen && (
-        <EntryFormModal onSave={handleAddEntry} onClose={() => setAddOpen(false)} />
+        <EntryFormModal
+          onSave={async (d) => { await addEntry(plan.id, d); setAddOpen(false); load(); }}
+          onClose={() => setAddOpen(false)}
+        />
       )}
       {editEntry && (
         <EntryFormModal
           initial={editEntry}
-          onSave={(d) => handleEditEntry(editEntry, d)}
-          onDelete={async () => { await handleDeleteEntry(editEntry.id); setEditEntry(null); }}
+          onSave={async (d) => { await editEntryCtx(editEntry, d); setEditEntry(null); load(); }}
+          onDelete={async () => { await removeEntry(editEntry.id); setEditEntry(null); load(); }}
           onClose={() => setEditEntry(null)}
         />
       )}
@@ -924,76 +819,33 @@ function PlanCard({ plan, onEdit, onEntriesChange }: {
   );
 }
 
-// ── Schedules page ─────────────────────────────────────────────────────────────
+// ── SchedulesPanel ─────────────────────────────────────────────────────────────
+// Drop-in module. Reads from SchedulesContext — must have <SchedulesProvider>
+// somewhere above it in the tree (done at App level).
 
 type MainTab = "timetable" | "plans";
 
-export function Schedules() {
-  const [plans,      setPlans]      = useState<Plan[]>([]);
-  const [allEntries, setAllEntries] = useState<ScheduleEntry[]>([]);
+export function SchedulesPanel() {
+  const { plans, allEntries, createSchedule, updateSchedule, deleteSchedule } = useSchedules();
   const [tab,        setTab]        = useState<MainTab>("timetable");
   const [createOpen, setCreateOpen] = useState(false);
   const [editPlan,   setEditPlan]   = useState<Plan | null>(null);
 
-  const loadPlans = useCallback(async () => {
-    const all = await getPlans();
-    setPlans(all.filter((p) => p.is_schedule));
-  }, []);
-
-  const loadAllEntries = useCallback(async () => {
-    setAllEntries(await getAllScheduleEntries());
-  }, []);
-
-  useEffect(() => {
-    loadPlans();
-    loadAllEntries();
-  }, [loadPlans, loadAllEntries]);
-
-  async function handleCreatePlan(d: PlanDraft) {
-    await createPlan({ title: d.title, description: d.description.trim() || null, is_schedule: true });
-    setCreateOpen(false);
-    loadPlans();
-  }
-
-  async function handleEditPlan(plan: Plan, d: PlanDraft) {
-    await updatePlan(plan.id, {
-      title: d.title, description: d.description.trim() || null,
-      status: plan.status, is_schedule: true,
-    });
-    setEditPlan(null);
-    loadPlans();
-  }
-
-  async function handleDeletePlan(plan: Plan) {
-    await deletePlan(plan.id);
-    setEditPlan(null);
-    loadPlans();
-    loadAllEntries();
-  }
-
-  // Merge updated entries from a plan card back into allEntries
-  function mergeEntries(planId: number, planEntries: ScheduleEntry[]) {
-    setAllEntries((prev) => [
-      ...prev.filter((e) => e.plan_id !== planId),
-      ...planEntries,
-    ]);
-  }
-
   return (
-    <div className="flex flex-col gap-5 p-5 max-w-3xl">
+    <div className="flex flex-col gap-5 p-5">
 
       {/* Header */}
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-2">
           <CalendarRange className="h-5 w-5 text-teal-500" />
-          <h1 className="text-xl font-semibold text-foreground">Schedules</h1>
+          <h2 className="text-xl font-semibold text-foreground">Schedules</h2>
         </div>
         <Button size="sm" onClick={() => setCreateOpen(true)}>
           <Plus className="h-3.5 w-3.5" /> New schedule
         </Button>
       </div>
 
-      {/* Main tab bar */}
+      {/* Tab bar */}
       {plans.length > 0 && (
         <div className="flex gap-1 p-1 bg-muted rounded-xl w-fit">
           {(["timetable", "plans"] as MainTab[]).map((t) => (
@@ -1018,7 +870,8 @@ export function Schedules() {
           <CalendarRange className="h-10 w-10 text-muted-foreground/30" />
           <p className="text-sm text-muted-foreground">No schedules yet.</p>
           <p className="text-xs text-muted-foreground/60 max-w-xs">
-            Create a schedule to organise recurring or one-off activities — commutes, doctor appointments, gym sessions, shifts — and see them on the weekly overview.
+            Create a schedule to organise recurring or one-off activities — commutes, doctor appointments,
+            gym sessions, shifts — and see them on the weekly overview.
           </p>
           <Button size="sm" variant="outline" onClick={() => setCreateOpen(true)}>
             <Plus className="h-3.5 w-3.5" /> Create first schedule
@@ -1029,31 +882,33 @@ export function Schedules() {
       ) : (
         <div className="flex flex-col gap-4">
           {plans.map((plan) => (
-            <PlanCard
-              key={plan.id}
-              plan={plan}
-              onEdit={() => setEditPlan(plan)}
-              onEntriesChange={(entries) => mergeEntries(plan.id, entries)}
-            />
+            <PlanCard key={plan.id} plan={plan} onEdit={() => setEditPlan(plan)} />
           ))}
         </div>
       )}
 
       {createOpen && (
         <PlanFormModal
-          onSave={handleCreatePlan}
+          onSave={async (d) => { await createSchedule(d); setCreateOpen(false); }}
           onClose={() => setCreateOpen(false)}
         />
       )}
-
       {editPlan && (
         <PlanFormModal
           initial={editPlan}
-          onSave={(d) => handleEditPlan(editPlan, d)}
-          onDelete={() => handleDeletePlan(editPlan)}
+          onSave={async (d) => { await updateSchedule(editPlan, d); setEditPlan(null); }}
+          onDelete={async () => { await deleteSchedule(editPlan); setEditPlan(null); }}
           onClose={() => setEditPlan(null)}
         />
       )}
     </div>
   );
+}
+
+// ── Schedules page (standalone) ────────────────────────────────────────────────
+// When navigated to directly, wraps the panel in its own provider.
+// When embedded elsewhere, the app-level SchedulesProvider takes precedence.
+
+export function Schedules() {
+  return <SchedulesPanel />;
 }

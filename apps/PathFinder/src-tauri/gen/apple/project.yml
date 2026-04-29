@@ -32,6 +32,8 @@ targets:
       - path: Sources
       - path: Assets.xcassets
       - path: Externals
+        excludes:
+          - "**/*.a"   # libapp.a is referenced as a framework dependency; excluding prevents duplicate copy errors
       - path: pathfinder_iOS
       - path: assets
         buildPhase: resources
@@ -84,6 +86,8 @@ targets:
       - sdk: Security.framework
       - sdk: UIKit.framework
       - sdk: WebKit.framework
+      - target: PathFinderWidgets
+        embed: true
     preBuildScripts:
       - script: npm run -- tauri ios xcode-script -v --platform ${PLATFORM_DISPLAY_NAME:?} --sdk-root ${SDKROOT:?} --framework-search-paths "${FRAMEWORK_SEARCH_PATHS:?}" --header-search-paths "${HEADER_SEARCH_PATHS:?}" --gcc-preprocessor-definitions "${GCC_PREPROCESSOR_DEFINITIONS:-}" --configuration ${CONFIGURATION:?} ${FORCE_COLOR} ${ARCHS:?}
         name: Build Rust Code
@@ -91,3 +95,26 @@ targets:
         outputFiles:
           - $(SRCROOT)/Externals/x86_64/${CONFIGURATION}/libapp.a
           - $(SRCROOT)/Externals/arm64/${CONFIGURATION}/libapp.a
+
+  PathFinderWidgets:
+    type: app-extension
+    platform: iOS
+    sources:
+      - path: PathFinderWidgets
+        excludes:
+          - "Info.plist"          # handled via INFOPLIST_FILE build setting below
+    dependencies:
+      - sdk: WidgetKit.framework
+      - sdk: SwiftUI.framework
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.bastianthomsen.pathfinder.widgets
+        DEVELOPMENT_TEAM: G9D6JYJSLT
+        SWIFT_VERSION: "5.0"
+        ARCHS: [arm64]
+        VALID_ARCHS: arm64
+        EXCLUDED_ARCHS[sdk=iphoneos*]: x86_64
+        IPHONEOS_DEPLOYMENT_TARGET: "16.0"
+        ENABLE_USER_SCRIPT_SANDBOXING: NO   # required: Xcode 15+ blocks pre-build scripts otherwise
+        ENABLE_BITCODE: false
+        INFOPLIST_FILE: $(SRCROOT)/PathFinderWidgets/Info.plist

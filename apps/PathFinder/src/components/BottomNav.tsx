@@ -1,14 +1,12 @@
 import { useState } from "react";
 import type { ReactNode } from "react";
-import { LayoutDashboard, CalendarDays, Target, CheckSquare, Map, MoreHorizontal } from "lucide-react";
+import { LayoutDashboard, CalendarDays, Target, MoreHorizontal } from "lucide-react";
 import type { Page } from "./Sidebar";
 
 const PRIMARY_TABS: { page: Page; label: string; icon: ReactNode }[] = [
   { page: "dashboard", label: "Home",  icon: <LayoutDashboard size={22} /> },
   { page: "week",      label: "Week",  icon: <CalendarDays size={22} /> },
   { page: "goals",     label: "Goals", icon: <Target size={22} /> },
-  { page: "tasks",     label: "Tasks", icon: <CheckSquare size={22} /> },
-  { page: "plans",     label: "Plans", icon: <Map size={22} /> },
 ];
 
 const MORE_PAGES: { page: Page; label: string }[] = [
