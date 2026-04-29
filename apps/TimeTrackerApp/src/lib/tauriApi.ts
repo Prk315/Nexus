@@ -64,7 +64,14 @@ export const pauseTimer = async () => {
   return session;
 };
 
-export const resumeTimer = () => invoke<ActiveSession>("resume_timer");
+export const resumeTimer = async () => {
+  const session = await invoke<ActiveSession>("resume_timer");
+  const startTimestamp = new Date(session.start_time).getTime() / 1000;
+  startLiveActivity(session.task_name, session.project ?? "", startTimestamp);
+  syncWidgetState();
+  return session;
+};
+
 export const cancelPaused = () => invoke<boolean>("cancel_paused");
 
 export const startFromTemplate = (templateName: string, userId?: string) =>
@@ -73,11 +80,15 @@ export const startFromTemplate = (templateName: string, userId?: string) =>
     userId: userId ?? null,
   });
 
-export const resumeFromEntry = (entryId: number, userId?: string) =>
-  invoke<void>("resume_from_entry", {
-    entryId,
-    userId: userId ?? null,
-  });
+export const resumeFromEntry = async (entryId: number, userId?: string) => {
+  await invoke<void>("resume_from_entry", { entryId, userId: userId ?? null });
+  const status = await getStatus();
+  if (status.active) {
+    const startTimestamp = new Date(status.active.start_time).getTime() / 1000;
+    startLiveActivity(status.active.task_name, status.active.project ?? "", startTimestamp);
+  }
+  syncWidgetState();
+};
 
 // ── Entries ──────────────────────────────────────────────────────────────────
 
