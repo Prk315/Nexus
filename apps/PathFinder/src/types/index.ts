@@ -34,6 +34,7 @@ export interface Goal {
 export interface Plan {
   id: number;
   goal_id: number | null;
+  parent_id: number | null;
   title: string;
   description: string | null;
   deadline: string | null;
@@ -144,6 +145,7 @@ export interface WeekItems {
   reminders: Reminder[];
   course_assignments: CourseAssignment[];
   schedule_entries: ScheduleEntry[];
+  training_sessions: TrainingSession[];
 }
 
 export interface ScheduleEntry {
@@ -320,6 +322,7 @@ export interface CalBlock {
   days_of_week: string | null;
   series_start_date: string | null;
   series_end_date: string | null;
+  task_id: number | null;
 }
 
 export interface PipelineStep {
@@ -433,6 +436,14 @@ export interface HabitStack {
   sort_order: number;
 }
 
+export interface HabitSubtask {
+  id: number;
+  habit_id: number;
+  title: string;
+  sort_order: number;
+  done: boolean;
+}
+
 export interface HabitWithCompletion {
   id: number;
   title: string;
@@ -442,6 +453,8 @@ export interface HabitWithCompletion {
   done: boolean;
   streak: number;
   recent_dates: string[]; // YYYY-MM-DD strings for last 7 days where completed
+  subtask_count: number;
+  subtask_done_count: number;
 }
 
 export interface DailyHabit {
@@ -525,6 +538,7 @@ export interface TrainingPlan {
   color: string;
   goal: string | null;
   days_per_week: number | null;
+  plan_type: "running" | "strength" | "yoga" | "other";
   created_at: string;
 }
 
@@ -533,6 +547,7 @@ export interface TrainingSession {
   user_id: string;
   plan_id: number | null;
   plan_title: string | null;
+  plan_type: string | null;
   title: string;
   scheduled_date: string | null;
   start_time: string | null;

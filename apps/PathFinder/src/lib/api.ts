@@ -8,7 +8,7 @@ import type {
   CaSubtask, LifestyleArea, PipelineTemplate, PipelineStep, PipelineRun,
   PipelineRunStep, PipelineStepSubtask, ProjectGoal, Game, GameFeature,
   GameDevlogEntry, RoadmapItem, CourseBook, BookSection, BookReadingLog,
-  HabitWithCompletion, DailyHabit, HabitStack, RunLog, WorkoutLog, WorkoutExercise,
+  HabitWithCompletion, DailyHabit, HabitStack, HabitSubtask, RunLog, WorkoutLog, WorkoutExercise,
   SubtaskToggleResult, SystemSubtask, GoalGroup,
   TrainingPlan, TrainingSession, SessionPerformance, Rule,
 } from "../types";
@@ -52,6 +52,7 @@ function mapPlan(r: any, taskCount = 0, doneCount = 0): Plan {
   return {
     id: num(r.id),
     goal_id: r.goal_id ? num(r.goal_id) : null,
+    parent_id: r.parent_id ? num(r.parent_id) : null,
     title: r.title,
     description: r.description,
     deadline: r.deadline,
@@ -353,6 +354,7 @@ function expandRecurring(block: any, startDate: string, endDate: string): CalBlo
         days_of_week: block.days_of_week,
         series_start_date: block.start_date,
         series_end_date: block.end_date,
+        task_id: null,
       });
     }
     cursor.setUTCDate(cursor.getUTCDate() + 1);
@@ -512,7 +514,7 @@ export const getPlans = async (): Promise<Plan[]> => {
 };
 
 export const createPlan = async (payload: {
-  goal_id?: number | null; title: string; description?: string | null;
+  goal_id?: number | null; parent_id?: number | null; title: string; description?: string | null;
   deadline?: string | null; tags?: string | null; is_course?: boolean;
   is_lifestyle?: boolean; is_schedule?: boolean; lifestyle_area_id?: number | null;
   purpose?: string | null; problem?: string | null; solution?: string | null;
@@ -527,7 +529,7 @@ export const createPlan = async (payload: {
 };
 
 export const updatePlan = async (id: number, payload: {
-  goal_id?: number | null; title: string; description?: string | null;
+  goal_id?: number | null; parent_id?: number | null; title: string; description?: string | null;
   deadline?: string | null; status: string; tags?: string | null;
   is_course?: boolean; is_lifestyle?: boolean; is_schedule?: boolean;
   lifestyle_area_id?: number | null;
@@ -857,6 +859,7 @@ export const getWeekItems = async (startDate: string, endDate: string): Promise<
     { data: assignments },
     { data: seOneOff },
     { data: seRecurring },
+    { data: trainingSessions },
   ] = await Promise.all([
     supabase.from("pf_tasks")
       .select("*, pf_plans(id, title, goal_id, pf_goals(id, title))")
@@ -884,6 +887,12 @@ export const getWeekItems = async (startDate: string, endDate: string): Promise<
       .select("*, pf_plans(title)").eq("user_id", USER_ID).eq("is_recurring", true)
       .lte("series_start_date", endDate)
       .or(`series_end_date.is.null,series_end_date.gte.${startDate}`),
+    // Training sessions scheduled in range
+    supabase.from("pf_training_sessions")
+      .select("*, pf_training_plans(title, plan_type)")
+      .eq("user_id", USER_ID)
+      .not("scheduled_date", "is", null)
+      .gte("scheduled_date", startDate).lte("scheduled_date", endDate),
   ]);
 
   const expandedRecurring = (seRecurring ?? []).flatMap((e) =>
@@ -901,6 +910,7 @@ export const getWeekItems = async (startDate: string, endDate: string): Promise<
       ...(seOneOff ?? []).map((e) => mapScheduleEntry(e)),
       ...expandedRecurring,
     ],
+    training_sessions:  (trainingSessions ?? []).map((r) => mapTrainingSession(r)),
   };
 };
 
@@ -1273,6 +1283,7 @@ export const getCalBlocks = async (startDate: string, endDate: string): Promise<
     location: b.location, created_at: b.created_at,
     is_recurring: false, recurring_id: null, recurrence: null,
     days_of_week: null, series_start_date: null, series_end_date: null,
+    task_id: b.task_id ? num(b.task_id) : null,
   }));
 
   const virtual = (recurring ?? []).flatMap((r) => expandRecurring(r, startDate, endDate));
@@ -1285,25 +1296,27 @@ export const getCalBlocks = async (startDate: string, endDate: string): Promise<
 export const createCalBlock = async (
   date: string, title: string, startTime: string, endTime: string,
   color: string, description: string | null, location: string | null,
+  taskId?: number | null,
 ): Promise<CalBlock> => {
   const { data, error } = await supabase
     .from("pf_cal_blocks")
-    .insert({ user_id: USER_ID, date, title, start_time: startTime, end_time: endTime, color, description, location })
+    .insert({ user_id: USER_ID, date, title, start_time: startTime, end_time: endTime, color, description, location, task_id: taskId ?? null })
     .select().single();
   if (error) err(error);
-  return { id: num(data!.id), date: data!.date, title: data!.title, start_time: data!.start_time, end_time: data!.end_time, color: data!.color, description: data!.description, location: data!.location, created_at: data!.created_at, is_recurring: false, recurring_id: null, recurrence: null, days_of_week: null, series_start_date: null, series_end_date: null };
+  return { id: num(data!.id), date: data!.date, title: data!.title, start_time: data!.start_time, end_time: data!.end_time, color: data!.color, description: data!.description, location: data!.location, created_at: data!.created_at, is_recurring: false, recurring_id: null, recurrence: null, days_of_week: null, series_start_date: null, series_end_date: null, task_id: data!.task_id ? num(data!.task_id) : null };
 };
 
 export const updateCalBlock = async (
   id: number, title: string, startTime: string, endTime: string,
   color: string, description: string | null, location: string | null,
+  taskId?: number | null,
 ): Promise<CalBlock> => {
   const { data, error } = await supabase
     .from("pf_cal_blocks")
-    .update({ title, start_time: startTime, end_time: endTime, color, description, location })
+    .update({ title, start_time: startTime, end_time: endTime, color, description, location, task_id: taskId ?? null })
     .eq("id", id).select().single();
   if (error) err(error);
-  return { id: num(data!.id), date: data!.date, title: data!.title, start_time: data!.start_time, end_time: data!.end_time, color: data!.color, description: data!.description, location: data!.location, created_at: data!.created_at, is_recurring: false, recurring_id: null, recurrence: null, days_of_week: null, series_start_date: null, series_end_date: null };
+  return { id: num(data!.id), date: data!.date, title: data!.title, start_time: data!.start_time, end_time: data!.end_time, color: data!.color, description: data!.description, location: data!.location, created_at: data!.created_at, is_recurring: false, recurring_id: null, recurrence: null, days_of_week: null, series_start_date: null, series_end_date: null, task_id: data!.task_id ? num(data!.task_id) : null };
 };
 
 export const deleteCalBlock = async (id: number): Promise<void> => {
@@ -2167,6 +2180,15 @@ export const getHabitsForDate = async (date: string): Promise<HabitWithCompletio
     .from("pf_habit_completions").select("habit_id, date")
     .in("habit_id", habitIds).gte("date", sinceStr);
 
+  // Subtask counts for progress display
+  const { data: subtaskRows } = await supabase
+    .from("pf_habit_subtasks").select("id, habit_id").in("habit_id", habitIds);
+  const subtaskIds = (subtaskRows ?? []).map((s) => num(s.id));
+  const { data: subtaskDone } = subtaskIds.length
+    ? await supabase.from("pf_habit_subtask_completions").select("subtask_id").in("subtask_id", subtaskIds).eq("date", date)
+    : { data: [] };
+  const subtaskDoneSet = new Set((subtaskDone ?? []).map((c) => num(c.subtask_id)));
+
   return habits.map((h): HabitWithCompletion => {
     const hc = (completions ?? []).filter((c) => num(c.habit_id) === num(h.id));
     const doneSet = new Set(hc.map((c) => c.date));
@@ -2183,7 +2205,11 @@ export const getHabitsForDate = async (date: string): Promise<HabitWithCompletio
       cur.setUTCDate(cur.getUTCDate() - 1);
     }
 
-    return { id: num(h.id), title: h.title, color: h.color, sort_order: h.sort_order, stack_id: h.stack_id ? num(h.stack_id) : null, done: doneSet.has(date), streak, recent_dates };
+    const mySubtasks = (subtaskRows ?? []).filter((s) => num(s.habit_id) === num(h.id));
+    const subtask_count = mySubtasks.length;
+    const subtask_done_count = mySubtasks.filter((s) => subtaskDoneSet.has(num(s.id))).length;
+
+    return { id: num(h.id), title: h.title, color: h.color, sort_order: h.sort_order, stack_id: h.stack_id ? num(h.stack_id) : null, done: doneSet.has(date), streak, recent_dates, subtask_count, subtask_done_count };
   });
 };
 
@@ -2241,6 +2267,54 @@ export const toggleHabitCompletion = async (habitId: number, date: string): Prom
   }
   await supabase.from("pf_habit_completions").insert({ habit_id: habitId, date });
   return true;
+};
+
+// ── Habit Subtasks ────────────────────────────────────────────────────────────
+
+export const getHabitSubtasks = async (habitId: number, date: string): Promise<HabitSubtask[]> => {
+  const { data: subtasks, error } = await supabase
+    .from("pf_habit_subtasks").select("*").eq("habit_id", habitId).order("sort_order");
+  if (error) err(error);
+  if (!subtasks?.length) return [];
+
+  const ids = subtasks.map((s) => num(s.id));
+  const { data: completions } = await supabase
+    .from("pf_habit_subtask_completions").select("subtask_id")
+    .in("subtask_id", ids).eq("date", date);
+  const doneSet = new Set((completions ?? []).map((c) => num(c.subtask_id)));
+
+  return subtasks.map((s) => ({
+    id: num(s.id), habit_id: num(s.habit_id),
+    title: s.title, sort_order: num(s.sort_order), done: doneSet.has(num(s.id)),
+  }));
+};
+
+export const addHabitSubtask = async (habitId: number, title: string, date: string): Promise<HabitSubtask[]> => {
+  const { error } = await supabase
+    .from("pf_habit_subtasks").insert({ habit_id: habitId, user_id: USER_ID, title });
+  if (error) err(error);
+  return getHabitSubtasks(habitId, date);
+};
+
+export const deleteHabitSubtask = async (id: number): Promise<void> => {
+  const { error } = await supabase.from("pf_habit_subtasks").delete().eq("id", id);
+  if (error) err(error);
+};
+
+export const toggleHabitSubtask = async (subtaskId: number, date: string): Promise<HabitSubtask[]> => {
+  const { data: existing } = await supabase
+    .from("pf_habit_subtask_completions").select("id")
+    .eq("subtask_id", subtaskId).eq("date", date).maybeSingle();
+
+  if (existing) {
+    await supabase.from("pf_habit_subtask_completions").delete().eq("id", existing.id);
+  } else {
+    await supabase.from("pf_habit_subtask_completions").insert({ subtask_id: subtaskId, date });
+  }
+
+  const { data: subtask } = await supabase
+    .from("pf_habit_subtasks").select("habit_id").eq("id", subtaskId).single();
+  return getHabitSubtasks(num(subtask!.habit_id), date);
 };
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -2372,7 +2446,9 @@ function mapTrainingPlan(r: any): TrainingPlan {
   return {
     id: num(r.id), user_id: r.user_id, title: r.title,
     description: r.description, color: r.color, goal: r.goal,
-    days_per_week: r.days_per_week, created_at: r.created_at,
+    days_per_week: r.days_per_week,
+    plan_type: (r.plan_type ?? "other") as TrainingPlan["plan_type"],
+    created_at: r.created_at,
   };
 }
 
@@ -2381,6 +2457,7 @@ function mapTrainingSession(r: any, planTitle?: string | null): TrainingSession 
     id: num(r.id), user_id: r.user_id,
     plan_id: r.plan_id ? num(r.plan_id) : null,
     plan_title: planTitle ?? r.pf_training_plans?.title ?? null,
+    plan_type: r.pf_training_plans?.plan_type ?? null,
     title: r.title, scheduled_date: r.scheduled_date,
     start_time: r.start_time, end_time: r.end_time,
     location: r.location, notes: r.notes,
@@ -2403,7 +2480,7 @@ export const getTrainingPlans = async (): Promise<TrainingPlan[]> => {
 };
 
 export const createTrainingPlan = async (payload: {
-  title: string; description?: string | null; color?: string; goal?: string | null; days_per_week?: number | null;
+  title: string; description?: string | null; color?: string; goal?: string | null; days_per_week?: number | null; plan_type?: string;
 }): Promise<TrainingPlan> => {
   const { data, error } = await supabase
     .from("pf_training_plans").insert({ user_id: USER_ID, ...payload }).select().single();
@@ -2412,7 +2489,7 @@ export const createTrainingPlan = async (payload: {
 };
 
 export const updateTrainingPlan = async (id: number, payload: {
-  title: string; description?: string | null; color?: string; goal?: string | null; days_per_week?: number | null;
+  title: string; description?: string | null; color?: string; goal?: string | null; days_per_week?: number | null; plan_type?: string;
 }): Promise<TrainingPlan> => {
   const { data, error } = await supabase
     .from("pf_training_plans").update(payload).eq("id", id).select().single();
@@ -2432,12 +2509,23 @@ export const deleteTrainingPlan = async (id: number): Promise<void> => {
 export const getTrainingSessions = async (planId?: number): Promise<TrainingSession[]> => {
   let q = supabase
     .from("pf_training_sessions")
-    .select("*, pf_training_plans(title)")
+    .select("*, pf_training_plans(title, plan_type)")
     .eq("user_id", USER_ID)
     .order("scheduled_date", { ascending: false })
     .order("created_at", { ascending: false });
   if (planId !== undefined) q = q.eq("plan_id", planId);
   const { data, error } = await q;
+  if (error) err(error);
+  return (data ?? []).map((r) => mapTrainingSession(r));
+};
+
+export const getTrainingSessionsForDate = async (date: string): Promise<TrainingSession[]> => {
+  const { data, error } = await supabase
+    .from("pf_training_sessions")
+    .select("*, pf_training_plans(title, plan_type)")
+    .eq("user_id", USER_ID)
+    .eq("scheduled_date", date)
+    .order("start_time", { ascending: true, nullsFirst: true });
   if (error) err(error);
   return (data ?? []).map((r) => mapTrainingSession(r));
 };
@@ -2448,7 +2536,7 @@ export const createTrainingSession = async (payload: {
   location?: string | null; notes?: string | null;
 }): Promise<TrainingSession> => {
   const { data, error } = await supabase
-    .from("pf_training_sessions").insert({ user_id: USER_ID, ...payload }).select("*, pf_training_plans(title)").single();
+    .from("pf_training_sessions").insert({ user_id: USER_ID, ...payload }).select("*, pf_training_plans(title, plan_type)").single();
   if (error) err(error);
   return mapTrainingSession(data!);
 };
@@ -2459,7 +2547,7 @@ export const updateTrainingSession = async (id: number, payload: {
   location?: string | null; notes?: string | null;
 }): Promise<TrainingSession> => {
   const { data, error } = await supabase
-    .from("pf_training_sessions").update(payload).eq("id", id).select("*, pf_training_plans(title)").single();
+    .from("pf_training_sessions").update(payload).eq("id", id).select("*, pf_training_plans(title, plan_type)").single();
   if (error) err(error);
   return mapTrainingSession(data!);
 };
@@ -2467,7 +2555,7 @@ export const updateTrainingSession = async (id: number, payload: {
 export const toggleTrainingSession = async (id: number): Promise<TrainingSession> => {
   const { data: cur } = await supabase.from("pf_training_sessions").select("completed").eq("id", id).single();
   const { data, error } = await supabase
-    .from("pf_training_sessions").update({ completed: !cur!.completed }).eq("id", id).select("*, pf_training_plans(title)").single();
+    .from("pf_training_sessions").update({ completed: !cur!.completed }).eq("id", id).select("*, pf_training_plans(title, plan_type)").single();
   if (error) err(error);
   return mapTrainingSession(data!);
 };

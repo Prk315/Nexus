@@ -21,6 +21,8 @@ import {
   getCourseAssignments, updateCourseAssignment,
   getScheduleEntriesForDate,
   getHabitsForDate, toggleHabitCompletion, getHabitStacks,
+  getHabitSubtasks, toggleHabitSubtask,
+  getTrainingSessionsForDate, toggleTrainingSession,
 } from "../lib/api";
 import { Progress } from "../components/ui/progress";
 import { Button } from "../components/ui/button";
@@ -28,7 +30,7 @@ import { Badge } from "../components/ui/badge";
 import { PriorityDot } from "../components/PriorityDot";
 import { daysUntil, deadlineLabel, deadlineVariant, cn, layoutCalItems } from "../lib/utils";
 import { isDue } from "./Systems";
-import type { Goal, GoalGroup, Plan, TaskWithContext, SystemEntry, SystemSubtask, CalBlock, DailyGoals, DailyPrimaryGoal, DailySecGoal, Reminder, QuickNote, BrainEntry, CalEvent, Deadline, Agreement, CourseAssignment, ScheduleEntry, HabitWithCompletion, HabitStack } from "../types";
+import type { Goal, GoalGroup, Plan, TaskWithContext, SystemEntry, SystemSubtask, CalBlock, DailyGoals, DailyPrimaryGoal, DailySecGoal, Reminder, QuickNote, BrainEntry, CalEvent, Deadline, Agreement, CourseAssignment, ScheduleEntry, HabitWithCompletion, HabitStack, HabitSubtask, TrainingSession } from "../types";
 
 const todayDate = () => new Date().toISOString().slice(0, 10);
 
@@ -82,16 +84,31 @@ const DC_COLOR_KEYS = Object.keys(DC_COLORS);
 type DCBlockDraft = {
   title: string; start_time: string; end_time: string;
   color: string; description: string; location: string;
+  task_id: number | null;
 };
+
+function addMinutes(time: string, minutes: number): string {
+  const [h, m] = time.split(":").map(Number);
+  const total = h * 60 + m + minutes;
+  const hh = Math.floor(total / 60) % 24;
+  const mm = total % 60;
+  return `${String(hh).padStart(2, "0")}:${String(mm).padStart(2, "0")}`;
+}
+
+function timeToMin(t: string): number {
+  const [h, m] = t.split(":").map(Number);
+  return h * 60 + m;
+}
 
 // ── Day Block Modal ───────────────────────────────────────────────────────────
 
 function DayBlockModal({
-  initial, startTime, endTime, onSave, onDelete, onClose,
+  initial, startTime, endTime, tasks, onSave, onDelete, onClose,
 }: {
   initial?: CalBlock;
   startTime?: string;
   endTime?: string;
+  tasks: TaskWithContext[];
   onSave: (d: DCBlockDraft) => Promise<void>;
   onDelete?: () => Promise<void>;
   onClose: () => void;
@@ -103,10 +120,25 @@ function DayBlockModal({
     color:       initial?.color       ?? "blue",
     description: initial?.description ?? "",
     location:    initial?.location    ?? "",
+    task_id:     initial?.task_id     ?? null,
   });
   const set = (p: Partial<DCBlockDraft>) => setForm((f) => ({ ...f, ...p }));
   const valid = form.title.trim() !== "" && form.start_time < form.end_time;
   const [saving, setSaving] = useState(false);
+
+  const openTasks = tasks.filter((t) => !t.done);
+
+  function handleTaskSelect(rawId: string) {
+    if (!rawId) { set({ task_id: null }); return; }
+    const id = Number(rawId);
+    const task = openTasks.find((t) => t.id === id);
+    if (!task) return;
+    const updates: Partial<DCBlockDraft> = { task_id: id, title: task.title };
+    if (task.time_estimate) {
+      updates.end_time = addMinutes(form.start_time, task.time_estimate);
+    }
+    set(updates);
+  }
 
   async function handleSave() {
     if (!valid || saving) return;
@@ -127,6 +159,23 @@ function DayBlockModal({
           </button>
         </div>
 
+        <div className="flex flex-col gap-0.5">
+          <label className="text-[10px] font-medium text-muted-foreground uppercase tracking-wide">Link task (optional)</label>
+          <select
+            className="h-7 rounded border border-input bg-background px-2 text-xs focus:outline-none focus:ring-1 focus:ring-ring"
+            value={form.task_id ?? ""}
+            onChange={(e) => handleTaskSelect(e.target.value)}
+          >
+            <option value="">— none —</option>
+            {openTasks.length === 0 && <option disabled value="">No open tasks</option>}
+            {openTasks.map((t) => (
+              <option key={t.id} value={t.id}>
+                {t.title}{t.plan_title ? ` · ${t.plan_title}` : ""}{t.time_estimate ? ` (${t.time_estimate}min)` : ""}
+              </option>
+            ))}
+          </select>
+        </div>
+
         <input
           autoFocus
           className="h-8 rounded border border-input bg-transparent px-2.5 text-sm focus:outline-none focus:ring-1 focus:ring-ring"
@@ -140,7 +189,15 @@ function DayBlockModal({
           <div className="flex flex-col gap-0.5 flex-1">
             <label className="text-[10px] font-medium text-muted-foreground uppercase tracking-wide">Start</label>
             <input type="time" className="h-7 rounded border border-input bg-transparent px-2 text-xs focus:outline-none focus:ring-1 focus:ring-ring"
-              value={form.start_time} onChange={(e) => set({ start_time: e.target.value })} />
+              value={form.start_time}
+              onChange={(e) => {
+                const newStart = e.target.value;
+                const linkedTask = openTasks.find((t) => t.id === form.task_id);
+                const newEnd = linkedTask?.time_estimate
+                  ? addMinutes(newStart, linkedTask.time_estimate)
+                  : form.end_time;
+                set({ start_time: newStart, end_time: newEnd });
+              }} />
           </div>
           <div className="flex flex-col gap-0.5 flex-1">
             <label className="text-[10px] font-medium text-muted-foreground uppercase tracking-wide">End</label>
@@ -211,10 +268,104 @@ const HABIT_COLOR_DOT: Record<string, string> = {
   rose:   "bg-rose-500",   slate:  "bg-slate-500",
 };
 
-function HabitsStrip({ habits, stacks, onToggle }: {
+function HabitRowWithSubtasks({ h, today, onToggle }: {
+  h: HabitWithCompletion;
+  today: string;
+  onToggle: (id: number) => void;
+}) {
+  const [expanded, setExpanded] = useState(false);
+  const [subtasks, setSubtasks] = useState<HabitSubtask[]>([]);
+  const [loaded, setLoaded] = useState(false);
+
+  const handleExpand = async () => {
+    const next = !expanded;
+    setExpanded(next);
+    if (next && !loaded) {
+      try {
+        const data = await getHabitSubtasks(h.id, today);
+        setSubtasks(data);
+        setLoaded(true);
+      } catch (e) { console.error(e); }
+    }
+  };
+
+  const handleToggleSub = async (subtaskId: number) => {
+    try {
+      const updated = await toggleHabitSubtask(subtaskId, today);
+      setSubtasks(updated);
+    } catch (e) { console.error(e); }
+  };
+
+  return (
+    <div>
+      <div className="flex items-center gap-1 px-1.5 py-1 rounded-md hover:bg-secondary/60 group">
+        <button
+          onClick={() => onToggle(h.id)}
+          className={cn(
+            "h-4 w-4 shrink-0 rounded-full border-2 flex items-center justify-center transition-colors",
+            h.done
+              ? `border-transparent ${HABIT_COLOR_DOT[h.color] ?? "bg-primary"}`
+              : "border-border group-hover:border-muted-foreground/50"
+          )}
+        >
+          {h.done && <Check className="h-2.5 w-2.5 text-white" strokeWidth={3} />}
+        </button>
+        <span
+          onClick={() => onToggle(h.id)}
+          className={cn("flex-1 text-[11px] truncate cursor-pointer transition-colors", h.done ? "line-through text-muted-foreground/50" : "text-foreground")}
+        >
+          {h.title}
+        </span>
+        {h.subtask_count > 0 && (
+          <span className="text-[9px] tabular-nums text-muted-foreground/70 shrink-0">
+            {h.subtask_done_count}/{h.subtask_count}
+          </span>
+        )}
+        {h.streak > 1 && (
+          <span className="text-[9px] text-amber-500 font-semibold shrink-0">🔥{h.streak}</span>
+        )}
+        {(h.subtask_count > 0 || expanded) && (
+          <button
+            onClick={handleExpand}
+            className="p-0.5 rounded text-muted-foreground/40 hover:text-muted-foreground transition-colors shrink-0"
+          >
+            <ChevronDown className={cn("h-2.5 w-2.5 transition-transform", expanded && "rotate-180")} />
+          </button>
+        )}
+      </div>
+      {expanded && (
+        <div className="pl-5 pr-1 pb-1 flex flex-col gap-0.5">
+          {subtasks.length === 0 && loaded && (
+            <span className="text-[10px] text-muted-foreground/50 italic px-1">No sub-habits yet.</span>
+          )}
+          {subtasks.map((sub) => (
+            <button
+              key={sub.id}
+              onClick={() => handleToggleSub(sub.id)}
+              className="flex items-center gap-1.5 px-1 py-0.5 rounded hover:bg-secondary/60 text-left transition-colors group/sub"
+            >
+              <div className={cn(
+                "h-3 w-3 shrink-0 rounded border flex items-center justify-center transition-colors",
+                sub.done ? `border-transparent ${HABIT_COLOR_DOT[h.color] ?? "bg-primary"}` : "border-border"
+              )}>
+                {sub.done && <Check className="h-2 w-2 text-white" strokeWidth={3} />}
+              </div>
+              <span className={cn("text-[10px] flex-1 truncate", sub.done && "line-through text-muted-foreground/50")}>
+                {sub.title}
+              </span>
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function HabitsStrip({ habits, stacks, onToggle, today }: {
   habits: HabitWithCompletion[];
   stacks: HabitStack[];
   onToggle: (id: number) => void;
+  today: string;
 }) {
   const [collapsed, setCollapsed] = useState(false);
   const [collapsedStacks, setCollapsedStacks] = useState<Set<number>>(new Set());
@@ -233,26 +384,7 @@ function HabitsStrip({ habits, stacks, onToggle }: {
     setCollapsedStacks((prev) => { const n = new Set(prev); n.has(id) ? n.delete(id) : n.add(id); return n; });
 
   const renderHabitRow = (h: HabitWithCompletion) => (
-    <button
-      key={h.id}
-      onClick={() => onToggle(h.id)}
-      className="flex items-center gap-2 px-1.5 py-1 rounded-md text-left transition-colors hover:bg-secondary/60 group"
-    >
-      <div className={cn(
-        "h-4 w-4 shrink-0 rounded-full border-2 flex items-center justify-center transition-colors",
-        h.done
-          ? `border-transparent ${HABIT_COLOR_DOT[h.color] ?? "bg-primary"}`
-          : "border-border group-hover:border-muted-foreground/50"
-      )}>
-        {h.done && <Check className="h-2.5 w-2.5 text-white" strokeWidth={3} />}
-      </div>
-      <span className={cn("flex-1 text-[11px] truncate transition-colors", h.done ? "line-through text-muted-foreground/50" : "text-foreground")}>
-        {h.title}
-      </span>
-      {h.streak > 1 && (
-        <span className="text-[9px] text-amber-500 font-semibold shrink-0">🔥{h.streak}</span>
-      )}
-    </button>
+    <HabitRowWithSubtasks key={h.id} h={h} today={today} onToggle={onToggle} />
   );
 
   return (
@@ -328,7 +460,7 @@ function HabitsStrip({ habits, stacks, onToggle }: {
 // ── Day Calendar ──────────────────────────────────────────────────────────────
 
 function DayCalendar({
-  date: _date, calBlocks, systems, courseAssignments, scheduleEntries,
+  date: _date, calBlocks, systems, courseAssignments, scheduleEntries, tasks,
   onCreateBlock, onUpdateBlock, onDeleteBlock,
 }: {
   date: string;
@@ -336,6 +468,7 @@ function DayCalendar({
   systems: SystemEntry[];
   courseAssignments: CourseAssignment[];
   scheduleEntries: ScheduleEntry[];
+  tasks: TaskWithContext[];
   onCreateBlock: (d: DCBlockDraft) => Promise<void>;
   onUpdateBlock: (id: number, d: DCBlockDraft) => Promise<void>;
   onDeleteBlock: (b: CalBlock) => Promise<void>;
@@ -645,6 +778,7 @@ function DayCalendar({
           initial={modal.block}
           startTime={modal.startTime}
           endTime={modal.endTime}
+          tasks={tasks}
           onSave={async (draft) => {
             if (modal.block) await onUpdateBlock(modal.block.id, draft);
             else await onCreateBlock(draft);
@@ -836,11 +970,11 @@ function TodayPie({ doneMin, pendingMin, freeMin, capTotal, items }: {
 
 function WelcomeBox({
   goals, plans, tasks, systems, dailyGoals, courseAssignments, date,
-  goalPrimaryDone, goalSecDone,
+  goalPrimaryDone, goalSecDone, todaySessions,
 }: {
   goals: Goal[]; plans: Plan[]; tasks: TaskWithContext[]; systems: SystemEntry[];
   dailyGoals: DailyGoals; courseAssignments: CourseAssignment[]; date: string;
-  goalPrimaryDone: boolean; goalSecDone: Set<number>;
+  goalPrimaryDone: boolean; goalSecDone: Set<number>; todaySessions: TrainingSession[];
 }) {
   const hour     = new Date().getHours();
   const greeting = hour < 12 ? "Good morning" : hour < 18 ? "Good afternoon" : "Good evening";
@@ -851,11 +985,12 @@ function WelcomeBox({
   const activePlans = plans.filter((p) => p.status === "active").length;
   const systemsDue  = systems.filter(isDue).length;
 
-  // Today's task progress (tasks due today + today's assignments)
+  // Today's task progress (tasks due today + assignments + training sessions)
   const todayTasks = tasks.filter((t) => t.due_date === date);
-  const totalToday = todayTasks.length + courseAssignments.length;
+  const totalToday = todayTasks.length + courseAssignments.length + todaySessions.length;
   const doneToday  = todayTasks.filter((t) => t.done).length
-                   + courseAssignments.filter((ca) => ca.status === "done").length;
+                   + courseAssignments.filter((ca) => ca.status === "done").length
+                   + todaySessions.filter((s) => s.completed).length;
   const progressPct = totalToday === 0 ? 0 : Math.round((doneToday / totalToday) * 100);
 
   // Pie chart: 16-hour day = 960 minutes
@@ -881,6 +1016,18 @@ function WelcomeBox({
       min = TASK_MIN;
     }
     ca.status === "done" ? (doneMin += min) : (pendingMin += min);
+  }
+
+  const SESSION_DEFAULT_MIN = 60;
+  for (const s of todaySessions) {
+    let min = SESSION_DEFAULT_MIN;
+    if (s.start_time && s.end_time) {
+      const [sh, sm] = s.start_time.split(":").map(Number);
+      const [eh, em] = s.end_time.split(":").map(Number);
+      const dur = (eh * 60 + em) - (sh * 60 + sm);
+      if (dur > 0) min = dur;
+    }
+    s.completed ? (doneMin += min) : (pendingMin += min);
   }
 
   const goalPieItems: PieItem[] = [];
@@ -918,6 +1065,18 @@ function WelcomeBox({
         min = TASK_MIN;
       }
       return { id: ca.id, label: ca.title, subtitle: ca.plan_title, minutes: min, done: ca.status === "done", kind: "assignment" as const };
+    }),
+    ...todaySessions.map((s) => {
+      let min = SESSION_DEFAULT_MIN;
+      if (s.start_time && s.end_time) {
+        const [sh, sm] = s.start_time.split(":").map(Number);
+        const [eh, em] = s.end_time.split(":").map(Number);
+        const dur = (eh * 60 + em) - (sh * 60 + sm);
+        if (dur > 0) min = dur;
+      }
+      const typeIcons: Record<string, string> = { running: "🏃", strength: "🏋️", yoga: "🧘", other: "⚡" };
+      const icon = typeIcons[s.plan_type ?? "other"] ?? "⚡";
+      return { id: s.id, label: `${icon} ${s.title}`, subtitle: s.plan_title ?? "Training", minutes: min, done: s.completed, kind: "assignment" as const };
     }),
     ...goalPieItems,
   ];
@@ -1046,7 +1205,14 @@ function TimeEstimateInput({ value, onChange, onBlur, className }: {
   );
 }
 
-function DailyGoalsSection({ goals, primaryDone, secDone, onTogglePrimaryDone, onToggleSecDone, onSetPrimary, onClearPrimary, onAddSecondary, onUpdateSecondaryEstimate, onDeleteSecondary }: {
+const TRAINING_TYPE_INFO: Record<string, { icon: string; accent: string }> = {
+  running:  { icon: "🏃", accent: "text-emerald-600" },
+  strength: { icon: "🏋️", accent: "text-orange-600" },
+  yoga:     { icon: "🧘", accent: "text-violet-600" },
+  other:    { icon: "⚡", accent: "text-slate-500" },
+};
+
+function DailyGoalsSection({ goals, primaryDone, secDone, onTogglePrimaryDone, onToggleSecDone, onSetPrimary, onClearPrimary, onAddSecondary, onUpdateSecondaryEstimate, onDeleteSecondary, todaySessions, onToggleSession }: {
   goals: DailyGoals;
   primaryDone: boolean;
   secDone: Set<number>;
@@ -1057,6 +1223,8 @@ function DailyGoalsSection({ goals, primaryDone, secDone, onTogglePrimaryDone, o
   onAddSecondary: (text: string) => void;
   onUpdateSecondaryEstimate: (id: number, min: number | null) => void;
   onDeleteSecondary: (id: number) => void;
+  todaySessions: TrainingSession[];
+  onToggleSession: (id: number) => void;
 }) {
   const [editingPrimary, setEditingPrimary] = useState(false);
   const [primaryDraft, setPrimaryDraft] = useState(goals.primary?.text ?? "");
@@ -1167,76 +1335,116 @@ function DailyGoalsSection({ goals, primaryDone, secDone, onTogglePrimaryDone, o
         )}
       </div>
 
-      {/* Secondary goals */}
-      <div className="flex flex-col gap-1.5">
-        <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">
-          Secondary goals
-        </p>
-        <div className="flex flex-col gap-0.5">
-          {goals.secondary.map((g) => {
-            const done = secDone.has(g.id);
-            return (
-              <div key={g.id} className="flex items-center gap-2 group py-0.5 pl-1">
-                <button
-                  onClick={() => onToggleSecDone(g.id)}
-                  className={cn(
-                    "h-3.5 w-3.5 shrink-0 rounded border flex items-center justify-center transition-colors",
-                    done
-                      ? "bg-emerald-500 border-emerald-500 text-white"
-                      : "border-muted-foreground/30 hover:border-muted-foreground"
-                  )}
-                >
-                  {done && <Check className="h-2 w-2" />}
-                </button>
-                <span className={cn("text-sm flex-1", done ? "line-through text-muted-foreground" : "text-foreground")}>
-                  {g.text}
-                </span>
-                {/* Time estimate */}
-                {editingEstId === g.id ? (
-                  <TimeEstimateInput
-                    value={estDraft}
-                    onChange={setEstDraft}
-                    onBlur={() => commitSecEst(g)}
-                    className="w-20"
-                  />
-                ) : (
+      {/* Secondary goals + Today's Training — two column layout */}
+      <div className="grid grid-cols-2 gap-3">
+        {/* Left: Secondary goals */}
+        <div className="flex flex-col gap-1.5">
+          <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">
+            Secondary goals
+          </p>
+          <div className="flex flex-col gap-0.5">
+            {goals.secondary.map((g) => {
+              const done = secDone.has(g.id);
+              return (
+                <div key={g.id} className="flex items-center gap-2 group py-0.5 pl-1">
                   <button
-                    onClick={() => { setEditingEstId(g.id); setEstDraft(g.time_estimate_min ? formatMinutes(g.time_estimate_min) : ""); }}
+                    onClick={() => onToggleSecDone(g.id)}
                     className={cn(
-                      "flex items-center gap-0.5 transition-colors shrink-0",
-                      g.time_estimate_min
-                        ? "text-muted-foreground hover:text-foreground"
-                        : "opacity-0 group-hover:opacity-100 text-muted-foreground/50 hover:text-muted-foreground"
+                      "h-3.5 w-3.5 shrink-0 rounded border flex items-center justify-center transition-colors",
+                      done
+                        ? "bg-emerald-500 border-emerald-500 text-white"
+                        : "border-muted-foreground/30 hover:border-muted-foreground"
                     )}
-                    title="Set time estimate"
                   >
-                    {g.time_estimate_min
-                      ? <TimeEstimateBadge min={g.time_estimate_min} />
-                      : <Clock className="h-3 w-3" />}
+                    {done && <Check className="h-2 w-2" />}
                   </button>
-                )}
-                <button onClick={() => onDeleteSecondary(g.id)}
-                  className="opacity-0 group-hover:opacity-100 transition-opacity text-muted-foreground hover:text-destructive">
-                  <X className="h-3 w-3" />
-                </button>
-              </div>
-            );
-          })}
+                  <span className={cn("text-sm flex-1 min-w-0 truncate", done ? "line-through text-muted-foreground" : "text-foreground")}>
+                    {g.text}
+                  </span>
+                  {editingEstId === g.id ? (
+                    <TimeEstimateInput
+                      value={estDraft}
+                      onChange={setEstDraft}
+                      onBlur={() => commitSecEst(g)}
+                      className="w-20"
+                    />
+                  ) : (
+                    <button
+                      onClick={() => { setEditingEstId(g.id); setEstDraft(g.time_estimate_min ? formatMinutes(g.time_estimate_min) : ""); }}
+                      className={cn(
+                        "flex items-center gap-0.5 transition-colors shrink-0",
+                        g.time_estimate_min
+                          ? "text-muted-foreground hover:text-foreground"
+                          : "opacity-0 group-hover:opacity-100 text-muted-foreground/50 hover:text-muted-foreground"
+                      )}
+                      title="Set time estimate"
+                    >
+                      {g.time_estimate_min
+                        ? <TimeEstimateBadge min={g.time_estimate_min} />
+                        : <Clock className="h-3 w-3" />}
+                    </button>
+                  )}
+                  <button onClick={() => onDeleteSecondary(g.id)}
+                    className="opacity-0 group-hover:opacity-100 transition-opacity text-muted-foreground hover:text-destructive">
+                    <X className="h-3 w-3" />
+                  </button>
+                </div>
+              );
+            })}
+          </div>
+          <div className="flex items-center gap-1.5">
+            <input
+              className="flex-1 h-7 rounded border border-input bg-transparent px-2 text-xs placeholder:text-muted-foreground/50 focus:outline-none focus:ring-1 focus:ring-ring"
+              placeholder="Add secondary goal… (Enter)"
+              value={secDraft}
+              onChange={(e) => setSecDraft(e.target.value)}
+              onKeyDown={handleSecKey}
+            />
+            <button
+              onClick={() => { if (secDraft.trim()) { onAddSecondary(secDraft.trim()); setSecDraft(""); } }}
+              className="flex h-7 w-7 shrink-0 items-center justify-center rounded border border-input text-muted-foreground hover:text-foreground hover:bg-secondary transition-colors"
+            >
+              <Plus className="h-3.5 w-3.5" />
+            </button>
+          </div>
         </div>
-        <div className="flex items-center gap-1.5">
-          <input
-            className="flex-1 h-7 rounded border border-input bg-transparent px-2 text-xs placeholder:text-muted-foreground/50 focus:outline-none focus:ring-1 focus:ring-ring"
-            placeholder="Add secondary goal… (Enter)"
-            value={secDraft}
-            onChange={(e) => setSecDraft(e.target.value)}
-            onKeyDown={handleSecKey}
-          />
-          <button
-            onClick={() => { if (secDraft.trim()) { onAddSecondary(secDraft.trim()); setSecDraft(""); } }}
-            className="flex h-7 w-7 shrink-0 items-center justify-center rounded border border-input text-muted-foreground hover:text-foreground hover:bg-secondary transition-colors"
-          >
-            <Plus className="h-3.5 w-3.5" />
-          </button>
+
+        {/* Right: Today's Training */}
+        <div className="flex flex-col gap-1.5">
+          <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide flex items-center gap-1.5">
+            <Zap className="h-3 w-3" /> Today's Training
+          </p>
+          {todaySessions.length === 0 ? (
+            <p className="text-xs text-muted-foreground/50 italic pl-1">No training scheduled.</p>
+          ) : (
+            <div className="flex flex-col gap-0.5">
+              {todaySessions.map((s) => {
+                const ti = TRAINING_TYPE_INFO[s.plan_type ?? "other"] ?? TRAINING_TYPE_INFO.other;
+                return (
+                  <div key={s.id} className="flex items-center gap-2 group py-0.5 pl-1">
+                    <button
+                      onClick={() => onToggleSession(s.id)}
+                      className={cn(
+                        "h-3.5 w-3.5 shrink-0 rounded border flex items-center justify-center transition-colors",
+                        s.completed
+                          ? "bg-emerald-500 border-emerald-500 text-white"
+                          : "border-muted-foreground/30 hover:border-muted-foreground"
+                      )}
+                    >
+                      {s.completed && <Check className="h-2 w-2" />}
+                    </button>
+                    <span className="text-sm shrink-0" title={s.plan_type ?? "other"}>{ti.icon}</span>
+                    <span className={cn("text-sm flex-1 min-w-0 truncate", s.completed ? "line-through text-muted-foreground" : "text-foreground")}>
+                      {s.title}
+                    </span>
+                    {s.start_time && (
+                      <span className="text-[10px] text-muted-foreground shrink-0">{s.start_time.slice(0, 5)}</span>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          )}
         </div>
       </div>
     </div>
@@ -2323,6 +2531,7 @@ export function Dashboard() {
   const [scheduleEntries,  setScheduleEntries]  = useState<ScheduleEntry[]>([]);
   const [habits,           setHabits]           = useState<HabitWithCompletion[]>([]);
   const [habitStacks,      setHabitStacks]      = useState<HabitStack[]>([]);
+  const [todaySessions,    setTodaySessions]    = useState<TrainingSession[]>([]);
 
   const date = todayDate();
 
@@ -2360,10 +2569,11 @@ export function Dashboard() {
   }, [date]);
 
   const load = useCallback(async () => {
-    const [g, gr, p, t, s, cb, dg, rem, qn, bd, ev, dl, ag, jc, cas, ses, hb, hs] = await Promise.all([
+    const [g, gr, p, t, s, cb, dg, rem, qn, bd, ev, dl, ag, jc, cas, ses, hb, hs, ts] = await Promise.all([
       getGoals(), getGoalGroups(), getPlans(), getAllTasks(), getSystems(), getCalBlocks(date, date),
       getDailyGoals(date), getReminders(), getQuickNotes(), getBrainDump(), getEvents(), getDeadlines(), getAgreements(),
       getJournalEntry(date), getCourseAssignments(), getScheduleEntriesForDate(date), getHabitsForDate(date), getHabitStacks(),
+      getTrainingSessionsForDate(date),
     ]);
     setGoals(g); setGroups(gr); setPlans(p); setTasks(t); setSystems(s); setCalBlocks(cb);
     setDailyGoals(dg); setReminders(rem); setNotes(qn); setBrainEntries(bd); setEvents(ev); setDeadlines(dl); setAgreements(ag);
@@ -2372,6 +2582,7 @@ export function Dashboard() {
     setScheduleEntries(ses);
     setHabits(hb);
     setHabitStacks(hs);
+    setTodaySessions(ts);
     loadSubtasks(s);
   }, [date, loadSubtasks]);
 
@@ -2517,12 +2728,34 @@ export function Dashboard() {
     setHabits((prev) => prev.map((h) => h.id === id ? { ...h, done: nowDone } : h));
   };
 
+  const handleToggleSession = async (id: number) => {
+    const updated = await toggleTrainingSession(id);
+    setTodaySessions((prev) => prev.map((s) => s.id === id ? { ...s, completed: updated.completed } : s));
+  };
+
   const handleCreateCalBlock = async (d: DCBlockDraft) => {
-    const b = await createCalBlock(date, d.title, d.start_time, d.end_time, d.color, d.description || null, d.location || null);
+    let taskId = d.task_id;
+    if (taskId === null) {
+      const durationMin = timeToMin(d.end_time) - timeToMin(d.start_time);
+      const newTask = await createTask({
+        plan_id: null, title: d.title,
+        time_estimate: durationMin > 0 ? durationMin : null,
+        due_date: date,
+      });
+      taskId = newTask.id;
+      setTasks((prev) => [{
+        id: newTask.id, plan_id: null, plan_title: null,
+        goal_id: null, goal_title: null, title: newTask.title,
+        done: newTask.done, sort_order: newTask.sort_order,
+        priority: newTask.priority, due_date: newTask.due_date,
+        created_at: newTask.created_at, time_estimate: newTask.time_estimate,
+      }, ...prev]);
+    }
+    const b = await createCalBlock(date, d.title, d.start_time, d.end_time, d.color, d.description || null, d.location || null, taskId);
     setCalBlocks((prev) => [...prev, b].sort((a, x) => a.start_time.localeCompare(x.start_time)));
   };
   const handleUpdateCalBlock = async (id: number, d: DCBlockDraft) => {
-    const b = await updateCalBlock(id, d.title, d.start_time, d.end_time, d.color, d.description || null, d.location || null);
+    const b = await updateCalBlock(id, d.title, d.start_time, d.end_time, d.color, d.description || null, d.location || null, d.task_id);
     setCalBlocks((prev) => prev.map((x) => x.id === id ? b : x));
   };
   const handleDeleteCalBlock = async (b: CalBlock) => {
@@ -2535,7 +2768,7 @@ export function Dashboard() {
 
       <WelcomeBox goals={goals} plans={plans} tasks={tasks} systems={systems}
         dailyGoals={dailyGoals} courseAssignments={courseAssignments} date={date}
-        goalPrimaryDone={goalPrimaryDone} goalSecDone={goalSecDone} />
+        goalPrimaryDone={goalPrimaryDone} goalSecDone={goalSecDone} todaySessions={todaySessions} />
 
       <div className="flex-1 min-h-0 flex flex-col md:flex-row overflow-hidden">
 
@@ -2554,6 +2787,8 @@ export function Dashboard() {
             onAddSecondary={handleAddSecondary}
             onUpdateSecondaryEstimate={handleUpdateSecondaryEstimate}
             onDeleteSecondary={handleDeleteSecondary}
+            todaySessions={todaySessions}
+            onToggleSession={handleToggleSession}
           />
 
           <div className="h-px bg-border" />
@@ -2600,13 +2835,14 @@ export function Dashboard() {
 
         {/* ── Right column: Habits + Day Calendar ─────────────────────────── */}
         <div className="hidden md:flex w-72 shrink-0 flex-col overflow-hidden px-3 py-3 gap-3">
-          <HabitsStrip habits={habits} stacks={habitStacks} onToggle={handleToggleHabit} />
+          <HabitsStrip habits={habits} stacks={habitStacks} onToggle={handleToggleHabit} today={date} />
           <DayCalendar
             date={date}
             calBlocks={calBlocks}
             systems={systems}
             courseAssignments={courseAssignments}
             scheduleEntries={scheduleEntries}
+            tasks={tasks}
             onCreateBlock={handleCreateCalBlock}
             onUpdateBlock={handleUpdateCalBlock}
             onDeleteBlock={handleDeleteCalBlock}

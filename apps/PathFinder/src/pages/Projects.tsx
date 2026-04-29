@@ -3,6 +3,7 @@ import {
   Plus, Trash2, Pencil, Check, X, ChevronDown, ChevronRight,
   ChevronLeft, Calendar, MoreHorizontal, FolderOpen, Target, ListTodo,
   Columns3, GitBranch, Map, Maximize2, Minimize2, PanelLeftClose, PanelLeftOpen,
+  FolderGit2,
 } from "lucide-react";
 import {
   getGoals, getPlans, createPlan, updatePlan, deletePlan,
@@ -991,13 +992,95 @@ function SectionBlock({ title, icon: Icon, open, onToggle, onToggleWidth, fullWi
   );
 }
 
+// ── Sub-projects Section ──────────────────────────────────────────────────────
+
+function SubProjectsSection({
+  parentId, subProjects, goals,
+  onCreate, onSelect,
+}: {
+  parentId: number;
+  subProjects: Plan[];
+  goals: Goal[];
+  onCreate: (sub: Plan) => void;
+  onSelect: (id: number) => void;
+}) {
+  const [creating, setCreating]   = useState(false);
+
+  async function handleCreate(form: ProjectForm, goalId: number | null) {
+    const p = await createPlan({
+      parent_id: parentId, goal_id: goalId, title: form.title,
+      description: form.description || null, deadline: form.deadline || null,
+      tags: serializeTags(form.tags.split(",").map((s) => s.trim())),
+      is_course: false, is_lifestyle: false, lifestyle_area_id: null,
+      purpose: null, problem: null, solution: null,
+    });
+    onCreate(p);
+    setCreating(false);
+  }
+
+  return (
+    <div className="flex flex-col gap-2">
+      {subProjects.length === 0 && !creating && (
+        <p className="text-sm text-muted-foreground italic">No sub-projects yet.</p>
+      )}
+
+      {subProjects.map((sub) => {
+        const pct  = sub.task_count === 0 ? 0 : Math.round((sub.done_count / sub.task_count) * 100);
+        const days = sub.deadline ? daysUntil(sub.deadline) : null;
+        return (
+          <button
+            key={sub.id}
+            onClick={() => onSelect(sub.id)}
+            className="w-full text-left rounded-md border border-border bg-card/50 px-3 py-2.5 hover:bg-card transition-colors"
+          >
+            <div className="flex items-center gap-2 mb-1">
+              <FolderGit2 className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
+              <span className="text-sm font-medium text-foreground truncate flex-1">{sub.title}</span>
+              <span className={cn("text-[9px] px-1.5 py-0 rounded-full border font-medium shrink-0", STATUS_STYLE[sub.status as ProjStatus])}>
+                {sub.status}
+              </span>
+              {days !== null && days <= 7 && (
+                <Badge variant={deadlineVariant(days)} className="text-[9px] shrink-0 px-1 py-0">
+                  {deadlineLabel(days)}
+                </Badge>
+              )}
+            </div>
+            {sub.description && (
+              <p className="text-xs text-muted-foreground truncate mb-1 ml-5">{sub.description}</p>
+            )}
+            {sub.task_count > 0 && (
+              <div className="flex items-center gap-2 ml-5">
+                <Progress value={sub.done_count} max={sub.task_count} className="flex-1 h-1" />
+                <span className="text-[10px] text-muted-foreground tabular-nums shrink-0">{pct}%</span>
+              </div>
+            )}
+          </button>
+        );
+      })}
+
+      {creating ? (
+        <ProjectFormPanel goals={goals} onSave={handleCreate} onCancel={() => setCreating(false)} />
+      ) : (
+        <button
+          onClick={() => setCreating(true)}
+          className="flex items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground transition-colors w-fit mt-1"
+        >
+          <Plus className="h-3 w-3" /> Add sub-project
+        </button>
+      )}
+    </div>
+  );
+}
+
 // ── Project Detail (single-page sections) ─────────────────────────────────────
 
 function ProjectDetail({
-  project, goals, today, onUpdate, onDelete,
+  project, goals, allProjects, today, onUpdate, onDelete, onAddSubProject, onSelectProject,
 }: {
-  project: Plan; goals: Goal[]; today: string;
+  project: Plan; goals: Goal[]; allProjects: Plan[]; today: string;
   onUpdate: (p: Plan) => void; onDelete: () => void;
+  onAddSubProject: (sub: Plan) => void;
+  onSelectProject: (id: number) => void;
 }) {
   const [editing,              setEditing]              = useState(false);
   const [menuOpen,             setMenuOpen]             = useState(false);
@@ -1006,14 +1089,16 @@ function ProjectDetail({
 
   // Section open/closed state
   const [open, setOpen] = useState({
-    overview: true, goals: true, kanban: false, pipeline: true,
+    overview: true, goals: true, kanban: false, pipeline: true, subprojects: true,
   });
   const toggle = (k: keyof typeof open) => setOpen((prev) => ({ ...prev, [k]: !prev[k] }));
 
   // Section width: 2 = full width (col-span-2), 1 = half width (col-span-1)
   const [spans, setSpans] = useState<Record<string, 1 | 2>>({
-    overview: 2, goals: 2, kanban: 2, pipeline: 2,
+    overview: 2, goals: 2, kanban: 2, pipeline: 2, subprojects: 2,
   });
+
+  const subProjects = allProjects.filter((p) => p.parent_id === project.id);
   const toggleSpan = (k: string) =>
     setSpans((prev) => ({ ...prev, [k]: prev[k] === 2 ? 1 : 2 }));
 
@@ -1181,6 +1266,19 @@ function ProjectDetail({
               </SectionBlock>
             </div>
 
+            <div className={spans.subprojects === 2 ? "col-span-2" : "col-span-1"}>
+              <SectionBlock title={`Sub-projects${subProjects.length > 0 ? ` (${subProjects.length})` : ""}`} icon={FolderGit2} open={open.subprojects} onToggle={() => toggle("subprojects")}
+                fullWidth={spans.subprojects === 2} onToggleWidth={() => toggleSpan("subprojects")}>
+                <SubProjectsSection
+                  parentId={project.id}
+                  subProjects={subProjects}
+                  goals={goals}
+                  onCreate={onAddSubProject}
+                  onSelect={onSelectProject}
+                />
+              </SectionBlock>
+            </div>
+
           </div>
         </div>
       </div>
@@ -1208,8 +1306,19 @@ export function Projects() {
   useEffect(() => { load(); }, [load]);
 
   const projects = plans.filter((p) => !p.is_course && !p.is_lifestyle);
-  const filtered = projects.filter((p) => statusFilter === "all" ? true : p.status === statusFilter);
+  // Only show root-level projects in the sidebar
+  const rootProjects = projects.filter((p) => p.parent_id === null);
+  const filtered = rootProjects.filter((p) => statusFilter === "all" ? true : p.status === statusFilter);
   const selected = projects.find((p) => p.id === selectedId) ?? null;
+
+  // Build breadcrumb trail for selected project
+  function buildBreadcrumb(id: number | null): Plan[] {
+    if (!id) return [];
+    const p = projects.find((x) => x.id === id);
+    if (!p) return [];
+    return [...buildBreadcrumb(p.parent_id), p];
+  }
+  const breadcrumb = selected ? buildBreadcrumb(selected.id) : [];
 
   async function handleCreate(form: ProjectForm, goalId: number | null) {
     const p = await createPlan({
@@ -1228,8 +1337,14 @@ export function Projects() {
   }
 
   function handleDelete() {
+    // If deleting a sub-project, go back to parent; otherwise clear selection
+    const parentId = selected?.parent_id ?? null;
     setPlans((prev) => prev.filter((p) => p.id !== selectedId));
-    setSelectedId(null);
+    setSelectedId(parentId);
+  }
+
+  function handleAddSubProject(sub: Plan) {
+    setPlans((prev) => [...prev, sub]);
   }
 
   return (
@@ -1349,24 +1464,47 @@ export function Projects() {
       </div>
 
       {/* Main area */}
-      <div className="flex-1 min-w-0 overflow-hidden">
-        {creating ? (
-          <div className="p-6 max-w-xl">
-            <ProjectFormPanel goals={goals} onSave={handleCreate} onCancel={() => setCreating(false)} />
-          </div>
-        ) : selected ? (
-          <ProjectDetail key={selected.id} project={selected} goals={goals} today={today}
-            onUpdate={handleUpdate} onDelete={handleDelete} />
-        ) : (
-          <div className="flex h-full flex-col items-center justify-center gap-3 text-muted-foreground">
-            <FolderOpen className="h-12 w-12 opacity-20" />
-            <p className="text-sm">Select a project or create a new one</p>
-            <button onClick={() => setCreating(true)}
-              className="flex items-center gap-1.5 text-sm text-primary hover:underline">
-              <Plus className="h-4 w-4" /> New project
-            </button>
+      <div className="flex-1 min-w-0 overflow-hidden flex flex-col">
+        {/* Breadcrumb — shown when a sub-project is selected */}
+        {breadcrumb.length > 1 && (
+          <div className="shrink-0 flex items-center gap-1 px-4 py-1.5 border-b border-border bg-muted/30 text-xs text-muted-foreground">
+            {breadcrumb.map((crumb, i) => (
+              <span key={crumb.id} className="flex items-center gap-1">
+                {i > 0 && <ChevronRight className="h-3 w-3 shrink-0" />}
+                <button
+                  onClick={() => setSelectedId(crumb.id)}
+                  className={cn(
+                    "hover:text-foreground transition-colors",
+                    i === breadcrumb.length - 1 ? "text-foreground font-medium" : "hover:underline"
+                  )}
+                >
+                  {crumb.title}
+                </button>
+              </span>
+            ))}
           </div>
         )}
+
+        <div className="flex-1 overflow-hidden">
+          {creating ? (
+            <div className="p-6 max-w-xl">
+              <ProjectFormPanel goals={goals} onSave={handleCreate} onCancel={() => setCreating(false)} />
+            </div>
+          ) : selected ? (
+            <ProjectDetail key={selected.id} project={selected} goals={goals} allProjects={projects} today={today}
+              onUpdate={handleUpdate} onDelete={handleDelete}
+              onAddSubProject={handleAddSubProject} onSelectProject={setSelectedId} />
+          ) : (
+            <div className="flex h-full flex-col items-center justify-center gap-3 text-muted-foreground">
+              <FolderOpen className="h-12 w-12 opacity-20" />
+              <p className="text-sm">Select a project or create a new one</p>
+              <button onClick={() => setCreating(true)}
+                className="flex items-center gap-1.5 text-sm text-primary hover:underline">
+                <Plus className="h-4 w-4" /> New project
+              </button>
+            </div>
+          )}
+        </div>
       </div>
 
     </div>

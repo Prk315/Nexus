@@ -5,7 +5,7 @@ import {
   PanelLeft, PanelRight, PanelBottom, PanelTop, CalendarRange, Eye, EyeOff,
 } from "lucide-react";
 import {
-  getWeekItems, getGoals, getPlans, getSystems,
+  getWeekItems, getAllTasks, getGoals, getPlans, getSystems,
   createTask, updateTask, deleteTask, toggleTask,
   createGoal, updateGoal, deleteGoal,
   createPlan, updatePlan, deletePlan,
@@ -139,7 +139,16 @@ type BlockDraft = {
   recurrence: "daily" | "weekly" | "weekdays" | "monthly";
   days_of_week: number[];
   series_end_date: string;
+  task_id: number | null;
 };
+
+function addBlockMinutes(time: string, minutes: number): string {
+  const [h, m] = time.split(":").map(Number);
+  const total = h * 60 + m + minutes;
+  const hh = Math.floor(total / 60) % 24;
+  const mm = total % 60;
+  return `${String(hh).padStart(2, "0")}:${String(mm).padStart(2, "0")}`;
+}
 
 function defaultDaysOfWeek(dateStr: string): number[] {
   return [new Date(dateStr + "T12:00:00").getDay()];
@@ -150,8 +159,9 @@ function parseDaysOfWeek(s: string | null | undefined): number[] {
   return s.split(",").map(Number).filter((n) => !isNaN(n));
 }
 
-function CalBlockModal({ initial, date, startTime, onSave, onDelete, onClose }: {
+function CalBlockModal({ initial, date, startTime, tasks, onSave, onDelete, onClose }: {
   initial?: CalBlock; date: string; startTime: string;
+  tasks: TaskWithContext[];
   onSave: (d: BlockDraft) => void; onDelete?: () => void; onClose: () => void;
 }) {
   const [form, setForm] = useState<BlockDraft>({
@@ -167,7 +177,23 @@ function CalBlockModal({ initial, date, startTime, onSave, onDelete, onClose }: 
                        ? parseDaysOfWeek(initial.days_of_week)
                        : defaultDaysOfWeek(date),
     series_end_date: initial?.series_end_date ?? "",
+    task_id:         initial?.task_id ?? null,
   });
+
+  const openTasks = tasks.filter((t) => !t.done);
+
+  function handleTaskSelect(rawId: string) {
+    if (!rawId) { setForm((f) => ({ ...f, task_id: null })); return; }
+    const id = Number(rawId);
+    const task = openTasks.find((t) => t.id === id);
+    if (!task) return;
+    setForm((f) => ({
+      ...f,
+      task_id: id,
+      title: task.title,
+      ...(task.time_estimate ? { end_time: addBlockMinutes(f.start_time, task.time_estimate) } : {}),
+    }));
+  }
 
   const ok = form.title.trim() && form.start_time < form.end_time &&
     (!form.is_recurring || form.recurrence !== "weekly" || form.days_of_week.length > 0);
@@ -189,6 +215,21 @@ function CalBlockModal({ initial, date, startTime, onSave, onDelete, onClose }: 
       initial            ? "Edit block" :
                            `New block — ${date}`
     } onClose={onClose}>
+      <Field label="Link task (optional)">
+        <select
+          className={inputCls}
+          value={form.task_id ?? ""}
+          onChange={(e) => handleTaskSelect(e.target.value)}
+        >
+          <option value="">— none —</option>
+          {openTasks.length === 0 && <option disabled value="">No open tasks</option>}
+          {openTasks.map((t) => (
+            <option key={t.id} value={t.id}>
+              {t.title}{t.plan_title ? ` · ${t.plan_title}` : ""}{t.time_estimate ? ` (${t.time_estimate}min)` : ""}
+            </option>
+          ))}
+        </select>
+      </Field>
       <Field label="Title">
         <input autoFocus className={inputCls} placeholder="What are you doing?"
           value={form.title} onChange={(e) => setForm({ ...form, title: e.target.value })}
@@ -197,7 +238,14 @@ function CalBlockModal({ initial, date, startTime, onSave, onDelete, onClose }: 
       <div className="grid grid-cols-2 gap-2">
         <Field label="Start">
           <input type="time" className={inputCls} value={form.start_time}
-            onChange={(e) => setForm({ ...form, start_time: e.target.value })} />
+            onChange={(e) => {
+              const newStart = e.target.value;
+              const linkedTask = openTasks.find((t) => t.id === form.task_id);
+              const newEnd = linkedTask?.time_estimate
+                ? addBlockMinutes(newStart, linkedTask.time_estimate)
+                : form.end_time;
+              setForm({ ...form, start_time: newStart, end_time: newEnd });
+            }} />
         </Field>
         <Field label="End">
           <input type="time" className={inputCls} value={form.end_time}
@@ -889,8 +937,9 @@ function SystemsBar({ systems, onMarkDone, onAdd, onEdit }: {
 function HeaderPanel({ items, today, days, view }: {
   items: WeekItems; today: string; days: Date[]; view: "week" | "month";
 }) {
-  const tasks = items.tasks;
-  const cas   = items.course_assignments;
+  const tasks    = items.tasks;
+  const cas      = items.course_assignments;
+  const sessions = items.training_sessions;
 
   // Per-day "free day" toggle — stored in localStorage
   const [freeDays, setFreeDays] = useState<Set<string>>(() => {
@@ -909,8 +958,10 @@ function HeaderPanel({ items, today, days, view }: {
     });
   }
 
-  const total = tasks.length + cas.length;
-  const done  = tasks.filter((t) => t.done).length + cas.filter((a) => a.status === "done").length;
+  const total = tasks.length + cas.length + sessions.length;
+  const done  = tasks.filter((t) => t.done).length
+              + cas.filter((a) => a.status === "done").length
+              + sessions.filter((s) => s.completed).length;
   const pct   = total > 0 ? Math.round((done / total) * 100) : 0;
 
   return (
@@ -942,10 +993,13 @@ function HeaderPanel({ items, today, days, view }: {
           <div className="flex items-end gap-2.5">
             {days.map((day) => {
               const iso      = toISO(day);
-              const dayTasks = tasks.filter((t) => t.due_date === iso);
-              const dayCAs   = cas.filter((a) => a.due_date === iso);
-              const dayDone  = dayTasks.filter((t) => t.done).length + dayCAs.filter((a) => a.status === "done").length;
-              const dayTotal = dayTasks.length + dayCAs.length;
+              const dayTasks     = tasks.filter((t) => t.due_date === iso);
+              const dayCAs       = cas.filter((a) => a.due_date === iso);
+              const daySessions  = sessions.filter((s) => s.scheduled_date === iso);
+              const dayDone  = dayTasks.filter((t) => t.done).length
+                             + dayCAs.filter((a) => a.status === "done").length
+                             + daySessions.filter((s) => s.completed).length;
+              const dayTotal = dayTasks.length + dayCAs.length + daySessions.length;
               const dayPct   = dayTotal > 0 ? dayDone / dayTotal : 0;
               const isToday  = iso === today;
               const isPast   = iso < today && !isToday;
@@ -1332,6 +1386,7 @@ function MonthView({ monthStart, calBlocks, items, today, onClickDay, onClickBlo
   const remindersFor         = (iso: string) => items.reminders.filter((r) => r.due_date === iso);
   const courseAssignmentsFor = (iso: string) => items.course_assignments.filter((a) => a.due_date === iso);
   const scheduleEntriesFor   = (iso: string) => items.schedule_entries.filter((e) => e.date === iso);
+  const trainingSessionsFor  = (iso: string) => items.training_sessions.filter((s) => s.scheduled_date === iso);
   const currentMonth = monthStart.getMonth();
 
   // Start grid on the Sunday of the week containing the 1st
@@ -1375,7 +1430,8 @@ function MonthView({ monthStart, calBlocks, items, today, onClickDay, onClickBlo
             const rmItems   = remindersFor(iso);
             const caItems   = courseAssignmentsFor(iso);
             const seItems   = scheduleEntriesFor(iso);
-            const total     = blocks.length + goals.length + tasks.length + dlItems.length + rmItems.length + caItems.length + seItems.length;
+            const tsItems   = trainingSessionsFor(iso);
+            const total     = blocks.length + goals.length + tasks.length + dlItems.length + rmItems.length + caItems.length + seItems.length + tsItems.length;
             let shown       = 0;
 
             return (
@@ -1520,6 +1576,29 @@ function MonthView({ monthStart, calBlocks, items, today, onClickDay, onClickBlo
                   );
                 })}
 
+                {/* Training sessions */}
+                {tsItems.map((s) => {
+                  if (shown >= MAX_CELL_ITEMS) return null;
+                  shown++;
+                  const typeColors: Record<string, string> = {
+                    running:  "bg-emerald-500/10 border-emerald-400/30 text-emerald-700",
+                    strength: "bg-orange-500/10 border-orange-400/30 text-orange-700",
+                    yoga:     "bg-violet-500/10 border-violet-400/30 text-violet-700",
+                    other:    "bg-slate-500/10 border-slate-400/30 text-slate-600",
+                  };
+                  const typeIcons: Record<string, string> = { running: "🏃", strength: "🏋️", yoga: "🧘", other: "⚡" };
+                  const cls = typeColors[s.plan_type ?? "other"] ?? typeColors.other;
+                  return (
+                    <div key={`ts-${s.id}`}
+                      className={cn("flex items-center gap-0.5 rounded px-1 py-px text-[10px] leading-tight border truncate shrink-0", cls)}
+                      onClick={(e) => e.stopPropagation()}
+                    >
+                      <span className="shrink-0 leading-none">{typeIcons[s.plan_type ?? "other"] ?? "⚡"}</span>
+                      <span className={cn("truncate", s.completed && "line-through opacity-60")}>{s.title}</span>
+                    </div>
+                  );
+                })}
+
                 {/* Overflow count */}
                 {total > MAX_CELL_ITEMS && (
                   <p className="text-[9px] text-muted-foreground px-1 shrink-0">+{total - MAX_CELL_ITEMS} more</p>
@@ -1562,13 +1641,14 @@ export function Week() {
     return () => window.removeEventListener("resize", fn);
   }, []);
   const [selectedDay, setSelectedDay] = useState(() => todayISO());
-  const [items,        setItems]       = useState<WeekItems>({ tasks: [], goals: [], plans: [], deadlines: [], reminders: [], course_assignments: [], schedule_entries: [] });
+  const [items,        setItems]       = useState<WeekItems>({ tasks: [], goals: [], plans: [], deadlines: [], reminders: [], course_assignments: [], schedule_entries: [], training_sessions: [] });
   const [allPlans,     setAllPlans]    = useState<Plan[]>([]);
   const [allGoals,     setAllGoals]    = useState<Goal[]>([]);
   const [systems,      setSystems]     = useState<SystemEntry[]>([]);
   const [calBlocks,    setCalBlocks]   = useState<CalBlock[]>([]);
   const [allDeadlines, setAllDeadlines] = useState<Deadline[]>([]);
   const [allReminders, setAllReminders] = useState<Reminder[]>([]);
+  const [allTasks,     setAllTasks]    = useState<TaskWithContext[]>([]);
   const [modal,        setModal]       = useState<ModalState | null>(null);
   const gridRef = useRef<HTMLDivElement>(null);
 
@@ -1604,12 +1684,12 @@ export function Week() {
   const queryEnd   = view === "week" ? end   : toISO(monthGridEnd);
 
   const load = useCallback(async () => {
-    const [wi, gp, pl, sy, cb, dl, rm] = await Promise.all([
+    const [wi, gp, pl, sy, cb, dl, rm, at] = await Promise.all([
       getWeekItems(queryStart, queryEnd), getGoals(), getPlans(), getSystems(),
-      getCalBlocks(queryStart, queryEnd), getDeadlines(), getReminders(),
+      getCalBlocks(queryStart, queryEnd), getDeadlines(), getReminders(), getAllTasks(),
     ]);
     setItems(wi); setAllGoals(gp); setAllPlans(pl); setSystems(sy); setCalBlocks(cb);
-    setAllDeadlines(dl); setAllReminders(rm);
+    setAllDeadlines(dl); setAllReminders(rm); setAllTasks(at);
   }, [queryStart, queryEnd]);
 
   useEffect(() => { load(); }, [load]);
@@ -1661,6 +1741,7 @@ export function Week() {
   const remindersFor         = (iso: string) => items.reminders.filter((r) => r.due_date === iso);
   const courseAssignmentsFor = (iso: string) => items.course_assignments.filter((a) => a.due_date === iso);
   const scheduleEntriesFor   = (iso: string) => items.schedule_entries.filter((e) => e.date === iso);
+  const trainingSessionsFor  = (iso: string) => items.training_sessions.filter((s) => s.scheduled_date === iso);
   const blocksFor            = (iso: string) => calBlocks.filter((b) => b.date === iso);
 
   // ── Handlers ────────────────────────────────────────────────────────────────
@@ -1752,7 +1833,25 @@ export function Week() {
       await createRecurringCalBlock(d.title, d.start_time, d.end_time, d.color, d.recurrence, dow, modal.date, d.series_end_date || null, desc, loc);
       load();
     } else {
-      const b = await createCalBlock(modal.date, d.title, d.start_time, d.end_time, d.color, desc, loc);
+      let taskId = d.task_id;
+      if (taskId === null) {
+        const durationMin = timeToMinutes(d.end_time) - timeToMinutes(d.start_time);
+        const newTask = await createTask({
+          plan_id: null,
+          title: d.title,
+          time_estimate: durationMin > 0 ? durationMin : null,
+          due_date: modal.date,
+        });
+        taskId = newTask.id;
+        setAllTasks((prev) => [{
+          id: newTask.id, plan_id: null, plan_title: null,
+          goal_id: null, goal_title: null, title: newTask.title,
+          done: newTask.done, sort_order: newTask.sort_order,
+          priority: newTask.priority, due_date: newTask.due_date,
+          created_at: newTask.created_at, time_estimate: newTask.time_estimate,
+        }, ...prev]);
+      }
+      const b = await createCalBlock(modal.date, d.title, d.start_time, d.end_time, d.color, desc, loc, taskId);
       setCalBlocks((prev) => [...prev, b]);
     }
     setModal(null);
@@ -1766,7 +1865,7 @@ export function Week() {
       await updateRecurringCalBlock(block.recurring_id, d.title, d.start_time, d.end_time, d.color, d.recurrence, dow, d.series_end_date || null, desc, loc);
       load();
     } else {
-      const b = await updateCalBlock(block.id, d.title, d.start_time, d.end_time, d.color, desc, loc);
+      const b = await updateCalBlock(block.id, d.title, d.start_time, d.end_time, d.color, desc, loc, d.task_id);
       setCalBlocks((prev) => prev.map((x) => x.id === block.id ? b : x));
     }
     setModal(null);
@@ -1818,11 +1917,11 @@ export function Week() {
             onClose={() => setModal(null)} />
         )}
         {modal?.kind === "create-block" && (
-          <CalBlockModal date={modal.date} startTime={modal.startTime}
+          <CalBlockModal date={modal.date} startTime={modal.startTime} tasks={allTasks}
             onSave={handleCreateBlock} onClose={() => setModal(null)} />
         )}
         {modal?.kind === "edit-block" && (
-          <CalBlockModal initial={modal.block} date={modal.block.date} startTime={modal.block.start_time}
+          <CalBlockModal initial={modal.block} date={modal.block.date} startTime={modal.block.start_time} tasks={allTasks}
             onSave={(d) => handleEditBlock(modal.block, d)}
             onDelete={() => handleDeleteBlock(modal.block)}
             onClose={() => setModal(null)} />
@@ -2107,7 +2206,8 @@ export function Week() {
                 const dayRM       = remindersFor(iso);
                 const dayCA       = courseAssignmentsFor(iso);
                 const daySE       = scheduleEntriesFor(iso).filter((e) => !e.start_time);
-                const hasItems = dayGoals.length + dayTasks.length + dayDL.length + dayRM.length + dayCA.length + daySE.length > 0;
+                const dayTS       = trainingSessionsFor(iso);
+                const hasItems = dayGoals.length + dayTasks.length + dayDL.length + dayRM.length + dayCA.length + daySE.length + dayTS.length > 0;
                 return (
                   <div key={iso}
                     className={cn("flex-1 min-w-0 border-r border-border p-0.5 flex flex-col gap-0.5",
@@ -2159,6 +2259,24 @@ export function Week() {
                           className={cn("flex items-center gap-1 px-1.5 py-0.5 rounded border", clr.bg, clr.border)}>
                           <CalendarRange className={cn("h-2.5 w-2.5 shrink-0", clr.text)} />
                           <span className={cn("text-[11px] truncate", clr.text)}>{e.title}</span>
+                        </div>
+                      );
+                    })}
+                    {dayTS.map((s) => {
+                      const typeColors: Record<string, string> = {
+                        running:  "bg-emerald-500/10 border-emerald-400/40 text-emerald-700",
+                        strength: "bg-orange-500/10 border-orange-400/40 text-orange-700",
+                        yoga:     "bg-violet-500/10 border-violet-400/40 text-violet-700",
+                        other:    "bg-slate-500/10 border-slate-400/40 text-slate-600",
+                      };
+                      const typeIcons: Record<string, string> = { running: "🏃", strength: "🏋️", yoga: "🧘", other: "⚡" };
+                      const cls = typeColors[s.plan_type ?? "other"] ?? typeColors.other;
+                      return (
+                        <div key={`ts-${s.id}`}
+                          className={cn("flex items-center gap-1 px-1.5 py-0.5 rounded border", cls)}>
+                          <span className="text-xs leading-none shrink-0">{typeIcons[s.plan_type ?? "other"] ?? "⚡"}</span>
+                          <span className={cn("text-[11px] truncate", s.completed && "line-through opacity-60")}>{s.title}</span>
+                          {s.start_time && <span className="text-[9px] opacity-60 shrink-0 ml-auto">{s.start_time.slice(0,5)}</span>}
                         </div>
                       );
                     })}
