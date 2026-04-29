@@ -1161,7 +1161,17 @@ function CodeCellContent({ block, sessionId, onUpdate, onRunAll, onRestart, onSe
       }
       onUpdate({ running: false, outputs });
     } catch (e) {
-      onUpdate({ running: false, outputs: [{ type: "error", content: String(e) }] });
+      const msg = String(e);
+      const isUnknownCmd = msg.includes("Unknown command") || msg.includes("unknown command");
+      onUpdate({
+        running: false,
+        outputs: [{
+          type: "error",
+          content: isUnknownCmd && lang === "python"
+            ? "Python is not available on this device.\nSwitch the cell to SQL to run queries, or use the desktop app for Python."
+            : msg,
+        }],
+      });
     }
   }
 
