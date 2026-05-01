@@ -5,6 +5,7 @@ members = [
     "apps/Vault/Vault/src-tauri",
     "apps/TimeTrackerApp/src-tauri",
     "apps/Stonks/src-tauri",
+    "apps/Protocol/src-tauri",
     "packages/nexus-core/crate",
 ]
 resolver = "2"

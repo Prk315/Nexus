@@ -16,6 +16,7 @@
     "dev:vault:ios": "cd apps/Vault/Vault && npx tauri ios dev",
     "build:vault:ios": "cd apps/Vault/Vault && npx tauri ios build",
     "dev:stonks": "npm run dev --workspace=apps/Stonks",
+    "dev:protocol": "npm run dev --workspace=apps/Protocol",
     "build:all": "npm run build --workspaces --if-present",
     "lint:all": "npm run lint --workspaces --if-present",
     "ios": "./ios-build.sh",
@@ -27,5 +28,8 @@
   },
   "devDependencies": {
     "turbo": "^2.0.0"
+  },
+  "optionalDependencies": {
+    "@esbuild/win32-x64": "^0.28.0"
   }
 }
