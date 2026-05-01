@@ -1,24 +1,15 @@
 import WidgetKit
 import SwiftUI
 
-// ── Design tokens ──────────────────────────────────────────────────────────────
-
-private let kBg    = Color(red: 0.02, green: 0.02, blue: 0.07)
-private let kGlow1 = Color(red: 0.48, green: 0.22, blue: 0.92)   // violet
-private let kGlow2 = Color(red: 0.20, green: 0.45, blue: 1.00)   // blue
-private let kText  = Color(red: 0.82, green: 0.86, blue: 1.00)   // pale blue-white
-private let kDim   = Color(red: 0.40, green: 0.45, blue: 0.70)   // muted blue-gray
-private let kDone  = Color(red: 0.18, green: 0.75, blue: 0.50)   // emerald — completed
-
-// ── Mission model ─────────────────────────────────────────────────────────────
+// MARK: - Mission model
 
 struct Mission: Identifiable {
-    let id: String       // "h-\(id)" or "s-\(id)" to avoid collisions
+    let id: String
     let title: String
     let done: Bool
 }
 
-// ── Entry ─────────────────────────────────────────────────────────────────────
+// MARK: - Entry
 
 struct SoloLevelingEntry: TimelineEntry {
     let date: Date
@@ -43,7 +34,7 @@ struct SoloLevelingEntry: TimelineEntry {
     static let empty = SoloLevelingEntry(date: Date(), missions: [])
 }
 
-// ── Provider ──────────────────────────────────────────────────────────────────
+// MARK: - Provider
 
 struct SoloLevelingProvider: TimelineProvider {
     let client = SupabaseClient()
@@ -70,14 +61,12 @@ struct SoloLevelingProvider: TimelineProvider {
         let today = todayString()
         let uid   = Secrets.userID
 
-        // 1. Habits (daily recurring activities)
         async let habitRows: [HabitRow] = (try? client.fetch(
             table: "pf_daily_habits",
             select: "id,title,color,sort_order",
             filters: ["user_id": "eq.\(uid)", "order": "sort_order.asc"]
         )) ?? []
 
-        // 2. Systems due today (recurring hard tasks)
         async let systemRows: [SystemRow] = (try? client.fetch(
             table: "pf_systems",
             select: "id,title,frequency,days_of_week,last_done,streak_count",
@@ -86,7 +75,6 @@ struct SoloLevelingProvider: TimelineProvider {
 
         let (habits, systems) = await (habitRows, systemRows)
 
-        // Fetch today's habit completions
         let completedHabitIds: Set<Int>
         if habits.isEmpty {
             completedHabitIds = []
@@ -100,122 +88,44 @@ struct SoloLevelingProvider: TimelineProvider {
             completedHabitIds = Set(comps.map { $0.habit_id })
         }
 
-        // Build mission list
         var missions: [Mission] = []
-
-        // Habits → always shown, marked done if completed today
         for h in habits {
-            missions.append(Mission(
-                id: "h-\(h.id)",
-                title: h.title,
-                done: completedHabitIds.contains(h.id)
-            ))
+            missions.append(Mission(id: "h-\(h.id)", title: h.title,
+                                    done: completedHabitIds.contains(h.id)))
         }
-
-        // Systems → shown if due today (not done), hidden if already handled
         for s in systems where systemIsDue(s) {
             missions.append(Mission(id: "s-\(s.id)", title: s.title, done: false))
         }
-
-        // Sort: incomplete first, done at bottom
         missions.sort { !$0.done && $1.done }
 
         return SoloLevelingEntry(date: Date(), missions: missions)
     }
 }
 
-// ── Shared sub-views ──────────────────────────────────────────────────────────
-
-private struct SystemBorder: View {
-    var body: some View {
-        RoundedRectangle(cornerRadius: 20, style: .continuous)
-            .strokeBorder(
-                LinearGradient(
-                    colors: [kGlow1, kGlow2, kGlow1],
-                    startPoint: .topLeading,
-                    endPoint: .bottomTrailing
-                ),
-                lineWidth: 1.2
-            )
-            .opacity(0.7)
-    }
-}
-
-private struct CornerBracket: View {
-    var body: some View {
-        ZStack(alignment: .topLeading) {
-            Rectangle().fill(kGlow1).frame(width: 10, height: 1.5)
-            Rectangle().fill(kGlow1).frame(width: 1.5, height: 10)
-        }
-    }
-}
-
-private struct CornerDecorations: View {
-    var body: some View {
-        GeometryReader { geo in
-            let w = geo.size.width
-            let h = geo.size.height
-            CornerBracket().position(x: 12, y: 12)
-            CornerBracket().scaleEffect(x: -1, y:  1, anchor: .center).position(x: w - 12, y: 12)
-            CornerBracket().scaleEffect(x:  1, y: -1, anchor: .center).position(x: 12,     y: h - 12)
-            CornerBracket().scaleEffect(x: -1, y: -1, anchor: .center).position(x: w - 12, y: h - 12)
-        }
-        .opacity(0.65)
-    }
-}
-
-private struct GlowDivider: View {
-    var body: some View {
-        Rectangle()
-            .fill(LinearGradient(
-                colors: [kGlow1.opacity(0), kGlow1.opacity(0.35), kGlow1.opacity(0)],
-                startPoint: .leading, endPoint: .trailing
-            ))
-            .frame(height: 1)
-    }
-}
-
-private struct SystemHeader: View {
-    var body: some View {
-        HStack(spacing: 0) {
-            Text("[ ")
-                .font(.system(size: 8, weight: .light, design: .monospaced))
-                .foregroundColor(kDim)
-            Text("SYSTEM NOTIFICATION")
-                .font(.system(size: 8, weight: .semibold, design: .monospaced))
-                .foregroundColor(kGlow2)
-                .tracking(0.8)
-            Text(" ]")
-                .font(.system(size: 8, weight: .light, design: .monospaced))
-                .foregroundColor(kDim)
-        }
-    }
-}
+// MARK: - Shared sub-views
 
 private struct MissionRow: View {
     let mission: Mission
 
     var body: some View {
         HStack(spacing: 8) {
-            // Checkbox
             ZStack {
                 RoundedRectangle(cornerRadius: 3, style: .continuous)
-                    .strokeBorder(
-                        mission.done ? kDone : kDim.opacity(0.5),
-                        lineWidth: 1.2
-                    )
-                    .frame(width: 13, height: 13)
+                    .fill(mission.done ? wGreen.opacity(0.10) : Color.clear)
+                RoundedRectangle(cornerRadius: 3, style: .continuous)
+                    .strokeBorder(mission.done ? wGreen : wSep, lineWidth: 1.3)
                 if mission.done {
                     Image(systemName: "checkmark")
-                        .font(.system(size: 8, weight: .bold))
-                        .foregroundColor(kDone)
+                        .font(.system(size: 7, weight: .bold))
+                        .foregroundColor(wGreen)
                 }
             }
+            .frame(width: 14, height: 14)
 
             Text(mission.title)
                 .font(.system(size: 12, weight: mission.done ? .regular : .medium))
-                .foregroundColor(mission.done ? kDim.opacity(0.6) : kText)
-                .strikethrough(mission.done, color: kDim.opacity(0.4))
+                .foregroundColor(mission.done ? wTertiary : wPrimary.opacity(0.85))
+                .strikethrough(mission.done, color: wSep)
                 .lineLimit(1)
 
             Spacer(minLength: 0)
@@ -223,204 +133,161 @@ private struct MissionRow: View {
     }
 }
 
-private struct CompletionFooter: View {
+private struct MissionFooter: View {
     let done: Int
     let total: Int
 
     var allDone: Bool { done == total && total > 0 }
 
     var body: some View {
-        HStack(spacing: 5) {
-            if allDone {
-                Image(systemName: "checkmark.seal.fill")
-                    .font(.system(size: 10))
-                    .foregroundColor(kDone)
-                Text("ALL MISSIONS COMPLETE")
-                    .font(.system(size: 9, weight: .semibold, design: .monospaced))
-                    .foregroundColor(kDone)
-                    .tracking(0.5)
-            } else {
-                Text("\(done)/\(total)")
-                    .font(.system(size: 9, weight: .bold, design: .monospaced))
-                    .foregroundColor(kDim)
-                Text("COMPLETE")
-                    .font(.system(size: 9, design: .monospaced))
-                    .foregroundColor(kDim.opacity(0.6))
-                    .tracking(0.5)
-                Spacer()
-                Text("\(total - done) REMAINING")
-                    .font(.system(size: 9, design: .monospaced))
-                    .foregroundColor(kGlow1.opacity(0.7))
+        HStack {
+            Text("\(done) done")
+                .font(.system(size: 9, weight: .medium))
+                .foregroundColor(allDone ? wGreen : wSecondary)
+            Spacer()
+            if !allDone {
+                Text("\(total - done) remaining")
+                    .font(.system(size: 9))
+                    .foregroundColor(wTertiary)
             }
         }
     }
 }
 
-// ── Small View ────────────────────────────────────────────────────────────────
+// MARK: - Small view
 
 struct SoloLevelingSmallView: View {
     let entry: SoloLevelingEntry
 
     var body: some View {
-        ZStack {
-            CornerDecorations()
-
-            VStack(alignment: .leading, spacing: 0) {
-                SystemHeader()
-                    .padding(.bottom, 8)
-
-                GlowDivider()
-                    .padding(.bottom, 8)
-
-                // Big completion count
-                if entry.totalCount == 0 {
-                    Spacer()
-                    Text("No missions\nassigned")
-                        .font(.system(size: 12, design: .monospaced))
-                        .foregroundColor(kDim.opacity(0.5))
-                        .multilineTextAlignment(.leading)
-                    Spacer()
-                } else if entry.allDone {
-                    Spacer()
-                    VStack(alignment: .leading, spacing: 4) {
-                        Image(systemName: "checkmark.seal.fill")
-                            .font(.system(size: 22))
-                            .foregroundColor(kDone)
-                        Text("ALL CLEAR")
-                            .font(.system(size: 11, weight: .black, design: .monospaced))
-                            .foregroundColor(kDone)
-                            .tracking(1)
-                    }
-                    Spacer()
-                } else {
-                    // Remaining count prominent
-                    HStack(alignment: .lastTextBaseline, spacing: 4) {
-                        Text("\(entry.totalCount - entry.doneCount)")
-                            .font(.system(size: 38, weight: .black, design: .rounded))
-                            .foregroundColor(.white)
-                        Text("left")
-                            .font(.system(size: 12, design: .monospaced))
-                            .foregroundColor(kDim)
-                            .padding(.bottom, 5)
-                    }
-
-                    Spacer(minLength: 4)
-
-                    // Next incomplete mission
-                    if let next = entry.missions.first(where: { !$0.done }) {
-                        HStack(spacing: 5) {
-                            Image(systemName: "chevron.right")
-                                .font(.system(size: 8, weight: .bold))
-                                .foregroundColor(kGlow1)
-                            Text(next.title)
-                                .font(.system(size: 11, weight: .medium))
-                                .foregroundColor(kText.opacity(0.85))
-                                .lineLimit(2)
-                        }
-                    }
-                }
-
-                Spacer(minLength: 0)
-
-                // Footer count
-                if entry.totalCount > 0 && !entry.allDone {
-                    GlowDivider().padding(.vertical, 6)
-                    CompletionFooter(done: entry.doneCount, total: entry.totalCount)
+        VStack(alignment: .leading, spacing: 0) {
+            HStack {
+                CleanHeader(label: "MISSIONS")
+                Spacer()
+                if entry.totalCount > 0 {
+                    Text("\(entry.doneCount)/\(entry.totalCount)")
+                        .font(.system(size: 10, weight: .medium))
+                        .foregroundColor(entry.allDone ? wGreen : wSecondary)
                 }
             }
-            .padding(14)
+            .padding(.bottom, 8)
+
+            CleanDivider().padding(.bottom, 10)
+
+            if entry.totalCount == 0 {
+                Spacer()
+                Text("No missions\nassigned")
+                    .font(.system(size: 12))
+                    .foregroundColor(wTertiary)
+                    .multilineTextAlignment(.leading)
+                Spacer()
+            } else if entry.allDone {
+                Spacer()
+                VStack(alignment: .leading, spacing: 4) {
+                    Image(systemName: "checkmark.circle.fill")
+                        .font(.system(size: 22))
+                        .foregroundColor(wGreen)
+                    Text("All done")
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundColor(wGreen)
+                }
+                Spacer()
+            } else {
+                HStack(alignment: .lastTextBaseline, spacing: 4) {
+                    Text("\(entry.totalCount - entry.doneCount)")
+                        .font(.system(size: 38, weight: .bold, design: .rounded))
+                        .foregroundColor(wPrimary)
+                    Text("left")
+                        .font(.system(size: 12))
+                        .foregroundColor(wSecondary)
+                        .padding(.bottom, 5)
+                }
+
+                Spacer(minLength: 4)
+
+                if let next = entry.missions.first(where: { !$0.done }) {
+                    Text(next.title)
+                        .font(.system(size: 11, weight: .medium))
+                        .foregroundColor(wPrimary.opacity(0.85))
+                        .lineLimit(2)
+                }
+            }
+
+            Spacer(minLength: 0)
+
+            if entry.totalCount > 0 && !entry.allDone {
+                CleanDivider().padding(.vertical, 6)
+                MissionFooter(done: entry.doneCount, total: entry.totalCount)
+            }
         }
-        .overlay(SystemBorder())
+        .padding(14)
     }
 }
 
-// ── Medium View ───────────────────────────────────────────────────────────────
+// MARK: - Medium view
 
 struct SoloLevelingMediumView: View {
     let entry: SoloLevelingEntry
 
     var body: some View {
-        ZStack {
-            CornerDecorations()
+        VStack(alignment: .leading, spacing: 0) {
+            HStack {
+                CleanHeader(label: "MISSIONS")
+                Spacer()
+                if entry.totalCount > 0 {
+                    Text("\(entry.doneCount)/\(entry.totalCount)")
+                        .font(.system(size: 10, weight: .semibold))
+                        .foregroundColor(entry.allDone ? wGreen : wSecondary)
+                }
+            }
+            .padding(.bottom, 8)
 
-            VStack(alignment: .leading, spacing: 0) {
-                // Header row
-                HStack {
-                    SystemHeader()
-                    Spacer()
-                    if entry.totalCount > 0 {
-                        Text("\(entry.doneCount)/\(entry.totalCount)")
-                            .font(.system(size: 9, weight: .semibold, design: .monospaced))
-                            .foregroundColor(entry.allDone ? kDone : kDim)
+            CleanDivider().padding(.bottom, 10)
+
+            if entry.missions.isEmpty {
+                Spacer()
+                Text("No missions assigned")
+                    .font(.system(size: 11))
+                    .foregroundColor(wTertiary)
+                Spacer()
+            } else {
+                let left  = Array(entry.missions.prefix(3))
+                let right = Array(entry.missions.dropFirst(3).prefix(3))
+
+                HStack(alignment: .top, spacing: 0) {
+                    VStack(alignment: .leading, spacing: 6) {
+                        ForEach(left) { m in MissionRow(mission: m) }
                     }
-                }
-                .padding(.bottom, 8)
+                    .frame(maxWidth: .infinity, alignment: .leading)
 
-                GlowDivider().padding(.bottom, 10)
+                    if !right.isEmpty {
+                        Rectangle().fill(wSep).frame(width: 0.5).padding(.vertical, 2).padding(.horizontal, 10)
 
-                // Section label
-                HStack(spacing: 4) {
-                    Image(systemName: "scroll")
-                        .font(.system(size: 8))
-                        .foregroundColor(kDim)
-                    Text("DAILY MISSIONS")
-                        .font(.system(size: 8, weight: .semibold, design: .monospaced))
-                        .foregroundColor(kDim)
-                        .tracking(1)
-                }
-                .padding(.bottom, 8)
-
-                if entry.missions.isEmpty {
-                    Spacer()
-                    Text("No missions assigned")
-                        .font(.system(size: 11, design: .monospaced))
-                        .foregroundColor(kDim.opacity(0.4))
-                    Spacer()
-                } else {
-                    // Show up to 6 missions in two columns
-                    let left  = Array(entry.missions.prefix(3))
-                    let right = Array(entry.missions.dropFirst(3).prefix(3))
-
-                    HStack(alignment: .top, spacing: 12) {
                         VStack(alignment: .leading, spacing: 6) {
-                            ForEach(left)  { m in MissionRow(mission: m) }
+                            ForEach(right) { m in MissionRow(mission: m) }
                         }
                         .frame(maxWidth: .infinity, alignment: .leading)
-
-                        if !right.isEmpty {
-                            // Subtle column divider
-                            Rectangle()
-                                .fill(kGlow1.opacity(0.15))
-                                .frame(width: 1)
-                                .padding(.vertical, 2)
-
-                            VStack(alignment: .leading, spacing: 6) {
-                                ForEach(right) { m in MissionRow(mission: m) }
-                            }
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                        }
-                    }
-
-                    if entry.missions.count > 6 {
-                        Text("+ \(entry.missions.count - 6) more")
-                            .font(.system(size: 8, design: .monospaced))
-                            .foregroundColor(kDim.opacity(0.4))
-                            .padding(.top, 4)
                     }
                 }
 
-                Spacer(minLength: 0)
-
-                GlowDivider().padding(.vertical, 8)
-                CompletionFooter(done: entry.doneCount, total: entry.totalCount)
+                if entry.missions.count > 6 {
+                    Text("+\(entry.missions.count - 6) more")
+                        .font(.system(size: 9))
+                        .foregroundColor(wTertiary)
+                        .padding(.top, 4)
+                }
             }
-            .padding(14)
+
+            Spacer(minLength: 0)
+
+            CleanDivider().padding(.vertical, 6)
+            MissionFooter(done: entry.doneCount, total: entry.totalCount)
         }
-        .overlay(SystemBorder())
+        .padding(14)
     }
 }
 
-// ── Large View ────────────────────────────────────────────────────────────────
+// MARK: - Large view
 
 struct SoloLevelingLargeView: View {
     let entry: SoloLevelingEntry
@@ -429,107 +296,87 @@ struct SoloLevelingLargeView: View {
     var complete:   [Mission] { entry.missions.filter {  $0.done } }
 
     var body: some View {
-        ZStack {
-            CornerDecorations()
-
-            VStack(alignment: .leading, spacing: 0) {
-                // Header
-                HStack {
-                    SystemHeader()
-                    Spacer()
-                    if entry.totalCount > 0 {
-                        Text("\(entry.doneCount)/\(entry.totalCount) COMPLETE")
-                            .font(.system(size: 8, weight: .semibold, design: .monospaced))
-                            .foregroundColor(entry.allDone ? kDone : kDim)
-                    }
-                }
-                .padding(.bottom, 8)
-
-                GlowDivider().padding(.bottom, 12)
-
-                if entry.missions.isEmpty {
-                    Spacer()
-                    VStack(spacing: 6) {
-                        Text("[ NO MISSIONS ASSIGNED ]")
-                            .font(.system(size: 11, weight: .semibold, design: .monospaced))
-                            .foregroundColor(kDim.opacity(0.4))
-                        Text("Add habits or systems to begin.")
-                            .font(.system(size: 9, design: .monospaced))
-                            .foregroundColor(kDim.opacity(0.25))
-                    }
-                    .frame(maxWidth: .infinity)
-                    Spacer()
-                } else if entry.allDone {
-                    Spacer()
-                    VStack(spacing: 10) {
-                        Image(systemName: "checkmark.seal.fill")
-                            .font(.system(size: 34))
-                            .foregroundColor(kDone)
-                        Text("ALL MISSIONS COMPLETE")
-                            .font(.system(size: 13, weight: .black, design: .monospaced))
-                            .foregroundColor(kDone)
-                            .tracking(1)
-                        Text("You may rest, Hunter.")
-                            .font(.system(size: 10, design: .monospaced))
-                            .foregroundColor(kDim.opacity(0.5))
-                    }
-                    .frame(maxWidth: .infinity)
-                    Spacer()
-                } else {
-                    // Active missions section
-                    if !incomplete.isEmpty {
-                        HStack(spacing: 4) {
-                            Image(systemName: "exclamationmark.circle")
-                                .font(.system(size: 8))
-                                .foregroundColor(kGlow1.opacity(0.8))
-                            Text("ACTIVE MISSIONS")
-                                .font(.system(size: 8, weight: .semibold, design: .monospaced))
-                                .foregroundColor(kGlow1.opacity(0.8))
-                                .tracking(1)
-                        }
-                        .padding(.bottom, 7)
-
-                        VStack(alignment: .leading, spacing: 7) {
-                            ForEach(incomplete) { m in MissionRow(mission: m) }
-                        }
-                    }
-
-                    // Completed section
-                    if !complete.isEmpty {
-                        GlowDivider()
-                            .padding(.vertical, 10)
-
-                        HStack(spacing: 4) {
-                            Image(systemName: "checkmark.circle")
-                                .font(.system(size: 8))
-                                .foregroundColor(kDone.opacity(0.7))
-                            Text("COMPLETED")
-                                .font(.system(size: 8, weight: .semibold, design: .monospaced))
-                                .foregroundColor(kDone.opacity(0.7))
-                                .tracking(1)
-                        }
-                        .padding(.bottom, 7)
-
-                        VStack(alignment: .leading, spacing: 7) {
-                            ForEach(complete) { m in MissionRow(mission: m) }
-                        }
-                    }
-                }
-
-                Spacer(minLength: 0)
-
-                if !entry.missions.isEmpty && !entry.allDone {
-                    GlowDivider().padding(.vertical, 8)
-                    CompletionFooter(done: entry.doneCount, total: entry.totalCount)
+        VStack(alignment: .leading, spacing: 0) {
+            HStack {
+                CleanHeader(label: "MISSIONS")
+                Spacer()
+                if entry.totalCount > 0 {
+                    Text("\(entry.doneCount)/\(entry.totalCount) done")
+                        .font(.system(size: 9, weight: .medium))
+                        .foregroundColor(entry.allDone ? wGreen : wSecondary)
                 }
             }
-            .padding(16)
+            .padding(.bottom, 8)
+
+            CleanDivider().padding(.bottom, 12)
+
+            if entry.missions.isEmpty {
+                Spacer()
+                VStack(spacing: 6) {
+                    Text("No missions assigned")
+                        .font(.system(size: 12, weight: .medium))
+                        .foregroundColor(wSecondary)
+                    Text("Add habits or systems to begin.")
+                        .font(.system(size: 10))
+                        .foregroundColor(wTertiary)
+                }
+                .frame(maxWidth: .infinity)
+                Spacer()
+            } else if entry.allDone {
+                Spacer()
+                VStack(spacing: 10) {
+                    Image(systemName: "checkmark.circle.fill")
+                        .font(.system(size: 32))
+                        .foregroundColor(wGreen)
+                    Text("All missions done")
+                        .font(.system(size: 15, weight: .semibold))
+                        .foregroundColor(wPrimary)
+                    Text("Great work today.")
+                        .font(.system(size: 11))
+                        .foregroundColor(wSecondary)
+                }
+                .frame(maxWidth: .infinity)
+                Spacer()
+            } else {
+                if !incomplete.isEmpty {
+                    Text("ACTIVE")
+                        .font(.system(size: 8, weight: .semibold))
+                        .foregroundColor(wTertiary)
+                        .tracking(1)
+                        .padding(.bottom, 7)
+
+                    VStack(alignment: .leading, spacing: 7) {
+                        ForEach(incomplete) { m in MissionRow(mission: m) }
+                    }
+                }
+
+                if !complete.isEmpty {
+                    CleanDivider().padding(.vertical, 10)
+
+                    Text("COMPLETED")
+                        .font(.system(size: 8, weight: .semibold))
+                        .foregroundColor(wTertiary)
+                        .tracking(1)
+                        .padding(.bottom, 7)
+
+                    VStack(alignment: .leading, spacing: 7) {
+                        ForEach(complete) { m in MissionRow(mission: m) }
+                    }
+                }
+            }
+
+            Spacer(minLength: 0)
+
+            if !entry.missions.isEmpty && !entry.allDone {
+                CleanDivider().padding(.vertical, 8)
+                MissionFooter(done: entry.doneCount, total: entry.totalCount)
+            }
         }
-        .overlay(SystemBorder())
+        .padding(16)
     }
 }
 
-// ── Entry view router ─────────────────────────────────────────────────────────
+// MARK: - Entry view router
 
 struct SoloLevelingWidgetEntryView: View {
     @Environment(\.widgetFamily) var family
@@ -544,7 +391,7 @@ struct SoloLevelingWidgetEntryView: View {
     }
 }
 
-// ── Widget definition ─────────────────────────────────────────────────────────
+// MARK: - Widget definition
 
 struct SoloLevelingWidget: Widget {
     let kind = "SoloLevelingWidget"
@@ -552,7 +399,7 @@ struct SoloLevelingWidget: Widget {
     var body: some WidgetConfiguration {
         StaticConfiguration(kind: kind, provider: SoloLevelingProvider()) { entry in
             SoloLevelingWidgetEntryView(entry: entry)
-                .widgetBackground(kBg)
+                .widgetBackground(wBg)
         }
         .configurationDisplayName("System Status")
         .description("Daily missions — physical and hard activities to complete.")

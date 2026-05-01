@@ -29,27 +29,19 @@ struct TodayFocusProvider: TimelineProvider {
     func placeholder(in context: Context) -> TodayFocusEntry { .placeholder }
 
     func getSnapshot(in context: Context, completion: @escaping (TodayFocusEntry) -> Void) {
-        if context.isPreview {
-            completion(.placeholder)
-            return
-        }
+        if context.isPreview { completion(.placeholder); return }
         Task { completion(await fetchEntry()) }
     }
 
     func getTimeline(in context: Context, completion: @escaping (Timeline<TodayFocusEntry>) -> Void) {
         Task {
             let entry = await fetchEntry()
-            // 4 entries, refresh every 15 minutes
             let entries = (0..<4).map { offset -> TodayFocusEntry in
-                let entryDate = Calendar.current.date(byAdding: .minute, value: offset * 15, to: Date()) ?? Date()
-                return TodayFocusEntry(
-                    date: entryDate,
-                    primaryGoal: entry.primaryGoal,
-                    secondaryCount: entry.secondaryCount,
-                    dueToday: entry.dueToday,
-                    overdue: entry.overdue,
-                    isPlaceholder: false
-                )
+                let d = Calendar.current.date(byAdding: .minute, value: offset * 15, to: Date()) ?? Date()
+                return TodayFocusEntry(date: d, primaryGoal: entry.primaryGoal,
+                                       secondaryCount: entry.secondaryCount,
+                                       dueToday: entry.dueToday, overdue: entry.overdue,
+                                       isPlaceholder: false)
             }
             completion(Timeline(entries: entries, policy: .atEnd))
         }
@@ -78,161 +70,133 @@ struct TodayFocusProvider: TimelineProvider {
         )) ?? []
 
         let (primary, secondary, tasks) = await (primaryRows, secondaryRows, taskRows)
-
         let dueToday = tasks.filter { $0.due_date == today }.count
         let overdue  = tasks.filter { t in
             guard let d = t.due_date else { return false }
             return d < today
         }.count
 
-        return TodayFocusEntry(
-            date: Date(),
-            primaryGoal: primary.first?.text,
-            secondaryCount: secondary.count,
-            dueToday: dueToday,
-            overdue: overdue,
-            isPlaceholder: false
-        )
+        return TodayFocusEntry(date: Date(), primaryGoal: primary.first?.text,
+                               secondaryCount: secondary.count,
+                               dueToday: dueToday, overdue: overdue, isPlaceholder: false)
     }
 }
 
-// MARK: - Views
+// MARK: - Small view
 
 struct TodayFocusSmallView: View {
     let entry: TodayFocusEntry
 
     var body: some View {
-        ZStack {
-            Color(red: 0.07, green: 0.07, blue: 0.09)
-            VStack(alignment: .leading, spacing: 6) {
-                HStack(spacing: 4) {
-                    Circle().fill(Color.indigo).frame(width: 6, height: 6)
-                    Text("TODAY")
-                        .font(.system(size: 9, weight: .semibold))
-                        .foregroundColor(.indigo)
-                        .tracking(1.5)
+        VStack(alignment: .leading, spacing: 0) {
+            CleanHeader(label: "TODAY FOCUS")
+                .padding(.bottom, 8)
+
+            CleanDivider()
+                .padding(.bottom, 10)
+
+            if let goal = entry.primaryGoal {
+                Text(goal)
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundColor(wPrimary)
+                    .lineLimit(4)
+                    .fixedSize(horizontal: false, vertical: true)
+            } else {
+                Text("No goal set")
+                    .font(.system(size: 12))
+                    .foregroundColor(wTertiary)
+            }
+
+            Spacer(minLength: 0)
+
+            CleanDivider().padding(.vertical, 6)
+
+            HStack(spacing: 8) {
+                if entry.overdue > 0 {
+                    Label("\(entry.overdue)", systemImage: "exclamationmark.circle.fill")
+                        .font(.system(size: 10, weight: .semibold))
+                        .foregroundColor(wRed)
                 }
-
-                if let goal = entry.primaryGoal {
-                    Text(goal)
-                        .font(.system(size: 14, weight: .semibold))
-                        .foregroundColor(.white)
-                        .lineLimit(3)
-                        .fixedSize(horizontal: false, vertical: true)
-                } else {
-                    Text("No goal set")
-                        .font(.system(size: 13, weight: .medium))
-                        .foregroundColor(Color.white.opacity(0.35))
-                }
-
-                Spacer(minLength: 0)
-
-                HStack(spacing: 6) {
-                    if entry.overdue > 0 {
-                        Label("\(entry.overdue)", systemImage: "exclamationmark.circle.fill")
-                            .font(.system(size: 10, weight: .semibold))
-                            .foregroundColor(.red)
-                    }
-                    Label("\(entry.dueToday)", systemImage: "checkmark.circle")
-                        .font(.system(size: 10, weight: .medium))
-                        .foregroundColor(Color.white.opacity(0.55))
-                    if entry.secondaryCount > 0 {
-                        Text("+\(entry.secondaryCount)")
-                            .font(.system(size: 10, weight: .medium))
-                            .foregroundColor(Color.white.opacity(0.35))
-                    }
+                Label("\(entry.dueToday)", systemImage: "checkmark.circle")
+                    .font(.system(size: 10))
+                    .foregroundColor(wSecondary)
+                if entry.secondaryCount > 0 {
+                    Text("+\(entry.secondaryCount)")
+                        .font(.system(size: 10))
+                        .foregroundColor(wTertiary)
                 }
             }
-            .padding(14)
         }
+        .padding(14)
     }
 }
+
+// MARK: - Medium view
 
 struct TodayFocusMediumView: View {
     let entry: TodayFocusEntry
 
     var body: some View {
-        ZStack {
-            Color(red: 0.07, green: 0.07, blue: 0.09)
-            HStack(alignment: .top, spacing: 0) {
-                // Left: primary goal
-                VStack(alignment: .leading, spacing: 8) {
-                    HStack(spacing: 4) {
-                        Circle().fill(Color.indigo).frame(width: 6, height: 6)
-                        Text("FOCUS")
-                            .font(.system(size: 9, weight: .semibold))
-                            .foregroundColor(.indigo)
-                            .tracking(1.5)
-                    }
-                    if let goal = entry.primaryGoal {
-                        Text(goal)
-                            .font(.system(size: 15, weight: .semibold))
-                            .foregroundColor(.white)
-                            .lineLimit(4)
-                    } else {
-                        Text("No goal set today")
-                            .font(.system(size: 13))
-                            .foregroundColor(Color.white.opacity(0.35))
-                    }
-                    Spacer(minLength: 0)
-                }
-                .padding(14)
-                .frame(maxWidth: .infinity)
+        HStack(alignment: .top, spacing: 0) {
+            // Left: primary goal
+            VStack(alignment: .leading, spacing: 0) {
+                CleanHeader(label: "TODAY FOCUS")
+                    .padding(.bottom, 8)
+                CleanDivider()
+                    .padding(.bottom, 10)
 
-                // Divider
-                Rectangle()
-                    .fill(Color.white.opacity(0.08))
-                    .frame(width: 1)
-                    .padding(.vertical, 12)
-
-                // Right: stats
-                VStack(alignment: .leading, spacing: 10) {
-                    statRow(icon: "checklist", label: "Due today", value: entry.dueToday, color: .indigo)
-                    if entry.overdue > 0 {
-                        statRow(icon: "exclamationmark.circle.fill", label: "Overdue", value: entry.overdue, color: .red)
-                    }
-                    statRow(icon: "target", label: "Goals", value: entry.secondaryCount + (entry.primaryGoal != nil ? 1 : 0), color: .teal)
+                if let goal = entry.primaryGoal {
+                    Text(goal)
+                        .font(.system(size: 14, weight: .semibold))
+                        .foregroundColor(wPrimary)
+                        .lineLimit(5)
+                } else {
+                    Text("No goal set today")
+                        .font(.system(size: 12))
+                        .foregroundColor(wTertiary)
                 }
-                .padding(14)
-                .frame(width: 120)
+                Spacer(minLength: 0)
             }
+            .padding(14)
+            .frame(maxWidth: .infinity)
+
+            Rectangle()
+                .fill(wSep)
+                .frame(width: 0.5)
+                .padding(.vertical, 12)
+
+            // Right: stat cards
+            VStack(alignment: .leading, spacing: 12) {
+                statRow(label: "DUE TODAY",
+                        value: entry.dueToday,
+                        color: entry.dueToday > 0 ? wBlue : wSecondary)
+                statRow(label: "GOALS",
+                        value: entry.secondaryCount + (entry.primaryGoal != nil ? 1 : 0),
+                        color: wSecondary)
+                if entry.overdue > 0 {
+                    statRow(label: "OVERDUE", value: entry.overdue, color: wRed)
+                }
+            }
+            .padding(14)
+            .frame(width: 110)
         }
     }
 
     @ViewBuilder
-    func statRow(icon: String, label: String, value: Int, color: Color) -> some View {
-        HStack(spacing: 6) {
-            Image(systemName: icon)
-                .font(.system(size: 11))
+    func statRow(label: String, value: Int, color: Color) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text(label)
+                .font(.system(size: 8, weight: .medium))
+                .foregroundColor(wTertiary)
+                .tracking(0.5)
+            Text("\(value)")
+                .font(.system(size: 18, weight: .bold, design: .rounded))
                 .foregroundColor(color)
-                .frame(width: 16)
-            VStack(alignment: .leading, spacing: 1) {
-                Text(label)
-                    .font(.system(size: 9))
-                    .foregroundColor(Color.white.opacity(0.4))
-                Text("\(value)")
-                    .font(.system(size: 14, weight: .bold))
-                    .foregroundColor(.white)
-            }
         }
     }
 }
 
 // MARK: - Widget definition
-
-struct TodayFocusWidget: Widget {
-    let kind = "TodayFocusWidget"
-
-    var body: some WidgetConfiguration {
-        StaticConfiguration(kind: kind, provider: TodayFocusProvider()) { entry in
-            TodayFocusWidgetEntryView(entry: entry)
-                .widgetBackground(Color(red: 0.07, green: 0.07, blue: 0.09))
-        }
-        .configurationDisplayName("Today Focus")
-        .description("Your primary goal and task overview for the day.")
-        .supportedFamilies([.systemSmall, .systemMedium])
-    }
-}
 
 struct TodayFocusWidgetEntryView: View {
     @Environment(\.widgetFamily) var family
@@ -243,5 +207,19 @@ struct TodayFocusWidgetEntryView: View {
         case .systemMedium: TodayFocusMediumView(entry: entry)
         default:            TodayFocusSmallView(entry: entry)
         }
+    }
+}
+
+struct TodayFocusWidget: Widget {
+    let kind = "TodayFocusWidget"
+
+    var body: some WidgetConfiguration {
+        StaticConfiguration(kind: kind, provider: TodayFocusProvider()) { entry in
+            TodayFocusWidgetEntryView(entry: entry)
+                .widgetBackground(wBg)
+        }
+        .configurationDisplayName("Today Focus")
+        .description("Your primary goal and task overview for the day.")
+        .supportedFamilies([.systemSmall, .systemMedium])
     }
 }

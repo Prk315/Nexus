@@ -30,10 +30,7 @@ struct HabitsProvider: TimelineProvider {
     func placeholder(in context: Context) -> HabitsWidgetEntry { .placeholder }
 
     func getSnapshot(in context: Context, completion: @escaping (HabitsWidgetEntry) -> Void) {
-        if context.isPreview {
-            completion(.placeholder)
-            return
-        }
+        if context.isPreview { completion(.placeholder); return }
         Task { completion(await fetchEntry()) }
     }
 
@@ -42,8 +39,8 @@ struct HabitsProvider: TimelineProvider {
             let entry = await fetchEntry()
             var entries: [HabitsWidgetEntry] = []
             for offset: Int in 0..<4 {
-                let entryDate = Calendar.current.date(byAdding: .minute, value: offset * 15, to: Date()) ?? Date()
-                entries.append(HabitsWidgetEntry(date: entryDate, habits: entry.habits, isPlaceholder: false))
+                let d = Calendar.current.date(byAdding: .minute, value: offset * 15, to: Date()) ?? Date()
+                entries.append(HabitsWidgetEntry(date: d, habits: entry.habits, isPlaceholder: false))
             }
             completion(Timeline(entries: entries, policy: .atEnd))
         }
@@ -68,17 +65,14 @@ struct HabitsProvider: TimelineProvider {
         let completions: [HabitCompletion] = (try? await client.fetch(
             table: "pf_habit_completions",
             select: "habit_id,date",
-            filters: [
-                "habit_id": "in.(\(ids))",
-                "date": "gte.\(sevenDaysAgo())",
-            ]
+            filters: ["habit_id": "in.(\(ids))", "date": "gte.\(sevenDaysAgo())"]
         )) ?? []
 
         let todayDoneIds = Set(completions.filter { $0.date == today }.map { $0.habit_id })
 
         let entries: [HabitEntry] = habits.map { h in
-            let datesForHabit = completions.filter { $0.habit_id == h.id }.map { $0.date }.sorted()
-            let streak = computeStreak(dates: datesForHabit, today: today)
+            let dates = completions.filter { $0.habit_id == h.id }.map { $0.date }.sorted()
+            let streak = computeStreak(dates: dates, today: today)
             return HabitEntry(title: h.title, color: h.color, done: todayDoneIds.contains(h.id), streak: streak)
         }
 
@@ -92,8 +86,7 @@ struct HabitsProvider: TimelineProvider {
     }
 
     private func computeStreak(dates: [String], today: String) -> Int {
-        var streak = 0
-        var check = today
+        var streak = 0; var check = today
         let fmt = DateFormatter(); fmt.dateFormat = "yyyy-MM-dd"
         while dates.contains(check) {
             streak += 1
@@ -123,7 +116,7 @@ extension Color {
         case "orange":  self = .orange
         case "amber":   self = Color(red: 0.96, green: 0.72, blue: 0.0)
         case "emerald": self = Color(red: 0.06, green: 0.73, blue: 0.46)
-        default:        self = .white
+        default:        self = Color(red: 0.48, green: 0.49, blue: 0.52)
         }
     }
 }
@@ -133,47 +126,75 @@ extension Color {
 struct HabitsWidgetView: View {
     let entry: HabitsWidgetEntry
 
-    var body: some View {
-        ZStack {
-            Color(red: 0.07, green: 0.07, blue: 0.09)
-            VStack(alignment: .leading, spacing: 8) {
-                // Header
-                HStack(spacing: 4) {
-                    Circle().fill(Color.teal.opacity(0.9)).frame(width: 6, height: 6)
-                    Text("HABITS")
-                        .font(.system(size: 9, weight: .semibold))
-                        .foregroundColor(.teal)
-                        .tracking(1.5)
-                    Spacer()
-                    let done = entry.habits.filter { $0.done }.count
-                    Text("\(done)/\(entry.habits.count)")
-                        .font(.system(size: 10, weight: .semibold))
-                        .foregroundColor(Color.white.opacity(0.5))
-                }
+    var doneCount: Int { entry.habits.filter { $0.done }.count }
+    var allDone: Bool  { !entry.habits.isEmpty && doneCount == entry.habits.count }
 
-                if entry.habits.isEmpty {
-                    Spacer()
-                    Text("No habits yet")
-                        .font(.system(size: 12))
-                        .foregroundColor(Color.white.opacity(0.3))
-                    Spacer()
-                } else {
-                    let displayHabits = Array(entry.habits.prefix(6))
-                    VStack(spacing: 4) {
-                        ForEach(Array(displayHabits.enumerated()), id: \.offset) { _, habit in
-                            HabitRowView(habit: habit)
-                        }
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            HStack {
+                CleanHeader(label: "HABITS")
+                Spacer()
+                Text("\(doneCount)/\(entry.habits.count)")
+                    .font(.system(size: 10, weight: .semibold))
+                    .foregroundColor(allDone ? wGreen : wSecondary)
+            }
+            .padding(.bottom, 8)
+
+            CleanDivider().padding(.bottom, 8)
+
+            if entry.habits.isEmpty {
+                Spacer()
+                Text("No habits yet")
+                    .font(.system(size: 12))
+                    .foregroundColor(wTertiary)
+                Spacer()
+            } else if allDone {
+                Spacer()
+                HStack(spacing: 10) {
+                    Image(systemName: "checkmark.circle.fill")
+                        .font(.system(size: 24))
+                        .foregroundColor(wGreen)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("All habits done")
+                            .font(.system(size: 13, weight: .semibold))
+                            .foregroundColor(wPrimary)
+                        Text("Great work today.")
+                            .font(.system(size: 10))
+                            .foregroundColor(wSecondary)
                     }
-                    if entry.habits.count > 6 {
-                        Text("+\(entry.habits.count - 6) more")
-                            .font(.system(size: 9))
-                            .foregroundColor(Color.white.opacity(0.25))
-                            .padding(.top, 2)
+                }
+                Spacer()
+            } else {
+                VStack(spacing: 6) {
+                    ForEach(Array(entry.habits.prefix(6).enumerated()), id: \.offset) { _, habit in
+                        HabitRowView(habit: habit)
                     }
+                }
+                if entry.habits.count > 6 {
+                    Text("+\(entry.habits.count - 6) more")
+                        .font(.system(size: 9))
+                        .foregroundColor(wTertiary)
+                        .padding(.top, 4)
                 }
             }
-            .padding(12)
+
+            Spacer(minLength: 0)
+
+            CleanDivider().padding(.vertical, 6)
+
+            HStack {
+                Text("\(doneCount) done")
+                    .font(.system(size: 9, weight: .medium))
+                    .foregroundColor(allDone ? wGreen : wSecondary)
+                Spacer()
+                if !allDone && !entry.habits.isEmpty {
+                    Text("\(entry.habits.count - doneCount) remaining")
+                        .font(.system(size: 9))
+                        .foregroundColor(wTertiary)
+                }
+            }
         }
+        .padding(12)
     }
 }
 
@@ -181,37 +202,34 @@ struct HabitRowView: View {
     let habit: HabitEntry
 
     var body: some View {
-        HStack(spacing: 6) {
-            // Color dot + done indicator
+        HStack(spacing: 8) {
             ZStack {
-                Circle()
-                    .fill(Color(habitColor: habit.color).opacity(habit.done ? 0.9 : 0.25))
-                    .frame(width: 10, height: 10)
+                RoundedRectangle(cornerRadius: 4, style: .continuous)
+                    .fill(habit.done ? Color(habitColor: habit.color).opacity(0.12) : Color.clear)
+                RoundedRectangle(cornerRadius: 4, style: .continuous)
+                    .strokeBorder(habit.done ? Color(habitColor: habit.color) : wSep, lineWidth: 1.5)
                 if habit.done {
                     Image(systemName: "checkmark")
-                        .font(.system(size: 6, weight: .bold))
-                        .foregroundColor(.white)
+                        .font(.system(size: 7, weight: .bold))
+                        .foregroundColor(Color(habitColor: habit.color))
                 }
             }
+            .frame(width: 14, height: 14)
 
             Text(habit.title)
                 .font(.system(size: 12, weight: .medium))
-                .foregroundColor(habit.done ? Color.white.opacity(0.9) : Color.white.opacity(0.5))
+                .foregroundColor(habit.done ? wSecondary : wPrimary)
+                .strikethrough(habit.done, color: wSep)
                 .lineLimit(1)
 
             Spacer()
 
             if habit.streak >= 3 {
-                HStack(spacing: 2) {
-                    Text("🔥")
-                        .font(.system(size: 9))
-                    Text("\(habit.streak)")
-                        .font(.system(size: 10, weight: .semibold))
-                        .foregroundColor(habit.streak >= 7 ? .orange : Color.yellow.opacity(0.8))
-                }
+                Text("×\(habit.streak)")
+                    .font(.system(size: 9, weight: .medium))
+                    .foregroundColor(habit.streak >= 7 ? wAmber : wTertiary)
             }
         }
-        .padding(.vertical, 2)
     }
 }
 
@@ -223,7 +241,7 @@ struct HabitsWidget: Widget {
     var body: some WidgetConfiguration {
         StaticConfiguration(kind: kind, provider: HabitsProvider()) { entry in
             HabitsWidgetView(entry: entry)
-                .widgetBackground(Color(red: 0.07, green: 0.07, blue: 0.09))
+                .widgetBackground(wBg)
         }
         .configurationDisplayName("Habits")
         .description("Today's habits with streaks and completion status.")

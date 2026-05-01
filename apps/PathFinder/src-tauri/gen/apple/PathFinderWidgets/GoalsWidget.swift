@@ -1,23 +1,21 @@
 import WidgetKit
 import SwiftUI
 
-private let kAccent = Color(red: 0.55, green: 0.27, blue: 0.9) // violet
-
 // MARK: - Entry
 
 struct GoalsWidgetEntry: TimelineEntry {
     let date: Date
-    let goals: [GoalRow]        // top 5, sorted high → medium → low
+    let goals: [GoalRow]
     let activeCount: Int
 
     static let placeholder = GoalsWidgetEntry(
         date: Date(),
         goals: [
-            GoalRow(id: 1, title: "Ship PathFinder v1.0",     priority: "high",   deadline: "2026-05-15"),
-            GoalRow(id: 2, title: "Read 12 books this year",  priority: "medium", deadline: nil),
-            GoalRow(id: 3, title: "Get to 80 kg",             priority: "medium", deadline: "2026-06-01"),
-            GoalRow(id: 4, title: "Daily meditation habit",   priority: "low",    deadline: nil),
-            GoalRow(id: 5, title: "Launch side project",      priority: "high",   deadline: "2026-07-01"),
+            GoalRow(id: 1, title: "Ship PathFinder v1.0",    priority: "high",   deadline: "2026-05-15"),
+            GoalRow(id: 2, title: "Read 12 books this year", priority: "medium", deadline: nil),
+            GoalRow(id: 3, title: "Get to 80 kg",            priority: "medium", deadline: "2026-06-01"),
+            GoalRow(id: 4, title: "Daily meditation habit",  priority: "low",    deadline: nil),
+            GoalRow(id: 5, title: "Launch side project",     priority: "high",   deadline: "2026-07-01"),
         ],
         activeCount: 5
     )
@@ -53,7 +51,6 @@ struct GoalsProvider: TimelineProvider {
             select: "id,title,priority,deadline",
             filters: ["user_id": "eq.\(Secrets.userID)", "status": "eq.active"]
         )) ?? []
-
         let sorted = all.sorted { priorityOrder($0.priority) < priorityOrder($1.priority) }
         return GoalsWidgetEntry(date: Date(), goals: Array(sorted.prefix(5)), activeCount: all.count)
     }
@@ -78,18 +75,16 @@ private struct GoalItemRow: View {
     }
 
     private var badgeColor: Color {
-        guard let dl = goal.deadline, let days = daysUntil(dl) else { return .orange }
-        return days < 0 ? .red : .orange
+        guard let dl = goal.deadline, let days = daysUntil(dl) else { return wTertiary }
+        return days < 0 ? wRed : wAmber
     }
 
     var body: some View {
-        HStack(spacing: 7) {
-            Circle()
-                .fill(dotColor.opacity(goal.priority == "low" ? 0.3 : 0.85))
-                .frame(width: 5, height: 5)
+        HStack(spacing: 8) {
+            Circle().fill(dotColor).frame(width: 6, height: 6)
             Text(goal.title)
                 .font(.system(size: 12, weight: .medium))
-                .foregroundColor(Color.white.opacity(0.85))
+                .foregroundColor(wPrimary.opacity(0.85))
                 .lineLimit(1)
             Spacer(minLength: 0)
             if let badge = deadlineBadge {
@@ -101,105 +96,94 @@ private struct GoalItemRow: View {
     }
 }
 
-// MARK: - Small View
+// MARK: - Small view
 
 struct GoalsSmallView: View {
     let entry: GoalsWidgetEntry
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            // Header
-            HStack(spacing: 4) {
-                Circle().fill(kAccent).frame(width: 6, height: 6)
-                Text("GOALS")
-                    .font(.system(size: 9, weight: .semibold))
-                    .foregroundColor(kAccent)
-                    .tracking(1.5)
+        VStack(alignment: .leading, spacing: 0) {
+            HStack {
+                CleanHeader(label: "GOALS")
                 Spacer()
                 if entry.activeCount > 0 {
                     Text("\(entry.activeCount)")
-                        .font(.system(size: 10, weight: .bold))
-                        .foregroundColor(Color.white.opacity(0.4))
+                        .font(.system(size: 10, weight: .medium))
+                        .foregroundColor(wSecondary)
                 }
             }
+            .padding(.bottom, 8)
+
+            CleanDivider().padding(.bottom, 10)
 
             if let top = entry.goals.first {
                 Text(top.title)
-                    .font(.system(size: 14, weight: .semibold))
-                    .foregroundColor(.white)
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundColor(wPrimary)
                     .lineLimit(4)
                     .fixedSize(horizontal: false, vertical: true)
             } else {
                 Spacer()
                 Text("No active goals")
                     .font(.system(size: 12))
-                    .foregroundColor(Color.white.opacity(0.3))
+                    .foregroundColor(wTertiary)
             }
 
             Spacer(minLength: 0)
 
             if entry.activeCount > 1 {
+                CleanDivider().padding(.vertical, 6)
                 Text("+\(entry.activeCount - 1) more")
                     .font(.system(size: 9))
-                    .foregroundColor(Color.white.opacity(0.25))
+                    .foregroundColor(wTertiary)
             }
         }
         .padding(14)
     }
 }
 
-// MARK: - Medium View
+// MARK: - Medium view
 
 struct GoalsMediumView: View {
     let entry: GoalsWidgetEntry
 
     var body: some View {
         HStack(alignment: .top, spacing: 0) {
-
-            // Left: top goal prominent display
-            VStack(alignment: .leading, spacing: 6) {
-                HStack(spacing: 4) {
-                    Circle().fill(kAccent).frame(width: 6, height: 6)
-                    Text("GOALS")
-                        .font(.system(size: 9, weight: .semibold))
-                        .foregroundColor(kAccent)
-                        .tracking(1.5)
-                }
+            VStack(alignment: .leading, spacing: 0) {
+                CleanHeader(label: "GOALS")
+                    .padding(.bottom, 8)
+                CleanDivider().padding(.bottom, 10)
 
                 if let top = entry.goals.first {
                     Text(top.title)
-                        .font(.system(size: 15, weight: .semibold))
-                        .foregroundColor(.white)
+                        .font(.system(size: 14, weight: .semibold))
+                        .foregroundColor(wPrimary)
                         .lineLimit(4)
                         .fixedSize(horizontal: false, vertical: true)
                 } else {
                     Text("No active goals")
-                        .font(.system(size: 13))
-                        .foregroundColor(Color.white.opacity(0.3))
+                        .font(.system(size: 12))
+                        .foregroundColor(wTertiary)
                 }
 
                 Spacer(minLength: 0)
 
+                CleanDivider().padding(.vertical, 6)
                 Text("\(entry.activeCount) active")
-                    .font(.system(size: 10))
-                    .foregroundColor(Color.white.opacity(0.3))
+                    .font(.system(size: 9))
+                    .foregroundColor(wTertiary)
             }
             .padding(14)
             .frame(maxWidth: .infinity)
 
-            // Divider
-            Rectangle()
-                .fill(Color.white.opacity(0.08))
-                .frame(width: 1)
-                .padding(.vertical, 12)
+            Rectangle().fill(wSep).frame(width: 0.5).padding(.vertical, 12)
 
-            // Right: next goals list
-            VStack(alignment: .leading, spacing: 6) {
+            VStack(alignment: .leading, spacing: 8) {
                 if entry.goals.count <= 1 {
                     Spacer()
-                    Text("Only one goal")
-                        .font(.system(size: 11))
-                        .foregroundColor(Color.white.opacity(0.25))
+                    Text("No other goals")
+                        .font(.system(size: 10))
+                        .foregroundColor(wTertiary)
                     Spacer()
                 } else {
                     ForEach(entry.goals.dropFirst(), id: \.id) { goal in
@@ -216,20 +200,6 @@ struct GoalsMediumView: View {
 
 // MARK: - Widget definition
 
-struct GoalsWidget: Widget {
-    let kind = "GoalsWidget"
-
-    var body: some WidgetConfiguration {
-        StaticConfiguration(kind: kind, provider: GoalsProvider()) { entry in
-            GoalsWidgetEntryView(entry: entry)
-                .widgetBackground(Color(red: 0.07, green: 0.07, blue: 0.09))
-        }
-        .configurationDisplayName("Goals")
-        .description("Your active goals at a glance.")
-        .supportedFamilies([.systemSmall, .systemMedium])
-    }
-}
-
 struct GoalsWidgetEntryView: View {
     @Environment(\.widgetFamily) var family
     let entry: GoalsWidgetEntry
@@ -239,5 +209,19 @@ struct GoalsWidgetEntryView: View {
         case .systemMedium: GoalsMediumView(entry: entry)
         default:            GoalsSmallView(entry: entry)
         }
+    }
+}
+
+struct GoalsWidget: Widget {
+    let kind = "GoalsWidget"
+
+    var body: some WidgetConfiguration {
+        StaticConfiguration(kind: kind, provider: GoalsProvider()) { entry in
+            GoalsWidgetEntryView(entry: entry)
+                .widgetBackground(wBg)
+        }
+        .configurationDisplayName("Goals")
+        .description("Your active goals at a glance.")
+        .supportedFamilies([.systemSmall, .systemMedium])
     }
 }

@@ -6,7 +6,7 @@ import SwiftUI
 struct SystemsWidgetEntry: TimelineEntry {
     let date: Date
     let dueCount: Int
-    let dueList: [SystemRow]     // for medium view
+    let dueList: [SystemRow]
     let isPlaceholder: Bool
 
     var topTitle: String? { dueList.first?.title }
@@ -59,52 +59,65 @@ struct SystemsProvider: TimelineProvider {
             .filter { systemIsDue($0) }
             .sorted { $0.streak_count > $1.streak_count }
 
-        return SystemsWidgetEntry(
-            date: Date(),
-            dueCount: due.count,
-            dueList: Array(due.prefix(6)),
-            isPlaceholder: false
-        )
+        return SystemsWidgetEntry(date: Date(), dueCount: due.count, dueList: Array(due.prefix(6)), isPlaceholder: false)
     }
 }
 
-// MARK: - Small View
+// MARK: - Row sub-view
+
+struct SystemRowView: View {
+    let sys: SystemRow
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Circle()
+                .strokeBorder(wTertiary, lineWidth: 1.2)
+                .frame(width: 12, height: 12)
+            Text(sys.title)
+                .font(.system(size: 12, weight: .medium))
+                .foregroundColor(wPrimary.opacity(0.85))
+                .lineLimit(1)
+            Spacer()
+            if sys.streak_count >= 2 {
+                Text("×\(sys.streak_count)")
+                    .font(.system(size: 9, weight: .medium))
+                    .foregroundColor(sys.streak_count >= 7 ? wAmber : wTertiary)
+            }
+        }
+    }
+}
+
+// MARK: - Small view
 
 struct SystemsSmallView: View {
     let entry: SystemsWidgetEntry
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            // Header
-            HStack(spacing: 4) {
-                Circle().fill(Color.orange.opacity(0.9)).frame(width: 6, height: 6)
-                Text("SYSTEMS")
-                    .font(.system(size: 9, weight: .semibold))
-                    .foregroundColor(.orange)
-                    .tracking(1.5)
-            }
-            .padding(.bottom, 10)
+            CleanHeader(label: "SYSTEMS")
+                .padding(.bottom, 8)
+
+            CleanDivider().padding(.bottom, 10)
 
             if entry.dueCount == 0 {
                 Spacer()
-                VStack(spacing: 4) {
-                    Image(systemName: "checkmark.seal.fill")
-                        .font(.system(size: 22))
-                        .foregroundColor(.green.opacity(0.8))
-                    Text("All done!")
-                        .font(.system(size: 12, weight: .semibold))
-                        .foregroundColor(Color.white.opacity(0.7))
+                VStack(alignment: .leading, spacing: 4) {
+                    Image(systemName: "checkmark.circle.fill")
+                        .font(.system(size: 20))
+                        .foregroundColor(wGreen)
+                    Text("All clear")
+                        .font(.system(size: 11, weight: .semibold))
+                        .foregroundColor(wGreen)
                 }
-                .frame(maxWidth: .infinity)
                 Spacer()
             } else {
-                HStack(alignment: .lastTextBaseline, spacing: 3) {
+                HStack(alignment: .lastTextBaseline, spacing: 4) {
                     Text("\(entry.dueCount)")
                         .font(.system(size: 36, weight: .bold, design: .rounded))
-                        .foregroundColor(.white)
+                        .foregroundColor(wPrimary)
                     Text("due")
-                        .font(.system(size: 13))
-                        .foregroundColor(Color.white.opacity(0.45))
+                        .font(.system(size: 12))
+                        .foregroundColor(wSecondary)
                         .padding(.bottom, 4)
                 }
 
@@ -113,64 +126,57 @@ struct SystemsSmallView: View {
                 if let title = entry.topTitle {
                     VStack(alignment: .leading, spacing: 3) {
                         Text(title)
-                            .font(.system(size: 12, weight: .semibold))
-                            .foregroundColor(Color.white.opacity(0.85))
+                            .font(.system(size: 12, weight: .medium))
+                            .foregroundColor(wPrimary.opacity(0.85))
                             .lineLimit(2)
                         if entry.topStreak > 0 {
-                            HStack(spacing: 2) {
-                                Text("🔥").font(.system(size: 10))
-                                Text("\(entry.topStreak) streak")
-                                    .font(.system(size: 10))
-                                    .foregroundColor(Color.orange.opacity(0.8))
-                            }
+                            Text("×\(entry.topStreak) streak")
+                                .font(.system(size: 9, weight: .medium))
+                                .foregroundColor(entry.topStreak >= 7 ? wAmber : wTertiary)
                         }
                     }
                 }
             }
+
+            Spacer(minLength: 0)
         }
         .padding(14)
     }
 }
 
-// MARK: - Medium View
+// MARK: - Medium view
 
 struct SystemsMediumView: View {
     let entry: SystemsWidgetEntry
 
     var body: some View {
         HStack(alignment: .top, spacing: 0) {
-
-            // Left: count + status
-            VStack(alignment: .leading, spacing: 8) {
-                HStack(spacing: 4) {
-                    Circle().fill(Color.orange.opacity(0.9)).frame(width: 6, height: 6)
-                    Text("SYSTEMS")
-                        .font(.system(size: 9, weight: .semibold))
-                        .foregroundColor(.orange)
-                        .tracking(1.5)
-                }
+            // Left: count
+            VStack(alignment: .leading, spacing: 0) {
+                CleanHeader(label: "SYSTEMS")
+                    .padding(.bottom, 8)
+                CleanDivider().padding(.bottom, 8)
 
                 if entry.dueCount == 0 {
                     Spacer()
-                    VStack(spacing: 4) {
-                        Image(systemName: "checkmark.seal.fill")
-                            .font(.system(size: 26))
-                            .foregroundColor(.green.opacity(0.8))
-                        Text("All caught up")
-                            .font(.system(size: 11, weight: .medium))
-                            .foregroundColor(Color.white.opacity(0.6))
+                    VStack(alignment: .leading, spacing: 4) {
+                        Image(systemName: "checkmark.circle.fill")
+                            .font(.system(size: 22))
+                            .foregroundColor(wGreen)
+                        Text("All clear")
+                            .font(.system(size: 11, weight: .semibold))
+                            .foregroundColor(wGreen)
                     }
-                    .frame(maxWidth: .infinity)
                     Spacer()
                 } else {
                     HStack(alignment: .lastTextBaseline, spacing: 3) {
                         Text("\(entry.dueCount)")
-                            .font(.system(size: 42, weight: .bold, design: .rounded))
-                            .foregroundColor(.white)
+                            .font(.system(size: 40, weight: .bold, design: .rounded))
+                            .foregroundColor(wPrimary)
                         Text("due")
-                            .font(.system(size: 13))
-                            .foregroundColor(Color.white.opacity(0.4))
-                            .padding(.bottom, 6)
+                            .font(.system(size: 12))
+                            .foregroundColor(wSecondary)
+                            .padding(.bottom, 5)
                     }
                     Spacer(minLength: 0)
                 }
@@ -178,54 +184,25 @@ struct SystemsMediumView: View {
             .padding(14)
             .frame(width: 110)
 
-            // Divider
-            Rectangle()
-                .fill(Color.white.opacity(0.08))
-                .frame(width: 1)
-                .padding(.vertical, 12)
+            Rectangle().fill(wSep).frame(width: 0.5).padding(.vertical, 12)
 
-            // Right: list of due systems
-            VStack(alignment: .leading, spacing: 5) {
+            // Right: due systems list
+            VStack(alignment: .leading, spacing: 6) {
                 if entry.dueList.isEmpty {
                     Spacer()
                     Text("Nothing due today")
-                        .font(.system(size: 11))
-                        .foregroundColor(Color.white.opacity(0.3))
+                        .font(.system(size: 10))
+                        .foregroundColor(wTertiary)
                     Spacer()
                 } else {
                     ForEach(entry.dueList, id: \.id) { sys in
                         SystemRowView(sys: sys)
                     }
                 }
+                Spacer(minLength: 0)
             }
             .padding(14)
             .frame(maxWidth: .infinity, alignment: .leading)
-        }
-    }
-}
-
-struct SystemRowView: View {
-    let sys: SystemRow
-
-    var body: some View {
-        HStack(spacing: 6) {
-            Image(systemName: "arrow.trianglehead.2.counterclockwise")
-                .font(.system(size: 9))
-                .foregroundColor(Color.orange.opacity(0.7))
-                .frame(width: 12)
-            Text(sys.title)
-                .font(.system(size: 12, weight: .medium))
-                .foregroundColor(Color.white.opacity(0.85))
-                .lineLimit(1)
-            Spacer()
-            if sys.streak_count >= 2 {
-                HStack(spacing: 2) {
-                    Text("🔥").font(.system(size: 9))
-                    Text("\(sys.streak_count)")
-                        .font(.system(size: 10, weight: .semibold))
-                        .foregroundColor(Color.orange.opacity(0.8))
-                }
-            }
         }
     }
 }
@@ -252,7 +229,7 @@ struct SystemsWidget: Widget {
     var body: some WidgetConfiguration {
         StaticConfiguration(kind: kind, provider: SystemsProvider()) { entry in
             SystemsWidgetEntryView(entry: entry)
-                .widgetBackground(Color(red: 0.07, green: 0.07, blue: 0.09))
+                .widgetBackground(wBg)
         }
         .configurationDisplayName("Systems Due")
         .description("Recurring systems that need attention today.")

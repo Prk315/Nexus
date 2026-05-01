@@ -1,8 +1,6 @@
 import WidgetKit
 import SwiftUI
 
-private let kTaskAccent = Color(red: 0.3, green: 0.6, blue: 1.0) // blue
-
 // MARK: - Entry
 
 struct TasksWidgetEntry: TimelineEntry {
@@ -54,14 +52,12 @@ struct TasksProvider: TimelineProvider {
     private func fetchEntry() async -> TasksWidgetEntry {
         let today = todayString()
 
-        // Fetch all undone tasks with a due_date <= today.
-        // PostgREST lte naturally excludes NULL values, so no extra null filter needed.
         let rows: [TaskDetailRow] = (try? await client.fetch(
             table: "pf_tasks",
             select: "id,title,done,due_date,priority",
             filters: [
-                "user_id": "eq.\(Secrets.userID)",
-                "done":    "eq.false",
+                "user_id":  "eq.\(Secrets.userID)",
+                "done":     "eq.false",
                 "due_date": "lte.\(today)",
             ]
         )) ?? []
@@ -93,31 +89,31 @@ private struct TaskRowView: View {
     }
 
     var body: some View {
-        HStack(spacing: 7) {
-            Circle()
-                .strokeBorder(task.isOverdue ? Color.red.opacity(0.7) : dotColor.opacity(0.7), lineWidth: 1.5)
-                .frame(width: 9, height: 9)
+        HStack(spacing: 8) {
+            RoundedRectangle(cornerRadius: 3, style: .continuous)
+                .strokeBorder(task.isOverdue ? wRed : dotColor, lineWidth: 1.2)
+                .frame(width: 12, height: 12)
             Text(task.title)
                 .font(.system(size: 12, weight: .medium))
-                .foregroundColor(task.isOverdue ? Color.red.opacity(0.75) : Color.white.opacity(0.85))
+                .foregroundColor(task.isOverdue ? wRed : wPrimary.opacity(0.85))
                 .lineLimit(1)
             Spacer(minLength: 0)
         }
     }
 }
 
-private struct SectionHeader: View {
+private struct CleanSectionLabel: View {
     let label: String
     let count: Int
     let color: Color
 
     var body: some View {
-        HStack(spacing: 4) {
-            Circle().fill(color).frame(width: 5, height: 5)
+        HStack(spacing: 6) {
+            Rectangle().fill(color).frame(width: 2, height: 8).cornerRadius(1)
             Text(label)
                 .font(.system(size: 8, weight: .semibold))
                 .foregroundColor(color)
-                .tracking(1.2)
+                .tracking(0.8)
             Spacer()
             Text("\(count)")
                 .font(.system(size: 9, weight: .semibold))
@@ -126,55 +122,49 @@ private struct SectionHeader: View {
     }
 }
 
-// MARK: - Medium View  (due today list)
+// MARK: - Medium view
 
 struct TasksMediumView: View {
     let entry: TasksWidgetEntry
 
     var body: some View {
         HStack(alignment: .top, spacing: 0) {
-
             // Left: count summary
-            VStack(alignment: .leading, spacing: 6) {
-                HStack(spacing: 4) {
-                    Circle().fill(kTaskAccent).frame(width: 6, height: 6)
-                    Text("TASKS")
-                        .font(.system(size: 9, weight: .semibold))
-                        .foregroundColor(kTaskAccent)
-                        .tracking(1.5)
-                }
+            VStack(alignment: .leading, spacing: 0) {
+                CleanHeader(label: "TASKS")
+                    .padding(.bottom, 8)
+                CleanDivider().padding(.bottom, 8)
 
                 if entry.totalDue == 0 {
                     Spacer()
-                    VStack(spacing: 4) {
+                    VStack(alignment: .leading, spacing: 4) {
                         Image(systemName: "checkmark.circle.fill")
-                            .font(.system(size: 24))
-                            .foregroundColor(.green.opacity(0.8))
+                            .font(.system(size: 20))
+                            .foregroundColor(wGreen)
                         Text("All clear")
-                            .font(.system(size: 11, weight: .medium))
-                            .foregroundColor(Color.white.opacity(0.6))
+                            .font(.system(size: 11, weight: .semibold))
+                            .foregroundColor(wGreen)
                     }
-                    .frame(maxWidth: .infinity)
                     Spacer()
                 } else {
                     HStack(alignment: .lastTextBaseline, spacing: 3) {
                         Text("\(entry.dueToday.count)")
-                            .font(.system(size: 38, weight: .bold, design: .rounded))
-                            .foregroundColor(.white)
+                            .font(.system(size: 36, weight: .bold, design: .rounded))
+                            .foregroundColor(wPrimary)
                         Text("today")
-                            .font(.system(size: 12))
-                            .foregroundColor(Color.white.opacity(0.4))
-                            .padding(.bottom, 5)
+                            .font(.system(size: 11))
+                            .foregroundColor(wSecondary)
+                            .padding(.bottom, 4)
                     }
                     Spacer(minLength: 0)
                     if entry.overdue.count > 0 {
                         HStack(spacing: 3) {
                             Image(systemName: "exclamationmark.circle.fill")
-                                .font(.system(size: 10))
-                                .foregroundColor(.red)
+                                .font(.system(size: 9))
+                                .foregroundColor(wRed)
                             Text("\(entry.overdue.count) overdue")
-                                .font(.system(size: 10, weight: .semibold))
-                                .foregroundColor(.red.opacity(0.8))
+                                .font(.system(size: 9, weight: .semibold))
+                                .foregroundColor(wRed)
                         }
                     }
                 }
@@ -182,22 +172,17 @@ struct TasksMediumView: View {
             .padding(14)
             .frame(width: 110)
 
-            // Divider
-            Rectangle()
-                .fill(Color.white.opacity(0.08))
-                .frame(width: 1)
-                .padding(.vertical, 12)
+            Rectangle().fill(wSep).frame(width: 0.5).padding(.vertical, 12)
 
             // Right: task list
             VStack(alignment: .leading, spacing: 5) {
                 if entry.dueToday.isEmpty && entry.overdue.isEmpty {
                     Spacer()
                     Text("Nothing due today")
-                        .font(.system(size: 11))
-                        .foregroundColor(Color.white.opacity(0.3))
+                        .font(.system(size: 10))
+                        .foregroundColor(wTertiary)
                     Spacer()
                 } else {
-                    // Show overdue first (capped at 2) then due today
                     let overdueShown = Array(entry.overdue.prefix(2))
                     let todayShown   = Array(entry.dueToday.prefix(6 - overdueShown.count))
 
@@ -208,10 +193,11 @@ struct TasksMediumView: View {
                     if remaining > 0 {
                         Text("+\(remaining) more")
                             .font(.system(size: 9))
-                            .foregroundColor(Color.white.opacity(0.25))
+                            .foregroundColor(wTertiary)
                             .padding(.top, 1)
                     }
                 }
+                Spacer(minLength: 0)
             }
             .padding(14)
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -219,50 +205,54 @@ struct TasksMediumView: View {
     }
 }
 
-// MARK: - Large View  (due today + full overdue section)
+// MARK: - Large view
 
 struct TasksLargeView: View {
     let entry: TasksWidgetEntry
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            // Header
-            HStack(spacing: 4) {
-                Circle().fill(kTaskAccent).frame(width: 6, height: 6)
-                Text("TASKS")
-                    .font(.system(size: 9, weight: .semibold))
-                    .foregroundColor(kTaskAccent)
-                    .tracking(1.5)
+        VStack(alignment: .leading, spacing: 0) {
+            HStack {
+                CleanHeader(label: "TASKS")
                 Spacer()
-                Text("\(entry.totalDue) pending")
-                    .font(.system(size: 10))
-                    .foregroundColor(Color.white.opacity(0.35))
+                if entry.totalDue > 0 {
+                    Text("\(entry.totalDue) pending")
+                        .font(.system(size: 9))
+                        .foregroundColor(wTertiary)
+                }
             }
+            .padding(.bottom, 8)
+
+            CleanDivider().padding(.bottom, 10)
 
             if entry.totalDue == 0 {
                 Spacer()
-                VStack(spacing: 6) {
+                VStack(spacing: 8) {
                     Image(systemName: "checkmark.circle.fill")
-                        .font(.system(size: 32))
-                        .foregroundColor(.green.opacity(0.8))
-                    Text("Nothing due today")
-                        .font(.system(size: 14, weight: .medium))
-                        .foregroundColor(Color.white.opacity(0.6))
+                        .font(.system(size: 28))
+                        .foregroundColor(wGreen)
+                    Text("All tasks done")
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundColor(wPrimary)
+                    Text("Great work today.")
+                        .font(.system(size: 10))
+                        .foregroundColor(wSecondary)
                 }
                 .frame(maxWidth: .infinity)
                 Spacer()
             } else {
-                // Due today section
                 if !entry.dueToday.isEmpty {
-                    SectionHeader(label: "DUE TODAY", count: entry.dueToday.count, color: kTaskAccent)
+                    CleanSectionLabel(label: "DUE TODAY", count: entry.dueToday.count, color: wBlue)
+                        .padding(.bottom, 6)
                     VStack(spacing: 6) {
                         ForEach(entry.dueToday) { task in TaskRowView(task: task) }
                     }
                 }
 
-                // Overdue section
                 if !entry.overdue.isEmpty {
-                    SectionHeader(label: "OVERDUE", count: entry.overdue.count, color: .red)
+                    CleanDivider().padding(.vertical, 8)
+                    CleanSectionLabel(label: "OVERDUE", count: entry.overdue.count, color: wRed)
+                        .padding(.bottom, 6)
                     VStack(spacing: 6) {
                         ForEach(entry.overdue) { task in TaskRowView(task: task) }
                     }
@@ -277,20 +267,6 @@ struct TasksLargeView: View {
 
 // MARK: - Widget definition
 
-struct TasksWidget: Widget {
-    let kind = "TasksWidget"
-
-    var body: some WidgetConfiguration {
-        StaticConfiguration(kind: kind, provider: TasksProvider()) { entry in
-            TasksWidgetEntryView(entry: entry)
-                .widgetBackground(Color(red: 0.07, green: 0.07, blue: 0.09))
-        }
-        .configurationDisplayName("Tasks")
-        .description("Tasks due today and overdue.")
-        .supportedFamilies([.systemMedium, .systemLarge])
-    }
-}
-
 struct TasksWidgetEntryView: View {
     @Environment(\.widgetFamily) var family
     let entry: TasksWidgetEntry
@@ -300,5 +276,19 @@ struct TasksWidgetEntryView: View {
         case .systemLarge: TasksLargeView(entry: entry)
         default:           TasksMediumView(entry: entry)
         }
+    }
+}
+
+struct TasksWidget: Widget {
+    let kind = "TasksWidget"
+
+    var body: some WidgetConfiguration {
+        StaticConfiguration(kind: kind, provider: TasksProvider()) { entry in
+            TasksWidgetEntryView(entry: entry)
+                .widgetBackground(wBg)
+        }
+        .configurationDisplayName("Tasks")
+        .description("Tasks due today and overdue.")
+        .supportedFamilies([.systemMedium, .systemLarge])
     }
 }
