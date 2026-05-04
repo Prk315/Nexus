@@ -87,3 +87,36 @@ pub fn toggle_widgets(app: AppHandle) {
         let _ = app; // no-op on mobile
     }
 }
+
+/// Invoked from the tray to show or hide all pie-widget windows.
+#[tauri::command]
+pub fn toggle_pie_widgets(app: AppHandle) {
+    #[cfg(desktop)]
+    {
+        let handle = app.clone();
+        let _ = app.run_on_main_thread(move || {
+            let widgets: Vec<_> = handle
+                .webview_windows()
+                .into_iter()
+                .filter(|(label, _)| label.starts_with("pie_widget"))
+                .map(|(_, win)| win)
+                .collect();
+
+            let Some(first) = widgets.first() else { return };
+            let visible = first.is_visible().unwrap_or(false);
+
+            for win in &widgets {
+                if visible {
+                    let _ = win.hide();
+                } else {
+                    let _ = win.show();
+                    apply_macos_workspace_behavior(win);
+                }
+            }
+        });
+    }
+    #[cfg(mobile)]
+    {
+        let _ = app;
+    }
+}

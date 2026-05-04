@@ -89,11 +89,26 @@ pub fn timetracker_dir() -> PathBuf {
 }
 
 fn read_config(path: &PathBuf) -> AppConfig {
-    if !path.exists() {
-        return AppConfig::default();
+    let mut config = if !path.exists() {
+        AppConfig::default()
+    } else {
+        fs::read_to_string(path)
+            .ok()
+            .and_then(|s| serde_json::from_str(&s).ok())
+            .unwrap_or_default()
+    };
+
+    // Backfill Supabase credentials if missing (migrates old configs)
+    let defaults = AppConfig::default();
+    if config.supabase.url.is_empty() {
+        config.supabase.url = defaults.supabase.url;
     }
-    fs::read_to_string(path)
-        .ok()
-        .and_then(|s| serde_json::from_str(&s).ok())
-        .unwrap_or_default()
+    if config.supabase.key.is_empty() {
+        config.supabase.key = defaults.supabase.key;
+    }
+    if config.supabase.table_name.is_empty() {
+        config.supabase.table_name = defaults.supabase.table_name;
+    }
+
+    config
 }

@@ -14,6 +14,10 @@ export default defineConfig(async () => ({
       "@": path.resolve(__dirname, "./src"),
       "@nexus/core": path.resolve(__dirname, "../../packages/nexus-core/src/index.ts"),
     },
+    dedupe: ["react", "react-dom"],
+  },
+  optimizeDeps: {
+    include: ["react-force-graph-2d"],
   },
 
   // Vite options tailored for Tauri development and only applied in `tauri dev` or `tauri build`

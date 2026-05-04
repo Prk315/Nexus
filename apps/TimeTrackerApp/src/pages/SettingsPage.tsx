@@ -7,7 +7,7 @@ import { fetchConfig, updateConfig, setTheme, setPomodoro } from "../store/slice
 import { fetchCategories, updateCategories } from "../store/slices/categoriesSlice";
 import { setPomodoroEnabled } from "../store/slices/timerSlice";
 import { runSync, runPush, runPull } from "../store/slices/syncSlice";
-import { testSupabaseConnection, exportCsv, exportJson, importJson } from "../lib/tauriApi";
+import { exportCsv, exportJson, importJson } from "../lib/tauriApi";
 import Toggle from "../components/shared/Toggle";
 
 // ── Categories CRUD ───────────────────────────────────────────────────────────
@@ -327,33 +327,12 @@ export default function SettingsPage() {
   const pomodoroEnabled = useAppSelector((s) => s.timer.pomodoroEnabled);
   const sync = useAppSelector((s) => s.sync);
 
-  const [supaUrl, setSupaUrl] = useState("");
-  const [supaKey, setSupaKey] = useState("");
-  const [connStatus, setConnStatus] = useState<string | null>(null);
   const [importResult, setImportResult] = useState<string | null>(null);
 
   useEffect(() => {
     dispatch(fetchConfig());
     dispatch(fetchCategories());
   }, [dispatch]);
-
-  useEffect(() => {
-    if (config?.supabase) {
-      setSupaUrl(config.supabase.url);
-      setSupaKey(config.supabase.key);
-    }
-  }, [config]);
-
-  const saveSupabase = () => {
-    dispatch(updateConfig({ key: "supabase.url", value: supaUrl }));
-    dispatch(updateConfig({ key: "supabase.key", value: supaKey }));
-  };
-
-  const testConn = async () => {
-    const ok = await testSupabaseConnection();
-    setConnStatus(ok ? "Connected" : "Failed");
-    setTimeout(() => setConnStatus(null), 3000);
-  };
 
   const handleExportCsv = async () => {
     const path = await save({
@@ -470,22 +449,11 @@ export default function SettingsPage() {
         <CategoriesEditor />
       </section>
 
-      {/* Supabase Sync */}
+      {/* Cloud Sync */}
       <section>
-        <h3 style={sectionTitle}>Supabase Sync</h3>
+        <h3 style={sectionTitle}>Cloud Sync</h3>
         <div style={{ display: "flex", flexDirection: "column", gap: 8, maxWidth: 400 }}>
-          <input placeholder="Project URL" value={supaUrl} onChange={(e) => setSupaUrl(e.target.value)} />
-          <input placeholder="Anon key" type="password" value={supaKey} onChange={(e) => setSupaKey(e.target.value)} />
           <div style={{ display: "flex", gap: 8 }}>
-            <button onClick={saveSupabase} style={btnPrimary}>Save</button>
-            <button onClick={testConn} style={btnSecondary}>Test Connection</button>
-          </div>
-          {connStatus && (
-            <div style={{ fontSize: 12, color: connStatus === "Connected" ? "var(--success)" : "var(--danger)" }}>
-              {connStatus}
-            </div>
-          )}
-          <div style={{ display: "flex", gap: 8, marginTop: 4 }}>
             <button onClick={() => dispatch(runSync())} disabled={sync.isSyncing} style={btnSecondary}>Sync Both</button>
             <button onClick={() => dispatch(runPush())} disabled={sync.isSyncing} style={btnSecondary}>Push</button>
             <button onClick={() => dispatch(runPull())} disabled={sync.isSyncing} style={btnSecondary}>Pull</button>
@@ -566,14 +534,6 @@ const btnSmallSecondary: React.CSSProperties = {
   fontSize: 12,
   cursor: "pointer",
   flexShrink: 0,
-};
-
-const btnPrimary: React.CSSProperties = {
-  background: "var(--accent)",
-  color: "var(--accent-fg)",
-  padding: "7px 14px",
-  borderRadius: "var(--radius-sm)",
-  fontSize: 13,
 };
 
 const btnSecondary: React.CSSProperties = {

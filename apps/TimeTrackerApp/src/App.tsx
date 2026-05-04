@@ -10,9 +10,11 @@ import { useAutoSync } from "./hooks/useAutoSync";
 import { syncWidgetState } from "./lib/tauriApi";
 import AppShell from "./components/layout/AppShell";
 import FloatingWidget from "./pages/FloatingWidget";
+import PieFloatingWidget from "./pages/PieFloatingWidget";
 
 // Reliably detect the widget window by its Tauri label, not URL pathname
-const IS_WIDGET = getCurrentWindow().label.startsWith("widget");
+const IS_WIDGET     = getCurrentWindow().label.startsWith("widget");
+const IS_PIE_WIDGET = getCurrentWindow().label.startsWith("pie_widget");
 
 function ThemeWrapper({ children }: { children: React.ReactNode }) {
   const theme = useAppSelector((s) => s.settings.theme);
@@ -44,7 +46,7 @@ export default function App() {
   const [pendingUrl, setPendingUrl] = useState<string | null>(null);
 
   useEffect(() => {
-    if (IS_WIDGET) {
+    if (IS_WIDGET || IS_PIE_WIDGET) {
       document.documentElement.classList.add("widget-window");
       document.body.classList.add("widget-window");
     }
@@ -74,7 +76,9 @@ export default function App() {
 
   return (
     <ThemeWrapper>
-      {IS_WIDGET ? (
+      {IS_PIE_WIDGET ? (
+        <PieFloatingWidget />
+      ) : IS_WIDGET ? (
         <FloatingWidget />
       ) : (
         <AppShell

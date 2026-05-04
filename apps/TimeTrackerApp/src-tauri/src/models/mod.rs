@@ -230,10 +230,10 @@ impl Default for AppConfig {
             billable_by_default: false,
             default_hourly_rate: 0.0,
             supabase: SupabaseConfig {
-                url: String::new(),
-                key: String::new(),
+                url: "https://efxmzsdisaymtpebaxlp.supabase.co".to_string(),
+                key: "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImVmeG16c2Rpc2F5bXRwZWJheGxwIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzY0NDM1NjksImV4cCI6MjA5MjAxOTU2OX0.ebOsEwVB2HXC-EV0n6ZhIKTeJML25ddMpvcZshrIQvs".to_string(),
                 table_name: "time_entries".to_string(),
-                auto_sync: false,
+                auto_sync: true,
             },
             display: default_display(),
             theme: default_theme(),

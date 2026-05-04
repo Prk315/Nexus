@@ -160,6 +160,123 @@ struct ActiveTimerMediumView: View {
     }
 }
 
+// MARK: - Lock screen: Circular
+
+struct ActiveTimerCircularView: View {
+    let entry: TimerEntry
+
+    private var startDate: Date {
+        Date(timeIntervalSince1970: entry.state.startTimestamp)
+    }
+
+    var body: some View {
+        if entry.state.isRunning {
+            ZStack {
+                AccessoryWidgetBackground()
+                VStack(spacing: 2) {
+                    Image(systemName: "timer")
+                        .font(.system(size: 12))
+                    Text(
+                        timerInterval: startDate...(startDate + 86400),
+                        countsDown: false
+                    )
+                    .font(.system(size: 11, weight: .bold, design: .monospaced))
+                    .monospacedDigit()
+                    .minimumScaleFactor(0.6)
+                    .lineLimit(1)
+                }
+            }
+        } else {
+            ZStack {
+                AccessoryWidgetBackground()
+                VStack(spacing: 2) {
+                    Image(systemName: "clock")
+                        .font(.system(size: 14))
+                    Text(todayFormatted)
+                        .font(.system(size: 10, weight: .medium))
+                }
+            }
+        }
+    }
+
+    private var todayFormatted: String {
+        let h = entry.state.todayTotalSeconds / 3600
+        let m = (entry.state.todayTotalSeconds % 3600) / 60
+        return h > 0 ? "\(h)h\(m)m" : "\(m)m"
+    }
+}
+
+// MARK: - Lock screen: Rectangular
+
+struct ActiveTimerRectangularView: View {
+    let entry: TimerEntry
+
+    private var startDate: Date {
+        Date(timeIntervalSince1970: entry.state.startTimestamp)
+    }
+
+    var body: some View {
+        if entry.state.isRunning {
+            VStack(alignment: .leading, spacing: 2) {
+                HStack(spacing: 4) {
+                    Image(systemName: "timer")
+                        .font(.system(size: 11))
+                    Text(
+                        timerInterval: startDate...(startDate + 86400),
+                        countsDown: false
+                    )
+                    .font(.system(size: 13, weight: .bold, design: .monospaced))
+                    .monospacedDigit()
+                }
+                Text(entry.state.taskName)
+                    .font(.system(size: 11))
+                    .lineLimit(1)
+                if !entry.state.projectName.isEmpty {
+                    Text(entry.state.projectName)
+                        .font(.system(size: 10))
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                }
+            }
+        } else {
+            VStack(alignment: .leading, spacing: 2) {
+                HStack(spacing: 4) {
+                    Image(systemName: "clock")
+                        .font(.system(size: 11))
+                    Text("No active session")
+                        .font(.system(size: 12, weight: .medium))
+                }
+                Text("Today: \(todayFormatted)")
+                    .font(.system(size: 11))
+                    .foregroundStyle(.secondary)
+            }
+        }
+    }
+
+    private var todayFormatted: String {
+        let h = entry.state.todayTotalSeconds / 3600
+        let m = (entry.state.todayTotalSeconds % 3600) / 60
+        return h > 0 ? "\(h)h \(m)m" : "\(m)m"
+    }
+}
+
+// MARK: - Lock screen: Inline
+
+struct ActiveTimerInlineView: View {
+    let entry: TimerEntry
+
+    var body: some View {
+        if entry.state.isRunning {
+            Label(entry.state.taskName.isEmpty ? "Tracking..." : entry.state.taskName, systemImage: "timer")
+        } else {
+            let h = entry.state.todayTotalSeconds / 3600
+            let m = (entry.state.todayTotalSeconds % 3600) / 60
+            let t = h > 0 ? "\(h)h \(m)m" : "\(m)m today"
+            Label(t, systemImage: "clock")
+        }
+    }
+}
+
 // MARK: - Widget definition
 
 struct ActiveTimerWidget: Widget {
@@ -179,7 +296,10 @@ struct ActiveTimerWidget: Widget {
         }
         .configurationDisplayName("Active Timer")
         .description("See your current tracking session at a glance.")
-        .supportedFamilies([.systemSmall, .systemMedium])
+        .supportedFamilies([
+            .systemSmall, .systemMedium,
+            .accessoryCircular, .accessoryRectangular, .accessoryInline
+        ])
     }
 }
 
@@ -190,8 +310,12 @@ struct ActiveTimerEntryView: View {
 
     var body: some View {
         switch family {
-        case .systemSmall: ActiveTimerSmallView(entry: entry)
-        default:           ActiveTimerMediumView(entry: entry)
+        case .systemSmall:          ActiveTimerSmallView(entry: entry)
+        case .systemMedium:         ActiveTimerMediumView(entry: entry)
+        case .accessoryCircular:    ActiveTimerCircularView(entry: entry)
+        case .accessoryRectangular: ActiveTimerRectangularView(entry: entry)
+        case .accessoryInline:      ActiveTimerInlineView(entry: entry)
+        default:                    ActiveTimerMediumView(entry: entry)
         }
     }
 }

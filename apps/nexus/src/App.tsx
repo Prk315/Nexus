@@ -4,6 +4,7 @@ import {
   AppGridButton, AppGraph3D, useConnectedApps, useAgentBar, useCalendarSidebar,
   type GraphNode, type GraphEdge,
 } from "@nexus/core";
+import { SchemaGraph2D } from "./components/SchemaGraph2D";
 
 // ── Error Boundary ─────────────────────────────────────────────────────────────
 class ErrorBoundary extends Component<
@@ -148,6 +149,11 @@ function App() {
             )}
           </div>
         </div>
+
+        {/* Database conceptual model */}
+        <ErrorBoundary name="SchemaGraph2D">
+          <SchemaGraph2D />
+        </ErrorBoundary>
       </main>
     </div>
   );

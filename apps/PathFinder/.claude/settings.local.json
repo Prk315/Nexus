@@ -60,7 +60,18 @@
       "Bash(/opt/homebrew/bin/node ./node_modules/.bin/tsc --noEmit)",
       "Bash(du -sh /Users/bastianthomsen/Repositories/PathFinder/* /Users/bastianthomsen/Repositories/PathFinder/.[^.]*)",
       "Bash(du -sh /Users/bastianthomsen/Repositories/PathFinder/src-tauri/*)",
-      "Bash(command -v node)"
+      "Bash(command -v node)",
+      "Bash(xcodebuild -project pathfinder.xcodeproj -target PathFinderWidgets -sdk iphonesimulator -destination 'generic/platform=iOS Simulator' build CODE_SIGNING_ALLOWED=NO)",
+      "Bash(/opt/homebrew/bin/xcodegen generate *)",
+      "Bash(npx tauri *)",
+      "Bash(cargo clean *)",
+      "Bash(du -sh ~/Library/Developer/*)",
+      "Bash(sort -rh du -sh ~/Library/Developer/Xcode/*)",
+      "Bash(xcrun simctl *)",
+      "Bash(python3 -c \" import json,sys d=json.load\\(sys.stdin\\)['devices'] for runtime,devs in d.items\\(\\): for dev in devs: print\\(f\\\\\"{runtime.split\\('.'\\)[-1]}: {dev['name']} \\({dev['udid'][:8]}...\\)\\\\\"\\) \")",
+      "Bash(du -sh ~/Documents/*)",
+      "Bash(du -sh ~/Library/Caches/*)",
+      "Bash(du -sh ~/.rustup/toolchains/*)"
     ]
   }
 }

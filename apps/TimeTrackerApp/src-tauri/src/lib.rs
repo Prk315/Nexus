@@ -75,8 +75,10 @@ pub fn run() {
                     .map(|m| m.scale_factor())
                     .unwrap_or(1.0);
 
+                let pie_logical = 180.0_f64;
+                let gap        = 10.0_f64;
+
                 for (i, monitor) in monitors.iter().enumerate() {
-                    let label = format!("widget_{}", i);
                     let own_scale = monitor.scale_factor();
                     let pos = monitor.position();
                     let size = monitor.size();
@@ -92,9 +94,10 @@ pub fn run() {
                         - widget_logical
                         - margin;
 
+                    // Timer widget (circle / square)
                     let build_result = tauri::WebviewWindowBuilder::new(
                         app,
-                        &label,
+                        &format!("widget_{i}"),
                         tauri::WebviewUrl::App("/".into()),
                     )
                     .title("")
@@ -110,12 +113,38 @@ pub fn run() {
                     .skip_taskbar(true)
                     .build();
 
-                    // Apply the full three-flag collection behavior so the widget
-                    // appears on all Spaces AND over fullscreen apps like VS Code.
                     if let Ok(ref widget) = build_result {
                         commands::configure_widget(widget);
                     }
                     let _ = build_result;
+
+                    // Pie widget — sits to the left of the timer widget,
+                    // vertically centred with it.
+                    let pie_x = x - pie_logical - gap;
+                    let pie_y = y - (pie_logical - widget_logical) / 2.0;
+
+                    let pie_result = tauri::WebviewWindowBuilder::new(
+                        app,
+                        &format!("pie_widget_{i}"),
+                        tauri::WebviewUrl::App("/".into()),
+                    )
+                    .title("")
+                    .inner_size(pie_logical, pie_logical)
+                    .position(pie_x, pie_y)
+                    .decorations(false)
+                    .transparent(true)
+                    .shadow(false)
+                    .always_on_top(true)
+                    .visible_on_all_workspaces(true)
+                    .visible(false)
+                    .resizable(false)
+                    .skip_taskbar(true)
+                    .build();
+
+                    if let Ok(ref widget) = pie_result {
+                        commands::configure_widget(widget);
+                    }
+                    let _ = pie_result;
                 }
             }
 
@@ -161,6 +190,7 @@ pub fn run() {
             commands::create_local_user,
             // Widget
             commands::toggle_widgets,
+            commands::toggle_pie_widgets,
             // App Blocker
             commands::get_blocked_apps,
             commands::add_blocked_app,

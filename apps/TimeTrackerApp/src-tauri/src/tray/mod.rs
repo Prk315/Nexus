@@ -11,10 +11,12 @@ pub fn setup(app: &AppHandle) -> tauri::Result<()> {
     let quit = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
     let open = MenuItem::with_id(app, "open", "Open TimeTracker", true, None::<&str>)?;
     let toggle_widget =
-        MenuItem::with_id(app, "toggle_widget", "Toggle Widget", true, None::<&str>)?;
+        MenuItem::with_id(app, "toggle_widget", "Toggle Timer Widget", true, None::<&str>)?;
+    let toggle_pie =
+        MenuItem::with_id(app, "toggle_pie_widget", "Toggle Day Pie", true, None::<&str>)?;
     let separator = PredefinedMenuItem::separator(app)?;
 
-    let menu = Menu::with_items(app, &[&open, &toggle_widget, &separator, &quit])?;
+    let menu = Menu::with_items(app, &[&open, &toggle_widget, &toggle_pie, &separator, &quit])?;
 
     TrayIconBuilder::with_id("main-tray")
         .tooltip("TimeTracker")
@@ -44,6 +46,25 @@ pub fn setup(app: &AppHandle) -> tauri::Result<()> {
                             let _ = win.show();
                             // Re-apply all three flags on every show so the
                             // full collection behavior survives hide→show cycles.
+                            configure_widget(win);
+                        }
+                    }
+                }
+            }
+            "toggle_pie_widget" => {
+                let widgets: Vec<_> = app
+                    .webview_windows()
+                    .into_iter()
+                    .filter(|(label, _)| label.starts_with("pie_widget"))
+                    .map(|(_, win)| win)
+                    .collect();
+                if let Some(first) = widgets.first() {
+                    let visible = first.is_visible().unwrap_or(false);
+                    for win in &widgets {
+                        if visible {
+                            let _ = win.hide();
+                        } else {
+                            let _ = win.show();
                             configure_widget(win);
                         }
                     }
