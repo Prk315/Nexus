@@ -21,6 +21,5 @@
       "@nexus/core/*": ["../../packages/nexus-core/src/*"]
     }
   },
-  "include": ["src", "../../packages/nexus-core/src"],
-  "references": [{ "path": "./tsconfig.node.json" }]
+  "include": ["src", "../../packages/nexus-core/src"]
 }

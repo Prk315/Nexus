@@ -5,13 +5,7 @@ import DashboardPage from "../../pages/DashboardPage";
 import BiomarkersPage from "../../pages/BiomarkersPage";
 import WorkoutsPage from "../../pages/WorkoutsPage";
 import RunningPage from "../../pages/RunningPage";
-
-const SettingsPage = () => (
-  <div style={{ padding: 32, color: "var(--text)" }}>
-    <h2 style={{ fontSize: 20, fontWeight: 600, marginBottom: 8 }}>Settings</h2>
-    <p style={{ color: "var(--text-muted)" }}>Theme and preferences.</p>
-  </div>
-);
+import SettingsPage from "../../pages/SettingsPage";
 
 const TABS = ["Dashboard", "Biomarkers", "Workouts", "Running", "Settings"] as const;
 type Tab = (typeof TABS)[number];

@@ -5,6 +5,7 @@ import { fetchWorkoutPlans, fetchWorkoutSessions } from "../store/slices/workout
 import WorkoutPlanner from "../components/workouts/WorkoutPlanner";
 import WorkoutSessionLogger from "../components/workouts/WorkoutSessionLogger";
 import StravaImportPanel from "../components/shared/StravaImportPanel";
+import GarminSyncPanel from "../components/shared/GarminSyncPanel";
 import type { WorkoutPlan } from "../store/types";
 
 const sectionHeader: React.CSSProperties = {
@@ -54,6 +55,10 @@ export default function WorkoutsPage() {
       </div>
 
       <StravaImportPanel mode="workouts" onImported={() => {
+        dispatch(fetchWorkoutPlans());
+        dispatch(fetchWorkoutSessions());
+      }} />
+      <GarminSyncPanel mode="activities" onSynced={() => {
         dispatch(fetchWorkoutPlans());
         dispatch(fetchWorkoutSessions());
       }} />

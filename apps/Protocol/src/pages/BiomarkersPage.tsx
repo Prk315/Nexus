@@ -6,6 +6,7 @@ import SleepLogger from "../components/biomarkers/SleepLogger";
 import NutritionLogger from "../components/biomarkers/NutritionLogger";
 import BodyMetricsLogger from "../components/biomarkers/BodyMetricsLogger";
 import OuraImportPanel from "../components/biomarkers/OuraImportPanel";
+import GarminSyncPanel from "../components/shared/GarminSyncPanel";
 
 type SubTab = "Sleep" | "Nutrition" | "Body Metrics";
 
@@ -81,6 +82,13 @@ export default function BiomarkersPage() {
         dispatch(fetchNutrition());
         dispatch(fetchBodyMetrics());
       }} />
+
+      {activeTab === "Sleep" && (
+        <GarminSyncPanel mode="sleep" onSynced={() => dispatch(fetchSleep())} />
+      )}
+      {activeTab === "Body Metrics" && (
+        <GarminSyncPanel mode="body" onSynced={() => dispatch(fetchBodyMetrics())} />
+      )}
     </div>
   );
 }

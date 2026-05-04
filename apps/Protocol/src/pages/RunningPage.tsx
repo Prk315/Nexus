@@ -5,6 +5,7 @@ import { fetchRunningPlans, fetchRunningSessions } from "../store/slices/running
 import RunningPlanBuilder from "../components/running/RunningPlanBuilder";
 import RunningSessionLogger from "../components/running/RunningSessionLogger";
 import StravaImportPanel from "../components/shared/StravaImportPanel";
+import GarminSyncPanel from "../components/shared/GarminSyncPanel";
 import type { RunningPlan } from "../store/types";
 
 const sectionHeader: React.CSSProperties = {
@@ -54,6 +55,10 @@ export default function RunningPage() {
       </div>
 
       <StravaImportPanel mode="running" onImported={() => {
+        dispatch(fetchRunningPlans());
+        dispatch(fetchRunningSessions());
+      }} />
+      <GarminSyncPanel mode="activities" onSynced={() => {
         dispatch(fetchRunningPlans());
         dispatch(fetchRunningSessions());
       }} />

@@ -20,7 +20,18 @@
       }
     ],
     "security": {
-      "csp": null
+      "csp": null,
+      "capabilities": [
+        {
+          "identifier": "default",
+          "description": "Default capability",
+          "windows": ["main"],
+          "permissions": [
+            "shell:allow-execute",
+            "shell:allow-open"
+          ]
+        }
+      ]
     }
   },
   "bundle": {

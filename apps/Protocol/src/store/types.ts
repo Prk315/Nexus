@@ -188,3 +188,11 @@ export interface CreateRunningSession {
   calories?: number | null;
   notes?: string | null;
 }
+
+export type GarminSyncStatus = "idle" | "syncing" | "success" | "error";
+
+export interface GarminSyncState {
+  status: GarminSyncStatus;
+  lastSynced: string | null;
+  error: string | null;
+}
