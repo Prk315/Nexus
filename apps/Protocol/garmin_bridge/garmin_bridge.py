@@ -1,9 +1,17 @@
 import argparse
 import datetime as dt
 import json
+import site
 import sys
 from datetime import date, timedelta
 from pathlib import Path
+
+# When spawned as a child process from a non-Store app (e.g. Tauri), the Windows
+# Store Python's sandboxed user site-packages isn't on sys.path by default.
+# Prepend it so packages installed via pip (garminconnect, etc.) are always found.
+_user_site = site.getusersitepackages()
+if _user_site not in sys.path:
+    sys.path.insert(0, _user_site)
 
 TOKEN_STORE = Path.home() / ".garminconnect"
 
