@@ -1,8 +1,8 @@
 import { useEffect, useState } from "react";
 import { Activity, CheckCircle, AlertCircle } from "lucide-react";
-import { garminCheckStatus, garminBridgePath } from "../../lib/garminClient";
+import { garminCheckStatus } from "../../lib/garminClient";
 import { syncGarminSleep, syncGarminBodyStats, syncGarminActivities } from "../../lib/importers/garmin";
-import { CARD_STYLE, BTN_GHOST, todayISO } from "../../lib/uiHelpers";
+import { CARD_STYLE, todayISO } from "../../lib/uiHelpers";
 
 const GARMIN_BLUE = "#009CDE";
 
@@ -13,7 +13,6 @@ interface GarminSyncPanelProps {
 
 export default function GarminSyncPanel({ mode, onSynced }: GarminSyncPanelProps) {
   const [connected, setConnected] = useState<boolean | null>(null);
-  const [bridgePath, setBridgePath] = useState<string>("");
   const [days, setDays] = useState(7);
   const [syncing, setSyncing] = useState(false);
   const [result, setResult] = useState<string | null>(null);
@@ -21,7 +20,6 @@ export default function GarminSyncPanel({ mode, onSynced }: GarminSyncPanelProps
 
   useEffect(() => {
     garminCheckStatus().then(s => setConnected(s.connected)).catch(() => setConnected(false));
-    garminBridgePath().then(setBridgePath).catch(() => {});
   }, []);
 
   async function runSync(
@@ -57,12 +55,6 @@ export default function GarminSyncPanel({ mode, onSynced }: GarminSyncPanelProps
       const { runCount, workoutCount } = await syncGarminActivities(date, d);
       return `Imported ${runCount + workoutCount} activities`;
     });
-  }
-
-  const authCommand = bridgePath ? `python "${bridgePath}" auth` : `python garmin_bridge.py auth`;
-
-  function copyAuthCommand() {
-    navigator.clipboard.writeText(authCommand).catch(() => {});
   }
 
   const syncBtnStyle: React.CSSProperties = {
@@ -115,43 +107,9 @@ export default function GarminSyncPanel({ mode, onSynced }: GarminSyncPanelProps
       </div>
 
       {connected === false && (
-        <div
-          style={{
-            marginTop: 12,
-            background: "var(--bg)",
-            border: "1px solid var(--border)",
-            borderRadius: "var(--radius-sm)",
-            padding: "10px 14px",
-            fontSize: 13,
-            color: "var(--text-muted)",
-          }}
-        >
-          <div style={{ marginBottom: 6, fontWeight: 500, color: "var(--text)" }}>
-            Run once to authenticate:
-          </div>
-          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-            <code
-              style={{
-                flex: 1,
-                fontFamily: "monospace",
-                fontSize: 12,
-                background: "var(--surface)",
-                border: "1px solid var(--border)",
-                borderRadius: "var(--radius-sm)",
-                padding: "4px 8px",
-                color: "var(--text)",
-                overflow: "hidden",
-                textOverflow: "ellipsis",
-                whiteSpace: "nowrap",
-              }}
-            >
-              {authCommand}
-            </code>
-            <button onClick={copyAuthCommand} style={BTN_GHOST}>
-              Copy command
-            </button>
-          </div>
-        </div>
+        <p style={{ marginTop: 10, fontSize: 13, color: "var(--text-muted)" }}>
+          Not connected — authenticate in the <strong>Settings</strong> tab first.
+        </p>
       )}
 
       {connected === true && (
