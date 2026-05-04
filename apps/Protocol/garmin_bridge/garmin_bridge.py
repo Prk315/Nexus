@@ -17,27 +17,45 @@ def get_client():
     return client
 
 
+def cmd_check(args):
+    try:
+        import garminconnect  # noqa: F401
+        print(json.dumps({"garminconnect_installed": True}))
+    except ImportError:
+        print(json.dumps({"garminconnect_installed": False}))
+
+
 def cmd_auth(args):
     from garminconnect import Garmin
 
-    email = input("Garmin email: ")
-    password = input("Garmin password: ")
+    email = args.email or input("Garmin email: ")
+    password = args.password or input("Garmin password: ")
 
     client = Garmin(email=email, password=password)
 
     try:
-        client.login()
-    except Exception:
-        # MFA path — garminconnect raises and expects a second login() call
-        # with the OTP already set; prompt here and retry once
-        otp = input("MFA code (leave blank if none): ")
-        if otp:
-            client.login(otp)
-        else:
-            raise
+        client.login(args.otp or None)
+    except Exception as exc:
+        msg = str(exc).lower()
+        # garminconnect signals MFA requirement via various exception messages
+        if any(k in msg for k in ("mfa", "2fa", "one-time", "verification")):
+            # Return structured response so the UI can show the OTP field
+            print(json.dumps({"mfa_required": True}))
+            return
+
+        # If an OTP was already supplied, fall through to the normal error path
+        raise
 
     TOKEN_STORE.mkdir(parents=True, exist_ok=True)
     client.garth.dump(str(TOKEN_STORE))
+    print(json.dumps({"ok": True}))
+
+
+def cmd_logout(args):
+    import shutil
+
+    if TOKEN_STORE.exists():
+        shutil.rmtree(TOKEN_STORE)
     print(json.dumps({"ok": True}))
 
 
@@ -174,7 +192,6 @@ def cmd_activities(args):
                 "date": act_date,
                 "name": act.get("activityName", ""),
                 "actual_km": round(dist_m / 1000, 2) if dist_m else None,
-                # pace in s/km: duration(s) / distance(km)
                 "avg_pace_s_per_km": round(act.get("duration") / (dist_m / 1000)) if dist_m and act.get("duration") else None,
                 "heart_rate_avg": act.get("averageHR"),
                 "heart_rate_max": act.get("maxHR"),
@@ -200,7 +217,14 @@ def main():
     parser = argparse.ArgumentParser(description="Garmin Connect bridge — outputs JSON to stdout")
     sub = parser.add_subparsers(dest="command", required=True)
 
-    sub.add_parser("auth", help="Authenticate with Garmin and store tokens")
+    sub.add_parser("check", help="Check if garminconnect library is installed")
+
+    p_auth = sub.add_parser("auth", help="Authenticate with Garmin and store tokens")
+    p_auth.add_argument("--email", default="", help="Garmin account email (omit to be prompted)")
+    p_auth.add_argument("--password", default="", help="Garmin account password (omit to be prompted)")
+    p_auth.add_argument("--otp", default="", help="One-time MFA code (for second auth step)")
+
+    sub.add_parser("logout", help="Remove stored Garmin tokens")
     sub.add_parser("status", help="Check if stored tokens are valid")
 
     p_sleep = sub.add_parser("sleep", help="Fetch sleep data")
@@ -218,7 +242,9 @@ def main():
     args = parser.parse_args()
 
     dispatch = {
+        "check": cmd_check,
         "auth": cmd_auth,
+        "logout": cmd_logout,
         "status": cmd_status,
         "sleep": cmd_sleep,
         "body_stats": cmd_body_stats,

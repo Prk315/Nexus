@@ -71,3 +71,33 @@ export async function garminFetchActivities(date: string, days: number): Promise
 export async function garminBridgePath(): Promise<string> {
   return invoke<string>("garminBridgePath");
 }
+
+export interface GarminAuthResult {
+  ok?: boolean;
+  mfa_required?: boolean;
+}
+
+export async function garminAuth(
+  email: string,
+  password: string,
+  otp?: string,
+): Promise<GarminAuthResult> {
+  const raw = await invoke<string>("garminAuth", {
+    email,
+    password,
+    otp: otp ?? null,
+  });
+  return JSON.parse(raw) as GarminAuthResult;
+}
+
+export async function garminLogout(): Promise<void> {
+  await run<{ ok: boolean }>("logout", []);
+}
+
+export interface GarminCheckResult {
+  garminconnect_installed: boolean;
+}
+
+export async function garminCheckDeps(): Promise<GarminCheckResult> {
+  return run<GarminCheckResult>("check", []);
+}

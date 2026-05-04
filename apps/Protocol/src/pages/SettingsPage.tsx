@@ -1,8 +1,14 @@
 import { useState, useEffect } from "react";
 import { useAppDispatch, useAppSelector } from "../store/hooks";
 import { setTheme } from "../store/slices/settingsSlice";
-import { garminCheckStatus, garminBridgePath } from "../lib/garminClient";
-import { CARD_STYLE, BTN_GHOST } from "../lib/uiHelpers";
+import {
+  garminCheckStatus,
+  garminCheckDeps,
+  garminAuth,
+  garminLogout,
+  garminBridgePath,
+} from "../lib/garminClient";
+import { CARD_STYLE, BTN_GHOST, INPUT_STYLE, LABEL_STYLE } from "../lib/uiHelpers";
 import type { Theme } from "../store/types";
 
 const GARMIN_BLUE = "#009CDE";
@@ -20,34 +26,89 @@ const sectionDesc: React.CSSProperties = {
   marginBottom: 14,
 };
 
+const connectBtn: React.CSSProperties = {
+  display: "inline-flex",
+  alignItems: "center",
+  gap: 6,
+  padding: "8px 18px",
+  background: GARMIN_BLUE,
+  color: "#fff",
+  border: "none",
+  borderRadius: "var(--radius-sm)",
+  fontSize: 13,
+  fontWeight: 600,
+  cursor: "pointer",
+};
+
 export default function SettingsPage() {
   const dispatch = useAppDispatch();
   const theme = useAppSelector((s) => s.settings.theme);
 
-  const [garminConnected, setGarminConnected] = useState<boolean | null>(null);
-  const [bridgePath, setBridgePath] = useState<string>("");
-  const [checkingGarmin, setCheckingGarmin] = useState(false);
+  // Garmin connection state
+  const [connected, setConnected] = useState<boolean | null>(null);
+  const [depsOk, setDepsOk] = useState<boolean | null>(null);
+  const [bridgePath, setBridgePath] = useState("");
 
-  function checkGarmin() {
-    setCheckingGarmin(true);
+  // Credential form state
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [otp, setOtp] = useState("");
+  const [needsMfa, setNeedsMfa] = useState(false);
+  const [connecting, setConnecting] = useState(false);
+  const [authError, setAuthError] = useState<string | null>(null);
+
+  // Show the manual fallback command
+  const [showManual, setShowManual] = useState(false);
+
+  function refreshStatus() {
+    setConnected(null);
     garminCheckStatus()
-      .then((s) => setGarminConnected(s.connected))
-      .catch(() => setGarminConnected(false))
-      .finally(() => setCheckingGarmin(false));
+      .then((s) => setConnected(s.connected))
+      .catch(() => setConnected(false));
   }
 
   useEffect(() => {
-    checkGarmin();
+    refreshStatus();
+    garminCheckDeps()
+      .then((r) => setDepsOk(r.garminconnect_installed))
+      .catch(() => setDepsOk(false));
     garminBridgePath().then(setBridgePath).catch(() => {});
   }, []);
+
+  async function handleConnect() {
+    if (!email || !password) return;
+    setConnecting(true);
+    setAuthError(null);
+    try {
+      const result = await garminAuth(email, password, needsMfa ? otp : undefined);
+      if (result.mfa_required) {
+        setNeedsMfa(true);
+      } else if (result.ok) {
+        setNeedsMfa(false);
+        setEmail("");
+        setPassword("");
+        setOtp("");
+        refreshStatus();
+      }
+    } catch (e) {
+      setAuthError(String(e));
+    } finally {
+      setConnecting(false);
+    }
+  }
+
+  async function handleDisconnect() {
+    try {
+      await garminLogout();
+      refreshStatus();
+    } catch (e) {
+      setAuthError(String(e));
+    }
+  }
 
   const authCommand = bridgePath
     ? `python "${bridgePath}" auth`
     : `python garmin_bridge.py auth`;
-
-  function copyAuthCommand() {
-    navigator.clipboard.writeText(authCommand).catch(() => {});
-  }
 
   const THEMES: { value: Theme; label: string }[] = [
     { value: "light", label: "Light" },
@@ -90,102 +151,214 @@ export default function SettingsPage() {
 
       {/* Garmin Connect */}
       <div style={{ ...CARD_STYLE, padding: "20px 24px" }}>
+        {/* Header */}
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 4 }}>
           <div style={sectionTitle}>Garmin Connect</div>
           <div style={{ fontSize: 12 }}>
-            {garminConnected === null && (
-              <span style={{ color: "var(--text-muted)" }}>Checking…</span>
-            )}
-            {garminConnected === true && (
-              <span style={{ color: "#10b981" }}>● Connected</span>
-            )}
-            {garminConnected === false && (
-              <span style={{ color: "var(--text-muted)" }}>○ Not connected</span>
-            )}
+            {connected === null && <span style={{ color: "var(--text-muted)" }}>Checking…</span>}
+            {connected === true && <span style={{ color: "#10b981" }}>● Connected</span>}
+            {connected === false && <span style={{ color: "var(--text-muted)" }}>○ Not connected</span>}
           </div>
         </div>
         <div style={sectionDesc}>
-          Sync sleep, body metrics, and activities from Garmin Connect using the python-garminconnect library.
+          Sync sleep, body metrics, and activities from your Garmin device.
         </div>
 
-        {garminConnected === false && (
+        {/* Library not installed warning */}
+        {depsOk === false && (
           <div
             style={{
-              background: "var(--bg)",
-              border: "1px solid var(--border)",
+              marginBottom: 16,
+              padding: "10px 14px",
+              background: "#fef3c7",
+              border: "1px solid #f59e0b",
               borderRadius: "var(--radius-sm)",
-              padding: "12px 16px",
-              marginBottom: 14,
+              fontSize: 13,
+              color: "#92400e",
             }}
           >
-            <div style={{ fontSize: 13, fontWeight: 500, color: "var(--text)", marginBottom: 6 }}>
-              First-time setup
-            </div>
-            <ol style={{ fontSize: 13, color: "var(--text-muted)", margin: 0, paddingLeft: 18, lineHeight: 1.7 }}>
-              <li>
-                Install the library:{" "}
-                <code
-                  style={{
-                    fontFamily: "monospace",
-                    fontSize: 12,
-                    background: "var(--surface)",
-                    border: "1px solid var(--border)",
-                    borderRadius: "var(--radius-sm)",
-                    padding: "1px 6px",
-                    color: "var(--text)",
-                  }}
-                >
-                  pip install garminconnect
-                </code>
-              </li>
-              <li style={{ marginTop: 6 }}>Run the auth command below once to store your tokens</li>
-            </ol>
-
-            <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 10 }}>
-              <code
-                style={{
-                  flex: 1,
-                  fontFamily: "monospace",
-                  fontSize: 12,
-                  background: "var(--surface)",
-                  border: "1px solid var(--border)",
-                  borderRadius: "var(--radius-sm)",
-                  padding: "5px 10px",
-                  color: "var(--text)",
-                  overflow: "hidden",
-                  textOverflow: "ellipsis",
-                  whiteSpace: "nowrap",
-                }}
-              >
-                {authCommand}
-              </code>
-              <button onClick={copyAuthCommand} style={BTN_GHOST}>
-                Copy
-              </button>
-            </div>
+            <strong>garminconnect</strong> is not installed. Run:{" "}
+            <code
+              style={{
+                fontFamily: "monospace",
+                fontSize: 12,
+                background: "#fde68a",
+                borderRadius: 3,
+                padding: "1px 5px",
+              }}
+            >
+              pip install garminconnect
+            </code>
           </div>
         )}
 
-        <button
-          onClick={checkGarmin}
-          disabled={checkingGarmin}
-          style={{
-            display: "inline-flex",
-            alignItems: "center",
-            gap: 6,
-            padding: "7px 14px",
-            background: `${GARMIN_BLUE}22`,
-            color: GARMIN_BLUE,
-            border: `1px solid ${GARMIN_BLUE}44`,
-            borderRadius: "var(--radius-sm)",
-            fontSize: 13,
-            fontWeight: 600,
-            cursor: checkingGarmin ? "default" : "pointer",
-            opacity: checkingGarmin ? 0.6 : 1,
-          }}
-        >
-          {checkingGarmin ? "Checking…" : "Check Connection"}
-        </button>
+        {/* Connected state */}
+        {connected === true && (
+          <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+            <span style={{ fontSize: 13, color: "var(--text-muted)" }}>
+              Tokens stored at <code style={{ fontFamily: "monospace", fontSize: 12 }}>~/.garminconnect</code>
+            </span>
+            <button
+              onClick={handleDisconnect}
+              style={{
+                ...BTN_GHOST,
+                color: "#ef4444",
+                borderColor: "#ef444444",
+              }}
+            >
+              Disconnect
+            </button>
+          </div>
+        )}
+
+        {/* Auth form — not connected */}
+        {connected === false && (
+          <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+            <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+              <label style={LABEL_STYLE}>Garmin email</label>
+              <input
+                type="email"
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+                placeholder="you@example.com"
+                style={INPUT_STYLE}
+                disabled={connecting}
+              />
+            </div>
+
+            <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+              <label style={LABEL_STYLE}>Password</label>
+              <input
+                type="password"
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                placeholder="••••••••"
+                style={INPUT_STYLE}
+                disabled={connecting}
+                onKeyDown={(e) => { if (e.key === "Enter" && !needsMfa) handleConnect(); }}
+              />
+            </div>
+
+            {needsMfa && (
+              <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+                <label style={LABEL_STYLE}>
+                  MFA code{" "}
+                  <span style={{ fontWeight: 400, color: "var(--text-muted)" }}>
+                    — check your Garmin app or authenticator
+                  </span>
+                </label>
+                <input
+                  type="text"
+                  value={otp}
+                  onChange={(e) => setOtp(e.target.value)}
+                  placeholder="123456"
+                  style={{ ...INPUT_STYLE, maxWidth: 160 }}
+                  disabled={connecting}
+                  autoFocus
+                  onKeyDown={(e) => { if (e.key === "Enter") handleConnect(); }}
+                />
+              </div>
+            )}
+
+            {authError && (
+              <div
+                style={{
+                  padding: "8px 12px",
+                  background: "#fee2e2",
+                  border: "1px solid #fca5a5",
+                  borderRadius: "var(--radius-sm)",
+                  fontSize: 13,
+                  color: "#b91c1c",
+                }}
+              >
+                {authError}
+              </div>
+            )}
+
+            <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+              <button
+                onClick={handleConnect}
+                disabled={connecting || !email || !password || depsOk === false}
+                style={{
+                  ...connectBtn,
+                  opacity: (connecting || !email || !password || depsOk === false) ? 0.5 : 1,
+                  cursor: (connecting || !email || !password || depsOk === false) ? "default" : "pointer",
+                }}
+              >
+                {connecting
+                  ? "Connecting…"
+                  : needsMfa
+                  ? "Submit Code"
+                  : "Connect to Garmin"}
+              </button>
+
+              {needsMfa && (
+                <button
+                  onClick={() => { setNeedsMfa(false); setOtp(""); setAuthError(null); }}
+                  style={BTN_GHOST}
+                >
+                  Start over
+                </button>
+              )}
+            </div>
+
+            {/* Manual fallback */}
+            <div style={{ marginTop: 4 }}>
+              <button
+                onClick={() => setShowManual((v) => !v)}
+                style={{ ...BTN_GHOST, fontSize: 12 }}
+              >
+                {showManual ? "Hide" : "Or connect via terminal ›"}
+              </button>
+              {showManual && (
+                <div
+                  style={{
+                    marginTop: 8,
+                    padding: "10px 14px",
+                    background: "var(--bg)",
+                    border: "1px solid var(--border)",
+                    borderRadius: "var(--radius-sm)",
+                    fontSize: 13,
+                    color: "var(--text-muted)",
+                  }}
+                >
+                  <div style={{ marginBottom: 6 }}>Run this command once, then refresh:</div>
+                  <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                    <code
+                      style={{
+                        flex: 1,
+                        fontFamily: "monospace",
+                        fontSize: 12,
+                        background: "var(--surface)",
+                        border: "1px solid var(--border)",
+                        borderRadius: "var(--radius-sm)",
+                        padding: "4px 8px",
+                        color: "var(--text)",
+                        overflow: "hidden",
+                        textOverflow: "ellipsis",
+                        whiteSpace: "nowrap",
+                      }}
+                    >
+                      {authCommand}
+                    </code>
+                    <button
+                      onClick={() => navigator.clipboard.writeText(authCommand).catch(() => {})}
+                      style={BTN_GHOST}
+                    >
+                      Copy
+                    </button>
+                  </div>
+                  <button
+                    onClick={refreshStatus}
+                    style={{ ...BTN_GHOST, marginTop: 10 }}
+                  >
+                    Refresh connection status
+                  </button>
+                </div>
+              )}
+            </div>
+          </div>
+        )}
       </div>
     </div>
   );

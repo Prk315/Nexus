@@ -7,6 +7,7 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .invoke_handler(tauri::generate_handler![
             garmin::garmin_run,
+            garmin::garmin_auth,
             garmin::garmin_bridge_path,
         ])
         .run(tauri::generate_context!())

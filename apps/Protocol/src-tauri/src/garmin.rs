@@ -52,6 +52,42 @@ pub async fn garmin_run(command: String, args: Vec<String>) -> Result<String, St
     }
 }
 
+/// Authenticate with Garmin Connect, storing OAuth tokens locally.
+/// Pass `otp` for the MFA second step; leave it empty/None for the first attempt.
+/// Returns raw JSON from the bridge: `{"ok":true}`, `{"mfa_required":true}`, or an error.
+#[command]
+pub async fn garmin_auth(email: String, password: String, otp: Option<String>) -> Result<String, String> {
+    let bridge = bridge_script_path()?;
+    let bridge_str = bridge.to_string_lossy().to_string();
+
+    let mut cmd_args = vec![
+        bridge_str,
+        "auth".to_string(),
+        "--email".to_string(),
+        email,
+        "--password".to_string(),
+        password,
+    ];
+    if let Some(code) = otp {
+        if !code.is_empty() {
+            cmd_args.push("--otp".to_string());
+            cmd_args.push(code);
+        }
+    }
+
+    let output = std::process::Command::new("python")
+        .args(&cmd_args)
+        .output()
+        .or_else(|_| std::process::Command::new("python3").args(&cmd_args).output())
+        .map_err(|e| format!("Failed to launch Python: {}", e))?;
+
+    if output.status.success() {
+        Ok(String::from_utf8_lossy(&output.stdout).to_string())
+    } else {
+        Err(String::from_utf8_lossy(&output.stderr).to_string())
+    }
+}
+
 /// Return the resolved path to garmin_bridge.py (useful for debugging / first-run setup UI).
 #[command]
 pub async fn garmin_bridge_path() -> Result<String, String> {
