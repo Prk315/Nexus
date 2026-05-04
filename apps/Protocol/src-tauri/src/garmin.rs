@@ -2,7 +2,6 @@ use std::path::PathBuf;
 use tauri::command;
 
 fn bridge_script_path() -> Result<PathBuf, String> {
-    // Allow override via env var for flexibility (CI, custom installs, etc.)
     if let Ok(env_path) = std::env::var("GARMIN_BRIDGE_PATH") {
         let p = PathBuf::from(env_path);
         if p.exists() {
@@ -28,23 +27,21 @@ fn bridge_script_path() -> Result<PathBuf, String> {
     Err("garmin_bridge.py not found — set GARMIN_BRIDGE_PATH env var to override".to_string())
 }
 
-/// Run an arbitrary command against the Garmin bridge script.
-/// `command` is the sub-command name (e.g. "sync", "fetch_activities").
-/// `args` are additional positional arguments passed after the command.
-#[command]
-pub async fn garmin_run(command: String, args: Vec<String>) -> Result<String, String> {
-    let bridge = bridge_script_path()?;
-    let bridge_str = bridge.to_string_lossy().to_string();
-
-    let mut cmd_args = vec![bridge_str, command];
-    cmd_args.extend(args);
-
-    let output = std::process::Command::new("python")
-        .args(&cmd_args)
+/// On Windows the Microsoft Store python.exe stub does not work when invoked
+/// from a child process. Try `py -3` (Windows Launcher, always in C:\Windows)
+/// first, then fall back to `python` and `python3` for other platforms.
+fn invoke_python(args: &[String]) -> Result<std::process::Output, String> {
+    std::process::Command::new("py")
+        .arg("-3")
+        .args(args)
         .output()
-        .or_else(|_| std::process::Command::new("python3").args(&cmd_args).output())
-        .map_err(|e| format!("Failed to launch Python: {}", e))?;
+        .or_else(|_| std::process::Command::new("python").args(args).output())
+        .or_else(|_| std::process::Command::new("python3").args(args).output())
+        .map_err(|e| format!("Failed to launch Python: {e}"))
+}
 
+fn run_bridge(cmd_args: Vec<String>) -> Result<String, String> {
+    let output = invoke_python(&cmd_args)?;
     if output.status.success() {
         Ok(String::from_utf8_lossy(&output.stdout).to_string())
     } else {
@@ -52,9 +49,20 @@ pub async fn garmin_run(command: String, args: Vec<String>) -> Result<String, St
     }
 }
 
+/// Run an arbitrary sub-command against the Garmin bridge script.
+#[command]
+pub async fn garmin_run(command: String, args: Vec<String>) -> Result<String, String> {
+    let bridge = bridge_script_path()?;
+    let bridge_str = bridge.to_string_lossy().to_string();
+
+    let mut cmd_args = vec![bridge_str, command];
+    cmd_args.extend(args);
+    run_bridge(cmd_args)
+}
+
 /// Authenticate with Garmin Connect, storing OAuth tokens locally.
-/// Pass `otp` for the MFA second step; leave it empty/None for the first attempt.
-/// Returns raw JSON from the bridge: `{"ok":true}`, `{"mfa_required":true}`, or an error.
+/// Pass `otp` for the MFA second step; leave it None for the first attempt.
+/// Returns raw JSON: `{"ok":true}`, `{"mfa_required":true}`, or Err(message).
 #[command]
 pub async fn garmin_auth(email: String, password: String, otp: Option<String>) -> Result<String, String> {
     let bridge = bridge_script_path()?;
@@ -74,21 +82,10 @@ pub async fn garmin_auth(email: String, password: String, otp: Option<String>) -
             cmd_args.push(code);
         }
     }
-
-    let output = std::process::Command::new("python")
-        .args(&cmd_args)
-        .output()
-        .or_else(|_| std::process::Command::new("python3").args(&cmd_args).output())
-        .map_err(|e| format!("Failed to launch Python: {}", e))?;
-
-    if output.status.success() {
-        Ok(String::from_utf8_lossy(&output.stdout).to_string())
-    } else {
-        Err(String::from_utf8_lossy(&output.stderr).to_string())
-    }
+    run_bridge(cmd_args)
 }
 
-/// Return the resolved path to garmin_bridge.py (useful for debugging / first-run setup UI).
+/// Return the resolved path to garmin_bridge.py (useful for the setup UI).
 #[command]
 pub async fn garmin_bridge_path() -> Result<String, String> {
     bridge_script_path().map(|p| p.to_string_lossy().to_string())
