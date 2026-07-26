@@ -2,19 +2,9 @@ import { useEffect, useRef, useState } from "react";
 import { useAppDispatch, useAppSelector } from "../hooks/useAppDispatch";
 import {
   fetchBlockerState,
-  fetchInstalledApps,
-  setBlockerEnabled,
-  addBlockedApp,
-  removeBlockedApp,
-  setAppEnabled,
-  type InstalledApp,
 } from "../store/slices/blockerSlice";
 import {
   fetchBlockedSites,
-  addBlockedSite,
-  removeBlockedSite,
-  setSiteEnabled,
-  syncBlockedSites,
 } from "../store/slices/siteBlockerSlice";
 import {
   fetchScheduleBlocks,
@@ -28,10 +18,6 @@ import {
   type FocusBlock,
 } from "../store/slices/scheduleSlice";
 import Toggle from "../components/shared/Toggle";
-
-// ── Platform detection ────────────────────────────────────────────────────────
-
-const IS_IOS = /iPhone|iPad|iPod/.test(navigator.userAgent);
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
@@ -60,23 +46,7 @@ function parseMinutes(t: string) {
 // ── App Blocker ───────────────────────────────────────────────────────────────
 
 function AppBlockerSection() {
-  const dispatch = useAppDispatch();
-  const { enabled, apps, installedApps, loading } = useAppSelector((s) => s.blocker);
-  const [showPicker, setShowPicker] = useState(false);
-  const [pickerFilter, setPickerFilter] = useState("");
-  const [selectedMode, setSelectedMode] = useState<"always" | "focus_only">("always");
-
-  const openPicker = () => {
-    if (installedApps.length === 0) dispatch(fetchInstalledApps());
-    setShowPicker(true);
-  };
-  const addApp = (app: InstalledApp) => {
-    dispatch(addBlockedApp({ display_name: app.display_name, process_name: app.process_name, block_mode: selectedMode }));
-    setShowPicker(false);
-    setPickerFilter("");
-  };
-  const filtered = installedApps.filter((a) => a.display_name.toLowerCase().includes(pickerFilter.toLowerCase()));
-  const alreadyBlocked = new Set(apps.map((a) => a.process_name));
+  const { enabled, apps } = useAppSelector((s) => s.blocker);
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
@@ -87,10 +57,12 @@ function AppBlockerSection() {
             Blocked apps are quit automatically while blocking is active.
           </div>
         </div>
-        <Toggle checked={enabled} onChange={async (v) => { await dispatch(setBlockerEnabled(v)); await dispatch(syncBlockedSites()); }} label="" />
+        <span style={{ fontSize: 11, fontWeight: 600, color: enabled ? "var(--success, #16a34a)" : "var(--text-muted)" }}>
+          {enabled ? "Active" : "Inactive"}
+        </span>
       </div>
 
-      {apps.length > 0 && (
+      {apps.length > 0 ? (
         <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
           {apps.map((app) => (
             <div key={app.id} style={{ display: "flex", alignItems: "center", gap: 8, padding: "6px 10px", background: "var(--surface-raised)", borderRadius: "var(--radius-sm)", border: "1px solid var(--border)" }}>
@@ -100,40 +72,19 @@ function AppBlockerSection() {
                   {app.block_mode === "always" ? "always" : "during focus"}
                 </span>
               </div>
-              <Toggle checked={app.enabled} onChange={(v) => dispatch(setAppEnabled({ id: app.id, enabled: v }))} label="" />
-              <button onClick={() => dispatch(removeBlockedApp(app.id))} style={{ background: "transparent", color: "var(--text-muted)", fontSize: 14, padding: "2px 4px", cursor: "pointer" }} title="Remove">✕</button>
+              <span style={{ fontSize: 10, fontWeight: 500, color: app.enabled ? "var(--success, #16a34a)" : "var(--text-muted)" }}>
+                {app.enabled ? "on" : "off"}
+              </span>
             </div>
           ))}
         </div>
+      ) : (
+        <p style={{ fontSize: 12, color: "var(--text-muted)", margin: 0 }}>No apps blocked yet.</p>
       )}
 
-      <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-        <select value={selectedMode} onChange={(e) => setSelectedMode(e.target.value as "always" | "focus_only")} style={{ fontSize: 12, padding: "4px 6px", borderRadius: "var(--radius-sm)", border: "1px solid var(--border)", background: "var(--surface)" }}>
-          <option value="always">Block always</option>
-          <option value="focus_only">Block during focus only</option>
-        </select>
-        <button onClick={openPicker} style={btnSmallPrimary}>+ Add app</button>
-      </div>
-
-      {showPicker && (
-        <div style={{ border: "1px solid var(--border)", borderRadius: "var(--radius-sm)", background: "var(--surface)", overflow: "hidden" }}>
-          <div style={{ padding: "8px 10px", borderBottom: "1px solid var(--border)" }}>
-            <input autoFocus placeholder="Search apps…" value={pickerFilter} onChange={(e) => setPickerFilter(e.target.value)} style={{ width: "100%", fontSize: 13, background: "transparent", border: "none", outline: "none" }} />
-          </div>
-          <div style={{ maxHeight: 200, overflowY: "auto" }}>
-            {loading && <div style={{ padding: "12px 10px", fontSize: 12, color: "var(--text-muted)" }}>Scanning…</div>}
-            {!loading && filtered.slice(0, 100).map((app) => (
-              <button key={app.process_name} disabled={alreadyBlocked.has(app.process_name)} onClick={() => addApp(app)} style={{ display: "block", width: "100%", textAlign: "left", padding: "7px 10px", fontSize: 13, background: "transparent", color: alreadyBlocked.has(app.process_name) ? "var(--text-muted)" : "var(--text)", cursor: alreadyBlocked.has(app.process_name) ? "not-allowed" : "pointer", borderBottom: "1px solid var(--border)" }}>
-                {app.display_name}
-                {alreadyBlocked.has(app.process_name) && <span style={{ marginLeft: 8, fontSize: 10, color: "var(--text-muted)" }}>already blocked</span>}
-              </button>
-            ))}
-          </div>
-          <div style={{ padding: "6px 10px", borderTop: "1px solid var(--border)" }}>
-            <button onClick={() => setShowPicker(false)} style={{ fontSize: 12, color: "var(--text-muted)", background: "transparent", cursor: "pointer" }}>Cancel</button>
-          </div>
-        </div>
-      )}
+      <p style={{ fontSize: 11, color: "var(--text-muted)", margin: 0, fontStyle: "italic" }}>
+        Blocked apps are managed from Supabase.
+      </p>
     </div>
   );
 }
@@ -141,54 +92,13 @@ function AppBlockerSection() {
 // ── Site Blocker ──────────────────────────────────────────────────────────────
 
 function SiteBlockerSection() {
-  const dispatch = useAppDispatch();
   const { sites, loading } = useAppSelector((s) => s.siteBlocker);
-  const blockerEnabled = useAppSelector((s) => s.blocker.enabled);
-  const [input, setInput] = useState("");
-  const [syncing, setSyncing] = useState(false);
-  const [syncError, setSyncError] = useState<string | null>(null);
-
-  const handleAdd = async () => {
-    const domain = input.trim();
-    if (!domain) return;
-    const result = await dispatch(addBlockedSite(domain));
-    if (addBlockedSite.fulfilled.match(result)) {
-      setInput("");
-      if (!IS_IOS && blockerEnabled) {
-        setSyncing(true); setSyncError(null);
-        const r = await dispatch(syncBlockedSites());
-        if (syncBlockedSites.rejected.match(r)) setSyncError(r.error.message ?? "Failed to update /etc/hosts");
-        setSyncing(false);
-      }
-    }
-  };
-
-  const handleRemove = async (id: number) => {
-    await dispatch(removeBlockedSite(id));
-    if (!IS_IOS && blockerEnabled) await dispatch(syncBlockedSites());
-  };
-
-  const handleToggle = async (id: number, enabled: boolean) => {
-    await dispatch(setSiteEnabled({ id, enabled }));
-    if (!IS_IOS && blockerEnabled) await dispatch(syncBlockedSites());
-  };
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-      {IS_IOS ? (
-        <p style={{ fontSize: 12, color: "var(--text-muted)", margin: 0 }}>
-          Blocked sites are enforced via Safari Content Blocker — enable in Settings › Safari › Extensions
-        </p>
-      ) : (
-        <p style={{ fontSize: 12, color: "var(--text-muted)", margin: 0 }}>
-          Blocked sites are redirected to 127.0.0.1 via /etc/hosts. Requires your Mac password to apply.
-        </p>
-      )}
-      <div style={{ display: "flex", gap: 8 }}>
-        <input type="text" value={input} onChange={(e) => setInput(e.target.value)} onKeyDown={(e) => e.key === "Enter" && handleAdd()} placeholder="example.com" style={{ flex: 1, padding: "6px 10px", borderRadius: 6, border: "1px solid var(--border)", background: "var(--surface)", color: "var(--text)", fontSize: 13 }} />
-        <button onClick={handleAdd} style={addBtnStyle} disabled={!input.trim() || syncing}>{syncing ? "Applying…" : "Block"}</button>
-      </div>
-      {!IS_IOS && syncError && <p style={{ fontSize: 12, color: "var(--danger, #e55)", margin: 0 }}>{syncError}</p>}
+      <p style={{ fontSize: 12, color: "var(--text-muted)", margin: 0 }}>
+        Blocked sites are redirected to 127.0.0.1 via /etc/hosts.
+      </p>
       {loading ? <p style={{ fontSize: 12, color: "var(--text-muted)" }}>Loading…</p>
         : sites.length === 0 ? <p style={{ fontSize: 12, color: "var(--text-muted)" }}>No sites blocked yet.</p>
         : (
@@ -196,12 +106,16 @@ function SiteBlockerSection() {
             {sites.map((site) => (
               <div key={site.id} style={{ display: "flex", alignItems: "center", gap: 8, padding: "6px 10px", borderRadius: 8, background: "var(--surface)", border: "1px solid var(--border)" }}>
                 <span style={{ flex: 1, fontSize: 13 }}>{site.domain}</span>
-                <Toggle checked={site.enabled} onChange={(v) => handleToggle(site.id, v)} />
-                <button onClick={() => handleRemove(site.id)} style={{ background: "transparent", border: "none", cursor: "pointer", color: "var(--text-muted)", fontSize: 16 }}>×</button>
+                <span style={{ fontSize: 10, fontWeight: 500, color: site.enabled ? "var(--success, #16a34a)" : "var(--text-muted)" }}>
+                  {site.enabled ? "on" : "off"}
+                </span>
               </div>
             ))}
           </div>
         )}
+      <p style={{ fontSize: 11, color: "var(--text-muted)", margin: 0, fontStyle: "italic" }}>
+        Blocked sites are managed from Supabase.
+      </p>
     </div>
   );
 }
@@ -474,7 +388,7 @@ function ScheduleSection() {
 
             {(blockedApps.length === 0 && blockedSites.length === 0) && (
               <p style={{ fontSize: 12, color: "var(--text-muted)", margin: 0 }}>
-                Add apps and sites in the Blockers tab first, then assign them to schedule blocks here.
+                No apps or sites yet — add them in Supabase, then sync to assign them to schedule blocks here.
               </p>
             )}
 
@@ -612,7 +526,7 @@ function RewardsSection() {
 
         {(addType === "app" ? appOptions.length === 0 : siteOptions.length === 0) && (
           <p style={{ fontSize: 11, color: "var(--text-muted)", margin: 0 }}>
-            No {addType === "app" ? "apps" : "sites"} available — add them in the Blockers tab first.
+            No {addType === "app" ? "apps" : "sites"} available — add them in Supabase, then sync.
           </p>
         )}
       </div>
@@ -650,12 +564,10 @@ export default function TimeKeeperPage() {
         <section style={{ flex: "1 1 320px", minWidth: 280 }}>
           <h3 style={sectionTitle}>Blockers</h3>
           <div style={{ display: "flex", flexDirection: "column", gap: 24 }}>
-            {!IS_IOS && (
-              <div>
-                <div style={{ fontSize: 12, fontWeight: 600, marginBottom: 8, color: "var(--text)" }}>Apps</div>
-                <AppBlockerSection />
-              </div>
-            )}
+            <div>
+              <div style={{ fontSize: 12, fontWeight: 600, marginBottom: 8, color: "var(--text)" }}>Apps</div>
+              <AppBlockerSection />
+            </div>
             <div>
               <div style={{ fontSize: 12, fontWeight: 600, marginBottom: 8, color: "var(--text)" }}>Websites</div>
               <SiteBlockerSection />
@@ -734,13 +646,3 @@ const btnDanger: React.CSSProperties = {
   fontSize: 13,
 };
 
-const addBtnStyle: React.CSSProperties = {
-  padding: "6px 14px",
-  borderRadius: 6,
-  border: "none",
-  background: "var(--accent)",
-  color: "#fff",
-  fontWeight: 600,
-  fontSize: 13,
-  cursor: "pointer",
-};

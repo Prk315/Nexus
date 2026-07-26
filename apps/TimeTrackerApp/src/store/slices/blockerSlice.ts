@@ -1,6 +1,12 @@
 import { createAsyncThunk, createSlice } from "@reduxjs/toolkit";
 import { invoke } from "@tauri-apps/api/core";
 
+// NOTE: the blocked-app list is managed from Supabase and the in-app UI is
+// read-only, so the mutation thunks below (fetchInstalledApps, setBlockerEnabled,
+// addBlockedApp, removeBlockedApp, setAppEnabled) currently have no callers.
+// They are kept deliberately — the matching Tauri commands are still registered
+// in lib.rs, so restoring local controls is a UI-only change. Do not delete.
+
 export interface BlockedApp {
   id: number;
   display_name: string;

@@ -1,6 +1,14 @@
 import { createAsyncThunk, createSlice } from "@reduxjs/toolkit";
 import { invoke } from "@tauri-apps/api/core";
 
+// NOTE: the blocked-site list is managed from Supabase and the in-app UI is
+// read-only, so addBlockedSite / removeBlockedSite / setSiteEnabled currently
+// have no callers. They are kept deliberately so local controls can be restored
+// as a UI-only change. Do not delete.
+// syncBlockedSites is the exception — it IS called, from runSync in syncSlice,
+// and is the only remaining path that reaches /etc/hosts (macOS) and the Safari
+// content blocker (iOS).
+
 export interface BlockedSite {
   id: number;
   domain: string;

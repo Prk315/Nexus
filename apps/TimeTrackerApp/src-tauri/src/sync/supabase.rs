@@ -21,8 +21,12 @@ pub async fn push_unsynced(
     };
 
     let client = Client::new();
+    // Upsert on the natural unique key (device_id, start_time, task_name) so that
+    // re-pushing already-synced entries merges instead of throwing 23505 (HTTP 409).
+    // Without on_conflict, PostgREST defaults the conflict target to the primary
+    // key (id) and the real unique constraint violation surfaces as an error.
     let url = format!(
-        "{}/rest/v1/{}",
+        "{}/rest/v1/{}?on_conflict=device_id,start_time,task_name",
         config.supabase.url.trim_end_matches('/'),
         config.supabase.table_name
     );

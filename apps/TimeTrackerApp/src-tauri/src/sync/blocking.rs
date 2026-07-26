@@ -84,7 +84,7 @@ pub async fn push_blocked_sites(
     };
 
     let client = Client::new();
-    let url = format!("{}/rest/v1/blocked_sites", base_url(config));
+    let url = format!("{}/rest/v1/blocked_sites?on_conflict=user_id,domain", base_url(config));
     let key = &config.supabase.key;
     let mut result = BlockingSyncResult::default();
 
@@ -102,7 +102,8 @@ pub async fn push_blocked_sites(
         }
 
         match req.json(&body).send().await {
-            Ok(r) if r.status().is_success() => {
+            Ok(r) if r.status().is_success() || r.status().as_u16() == 409 => {
+                // 409 = row already exists remotely, treat as synced
                 let db = state.db.lock().map_err(|e| e.to_string())?;
                 let _ = db.execute(
                     "UPDATE blocked_sites SET synced = 1 WHERE id = ?1",
@@ -220,7 +221,7 @@ pub async fn push_blocked_apps(
     };
 
     let client = Client::new();
-    let url = format!("{}/rest/v1/blocked_apps", base_url(config));
+    let url = format!("{}/rest/v1/blocked_apps?on_conflict=user_id,process_name", base_url(config));
     let key = &config.supabase.key;
     let mut result = BlockingSyncResult::default();
 
@@ -240,7 +241,7 @@ pub async fn push_blocked_apps(
         }
 
         match req.json(&body).send().await {
-            Ok(r) if r.status().is_success() => {
+            Ok(r) if r.status().is_success() || r.status().as_u16() == 409 => {
                 let db = state.db.lock().map_err(|e| e.to_string())?;
                 let _ = db.execute(
                     "UPDATE blocked_apps SET synced = 1 WHERE id = ?1",

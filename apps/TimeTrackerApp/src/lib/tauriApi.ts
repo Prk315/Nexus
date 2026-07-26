@@ -241,8 +241,22 @@ export const syncPush = () => invoke<SyncResult>("sync_push");
 export const syncPull = (includeOwnDevice = false) =>
   invoke<SyncResult>("sync_pull", { includeOwnDevice });
 export const syncBidirectional = () => invoke<SyncResult>("sync_bidirectional");
+export const syncBlockingBidirectional = () =>
+  invoke<BlockingSyncSummary>("sync_blocking_bidirectional");
 export const testSupabaseConnection = () =>
   invoke<boolean>("test_supabase_connection");
+
+export interface BlockingSyncSummary {
+  sites_pushed: number;
+  sites_pulled: number;
+  apps_pushed: number;
+  apps_pulled: number;
+  blocks_pushed: number;
+  blocks_pulled: number;
+  rules_pushed: number;
+  rules_pulled: number;
+  errors: string[];
+}
 
 // ── Export / Import ──────────────────────────────────────────────────────────
 
