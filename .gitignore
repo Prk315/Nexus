@@ -42,6 +42,17 @@ npm-debug.log*
 .idea/
 *.swp
 
+# Agent / tooling config (machine-local)
+.claude/
+
+# R (RStudio leaves these next to any script it runs)
+.Rhistory
+.RData
+.Rproj.user/
+
+# Stray scratch files
+.__wtest
+
 # Turbo
 .turbo/
 
