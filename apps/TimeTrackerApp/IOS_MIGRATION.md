@@ -183,10 +183,40 @@ mismatch, script sandboxing) — all four are already fixed in this repo.
 ## Free developer account notes
 
 - Certificates expire every **7 days** — must re-build and re-install weekly
-- Max 3 app IDs per 7-day window
+- Max 3 apps installed at once, and 10 app IDs per 7-day window
 - No TestFlight, no App Store distribution
 - Works only on your own registered devices
 - **AltStore / SideStore** can manage re-signing automatically over Wi-Fi
+
+### There is no in-app workaround
+
+The 7-day expiry is **not** something app code can affect. It lives in the
+`embedded.mobileprovision` inside the signed bundle and is validated by iOS at
+launch, before any of our Rust or JS runs. No `tauri.conf.json` setting, Info.plist
+key, or entitlement extends it. The only ways out are re-signing on a schedule
+(what we do) or a paid Apple Developer Program membership, which issues 1-year
+profiles instead of 7-day ones and drops the app-count limit.
+
+### Weekly refresh
+
+`ios-build.sh` handles the re-sign. `PHONE_APPS` at the top of the script lists
+the apps that live on the phone — currently TimeTracker and PathFinder, which
+fits inside the 3-app free-tier ceiling.
+
+```bash
+npm run ios:refresh   # rebuild + reinstall every app in PHONE_APPS, no launch
+npm run ios:check     # report days remaining, build nothing
+```
+
+`--check` reads `ExpirationDate` out of each installed bundle's provisioning
+profile and prints days left, colour-coded (green > 2 days, yellow ≤ 2, red if
+already expired). It needs a local build in DerivedData to inspect — after a
+`cargo clean` or a DerivedData wipe it will report "no local build found" until
+you run a real build.
+
+A refresh run does not stop at the first failure: if one app fails to build or
+install, the other still gets deployed, and the failures are listed in the
+summary with a non-zero exit code.
 
 ---
 

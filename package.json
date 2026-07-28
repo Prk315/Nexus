@@ -23,6 +23,8 @@
     "ios:clean": "./ios-build.sh --clean",
     "ios:release": "./ios-build.sh --release",
     "ios:logs": "./ios-build.sh --logs",
+    "ios:refresh": "./ios-build.sh --refresh",
+    "ios:check": "./ios-build.sh --app all --check",
     "ios:pathfinder": "./ios-build.sh --app pathfinder",
     "ios:vault": "./ios-build.sh --app vault"
   },
