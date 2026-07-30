@@ -16,6 +16,7 @@ import { VideoViewer } from "./VideoViewer";
 import { WorkbookEditor } from "./WorkbookEditor";
 import { BookshelfEditor } from "./BookshelfEditor";
 import { JournalEditor } from "./JournalEditor";
+import { DatabaseEditor } from "./DatabaseEditor";
 import { HomePage } from "./HomePage";
 import { GraphView } from "./GraphView";
 import { nodeIcon } from "../nodeUtils";
@@ -25,11 +26,11 @@ import type { VaultGraph } from "../types";
 // same note is opened in a second pane or re-opened after tab close.
 const globalContentCache = new Map<string, string>();
 
-class WorkbookErrorBoundary extends Component<
-  { children: React.ReactNode },
+class EditorErrorBoundary extends Component<
+  { label: string; children: React.ReactNode },
   { error: string | null }
 > {
-  constructor(props: { children: React.ReactNode }) {
+  constructor(props: { label: string; children: React.ReactNode }) {
     super(props);
     this.state = { error: null };
   }
@@ -37,7 +38,7 @@ class WorkbookErrorBoundary extends Component<
     return { error: e.message };
   }
   componentDidCatch(e: Error) {
-    console.error("WorkbookEditor crash:", e);
+    console.error(`${this.props.label} crash:`, e);
   }
   render() {
     if (this.state.error) {
@@ -50,7 +51,7 @@ class WorkbookErrorBoundary extends Component<
             whiteSpace: "pre-wrap",
           }}
         >
-          <strong>WorkbookEditor crashed:</strong>
+          <strong>{this.props.label} crashed:</strong>
           {"\n\n"}
           {this.state.error}
         </div>
@@ -127,6 +128,9 @@ export const EditorPane = forwardRef<EditorPaneHandle, EditorPaneProps>(
     const isVideoSelected = selectedId
       ? graph.nodes[selectedId]?.kind.type === "Video"
       : false;
+    const isDatabaseSelected = selectedId
+      ? graph.nodes[selectedId]?.kind.type === "Database"
+      : false;
 
     const selectedNode = selectedId ? graph.nodes[selectedId] : null;
     const edgeChildren = selectedId
@@ -196,7 +200,7 @@ export const EditorPane = forwardRef<EditorPaneHandle, EditorPaneProps>(
 
     // Auto-save
     useEffect(() => {
-      if (!selectedId || isFolderSelected || isPdfSelected || isVideoSelected)
+      if (!selectedId || isFolderSelected || isPdfSelected || isVideoSelected || isDatabaseSelected)
         return;
       setSaveStatus("saving");
       const timer = setTimeout(async () => {
@@ -483,7 +487,7 @@ export const EditorPane = forwardRef<EditorPaneHandle, EditorPaneProps>(
             ) : selectedNode?.kind.type === "Video" ? (
               <VideoViewer content={content} />
             ) : selectedNode?.kind.type === "Workbook" ? (
-              <WorkbookErrorBoundary key={selectedId}>
+              <EditorErrorBoundary key={selectedId} label="WorkbookEditor">
                 <WorkbookEditor
                   nodeId={selectedId!}
                   name={selectedNode.name}
@@ -492,18 +496,33 @@ export const EditorPane = forwardRef<EditorPaneHandle, EditorPaneProps>(
                   graph={graph}
                   onOpenNode={selectNode}
                 />
-              </WorkbookErrorBoundary>
+              </EditorErrorBoundary>
             ) : selectedNode?.kind.type === "Books" ? (
-              <BookshelfEditor
-                nodeId={selectedId!}
-                name={selectedNode.name}
-                content={content}
-                onChange={setContent}
-              />
+              <EditorErrorBoundary key={selectedId} label="BookshelfEditor">
+                <BookshelfEditor
+                  nodeId={selectedId!}
+                  name={selectedNode.name}
+                  content={content}
+                  onChange={setContent}
+                />
+              </EditorErrorBoundary>
             ) : selectedNode?.kind.type === "Journal" ? (
               <JournalEditor key={selectedId} nodeId={selectedId!} />
+            ) : selectedNode?.kind.type === "Database" ? (
+              <EditorErrorBoundary key={selectedId} label="DatabaseEditor">
+                <DatabaseEditor
+                  nodeId={selectedId!}
+                  graph={graph}
+                  onOpenNode={selectNode}
+                />
+              </EditorErrorBoundary>
             ) : (
-              <NoteEditor content={content} onChange={setContent} />
+              <NoteEditor
+                content={content}
+                onChange={setContent}
+                nodeId={selectedId ?? undefined}
+                graph={graph}
+              />
             )}
           </>
         ) : (

@@ -10,6 +10,9 @@ import * as pdfjs from "pdfjs-dist";
 import type { PDFDocumentProxy, PDFPageProxy, PageViewport } from "pdfjs-dist";
 import type { TextItem } from "pdfjs-dist/types/src/display/api";
 import * as api from "../lib/api";
+import type { HighlighterCategory } from "../types";
+import { DEFAULT_HIGHLIGHTERS } from "../nodeUtils";
+import { HighlighterCatEditor } from "./HighlighterCatEditor";
 import { exportAnnotatedPdf } from "../lib/pdfExport";
 import { PdfTextAnnotationLayer } from "./PdfTextAnnotationLayer";
 import type { TextAnnotation, TextAnnotations } from "./PdfTextAnnotationLayer";
@@ -127,7 +130,7 @@ interface PdfPageProps {
   textItems: TextItem[]; // pre-filtered text items for this page (for mark tool)
   pageViewport: PageViewport | null; // scale=1 viewport for coordinate mapping
   onStrokeAdded: (pageIdx: number, stroke: Stroke) => void;
-  onMarkHighlight: (pageIdx: number, stroke: Stroke) => void;
+  onMarkHighlight: (pageIdx: number, stroke: Stroke, text: string) => void;
   onErase: (pageIdx: number, updatedStrokes: Stroke[]) => void;
   onSize: (pageIdx: number, w: number, h: number) => void;
   onLassoSelect: (pageIdx: number, ids: Set<string>) => void;
@@ -605,8 +608,14 @@ const PdfPage = memo(function PdfPage({
       if (markActiveRef.current && markRangeRef.current) {
         const { s, e: eIdx } = markRangeRef.current;
         const stroke = buildHighlightStroke(s, eIdx);
-        if (stroke) onMarkHighlight(pageIdx, stroke);
-        else redraw(canvas, strokesRef.current, selectedStrokesRef.current, null);
+        if (stroke) {
+          const lo = Math.min(s, eIdx), hi = Math.max(s, eIdx);
+          const text = textItems.slice(lo, hi + 1)
+            .map(it => it.str).join(" ").replace(/\s+/g, " ").trim();
+          onMarkHighlight(pageIdx, stroke, text);
+        } else {
+          redraw(canvas, strokesRef.current, selectedStrokesRef.current, null);
+        }
       }
       markStartRef.current  = null;
       markRangeRef.current  = null;
@@ -666,12 +675,48 @@ export function PdfViewer({ content: pdfPath, nodeId }: Props) {
   const [annotations, setAnnotations] = useState<Annotations>({});
   const [tool,       setTool]       = useState<Tool>("pen");
   const [color,      setColor]      = useState("#1a1a1a");
+  // Per-node highlighter categories (for the mark tool). Each drives a record.
+  const [highlighters, setHighlighters] = useState<HighlighterCategory[]>([]);
+  const [markCategory,  setMarkCategory]  = useState<string | null>(null);
+  const [editingCats,   setEditingCats]   = useState(false);
   const [strokeWidth, setStrokeWidth] = useState(4);
   const [zoom,       setZoom]       = useState(1.0);
   // Keep zoom in a ref so scroll/page-tracker callbacks always see the latest value
   // without being recreated on every zoom change.
   const zoomRef = useRef(1.0);
   useEffect(() => { zoomRef.current = zoom; }, [zoom]);
+
+  // Load this node's highlighter categories; seed defaults on first use.
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      let sets = await api.readHighlighters(nodeId);
+      if (sets.length === 0) {
+        sets = DEFAULT_HIGHLIGHTERS;
+        await api.saveHighlighters(nodeId, sets);
+      }
+      if (cancelled) return;
+      setHighlighters(sets);
+      setMarkCategory(prev => prev ?? sets[0]?.name ?? null);
+    })();
+    return () => { cancelled = true; };
+  }, [nodeId]);
+
+  // Refs mirror the latest values so the memoised handleMarkHighlight (which must
+  // not be recreated per keystroke) always reads the current category/palette.
+  const highlightersRef = useRef<HighlighterCategory[]>([]);
+  const markCategoryRef = useRef<string | null>(null);
+  useEffect(() => { highlightersRef.current = highlighters; }, [highlighters]);
+  useEffect(() => { markCategoryRef.current = markCategory; }, [markCategory]);
+
+  function persistHighlighters(next: HighlighterCategory[]) {
+    setHighlighters(next);
+    api.saveHighlighters(nodeId, next);
+  }
+  function selectCategory(cat: HighlighterCategory) {
+    setMarkCategory(cat.name);
+    setColor(cat.color);
+  }
   // renderScale is the canvas render scale (fit-to-width, recomputed on sidebar toggle).
   // zoom is a pure CSS visual multiplier applied on top — never triggers a canvas re-render.
   const [renderScale, setRenderScale] = useState(1.0);
@@ -1072,9 +1117,21 @@ export function PdfViewer({ content: pdfPath, nodeId }: Props) {
     scheduleSave(next);
   }, [scheduleSave]);
 
-  const handleMarkHighlight = useCallback((pIdx: number, stroke: Stroke) => {
+  const handleMarkHighlight = useCallback((pIdx: number, stroke: Stroke, text: string) => {
     handleStrokeAdded(pIdx, stroke);
-  }, [handleStrokeAdded]);
+    // Record the highlighted text under its category into the database store.
+    const cat = highlightersRef.current.find(c => c.name === markCategoryRef.current)
+      ?? highlightersRef.current[0];
+    if (cat && text) {
+      api.insertRecord({
+        source_node_id: nodeId,
+        category: cat.name,
+        color: cat.color,
+        text,
+        location: `p.${pIdx + 1}`,
+      }).catch(() => { /* non-fatal: the visual highlight is already saved */ });
+    }
+  }, [handleStrokeAdded, nodeId]);
 
   const handleErase = useCallback((pageIdx: number, updated: Stroke[]) => {
     const next = { ...annotationsRef.current, [pageIdx]: updated };
@@ -1183,6 +1240,7 @@ export function PdfViewer({ content: pdfPath, nodeId }: Props) {
     }
 
     function onTouchMove(e: TouchEvent) {
+      if (!el) return;
       if (e.touches.length !== 2 || lastDist === 0) return;
       const t0 = e.touches[0], t1 = e.touches[1];
       const dist = Math.hypot(t0.clientX - t1.clientX, t0.clientY - t1.clientY);
@@ -1428,7 +1486,11 @@ export function PdfViewer({ content: pdfPath, nodeId }: Props) {
         <div className="pdf-toolbar-group">
           <button
             className={`pdf-tb-btn pdf-tool-btn ${tool === "mark" ? "active" : ""}`}
-            onClick={() => { setTool("mark"); setColor(c => ["#f1c40f","#27ae60","#2980b9","#e74c3c","#8e44ad","#e67e22"].includes(c) ? c : "#f1c40f"); }}
+            onClick={() => {
+              setTool("mark");
+              const cat = highlighters.find(c => c.name === markCategory) ?? highlighters[0];
+              if (cat) selectCategory(cat);
+            }}
             title="Mark text (hold briefly on text, then drag to extend selection)"
           >
             <span className="pdf-mark-btn-icon">aB</span>
@@ -1453,22 +1515,38 @@ export function PdfViewer({ content: pdfPath, nodeId }: Props) {
           </>
         )}
 
-        {/* Mark tool color picker — show all colors but default to yellow highlight */}
+        {/* Mark tool — highlighter categories (each records into the database) */}
         {tool === "mark" && (
           <>
             <div className="pdf-tb-sep" />
-            <div className="pdf-toolbar-group">
-              {["#f1c40f", "#27ae60", "#2980b9", "#e74c3c", "#8e44ad", "#e67e22"].map(c => (
+            <div className="pdf-toolbar-group pdf-hl-cats">
+              {highlighters.map(cat => (
                 <button
-                  key={c}
-                  className={`pdf-color-swatch ${color === c ? "active" : ""}`}
-                  style={{ background: c }}
-                  onClick={() => setColor(c)}
-                  title={c}
-                />
+                  key={cat.name}
+                  className={`pdf-hl-cat ${markCategory === cat.name ? "active" : ""}`}
+                  onClick={() => selectCategory(cat)}
+                  title={cat.name}
+                >
+                  <span className="pdf-hl-swatch" style={{ background: cat.color }} />
+                  {cat.name}
+                </button>
               ))}
+              <button
+                className="pdf-hl-edit"
+                onClick={() => setEditingCats(v => !v)}
+                title="Edit highlighter categories"
+              >
+                ✎
+              </button>
             </div>
           </>
+        )}
+        {tool === "mark" && editingCats && (
+          <HighlighterCatEditor
+            cats={highlighters}
+            onChange={persistHighlighters}
+            onClose={() => setEditingCats(false)}
+          />
         )}
 
         {/* Stroke sizes — hidden while eraser/lasso/text/mark tool active */}

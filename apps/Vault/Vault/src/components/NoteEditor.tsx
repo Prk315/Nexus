@@ -5,12 +5,24 @@ import Mathematics from "@tiptap/extension-mathematics";
 import { Table, TableRow, TableHeader, TableCell } from "@tiptap/extension-table";
 import { useEffect, useRef, useState } from "react";
 import { createSlashCommandsExtension, type SlashMenuState } from "../extensions/SlashCommands";
+import { CategoryHighlight } from "../extensions/CategoryHighlight";
 import { SlashCommandsList } from "./SlashCommandsList";
+import { HighlighterCatEditor } from "./HighlighterCatEditor";
+import { DatabaseInsertPicker } from "./DatabaseInsertPicker";
+import * as api from "../lib/api";
+import { DEFAULT_HIGHLIGHTERS, findAncestorOfKind, getDescendants } from "../nodeUtils";
+import type { VaultGraph, HighlighterCategory, VaultRecord } from "../types";
 import "katex/dist/katex.min.css";
 
 interface Props {
   content: string;
   onChange: (content: string) => void;
+  nodeId?: string;
+  graph?: VaultGraph;
+}
+
+function escapeHtml(s: string) {
+  return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 }
 
 function parseContent(raw: string) {
@@ -22,22 +34,32 @@ function parseContent(raw: string) {
   }
 }
 
-export function NoteEditor({ content, onChange }: Props) {
+export function NoteEditor({ content, onChange, nodeId, graph }: Props) {
   const [, forceUpdate] = useState(0);
   const [slashMenu, setSlashMenu] = useState<SlashMenuState | null>(null);
   const [nearRightEdge, setNearRightEdge] = useState(false);
   const [onPanel, setOnPanel] = useState(false);
   const wrapperRef = useRef<HTMLDivElement>(null);
 
+  // Highlighter categories (this note's own set) + database insert picker.
+  const [highlighters, setHighlighters] = useState<HighlighterCategory[]>([]);
+  const [editingCats, setEditingCats] = useState(false);
+  const [picker, setPicker] = useState<{ records: VaultRecord[]; dbName: string } | null>(null);
+  const [pickerMsg, setPickerMsg] = useState<string | null>(null);
+
   const setMenuRef = useRef(setSlashMenu);
   setMenuRef.current = setSlashMenu;
 
   const keyHandlerRef = useRef<((event: KeyboardEvent) => boolean) | null>(null);
+  // Stable indirection so the slash extension (created once) always calls the
+  // latest DB-insert handler.
+  const dbInsertRef = useRef<((props: { editor: any; range: any }) => void) | null>(null);
 
   const slashExtRef = useRef(
     createSlashCommandsExtension(
       (s) => setMenuRef.current(s),
-      () => keyHandlerRef.current
+      () => keyHandlerRef.current,
+      (props) => dbInsertRef.current?.(props)
     )
   );
 
@@ -50,6 +72,7 @@ export function NoteEditor({ content, onChange }: Props) {
       StarterKit,
       Placeholder.configure({ placeholder: "Write here… (type / for commands)" }),
       Mathematics,
+      CategoryHighlight,
       Table.configure({ resizable: true }),
       TableRow,
       TableHeader,
@@ -72,6 +95,71 @@ export function NoteEditor({ content, onChange }: Props) {
     lastEmittedRef.current = content;
     editor.commands.setContent(parseContent(content), { emitUpdate: false });
   }, [content]);
+
+  // Load this note's highlighter categories; seed defaults on first use.
+  useEffect(() => {
+    if (!nodeId) return;
+    let cancelled = false;
+    (async () => {
+      let sets = await api.readHighlighters(nodeId);
+      if (sets.length === 0) {
+        sets = DEFAULT_HIGHLIGHTERS;
+        await api.saveHighlighters(nodeId, sets);
+      }
+      if (!cancelled) setHighlighters(sets);
+    })();
+    return () => { cancelled = true; };
+  }, [nodeId]);
+
+  function persistHighlighters(next: HighlighterCategory[]) {
+    setHighlighters(next);
+    if (nodeId) api.saveHighlighters(nodeId, next);
+  }
+
+  // Apply a highlighter to the current selection and record it into the database.
+  function applyCategory(cat: HighlighterCategory) {
+    if (!editor) return;
+    const { from, to } = editor.state.selection;
+    editor.chain().focus().setHighlight({ color: cat.color, category: cat.name } as any).run();
+    if (from === to) return; // nothing selected → only sets the mark for typing
+    const text = editor.state.doc.textBetween(from, to, " ").replace(/\s+/g, " ").trim();
+    if (text && nodeId) {
+      api.insertRecord({
+        source_node_id: nodeId,
+        category: cat.name,
+        color: cat.color,
+        text,
+        location: "",
+      }).catch(() => { /* non-fatal: the visual highlight is already applied */ });
+    }
+  }
+
+  // Open the ancestor Database node's records for insertion at the cursor.
+  async function openDatabasePicker() {
+    if (!nodeId || !graph) { setPickerMsg("This note is not inside a database."); return; }
+    const dbId = findAncestorOfKind(graph, nodeId, "Database");
+    if (!dbId) { setPickerMsg("No database node found above this note."); return; }
+    const sources = getDescendants(graph, dbId);
+    const records = await api.readRecordsForSources(sources);
+    setPicker({ records, dbName: graph.nodes[dbId]?.name ?? "Database" });
+  }
+
+  function insertRecords(recs: VaultRecord[]) {
+    if (editor && recs.length) {
+      const html =
+        "<ul>" +
+        recs.map(r => `<li><strong>${escapeHtml(r.category)}:</strong> ${escapeHtml(r.text)}</li>`).join("") +
+        "</ul>";
+      editor.chain().focus().insertContent(html).run();
+    }
+    setPicker(null);
+  }
+
+  // Keep the slash-command "Insert from Database" wired to the latest handler.
+  dbInsertRef.current = ({ editor: ed, range }) => {
+    ed.chain().focus().deleteRange(range).run();
+    openDatabasePicker();
+  };
 
   const btn = (active: boolean, onClick: () => void, label: string) => (
     <button className={`tt-btn${active ? " active" : ""}`} onClick={onClick} type="button">
@@ -136,10 +224,50 @@ export function NoteEditor({ content, onChange }: Props) {
               <button className="tt-btn" onClick={() => editor.chain().focus().deleteTable().run()} type="button" title="Delete table">del⊞</button>
             </>
         }
+        {btn(editor.isActive("highlight"), () => editor.chain().focus().unsetHighlight().run(), "🖊")}
+        {nodeId && (
+          <>
+            {highlighters.map((cat) => (
+              <button
+                key={cat.name}
+                className="tt-btn tt-hl-btn"
+                onClick={() => applyCategory(cat)}
+                type="button"
+                title={`Highlight selection as ${cat.name}`}
+              >
+                <span className="tt-hl-swatch" style={{ background: cat.color }} />
+                {cat.name}
+              </button>
+            ))}
+            <button className="tt-btn" onClick={() => setEditingCats(v => !v)} type="button" title="Edit highlighters">✎</button>
+            <div className="tt-sep" />
+            <button className="tt-btn" onClick={openDatabasePicker} type="button" title="Insert records from the database above">◉ DB</button>
+          </>
+        )}
         <div className="tt-sep" />
         {btn(false, () => editor.chain().focus().undo().run(), "↩")}
         {btn(false, () => editor.chain().focus().redo().run(), "↪")}
       </div>
+      {editingCats && (
+        <HighlighterCatEditor
+          cats={highlighters}
+          onChange={persistHighlighters}
+          onClose={() => setEditingCats(false)}
+        />
+      )}
+      {picker && (
+        <DatabaseInsertPicker
+          records={picker.records}
+          dbName={picker.dbName}
+          onInsert={insertRecords}
+          onClose={() => setPicker(null)}
+        />
+      )}
+      {pickerMsg && (
+        <div className="db-picker-toast" onClick={() => setPickerMsg(null)}>
+          {pickerMsg}
+        </div>
+      )}
       <EditorContent editor={editor} className="tiptap-editor" />
       {slashMenu && (
         <SlashCommandsList

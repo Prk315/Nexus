@@ -1,5 +1,5 @@
 import { supabase } from "./supabase";
-import { VaultGraph, VaultNode, NodeKind } from "../types";
+import { VaultGraph, VaultNode, NodeKind, VaultRecord, HighlighterCategory } from "../types";
 
 const USER_ID = "default";
 function err(e: any): never { throw new Error(e?.message ?? String(e)); }
@@ -51,7 +51,9 @@ export async function deleteNode(id: string): Promise<VaultGraph> {
   await Promise.all([
     supabase.from("vault_content").delete().eq("node_id", id),
     supabase.from("vault_content").delete().eq("node_id", `${id}_annot`),
+    supabase.from("vault_content").delete().eq("node_id", `${id}_hl`),
     supabase.from("vault_journals").delete().eq("node_id", id),
+    supabase.from("vault_records").delete().eq("source_node_id", id),
   ]);
   const { error } = await supabase.from("vault_nodes").delete().eq("id", id);
   if (error) err(error);
@@ -173,4 +175,60 @@ export async function uploadAsset(nodeId: string, file: File): Promise<string> {
   // Persist the public URL as the node's content so EditorPane can read it back
   await saveContent(nodeId, data.publicUrl);
   return data.publicUrl;
+}
+
+// ── Highlighter categories (per reader node) ─────────────────────────────────
+// Stored as JSON in vault_content under the `${nodeId}_hl` suffix key,
+// following the existing `${id}_annot` convention.
+
+export async function readHighlighters(nodeId: string): Promise<HighlighterCategory[]> {
+  const raw = await readContent(`${nodeId}_hl`);
+  if (!raw) return [];
+  try {
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
+
+export async function saveHighlighters(nodeId: string, sets: HighlighterCategory[]): Promise<void> {
+  await saveContent(`${nodeId}_hl`, JSON.stringify(sets));
+}
+
+// ── Records (highlight entries) ──────────────────────────────────────────────
+
+export async function insertRecord(
+  rec: Omit<VaultRecord, "id" | "created_at"> & { id?: string }
+): Promise<VaultRecord> {
+  const id = rec.id ?? crypto.randomUUID();
+  const row = {
+    id,
+    source_node_id: rec.source_node_id,
+    category: rec.category,
+    color: rec.color,
+    text: rec.text,
+    location: rec.location ?? "",
+    user_id: USER_ID,
+  };
+  const { data, error } = await supabase.from("vault_records")
+    .insert(row).select("id, source_node_id, category, color, text, location, created_at").single();
+  if (error) err(error);
+  return data as VaultRecord;
+}
+
+export async function readRecordsForSources(sourceIds: string[]): Promise<VaultRecord[]> {
+  if (sourceIds.length === 0) return [];
+  const { data, error } = await supabase.from("vault_records")
+    .select("id, source_node_id, category, color, text, location, created_at")
+    .eq("user_id", USER_ID)
+    .in("source_node_id", sourceIds)
+    .order("created_at", { ascending: true });
+  if (error) err(error);
+  return (data ?? []) as VaultRecord[];
+}
+
+export async function deleteRecord(id: string): Promise<void> {
+  const { error } = await supabase.from("vault_records").delete().eq("id", id);
+  if (error) err(error);
 }

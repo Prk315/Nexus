@@ -78,8 +78,20 @@ const COMMANDS: CommandItem[] = [
 
 export function createSlashCommandsExtension(
   setMenu: (state: SlashMenuState | null) => void,
-  getKeyHandler: () => ((event: KeyboardEvent) => boolean) | null
+  getKeyHandler: () => ((event: KeyboardEvent) => boolean) | null,
+  onDatabaseInsert?: (props: { editor: any; range: any }) => void
 ) {
+  const commands: CommandItem[] = onDatabaseInsert
+    ? [
+        ...COMMANDS,
+        {
+          title: "Insert from Database",
+          icon: "◉",
+          command: (props) => onDatabaseInsert(props),
+        },
+      ]
+    : COMMANDS;
+
   return Extension.create({
     name: "slashCommands",
 
@@ -89,7 +101,7 @@ export function createSlashCommandsExtension(
           editor: this.editor,
           char: "/",
           items: ({ query }) =>
-            COMMANDS.filter((c) =>
+            commands.filter((c) =>
               c.title.toLowerCase().includes(query.toLowerCase())
             ),
           command: ({ editor, range, props }) => {
