@@ -178,6 +178,24 @@ const PdfPage = memo(function PdfPage({
   const selectedStrokesRef = useRef<Set<string>>(selectedStrokes);
   useEffect(() => { selectedStrokesRef.current = selectedStrokes; }, [selectedStrokes]);
 
+  // iPad Safari + Apple Pencil: the Pencil fires pointerType "pen" events (driven
+  // by the pointer handlers below), but by default a Pencil drag scrolls the page
+  // (touch-action: pan-y) and Safari cancels the stroke, so drawing/highlighting
+  // never completes. Prevent the page from scrolling while a stylus is on the
+  // canvas so the Pencil draws; finger-only touches are left alone so they still
+  // scroll the PDF for reading. A stylus touching also suppresses palm touches.
+  // Must be a native non-passive listener — React's touch listeners are passive.
+  useEffect(() => {
+    const canvas = annotCanvasRef.current;
+    if (!canvas) return;
+    const onTouchMove = (e: TouchEvent) => {
+      const touches = Array.from(e.touches) as Array<Touch & { touchType?: string }>;
+      if (touches.some(t => t.touchType === "stylus")) e.preventDefault();
+    };
+    canvas.addEventListener("touchmove", onTouchMove, { passive: false });
+    return () => canvas.removeEventListener("touchmove", onTouchMove);
+  }, []);
+
   // ── Mark tool state ──────────────────────────────────────────────────────
   const markStartRef  = useRef<{ pt: Point; cx: number; cy: number } | null>(null);
   const markRangeRef  = useRef<{ s: number; e: number } | null>(null);
