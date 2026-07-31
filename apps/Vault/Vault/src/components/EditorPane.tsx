@@ -483,7 +483,7 @@ export const EditorPane = forwardRef<EditorPaneHandle, EditorPaneProps>(
                 nodeId={selectedId ?? undefined}
               />
             ) : selectedNode?.kind.type === "Pdf" ? (
-              <PdfViewer content={content} nodeId={selectedId!} />
+              <PdfViewer key={selectedId} content={content} nodeId={selectedId!} />
             ) : selectedNode?.kind.type === "Video" ? (
               <VideoViewer content={content} />
             ) : selectedNode?.kind.type === "Workbook" ? (

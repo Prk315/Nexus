@@ -686,6 +686,11 @@ interface Props {
   nodeId:  string;
 }
 
+// Preserve scroll position + measured page sizes per PDF node across tab
+// switches — EditorPane unmounts the viewer when you switch to another node,
+// which would otherwise reset it to page 1 on the way back.
+const pdfViewCache = new Map<string, { page: number; pageSizes: Record<number, { w: number; h: number }> }>();
+
 export function PdfViewer({ content: pdfPath, nodeId }: Props) {
   const [pdfDoc,     setPdfDoc]     = useState<PDFDocumentProxy | null>(null);
   const [numPages,   setNumPages]   = useState(0);
@@ -778,7 +783,14 @@ export function PdfViewer({ content: pdfPath, nodeId }: Props) {
   // Off-screen pages render as placeholder divs (no canvases) to cap memory.
   const [visiblePages, setVisiblePages] = useState<Set<number>>(new Set([0, 1, 2]));
   // Estimated per-page CSS size so placeholders keep correct scroll height.
-  const [pageSizes, setPageSizes] = useState<Record<number, { w: number; h: number }>>({});
+  const [pageSizes, setPageSizes] = useState<Record<number, { w: number; h: number }>>(
+    () => pdfViewCache.get(nodeId)?.pageSizes ?? {}
+  );
+  // Page index to restore on (re)mount, captured once from the cache. Restored by
+  // re-asserting scrollToPage over a short window so it converges on the right
+  // page as the document loads and page heights settle.
+  const restorePageRef = useRef<number>(pdfViewCache.get(nodeId)?.page ?? 0);
+  const hasRestoredRef = useRef(false);
   // Natural (pre-zoom) total height of all page slots — used to compute the CSS transform margin-bottom.
   const totalHeight = useMemo(() => {
     let h = 0;
@@ -1113,10 +1125,29 @@ export function PdfViewer({ content: pdfPath, nodeId }: Props) {
         }
       }
       setCurrentPage(prev => prev === bestIdx ? prev : bestIdx);
+      // Persist current page so a tab switch away and back returns here.
+      if (hasRestoredRef.current) {
+        pdfViewCache.set(nodeIdRef.current, { page: bestIdx, pageSizes: pageSizesRef.current });
+      }
     }
 
     el.addEventListener("scroll", onScroll, { passive: true });
     return () => el.removeEventListener("scroll", onScroll);
+  }, [numPages]);
+
+  // Restore the saved page once the document is loaded. Re-assert scrollToPage
+  // every frame for a short window: the target page's offset keeps refining as
+  // renderScale applies and page heights settle, so the last frames land exactly.
+  useEffect(() => {
+    if (numPages === 0 || hasRestoredRef.current) return;
+    const want = Math.min(restorePageRef.current, numPages - 1);
+    if (want <= 0) { hasRestoredRef.current = true; return; }
+    // Re-assert scrollToPage at increasing delays: the target page's offset keeps
+    // refining as renderScale applies and heights settle, so a later call lands
+    // exactly. setTimeout (not rAF) so it also runs while the tab is backgrounded.
+    const timers = [80, 250, 600, 1200, 2000].map(d => window.setTimeout(() => scrollToPage(want), d));
+    timers.push(window.setTimeout(() => { hasRestoredRef.current = true; }, 2100));
+    return () => timers.forEach(clearTimeout);
   }, [numPages]);
 
   // ── Stroke callbacks ──────────────────────────────────────────────────
