@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef, useMemo } from "react";
-import { useNexusRegistration, NexusHeader } from "@nexus/core";
+import { useNexusRegistration, NexusHeader, useNexusAuth } from "@nexus/core";
 import * as api from "./lib/api";
 import ForceGraph2D from "react-force-graph-2d";
 import ForceGraph3D from "react-force-graph-3d";
@@ -18,6 +18,7 @@ import "./App.css";
 
 function App() {
   useNexusRegistration("Vault");
+  const { user, signOut } = useNexusAuth();
   const { graph, graphData, savePositions, loadGraph, createNode, deleteNode, addEdge, removeEdge, addTag, removeTag, setTagColor, createTag, renameTag, deleteTagGlobal } = useGraph();
 
   const [newName, setNewName] = useState("");
@@ -701,6 +702,13 @@ function App() {
               <button className={sidebarView === "graph" ? "active" : ""} onClick={() => setSidebarView("graph")}>Graph</button>
               <button className={sidebarView === "tags" ? "active" : ""} onClick={() => setSidebarView("tags")}>Tags</button>
             </div>
+            <button
+              className="vault-signout-btn"
+              title={user?.email ? `Signed in as ${user.email} — sign out` : "Sign out"}
+              onClick={() => signOut()}
+            >
+              ⏻
+            </button>
           </div>
         </div>
 

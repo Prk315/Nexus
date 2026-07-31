@@ -7,6 +7,7 @@ import initSqlJs from 'sql.js';
 import type { SqlJsStatic, Database } from 'sql.js';
 import sqlWasmUrl from 'sql.js/dist/sql-wasm.wasm?url';
 import { readText as clipboardReadText } from "@tauri-apps/plugin-clipboard-manager";
+import { isTauri } from "../lib/platform";
 import Markdown from "react-markdown";
 import remarkMath from "remark-math";
 import rehypeKatex from "rehype-katex";
@@ -690,7 +691,9 @@ async function handleNativePaste(e: React.ClipboardEvent<HTMLTextAreaElement>) {
 
   let text: string;
   try {
-    text = await clipboardReadText();
+    // The Tauri clipboard plugin only exists in the desktop shell; in the
+    // browser the native clipboardData is already the source of truth.
+    text = isTauri() ? await clipboardReadText() : browserText;
     if (!text) text = browserText; // plugin returned empty, fall back
   } catch {
     text = browserText;            // plugin unavailable, fall back
@@ -1729,8 +1732,8 @@ export function CanvasEditor({ content, onChange, nodeId }: Props) {
   const [inkMode,        setInkMode]        = useState(false);
   const inkModeRef       = useRef(inkMode);
   inkModeRef.current     = inkMode;
-  const [inkColor,       setInkColor]       = useState(DRAW_COLORS[0]);
-  const [inkWidth,       setInkWidth]       = useState(2.5);
+  const [inkColor]       = useState(DRAW_COLORS[0]);
+  const [inkWidth]       = useState(2.5);
   const inkActive        = useRef<{ x: number; y: number }[] | null>(null);
   const [inkPreview,     setInkPreview]     = useState<string | null>(null);
   const dataRef          = useRef(data);
@@ -2720,7 +2723,9 @@ export function CanvasEditor({ content, onChange, nodeId }: Props) {
         .map(id => getComponentSessionId(id, nodeId, blocks, arrows))
     );
 
-    await Promise.all([...pythonSessionIds].map(sid => invoke("reset_python_session", { sessionId: sid })));
+    // Python execution is Rust-backed (desktop only); no-op in the web build.
+    if (isTauri())
+      await Promise.all([...pythonSessionIds].map(sid => invoke("reset_python_session", { sessionId: sid })));
     sqlSessionIds.forEach(sid => _resetSqlSession(sid));
 
     setData(d => ({

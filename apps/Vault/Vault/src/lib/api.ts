@@ -1,16 +1,15 @@
-import { supabase } from "./supabase";
+import { supabase, getUserId } from "./supabase";
 import { VaultGraph, VaultNode, NodeKind, VaultRecord, HighlighterCategory } from "../types";
 
-const USER_ID = "default";
 function err(e: any): never { throw new Error(e?.message ?? String(e)); }
 
 // ── Graph load ────────────────────────────────────────────────────────────────
 
 export async function loadGraph(): Promise<VaultGraph> {
   const [nodesRes, edgesRes, colorsRes] = await Promise.all([
-    supabase.from("vault_nodes").select("id, name, kind, tags").eq("user_id", USER_ID),
-    supabase.from("vault_edges").select("from_id, to_id").eq("user_id", USER_ID),
-    supabase.from("vault_tag_colors").select("tag, color").eq("user_id", USER_ID),
+    supabase.from("vault_nodes").select("id, name, kind, tags").eq("user_id", getUserId()),
+    supabase.from("vault_edges").select("from_id, to_id").eq("user_id", getUserId()),
+    supabase.from("vault_tag_colors").select("tag, color").eq("user_id", getUserId()),
   ]);
   if (nodesRes.error) err(nodesRes.error);
   if (edgesRes.error) err(edgesRes.error);
@@ -41,7 +40,7 @@ export async function loadGraph(): Promise<VaultGraph> {
 export async function createNode(name: string, kind: NodeKind): Promise<VaultGraph> {
   const id = crypto.randomUUID();
   const { error } = await supabase.from("vault_nodes")
-    .insert({ id, name, kind, tags: [], user_id: USER_ID });
+    .insert({ id, name, kind, tags: [], user_id: getUserId() });
   if (error) err(error);
   return loadGraph();
 }
@@ -65,7 +64,7 @@ export async function deleteNode(id: string): Promise<VaultGraph> {
 
 export async function addEdge(fromId: string, toId: string): Promise<VaultGraph> {
   const { error } = await supabase.from("vault_edges")
-    .upsert({ from_id: fromId, to_id: toId, user_id: USER_ID }, { onConflict: "from_id,to_id" });
+    .upsert({ from_id: fromId, to_id: toId, user_id: getUserId() }, { onConflict: "from_id,to_id" });
   if (error) err(error);
   return loadGraph();
 }
@@ -104,7 +103,7 @@ export async function removeTag(id: string, tag: string): Promise<VaultGraph> {
 
 export async function setTagColor(tag: string, color: string): Promise<VaultGraph> {
   const { error } = await supabase.from("vault_tag_colors")
-    .upsert({ tag, color, user_id: USER_ID }, { onConflict: "user_id,tag" });
+    .upsert({ tag, color, user_id: getUserId() }, { onConflict: "user_id,tag" });
   if (error) err(error);
   return loadGraph();
 }
@@ -115,7 +114,7 @@ export async function createTag(tag: string, color: string): Promise<VaultGraph>
 
 export async function renameTag(oldName: string, newName: string): Promise<VaultGraph> {
   const { error } = await supabase.rpc("vault_rename_tag", {
-    p_user_id: USER_ID,
+    p_user_id: getUserId(),
     p_old: oldName,
     p_new: newName,
   });
@@ -125,7 +124,7 @@ export async function renameTag(oldName: string, newName: string): Promise<Vault
 
 export async function deleteTagGlobal(tag: string): Promise<VaultGraph> {
   const { error } = await supabase.rpc("vault_delete_tag", {
-    p_user_id: USER_ID,
+    p_user_id: getUserId(),
     p_tag: tag,
   });
   if (error) err(error);
@@ -142,7 +141,7 @@ export async function readContent(id: string): Promise<string> {
 
 export async function saveContent(id: string, content: string): Promise<void> {
   const { error } = await supabase.from("vault_content")
-    .upsert({ node_id: id, data: content, user_id: USER_ID, updated_at: new Date().toISOString() },
+    .upsert({ node_id: id, data: content, user_id: getUserId(), updated_at: new Date().toISOString() },
       { onConflict: "node_id" });
   if (error) err(error);
 }
@@ -157,7 +156,7 @@ export async function readJournal(id: string): Promise<string> {
 
 export async function saveJournal(id: string, data: string): Promise<void> {
   const { error } = await supabase.from("vault_journals")
-    .upsert({ node_id: id, data, user_id: USER_ID, updated_at: new Date().toISOString() },
+    .upsert({ node_id: id, data, user_id: getUserId(), updated_at: new Date().toISOString() },
       { onConflict: "node_id" });
   if (error) err(error);
 }
@@ -166,7 +165,7 @@ export async function saveJournal(id: string, data: string): Promise<void> {
 
 export async function uploadAsset(nodeId: string, file: File): Promise<string> {
   const ext = file.name.split(".").pop() ?? "bin";
-  const path = `${USER_ID}/${nodeId}.${ext}`;
+  const path = `${getUserId()}/${nodeId}.${ext}`;
   const { error } = await supabase.storage
     .from("vault-assets")
     .upload(path, file, { upsert: true });
@@ -209,7 +208,7 @@ export async function insertRecord(
     color: rec.color,
     text: rec.text,
     location: rec.location ?? "",
-    user_id: USER_ID,
+    user_id: getUserId(),
   };
   const { data, error } = await supabase.from("vault_records")
     .insert(row).select("id, source_node_id, category, color, text, location, created_at").single();
@@ -221,7 +220,7 @@ export async function readRecordsForSources(sourceIds: string[]): Promise<VaultR
   if (sourceIds.length === 0) return [];
   const { data, error } = await supabase.from("vault_records")
     .select("id, source_node_id, category, color, text, location, created_at")
-    .eq("user_id", USER_ID)
+    .eq("user_id", getUserId())
     .in("source_node_id", sourceIds)
     .order("created_at", { ascending: true });
   if (error) err(error);

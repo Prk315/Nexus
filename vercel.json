@@ -1,0 +1,7 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "installCommand": "npm install",
+  "buildCommand": "npm run build --workspace=apps/Vault/Vault",
+  "outputDirectory": "apps/Vault/Vault/dist",
+  "rewrites": [{ "source": "/(.*)", "destination": "/index.html" }]
+}

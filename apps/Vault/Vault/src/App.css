@@ -5900,3 +5900,16 @@ body {
 }
 .db-refresh:hover:not(:disabled) { background: var(--bg-subtle); color: var(--fg-main); }
 .db-refresh:disabled { opacity: 0.5; cursor: default; }
+
+.vault-signout-btn {
+  margin-left: 8px;
+  border: 1px solid var(--border-base);
+  border-radius: var(--radius);
+  background: var(--bg-raised);
+  color: var(--fg-muted);
+  cursor: pointer;
+  padding: 3px 8px;
+  font-size: 13px;
+  line-height: 1;
+}
+.vault-signout-btn:hover { background: var(--destructive-bg); color: var(--destructive); border-color: var(--destructive-border); }

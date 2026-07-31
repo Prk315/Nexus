@@ -1,6 +1,7 @@
 export * from "./types";
 export * from "./utils";
 export * from "./client";
+export * from "./auth/NexusAuth";
 export * from "./components/AppGridButton";
 export * from "./components/NexusHeader";
 export * from "./components/LifeBar";

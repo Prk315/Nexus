@@ -6,6 +6,7 @@
     ".": "./src/index.ts"
   },
   "peerDependencies": {
+    "@supabase/supabase-js": ">=2.0.0",
     "clsx": ">=2.0.0",
     "tailwind-merge": ">=2.0.0",
     "react": ">=18.0.0",

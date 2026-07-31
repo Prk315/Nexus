@@ -5,6 +5,18 @@ import "katex/dist/katex.min.css";
 import { VaultGraph } from "../types";
 import { NoteEditor } from "./NoteEditor";
 import { CanvasEditor } from "./CanvasEditor";
+import { isTauri } from "../lib/platform";
+import * as api from "../lib/api";
+
+// Linked-node content read/write: use the Rust command inside the desktop shell,
+// fall back to Supabase (the source of truth) in the browser / web deploy.
+function readNodeContent(id: string): Promise<string> {
+  return isTauri() ? invoke<string>("read_content", { id }) : api.readContent(id);
+}
+function saveNodeContent(id: string, content: string): void {
+  if (isTauri()) invoke("save_content", { id, content });
+  else void api.saveContent(id, content);
+}
 
 // ── Data model ──────────────────────────────────────────────────────────────
 
@@ -252,7 +264,7 @@ function LiteratureSection({ linkedIds, graph, onOpenNode, onChange }: Literatur
     const missing = linkedIds.filter(id => !(id in contentMap));
     if (missing.length === 0) return;
     missing.forEach(id => {
-      invoke<string>("read_content", { id }).then(c => {
+      readNodeContent(id).then(c => {
         setContentMap(prev => ({ ...prev, [id]: c }));
       });
     });
@@ -361,7 +373,7 @@ function NotesSection({ linkedIds, graph, onOpenNode, onChange }: NotesSectionPr
     const missing = linkedIds.filter(id => !(id in contentMap));
     if (missing.length === 0) return;
     missing.forEach(id => {
-      invoke<string>("read_content", { id }).then(c => {
+      readNodeContent(id).then(c => {
         setContentMap(prev => ({ ...prev, [id]: c }));
       });
     });
@@ -385,7 +397,7 @@ function NotesSection({ linkedIds, graph, onOpenNode, onChange }: NotesSectionPr
     setContentMap(prev => ({ ...prev, [id]: content }));
     clearTimeout(saveTimers.current[id]);
     saveTimers.current[id] = setTimeout(() => {
-      invoke("save_content", { id, content });
+      saveNodeContent(id, content);
     }, 400);
   }
 
@@ -462,7 +474,7 @@ function CanvasSection({ linkedIds, graph, onOpenNode, onChange }: CanvasSection
     const missing = linkedIds.filter(id => !(id in contentMap));
     if (missing.length === 0) return;
     missing.forEach(id => {
-      invoke<string>("read_content", { id }).then(c => {
+      readNodeContent(id).then(c => {
         setContentMap(prev => ({ ...prev, [id]: c }));
       });
     });
@@ -486,7 +498,7 @@ function CanvasSection({ linkedIds, graph, onOpenNode, onChange }: CanvasSection
     setContentMap(prev => ({ ...prev, [id]: content }));
     clearTimeout(saveTimers.current[id]);
     saveTimers.current[id] = setTimeout(() => {
-      invoke("save_content", { id, content });
+      saveNodeContent(id, content);
     }, 400);
   }
 
