@@ -397,6 +397,7 @@ const PdfPage = memo(function PdfPage({
   useEffect(() => {
     let cancelled = false;
     let page: PDFPageProxy | null = null;
+    let renderTask: ReturnType<PDFPageProxy["render"]> | null = null;
 
     async function render() {
       const pdfCanvas  = pdfCanvasRef.current;
@@ -425,7 +426,15 @@ const PdfPage = memo(function PdfPage({
 
       // pdfjs-dist v5+ wants `canvas` directly; `canvasContext` is deprecated
       // and silently no-ops on some pages.
-      await page.render({ canvas: pdfCanvas, viewport }).promise;
+      renderTask = page.render({ canvas: pdfCanvas, viewport });
+      try {
+        await renderTask.promise;
+      } catch (e: any) {
+        // A superseded render (zoom/page change, or React StrictMode's double
+        // effect invoke in dev) cancels the task — expected, not an error.
+        if (e?.name === "RenderingCancelledException") return;
+        throw e;
+      }
       if (cancelled) return;
 
       // Restore any existing annotations after re-render
@@ -435,6 +444,11 @@ const PdfPage = memo(function PdfPage({
     render();
     return () => {
       cancelled = true;
+      // Cancel the in-flight render BEFORE the next effect starts a new render
+      // on the same canvas — otherwise pdfjs throws "Cannot use the same canvas
+      // during multiple render() operations", which aborts the annotation
+      // restore and can wipe the highlight layer.
+      try { renderTask?.cancel(); } catch { /* ignore */ }
       // pdfjs-dist v5+: page.cleanup() returns void, not a Promise.
       try { page?.cleanup(); } catch { /* ignore */ }
     };
