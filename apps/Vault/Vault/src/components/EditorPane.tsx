@@ -79,6 +79,9 @@ interface EditorPaneProps {
   onAddPane: () => void;
   onSelectionChange: (nodeId: string | null) => void;
   removeEdge: (a: string, b: string) => Promise<void>;
+  addEdge: (a: string, b: string) => Promise<void>;
+  createNode: (name: string, kind: string) => Promise<VaultGraph>;
+  deleteNode: (id: string) => Promise<void>;
   addTag: (id: string, tag: string) => Promise<void>;
   removeTag: (id: string, tag: string) => Promise<void>;
   setTagColor: (tag: string, color: string) => void;
@@ -97,6 +100,9 @@ export const EditorPane = forwardRef<EditorPaneHandle, EditorPaneProps>(
       onAddPane,
       onSelectionChange,
       removeEdge,
+      addEdge,
+      createNode,
+      deleteNode,
       addTag,
       removeTag,
       setTagColor,
@@ -112,6 +118,12 @@ export const EditorPane = forwardRef<EditorPaneHandle, EditorPaneProps>(
     const [saveStatus, setSaveStatus] = useState("");
     const [newTag, setNewTag] = useState("");
     const [isLoading, setIsLoading] = useState(false);
+
+    // Folder-graph editing: connect (link mode), add child, select-then-delete.
+    const [linkMode, setLinkMode] = useState(false);
+    const [linkSource, setLinkSource] = useState<string | null>(null);
+    const [graphSelId, setGraphSelId] = useState<string | null>(null);
+    const lastGraphClickRef = useRef<{ id: string; t: number }>({ id: "", t: 0 });
 
     const folderAreaRef = useRef<HTMLDivElement>(null);
     const [folderAreaSize, setFolderAreaSize] = useState({
@@ -228,6 +240,56 @@ export const EditorPane = forwardRef<EditorPaneHandle, EditorPaneProps>(
       onSelectionChange(selectedId);
     }, [selectedId]);
 
+    // Reset folder-graph editing state when the viewed node changes.
+    useEffect(() => {
+      setGraphSelId(null);
+      setLinkMode(false);
+      setLinkSource(null);
+    }, [selectedId]);
+
+
+    // ── Folder-graph editing ────────────────────────────────────────────────
+    // Single click selects (highlights) a node; double click opens it. In link
+    // mode, clicks connect a source → target instead.
+    function handleFolderNodeClick(id: string) {
+      const now = Date.now();
+      const last = lastGraphClickRef.current;
+      lastGraphClickRef.current = { id, t: now };
+      if (last.id === id && now - last.t < 300) {
+        // double click → open
+        setGraphSelId(null);
+        selectNode(id);
+        return;
+      }
+      if (linkMode) {
+        if (!linkSource) { setLinkSource(id); return; }
+        if (linkSource === id) { setLinkSource(null); return; }
+        addEdge(linkSource, id).catch(() => {});
+        setLinkSource(null);
+        return;
+      }
+      setGraphSelId(id);
+    }
+
+    function toggleFolderLinkMode() {
+      setLinkMode((v) => !v);
+      setLinkSource(null);
+    }
+
+    // Create a node as a child of the folder currently shown, so it appears in
+    // this folder's graph (mirrors App.handleCreateChild).
+    async function handleFolderCreateNode(name: string, kind: string) {
+      if (!selectedId) return;
+      const oldIds = new Set(Object.keys(graph.nodes));
+      const g = await createNode(name, kind);
+      const newId = Object.keys(g.nodes).find((id) => !oldIds.has(id));
+      if (newId) await addEdge(selectedId, newId);
+    }
+
+    async function handleFolderDeleteNode(id: string) {
+      await deleteNode(id);
+      setGraphSelId(null);
+    }
 
     async function selectNode(id: string) {
       const node = graph.nodes[id];
@@ -458,16 +520,17 @@ export const EditorPane = forwardRef<EditorPaneHandle, EditorPaneProps>(
                 <GraphView
                   graph={graph}
                   graphData={folderGraphData}
-                  selectedId={selectedId}
-                  linkMode={false}
-                  linkSource={null}
+                  selectedId={graphSelId}
+                  linkMode={linkMode}
+                  linkSource={linkSource}
                   width={folderAreaSize.width}
                   height={folderAreaSize.height}
-                  onNodeClick={selectNode}
+                  onNodeClick={handleFolderNodeClick}
                   onEngineStop={() => savePositions(folderGraphData.nodes)}
-                  onToggleLinkMode={() => {}}
+                  onToggleLinkMode={toggleFolderLinkMode}
+                  onCreateNode={handleFolderCreateNode}
+                  onDeleteNode={handleFolderDeleteNode}
                   onDeleteEdge={async (a, b) => removeEdge(a, b)}
-                  hideToolbar
                 />
               </div>
             ) : isFolderSelected ? (

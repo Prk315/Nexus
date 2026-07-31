@@ -824,6 +824,9 @@ function App() {
               onAddPane={() => addPaneAfter(pane.id)}
               onSelectionChange={nodeId => setPaneSelectedIds(prev => ({ ...prev, [pane.id]: nodeId }))}
               removeEdge={removeEdge}
+              addEdge={addEdge}
+              createNode={createNode}
+              deleteNode={handleDeleteNode}
               addTag={addTag}
               removeTag={removeTag}
               setTagColor={setTagColor}
