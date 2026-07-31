@@ -187,7 +187,10 @@ const PdfPage = memo(function PdfPage({
   // Convert a PDF TextItem to a normalised (0..1) rect using the scale=1 viewport.
   // PdfSearchOverlay uses the same pdfjs.Util.transform pattern.
   function getItemRect(item: TextItem, vp: PageViewport): { x: number; y: number; w: number; h: number } | null {
-    const [x, y] = pdfjs.Util.transform(vp.transform, [1, 0, 0, 1, item.transform[4], item.transform[5]]);
+    // Util.transform returns the full matrix [a,b,c,d,e,f]; the on-screen
+    // position is the translation (e,f) = indices [4],[5], NOT [0],[1].
+    const m = pdfjs.Util.transform(vp.transform, [1, 0, 0, 1, item.transform[4], item.transform[5]]);
+    const x = m[4], y = m[5];
     const w = item.width * vp.scale;
     // item.height is often 0 in practice; fall back to the font scale component
     const h = item.height > 0 ? item.height * vp.scale : Math.abs(item.transform[3]) * vp.scale;
