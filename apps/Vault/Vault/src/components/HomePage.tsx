@@ -11,6 +11,9 @@ export function HomePage({ graph, onSelectNode }: HomePageProps) {
   const [search, setSearch]       = useState("");
   const [openFolder, setOpenFolder] = useState<string | null>(null);
   const [view, setView]           = useState<"folders" | "concept">("folders");
+  // Mount the concept-map iframe once, then keep it (hidden) — remounting the
+  // heavy 3D app on every toggle churns WebGL contexts and hangs the tab.
+  const [conceptMounted, setConceptMounted] = useState(false);
 
   const q = search.toLowerCase().trim();
 
@@ -84,7 +87,7 @@ export function HomePage({ graph, onSelectNode }: HomePageProps) {
           <div className="home-main-header">
             <div className="home-view-toggle">
               <button className={view === "folders" ? "active" : ""} onClick={() => setView("folders")}>Folders</button>
-              <button className={view === "concept" ? "active" : ""} onClick={() => setView("concept")}>Concept Map</button>
+              <button className={view === "concept" ? "active" : ""} onClick={() => { setConceptMounted(true); setView("concept"); }}>Concept Map</button>
             </div>
             {view === "folders" && (openFolder ? (
               <div className="home-folder-breadcrumb">
@@ -105,13 +108,15 @@ export function HomePage({ graph, onSelectNode }: HomePageProps) {
             )}
           </div>
 
-          {view === "concept" ? (
+          {conceptMounted && (
             <iframe
               src="/conceptmap.html"
               title="Concept Map"
               className="home-conceptmap"
+              style={{ display: view === "concept" ? "block" : "none" }}
             />
-          ) : (
+          )}
+          {view === "folders" && (
           <div className="home-notes-grid">
             {openFolder ? (
               folderChildren.length === 0
