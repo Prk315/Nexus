@@ -9,13 +9,11 @@ import { GoalHub } from "./pages/GoalHub";
 import { Systems } from "./pages/Systems";
 import { Week } from "./pages/Week";
 import { Courses } from "./pages/Courses";
-import { Lifestyle } from "./pages/Lifestyle";
 import { Projects } from "./pages/Projects";
 import { Games } from "./pages/Games";
 import { Schedules } from "./pages/Schedules";
 import { Backlog } from "./pages/Backlog";
 import { Planner } from "./pages/Planner";
-import { Journal } from "./pages/Journal";
 
 const IS_IOS = /iPhone|iPad|iPod/.test(navigator.userAgent);
 
@@ -57,13 +55,11 @@ function App() {
           {page === "goals"     && <GoalHub />}
           {page === "systems"   && <Systems />}
           {page === "projects"  && <Projects />}
-          {page === "lifestyle" && <Lifestyle />}
           {page === "courses"   && <Courses />}
           {page === "schedules" && <Schedules />}
           {page === "games"     && <Games />}
           {page === "backlog"   && <Backlog />}
           {page === "planner"   && <Planner />}
-          {page === "journal"   && <Journal />}
         </main>
         </SchedulesProvider>
       </div>

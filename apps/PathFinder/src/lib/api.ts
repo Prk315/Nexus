@@ -5,12 +5,12 @@ import type {
   WeekItems, Reminder, QuickNote, BrainEntry, CalEvent, Deadline, Agreement,
   ScheduleEntry,
   DailyGoals, DailySecGoal, DailyPrimaryGoal, CalBlock, RecurringCalBlock, CourseAssignment,
-  CaSubtask, LifestyleArea, PipelineTemplate, PipelineStep, PipelineRun,
+  CaSubtask, PipelineTemplate, PipelineStep, PipelineRun,
   PipelineRunStep, PipelineStepSubtask, ProjectGoal, Game, GameFeature,
   GameDevlogEntry, RoadmapItem, CourseBook, BookSection, BookReadingLog,
   HabitWithCompletion, DailyHabit, HabitStack, HabitSubtask, RunLog, WorkoutLog, WorkoutExercise,
   SubtaskToggleResult, SystemSubtask, GoalGroup,
-  TrainingPlan, TrainingSession, SessionPerformance, Rule,
+  TrainingPlan, TrainingSession, SessionPerformance,
 } from "../types";
 
 
@@ -1468,72 +1468,6 @@ export const deleteScheduleEntry = async (id: number): Promise<void> => {
 };
 
 // ═══════════════════════════════════════════════════════════════════════════
-// JOURNAL
-// ═══════════════════════════════════════════════════════════════════════════
-
-export const getJournalEntry = async (date: string): Promise<string> => {
-  const { data } = await supabase
-    .from("pf_journal_entries").select("content").eq("user_id", getUserId()).eq("date", date).maybeSingle();
-  return data?.content ?? "";
-};
-
-export const saveJournalEntry = async (date: string, content: string): Promise<void> => {
-  const { error } = await supabase
-    .from("pf_journal_entries")
-    .upsert({ user_id: getUserId(), date, content, updated_at: new Date().toISOString() }, { onConflict: "user_id,date" });
-  if (error) err(error);
-};
-
-export const getJournalForPeriod = async (date: string, period: string): Promise<string> => {
-  const { data } = await supabase
-    .from("pf_journal_entries")
-    .select("content")
-    .eq("user_id", getUserId())
-    .eq("date", date)
-    .eq("period", period)
-    .maybeSingle();
-  return data?.content ?? "";
-};
-
-export const saveJournalForPeriod = async (date: string, period: string, content: string): Promise<void> => {
-  const { error } = await supabase
-    .from("pf_journal_entries")
-    .upsert(
-      { user_id: getUserId(), date, period, content, updated_at: new Date().toISOString() },
-      { onConflict: "user_id,date,period" },
-    );
-  if (error) throw new Error(error.message);
-};
-
-export const getRules = async (): Promise<Rule[]> => {
-  const { data, error } = await supabase
-    .from("pf_rules").select("*").eq("user_id", getUserId()).order("sort_order");
-  if (error) throw new Error(error.message);
-  return (data ?? []) as Rule[];
-};
-
-export const createRule = async (payload: { title: string; body?: string | null }): Promise<Rule> => {
-  const { data, error } = await supabase
-    .from("pf_rules").insert({ user_id: getUserId(), ...payload }).select().single();
-  if (error) throw new Error(error.message);
-  return data as Rule;
-};
-
-export const updateRule = async (id: number, payload: { title: string; body?: string | null }): Promise<Rule> => {
-  const { data, error } = await supabase
-    .from("pf_rules")
-    .update({ ...payload, updated_at: new Date().toISOString() })
-    .eq("id", id).select().single();
-  if (error) throw new Error(error.message);
-  return data as Rule;
-};
-
-export const deleteRule = async (id: number): Promise<void> => {
-  const { error } = await supabase.from("pf_rules").delete().eq("id", id);
-  if (error) throw new Error(error.message);
-};
-
-// ═══════════════════════════════════════════════════════════════════════════
 // COURSE ASSIGNMENTS
 // ═══════════════════════════════════════════════════════════════════════════
 
@@ -2032,47 +1966,6 @@ export const updateBookSection = async (sectionId: number, notes: string | null,
     .eq("id", sectionId).select().single();
   if (error) err(error);
   return mapBookSection(data!);
-};
-
-// ═══════════════════════════════════════════════════════════════════════════
-// LIFESTYLE AREAS
-// ═══════════════════════════════════════════════════════════════════════════
-
-export const getLifestyleAreas = async (): Promise<LifestyleArea[]> => {
-  const { data, error } = await supabase
-    .from("pf_lifestyle_areas").select("*").eq("user_id", getUserId()).order("sort_order");
-  if (error) err(error);
-  return (data ?? []).map((r) => ({ id: num(r.id), name: r.name, color: r.color, sort_order: r.sort_order }));
-};
-
-export const createLifestyleArea = async (name: string, color: string): Promise<LifestyleArea> => {
-  const { data, error } = await supabase
-    .from("pf_lifestyle_areas").insert({ user_id: getUserId(), name, color }).select().single();
-  if (error) err(error);
-  return { id: num(data!.id), name: data!.name, color: data!.color, sort_order: data!.sort_order };
-};
-
-export const updateLifestyleArea = async (id: number, name: string, color: string, sortOrder: number): Promise<LifestyleArea> => {
-  const { data, error } = await supabase
-    .from("pf_lifestyle_areas").update({ name, color, sort_order: sortOrder }).eq("id", id).select().single();
-  if (error) err(error);
-  return { id: num(data!.id), name: data!.name, color: data!.color, sort_order: data!.sort_order };
-};
-
-export const deleteLifestyleArea = async (id: number): Promise<void> => {
-  const { error } = await supabase.from("pf_lifestyle_areas").delete().eq("id", id);
-  if (error) err(error);
-};
-
-export const getLifestyleItems = async (areaId: number | null): Promise<{ systems: SystemEntry[]; plans: Plan[] }> => {
-  let sQ = supabase.from("pf_systems").select("*").eq("user_id", getUserId()).eq("is_lifestyle", true);
-  let pQ = supabase.from("pf_plans").select("*").eq("user_id", getUserId()).eq("is_lifestyle", true);
-  if (areaId !== null) {
-    sQ = sQ.eq("lifestyle_area_id", areaId);
-    pQ = pQ.eq("lifestyle_area_id", areaId);
-  }
-  const [{ data: systems }, { data: plans }] = await Promise.all([sQ, pQ]);
-  return { systems: (systems ?? []).map(mapSystem), plans: (plans ?? []).map((p) => mapPlan(p)) };
 };
 
 // ═══════════════════════════════════════════════════════════════════════════
