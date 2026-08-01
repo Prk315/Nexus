@@ -10,6 +10,7 @@ const WEB_APPS: { name: string; url: string }[] = (
   [
     { name: "Vault", url: (import.meta as any).env?.VITE_VAULT_URL as string | undefined },
     { name: "PathFinder", url: (import.meta as any).env?.VITE_PATHFINDER_URL as string | undefined },
+    { name: "Protocol", url: (import.meta as any).env?.VITE_PROTOCOL_URL as string | undefined },
   ].filter((a) => !!a.url) as { name: string; url: string }[]
 );
 

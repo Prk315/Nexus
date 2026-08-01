@@ -1,9 +1,9 @@
-import { getSupabaseClient, USER_ID } from "./supabase";
+import { getSupabaseClient, getUserId } from "./supabase";
 import type {
   BodyMetric, CreateBodyMetric,
   CreateNutritionEntry, CreateSleepEntry,
-  Exercise, RunningPlan, RunningSession,
-  SleepEntry, WorkoutPlan, WorkoutSession,
+  Exercise, CreateExercise, RunningPlan, RunningSession, CreateRunningSession,
+  SleepEntry, WorkoutPlan, WorkoutSession, CreateWorkoutSession,
   NutritionEntry, Habit, CreateHabit, UpdateHabit, HabitCompletion,
   HabitStack, CreateHabitStack,
   Food, CreateFood, Meal, CreateMeal, MealItem, CreateMealItem,
@@ -17,7 +17,7 @@ export async function fetchSleepFromCloud(): Promise<SleepEntry[]> {
   const { data, error } = await sb
     .from("protocol_sleep")
     .select("*")
-    .eq("user_id", USER_ID)
+    .eq("user_id", getUserId())
     .order("date", { ascending: false });
   if (error) throw new Error(error.message);
   return (data ?? []).map(rowToSleep);
@@ -27,7 +27,7 @@ export async function pushSleepToCloud(entry: CreateSleepEntry & { id: string })
   const sb = getSupabaseClient();
   const { error } = await sb.from("protocol_sleep").upsert({
     id: entry.id,
-    user_id: USER_ID,
+    user_id: getUserId(),
     date: entry.date,
     duration_min: entry.duration_min,
     quality_score: entry.quality_score,
@@ -70,7 +70,7 @@ export async function fetchNutritionFromCloud(): Promise<NutritionEntry[]> {
   const { data, error } = await sb
     .from("protocol_nutrition")
     .select("*")
-    .eq("user_id", USER_ID)
+    .eq("user_id", getUserId())
     .order("date", { ascending: false });
   if (error) throw new Error(error.message);
   return (data ?? []).map(rowToNutrition);
@@ -80,7 +80,7 @@ export async function pushNutritionToCloud(entry: CreateNutritionEntry & { id: s
   const sb = getSupabaseClient();
   const { error } = await sb.from("protocol_nutrition").upsert({
     id: entry.id,
-    user_id: USER_ID,
+    user_id: getUserId(),
     date: entry.date,
     meal_type: entry.meal_type,
     calories: entry.calories ?? null,
@@ -115,7 +115,7 @@ export async function fetchBodyMetricsFromCloud(): Promise<BodyMetric[]> {
   const { data, error } = await sb
     .from("protocol_body_metrics")
     .select("*")
-    .eq("user_id", USER_ID)
+    .eq("user_id", getUserId())
     .order("date", { ascending: false });
   if (error) throw new Error(error.message);
   return (data ?? []).map(rowToBodyMetric);
@@ -125,7 +125,7 @@ export async function pushBodyMetricToCloud(entry: CreateBodyMetric & { id: stri
   const sb = getSupabaseClient();
   const { error } = await sb.from("protocol_body_metrics").upsert({
     id: entry.id,
-    user_id: USER_ID,
+    user_id: getUserId(),
     date: entry.date,
     weight_kg: entry.weight_kg ?? null,
     hrv_ms: entry.hrv_ms ?? null,
@@ -162,7 +162,7 @@ export async function fetchWorkoutPlansFromCloud(): Promise<WorkoutPlan[]> {
   const { data, error } = await sb
     .from("protocol_workout_plans")
     .select("*")
-    .eq("user_id", USER_ID)
+    .eq("user_id", getUserId())
     .order("created_at", { ascending: false });
   if (error) throw new Error(error.message);
   return (data ?? []) as WorkoutPlan[];
@@ -170,7 +170,7 @@ export async function fetchWorkoutPlansFromCloud(): Promise<WorkoutPlan[]> {
 
 export async function pushWorkoutPlanToCloud(plan: WorkoutPlan): Promise<void> {
   const sb = getSupabaseClient();
-  const { error } = await sb.from("protocol_workout_plans").upsert({ ...plan, user_id: USER_ID });
+  const { error } = await sb.from("protocol_workout_plans").upsert({ ...plan, user_id: getUserId() });
   if (error) throw new Error(error.message);
 }
 
@@ -178,7 +178,7 @@ export async function pushWorkoutPlanToCloud(plan: WorkoutPlan): Promise<void> {
 
 export async function fetchWorkoutSessionsFromCloud(planId?: string): Promise<WorkoutSession[]> {
   const sb = getSupabaseClient();
-  let q = sb.from("protocol_workout_sessions").select("*").eq("user_id", USER_ID);
+  let q = sb.from("protocol_workout_sessions").select("*").eq("user_id", getUserId());
   if (planId) q = q.eq("plan_id", planId);
   const { data, error } = await q.order("scheduled_date", { ascending: false });
   if (error) throw new Error(error.message);
@@ -207,7 +207,7 @@ export async function fetchRunningPlansFromCloud(): Promise<RunningPlan[]> {
   const { data, error } = await sb
     .from("protocol_running_plans")
     .select("*")
-    .eq("user_id", USER_ID)
+    .eq("user_id", getUserId())
     .order("created_at", { ascending: false });
   if (error) throw new Error(error.message);
   return (data ?? []) as RunningPlan[];
@@ -217,7 +217,7 @@ export async function fetchRunningPlansFromCloud(): Promise<RunningPlan[]> {
 
 export async function fetchRunningSessionsFromCloud(planId?: string): Promise<RunningSession[]> {
   const sb = getSupabaseClient();
-  let q = sb.from("protocol_running_sessions").select("*").eq("user_id", USER_ID);
+  let q = sb.from("protocol_running_sessions").select("*").eq("user_id", getUserId());
   if (planId) q = q.eq("plan_id", planId);
   const { data, error } = await q.order("date", { ascending: false });
   if (error) throw new Error(error.message);
@@ -285,7 +285,7 @@ export async function pushWorkoutSessionToCloud(
   const sb = getSupabaseClient();
   const { error } = await sb.from("protocol_workout_sessions").upsert({
     id: session.id,
-    user_id: USER_ID,
+    user_id: getUserId(),
     plan_id: session.plan_id ?? null,
     name: session.name,
     scheduled_date: session.scheduled_date,
@@ -326,7 +326,7 @@ export async function pushExerciseToCloud(
 
 export async function pushRunningPlanToCloud(plan: RunningPlan): Promise<void> {
   const sb = getSupabaseClient();
-  const { error } = await sb.from("protocol_running_plans").upsert({ ...plan, user_id: USER_ID });
+  const { error } = await sb.from("protocol_running_plans").upsert({ ...plan, user_id: getUserId() });
   if (error) throw new Error(error.message);
 }
 
@@ -336,7 +336,7 @@ export async function pushRunningSessionToCloud(
   const sb = getSupabaseClient();
   const { error } = await sb.from("protocol_running_sessions").upsert({
     id: session.id,
-    user_id: USER_ID,
+    user_id: getUserId(),
     plan_id: session.plan_id ?? null,
     date: session.date,
     planned_km: session.planned_km ?? null,
@@ -395,7 +395,7 @@ export async function fetchHabitsFromCloud(): Promise<Habit[]> {
   const { data, error } = await sb
     .from("protocol_habits")
     .select("*")
-    .eq("user_id", USER_ID)
+    .eq("user_id", getUserId())
     .eq("archived", false)
     .order("sort_order", { ascending: true });
   if (error) throw new Error(error.message);
@@ -406,7 +406,7 @@ export async function pushHabitToCloud(habit: CreateHabit & { id: string }): Pro
   const sb = getSupabaseClient();
   const { error } = await sb.from("protocol_habits").upsert({
     id: habit.id,
-    user_id: USER_ID,
+    user_id: getUserId(),
     name: habit.name,
     description: habit.description ?? null,
     scheduled_time: habit.scheduled_time ?? null,
@@ -448,7 +448,7 @@ export async function fetchHabitStacksFromCloud(): Promise<HabitStack[]> {
   const { data, error } = await sb
     .from("protocol_habit_stacks")
     .select("*")
-    .eq("user_id", USER_ID)
+    .eq("user_id", getUserId())
     .order("sort_order", { ascending: true });
   if (error) throw new Error(error.message);
   return (data ?? []).map(rowToHabitStack);
@@ -458,7 +458,7 @@ export async function pushHabitStackToCloud(stack: CreateHabitStack & { id: stri
   const sb = getSupabaseClient();
   const { error } = await sb.from("protocol_habit_stacks").upsert({
     id: stack.id,
-    user_id: USER_ID,
+    user_id: getUserId(),
     name: stack.name,
     sort_order: stack.sort_order ?? 0,
   });
@@ -476,7 +476,7 @@ export async function fetchHabitCompletionsFromCloud(sinceDate: string): Promise
   const { data, error } = await sb
     .from("protocol_habit_completions")
     .select("id, habit_id, date")
-    .eq("user_id", USER_ID)
+    .eq("user_id", getUserId())
     .gte("date", sinceDate);
   if (error) throw new Error(error.message);
   return (data ?? []) as HabitCompletion[];
@@ -486,7 +486,7 @@ export async function addHabitCompletionToCloud(habitId: string, date: string): 
   const sb = getSupabaseClient();
   const { data, error } = await sb
     .from("protocol_habit_completions")
-    .insert({ habit_id: habitId, user_id: USER_ID, date })
+    .insert({ habit_id: habitId, user_id: getUserId(), date })
     .select("id, habit_id, date")
     .single();
   if (error) throw new Error(error.message);
@@ -500,7 +500,7 @@ export async function removeHabitCompletionFromCloud(habitId: string, date: stri
     .delete()
     .eq("habit_id", habitId)
     .eq("date", date)
-    .eq("user_id", USER_ID);
+    .eq("user_id", getUserId());
   if (error) throw new Error(error.message);
 }
 
@@ -536,7 +536,7 @@ export async function fetchFoodsFromCloud(): Promise<Food[]> {
   const { data, error } = await sb
     .from("protocol_foods")
     .select("*")
-    .eq("user_id", USER_ID)
+    .eq("user_id", getUserId())
     .order("name", { ascending: true });
   if (error) throw new Error(error.message);
   return (data ?? []).map(rowToFood);
@@ -544,7 +544,7 @@ export async function fetchFoodsFromCloud(): Promise<Food[]> {
 
 export async function pushFoodToCloud(food: CreateFood & { id: string }): Promise<void> {
   const sb = getSupabaseClient();
-  const { error } = await sb.from("protocol_foods").upsert({ ...food, user_id: USER_ID });
+  const { error } = await sb.from("protocol_foods").upsert({ ...food, user_id: getUserId() });
   if (error) throw new Error(error.message);
 }
 
@@ -555,7 +555,7 @@ export async function fetchMealsFromCloud(): Promise<Meal[]> {
   const { data, error } = await sb
     .from("protocol_meals")
     .select("*")
-    .eq("user_id", USER_ID)
+    .eq("user_id", getUserId())
     .order("name", { ascending: true });
   if (error) throw new Error(error.message);
   return (data ?? []) as Meal[];
@@ -565,7 +565,7 @@ export async function pushMealToCloud(meal: CreateMeal & { id: string }): Promis
   const sb = getSupabaseClient();
   const { error } = await sb.from("protocol_meals").upsert({
     id: meal.id,
-    user_id: USER_ID,
+    user_id: getUserId(),
     name: meal.name,
     description: meal.description ?? null,
   });
@@ -614,7 +614,7 @@ export async function fetchMealPlanEntriesFromCloud(startDate: string, endDate: 
   const { data, error } = await sb
     .from("protocol_meal_plan_entries")
     .select("*")
-    .eq("user_id", USER_ID)
+    .eq("user_id", getUserId())
     .gte("date", startDate)
     .lte("date", endDate)
     .order("sort_order", { ascending: true });
@@ -626,7 +626,7 @@ export async function pushMealPlanEntryToCloud(entry: CreateMealPlanEntry & { id
   const sb = getSupabaseClient();
   const { error } = await sb.from("protocol_meal_plan_entries").upsert({
     id: entry.id,
-    user_id: USER_ID,
+    user_id: getUserId(),
     date: entry.date,
     slot: entry.slot,
     food_id: entry.food_id ?? null,
@@ -657,7 +657,7 @@ export async function fetchNutritionGoalsFromCloud(): Promise<NutritionGoals | n
   const { data, error } = await sb
     .from("protocol_nutrition_goals")
     .select("*")
-    .eq("user_id", USER_ID)
+    .eq("user_id", getUserId())
     .order("updated_at", { ascending: false })
     .limit(1)
     .maybeSingle();
@@ -669,7 +669,7 @@ export async function upsertNutritionGoalsInCloud(id: string, goals: UpdateNutri
   const sb = getSupabaseClient();
   const { error } = await sb.from("protocol_nutrition_goals").upsert({
     id,
-    user_id: USER_ID,
+    user_id: getUserId(),
     ...goals,
     updated_at: new Date().toISOString(),
   });

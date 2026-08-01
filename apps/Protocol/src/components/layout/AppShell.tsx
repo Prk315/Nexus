@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { NexusHeader } from "@nexus/core";
+import { NexusHeader, useNexusAuth } from "@nexus/core";
 import NavTab from "./NavTab";
 import DashboardPage from "../../pages/DashboardPage";
 import BiomarkersPage from "../../pages/BiomarkersPage";
@@ -26,10 +26,16 @@ function ActivePage({ tab }: { tab: Tab }) {
 
 export default function AppShell() {
   const [activeTab, setActiveTab] = useState<Tab>("Dashboard");
+  const { user, signOut } = useNexusAuth();
 
   return (
     <div style={{ display: "flex", flexDirection: "column", height: "100%", background: "var(--bg)" }}>
-      <NexusHeader appName="Protocol" />
+      <NexusHeader
+        appName="Protocol"
+        onHome={() => setActiveTab("Dashboard")}
+        userEmail={user?.email}
+        onSignOut={() => signOut()}
+      />
       <div
         style={{
           display: "flex",
