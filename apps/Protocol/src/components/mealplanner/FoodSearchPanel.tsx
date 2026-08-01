@@ -7,6 +7,7 @@ import type { CreateFood, Food } from "../../store/types";
 const SOURCE_LABEL: Record<FoodSearchResult["source"], string> = {
   usda: "USDA",
   openfoodfacts: "Open Food Facts",
+  frida: "Frida (Danish)",
 };
 
 const emptyManualFood: CreateFood = {
@@ -122,7 +123,7 @@ export default function FoodSearchPanel({
             </div>
             <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
               {myMatches.slice(0, 5).map((f) => (
-                <FoodRow key={f.id} name={f.name} brand={f.brand} calories={f.calories} sourceLabel={SOURCE_LABEL[f.source as "usda" | "openfoodfacts"] ?? "Logged before"} onAdd={() => pickLocal(f)} />
+                <FoodRow key={f.id} name={f.name} brand={f.brand} calories={f.calories} sourceLabel={SOURCE_LABEL[f.source as keyof typeof SOURCE_LABEL] ?? "Logged before"} onAdd={() => pickLocal(f)} />
               ))}
             </div>
           </div>
@@ -148,6 +149,7 @@ export default function FoodSearchPanel({
                     brand={r.brand}
                     calories={r.calories}
                     sourceLabel={SOURCE_LABEL[r.source]}
+                    country={r.country}
                     onAdd={() => pickResult(r)}
                   />
                 ))}
@@ -202,12 +204,13 @@ export default function FoodSearchPanel({
 }
 
 function FoodRow({
-  name, brand, calories, sourceLabel, onAdd,
+  name, brand, calories, sourceLabel, country, onAdd,
 }: {
   name: string;
   brand: string | null;
   calories: number | null;
   sourceLabel: string;
+  country?: string | null;
   onAdd: () => void;
 }) {
   return (
@@ -220,8 +223,15 @@ function FoodRow({
       }}
     >
       <div style={{ minWidth: 0 }}>
-        <div style={{ fontSize: 13, fontWeight: 600, color: "var(--text)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
-          {name}
+        <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+          <div style={{ fontSize: 13, fontWeight: 600, color: "var(--text)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+            {name}
+          </div>
+          {country && (
+            <span style={{ fontSize: 10, fontWeight: 600, color: "var(--accent)", background: "var(--accent-tint)", borderRadius: "var(--radius-sm)", padding: "1px 6px", flexShrink: 0 }}>
+              {country}
+            </span>
+          )}
         </div>
         <div style={{ fontSize: 11, color: "var(--text-muted)" }}>
           {brand ? `${brand} · ` : ""}{sourceLabel}{calories != null ? ` · ${Math.round(calories)} kcal/100g` : ""}

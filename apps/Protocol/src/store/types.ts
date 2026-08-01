@@ -248,7 +248,7 @@ export interface HabitCompletion {
 
 // ── Meal planner ─────────────────────────────────────────────────────────────
 
-export type FoodSource = "usda" | "openfoodfacts" | "manual";
+export type FoodSource = "usda" | "openfoodfacts" | "frida" | "manual";
 
 /** Nutrient values are always per 100g/100ml — servings apply a multiplier. */
 export interface Food {
