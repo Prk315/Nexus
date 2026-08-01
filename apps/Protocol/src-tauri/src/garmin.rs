@@ -9,8 +9,24 @@ fn bridge_script_path() -> Result<PathBuf, String> {
         }
     }
 
-    // In dev the binary lives at apps/Protocol/src-tauri/target/debug/protocol.
-    // Walk upward until we find garmin_bridge/garmin_bridge.py (up to 8 levels).
+    // In dev, resolve relative to this crate's own manifest dir. Protocol's
+    // src-tauri is a member of the root Cargo workspace, so the compiled binary
+    // actually lives under the shared <repo_root>/target/debug/, not under
+    // apps/Protocol/src-tauri/target/debug/ — walking up from the exe would
+    // never reach apps/Protocol/garmin_bridge/. CARGO_MANIFEST_DIR is baked in
+    // at compile time and always points at this crate's own directory instead.
+    #[cfg(debug_assertions)]
+    {
+        if let Some(app_dir) = PathBuf::from(env!("CARGO_MANIFEST_DIR")).parent() {
+            let dev_candidate = app_dir.join("garmin_bridge").join("garmin_bridge.py");
+            if dev_candidate.exists() {
+                return Ok(dev_candidate);
+            }
+        }
+    }
+
+    // Fallback for bundled/release layouts: walk upward from the executable
+    // until we find garmin_bridge/garmin_bridge.py (up to 8 levels).
     let exe = std::env::current_exe().map_err(|e| e.to_string())?;
     let mut dir = exe.parent().unwrap_or(&exe).to_path_buf();
     for _ in 0..8 {

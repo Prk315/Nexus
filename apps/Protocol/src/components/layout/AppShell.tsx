@@ -5,9 +5,10 @@ import DashboardPage from "../../pages/DashboardPage";
 import BiomarkersPage from "../../pages/BiomarkersPage";
 import WorkoutsPage from "../../pages/WorkoutsPage";
 import RunningPage from "../../pages/RunningPage";
+import HabitsPage from "../../pages/HabitsPage";
 import SettingsPage from "../../pages/SettingsPage";
 
-const TABS = ["Dashboard", "Biomarkers", "Workouts", "Running", "Settings"] as const;
+const TABS = ["Dashboard", "Biomarkers", "Workouts", "Running", "Habits", "Settings"] as const;
 type Tab = (typeof TABS)[number];
 
 function ActivePage({ tab }: { tab: Tab }) {
@@ -16,6 +17,7 @@ function ActivePage({ tab }: { tab: Tab }) {
     case "Biomarkers": return <BiomarkersPage />;
     case "Workouts":   return <WorkoutsPage />;
     case "Running":    return <RunningPage />;
+    case "Habits":     return <HabitsPage />;
     case "Settings":   return <SettingsPage />;
   }
 }

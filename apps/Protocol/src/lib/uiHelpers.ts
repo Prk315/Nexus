@@ -1,7 +1,20 @@
 import type React from "react";
 
-/** Returns today's date as a YYYY-MM-DD string. */
-export const todayISO = (): string => new Date().toISOString().slice(0, 10);
+/**
+ * Formats a Date as a local YYYY-MM-DD string.
+ * Deliberately NOT `toISOString().slice(0, 10)` — that converts to UTC first,
+ * which silently shifts to the wrong calendar day whenever local time is past
+ * midnight but UTC time isn't yet (any timezone ahead of UTC).
+ */
+export function isoDate(d: Date): string {
+  const yyyy = d.getFullYear();
+  const mm = String(d.getMonth() + 1).padStart(2, "0");
+  const dd = String(d.getDate()).padStart(2, "0");
+  return `${yyyy}-${mm}-${dd}`;
+}
+
+/** Returns today's local date as a YYYY-MM-DD string. */
+export const todayISO = (): string => isoDate(new Date());
 
 /** Formats a duration in minutes as "Xh Ym" or "Ym". */
 export function formatMinutes(minutes: number): string {

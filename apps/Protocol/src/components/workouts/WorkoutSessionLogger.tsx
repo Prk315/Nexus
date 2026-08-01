@@ -10,7 +10,7 @@ import {
   removeExercise,
 } from "../../store/slices/workoutsSlice";
 import type { WorkoutSession } from "../../store/types";
-import { CARD_PADDED, CARD_TIGHT, INPUT_STYLE, INPUT_SM, SECTION_LABEL, BTN_PRIMARY, BTN_GHOST, ICON_BTN } from "../../lib/uiHelpers";
+import { CARD_PADDED, CARD_TIGHT, INPUT_STYLE, INPUT_SM, SECTION_LABEL, BTN_PRIMARY, BTN_GHOST, ICON_BTN, todayISO } from "../../lib/uiHelpers";
 
 interface WorkoutSessionLoggerProps {
   planId?: string | null;
@@ -115,7 +115,7 @@ export default function WorkoutSessionLogger({ planId }: WorkoutSessionLoggerPro
     : allSessions;
 
   const [sessionName, setSessionName] = useState("");
-  const [scheduledDate, setScheduledDate] = useState(new Date().toISOString().slice(0, 10));
+  const [scheduledDate, setScheduledDate] = useState(todayISO());
   const [notes, setNotes] = useState("");
   const [expandedId, setExpandedId] = useState<string | null>(null);
 

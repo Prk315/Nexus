@@ -1,27 +1,90 @@
 import { useMemo, useState } from "react";
 import {
-  LineChart,
+  ComposedChart,
   Line,
+  Area,
   XAxis,
   YAxis,
   CartesianGrid,
   Tooltip,
   Legend,
   ResponsiveContainer,
+  RadialBarChart,
+  RadialBar,
+  PolarAngleAxis,
 } from "recharts";
 import type { BodyMetric, NutritionEntry, RunningSession, SleepEntry, WorkoutSession } from "../../store/types";
-import { CARD_STYLE } from "../../lib/uiHelpers";
+import { isoDate } from "../../lib/uiHelpers";
 
 type Range = "7D" | "4W" | "6M";
+type Domain = "sleep" | "nutrition" | "body" | "workout" | "running";
 
-const COLORS = {
-  overall:   "#f1f5f9",
-  sleep:     "#3b82f6",
-  nutrition: "#f59e0b",
-  body:      "#8b5cf6",
-  workout:   "#10b981",
-  running:   "#f97316",
+const COLORS: Record<"overall" | Domain, string> = {
+  overall:   "var(--accent)",
+  sleep:     "var(--series-sleep)",
+  nutrition: "var(--series-nutrition)",
+  body:      "var(--series-body)",
+  workout:   "var(--series-workout)",
+  running:   "var(--series-running)",
 };
+
+const TRACK_COLORS: Record<Domain, string> = {
+  sleep:     "var(--series-sleep-track)",
+  nutrition: "var(--series-nutrition-track)",
+  body:      "var(--series-body-track)",
+  workout:   "var(--series-workout-track)",
+  running:   "var(--series-running-track)",
+};
+
+const DOMAIN_META: { key: Domain; label: string }[] = [
+  { key: "sleep",     label: "Sleep" },
+  { key: "nutrition", label: "Nutrition" },
+  { key: "body",      label: "Body" },
+  { key: "workout",   label: "Workout" },
+  { key: "running",   label: "Running" },
+];
+
+/** A single ring gauge — score out of 100, filled arc in the domain's own color. */
+function DomainRing({ label, value, color, track }: { label: string; value: number; color: string; track: string }) {
+  return (
+    <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+      <div style={{ position: "relative", width: 44, height: 44, flexShrink: 0 }}>
+        <ResponsiveContainer width="100%" height="100%">
+          <RadialBarChart
+            data={[{ value }]}
+            innerRadius="72%"
+            outerRadius="100%"
+            startAngle={90}
+            endAngle={-270}
+            barSize={5}
+          >
+            <PolarAngleAxis type="number" domain={[0, 100]} tick={false} axisLine={false} />
+            <RadialBar
+              dataKey="value"
+              cornerRadius={3}
+              fill={color}
+              background={{ fill: track }}
+              isAnimationActive={false}
+            />
+          </RadialBarChart>
+        </ResponsiveContainer>
+        <div
+          style={{
+            position: "absolute", inset: 0,
+            display: "flex", alignItems: "center", justifyContent: "center",
+            fontSize: 10, fontWeight: 700, color: "var(--text)",
+          }}
+        >
+          {value}
+        </div>
+      </div>
+      <div>
+        <div style={{ fontSize: 12, fontWeight: 600, color: "var(--text)" }}>{label}</div>
+        <div style={{ fontSize: 11, color: "var(--text-muted)" }}>{value}%</div>
+      </div>
+    </div>
+  );
+}
 
 // ── Scoring (0–100 per day) ─────────────────────────────────────────────────
 
@@ -68,10 +131,6 @@ function scoreRunning(sessions: RunningSession[]): number {
 }
 
 // ── Date helpers ────────────────────────────────────────────────────────────
-
-function isoDate(d: Date): string {
-  return d.toISOString().slice(0, 10);
-}
 
 function daysBetween(start: string, end: string): string[] {
   const days: string[] = [];
@@ -185,77 +244,149 @@ export default function ProtocolChargeChart({
   const TOOLTIP_STYLE = {
     background: "var(--surface)",
     border: "1px solid var(--border)",
-    borderRadius: "var(--radius-sm)",
+    borderRadius: "var(--radius)",
+    boxShadow: "var(--shadow-md)",
     fontSize: 12,
     color: "var(--text)",
   };
 
+  const latest = data[data.length - 1]?.overall ?? null;
+  const previous = data[data.length - 2]?.overall ?? null;
+  const delta = latest != null && previous != null ? latest - previous : null;
+
   return (
-    <div style={{ ...CARD_STYLE, padding: "20px 20px 12px" }}>
-      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 16 }}>
+    <div
+      style={{
+        width: "100%",
+        background: "var(--surface)",
+        borderBottom: "1px solid var(--border)",
+        padding: "28px 40px 20px",
+        boxSizing: "border-box",
+      }}
+    >
+      <div style={{ display: "flex", alignItems: "flex-end", justifyContent: "space-between", flexWrap: "wrap", gap: 16, marginBottom: 20 }}>
         <div>
-          <span style={{ fontWeight: 700, color: "var(--text)", fontSize: 15 }}>Protocol Charge</span>
-          <span style={{ marginLeft: 8, fontSize: 12, color: "var(--text-muted)" }}>
-            health score across all domains
-          </span>
+          <h1 style={{ margin: 0, fontSize: 40, fontWeight: 800, letterSpacing: "-0.02em", color: "var(--text)" }}>
+            Protocol
+          </h1>
+          <div style={{ marginTop: 4, fontSize: 13, color: "var(--text-secondary)" }}>
+            <span style={{ fontWeight: 600, color: "var(--text)" }}>Charge</span>
+            {" — health score across sleep, nutrition, body, workouts & running"}
+          </div>
         </div>
-        <div style={{ display: "flex", gap: 4 }}>
-          {(["7D", "4W", "6M"] as Range[]).map((r) => (
-            <button
-              key={r}
-              onClick={() => setRange(r)}
-              style={{
-                padding: "4px 10px",
-                borderRadius: "var(--radius-sm)",
-                border: "1px solid var(--border)",
-                background: range === r ? "var(--accent)" : "transparent",
-                color: range === r ? "#fff" : "var(--text-muted)",
-                fontSize: 12,
-                fontWeight: 600,
-                cursor: "pointer",
-              }}
-            >
-              {r}
-            </button>
-          ))}
+
+        <div style={{ display: "flex", alignItems: "flex-end", gap: 24 }}>
+          {latest != null && (
+            <div style={{ textAlign: "right" }}>
+              <div style={{ display: "flex", alignItems: "baseline", gap: 8, justifyContent: "flex-end" }}>
+                <span style={{ fontSize: 48, fontWeight: 700, color: "var(--text)", lineHeight: 1 }}>
+                  {latest}%
+                </span>
+                {delta != null && delta !== 0 && (
+                  <span style={{ fontSize: 13, fontWeight: 600, color: delta > 0 ? "var(--success)" : "var(--danger)" }}>
+                    {delta > 0 ? "+" : ""}{delta}
+                  </span>
+                )}
+              </div>
+              <span style={{ fontSize: 12, color: "var(--text-muted)" }}>overall, latest</span>
+            </div>
+          )}
+
+          <div style={{ display: "flex", gap: 4, paddingBottom: 4 }}>
+            {(["7D", "4W", "6M"] as Range[]).map((r) => (
+              <button
+                key={r}
+                onClick={() => setRange(r)}
+                style={{
+                  padding: "5px 12px",
+                  borderRadius: "var(--radius-sm)",
+                  border: "1px solid var(--border)",
+                  background: range === r ? "var(--accent)" : "transparent",
+                  color: range === r ? "var(--accent-fg)" : "var(--text-muted)",
+                  fontSize: 12,
+                  fontWeight: 600,
+                  cursor: "pointer",
+                }}
+              >
+                {r}
+              </button>
+            ))}
+          </div>
         </div>
       </div>
 
-      <ResponsiveContainer width="100%" height={240}>
-        <LineChart data={data} margin={{ top: 4, right: 8, bottom: 0, left: -20 }}>
-          <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" vertical={false} />
-          <XAxis
-            dataKey="label"
-            tick={{ fontSize: 11, fill: "var(--text-muted)" }}
-            axisLine={false}
-            tickLine={false}
-          />
-          <YAxis
-            domain={[0, 100]}
-            tick={{ fontSize: 11, fill: "var(--text-muted)" }}
-            axisLine={false}
-            tickLine={false}
-            tickFormatter={(v) => `${v}%`}
-          />
-          <Tooltip
-            contentStyle={TOOLTIP_STYLE}
-            formatter={(value: number, name: string) => [
-              `${value}%`,
-              name.charAt(0).toUpperCase() + name.slice(1),
-            ]}
-          />
-          <Legend
-            wrapperStyle={{ fontSize: 12, paddingTop: 12 }}
-            formatter={(v) => v.charAt(0).toUpperCase() + v.slice(1)}
-          />
-          <Line type="monotone" dataKey="overall"   name="overall"   stroke={COLORS.overall}   strokeWidth={3} dot={false} />
-          <Line type="monotone" dataKey="sleep"     name="sleep"     stroke={COLORS.sleep}     strokeWidth={1.5} dot={false} />
-          <Line type="monotone" dataKey="nutrition" name="nutrition" stroke={COLORS.nutrition} strokeWidth={1.5} dot={false} />
-          <Line type="monotone" dataKey="body"      name="body"      stroke={COLORS.body}      strokeWidth={1.5} dot={false} />
-          <Line type="monotone" dataKey="workout"   name="workout"   stroke={COLORS.workout}   strokeWidth={1.5} dot={false} />
-          <Line type="monotone" dataKey="running"   name="running"   stroke={COLORS.running}   strokeWidth={1.5} dot={false} />
-        </LineChart>
-      </ResponsiveContainer>
+      <div style={{ display: "flex", gap: 32, alignItems: "stretch" }}>
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <ResponsiveContainer width="100%" height={360}>
+            <ComposedChart data={data} margin={{ top: 8, right: 0, bottom: 0, left: -28 }}>
+              <defs>
+                <linearGradient id="overallGrad" x1="0" y1="0" x2="0" y2="1">
+                  <stop offset="0%" stopColor={COLORS.overall} stopOpacity={0.22} />
+                  <stop offset="100%" stopColor={COLORS.overall} stopOpacity={0} />
+                </linearGradient>
+              </defs>
+              <CartesianGrid stroke="var(--border-subtle)" strokeWidth={1} vertical={false} />
+              <XAxis
+                dataKey="label"
+                tick={{ fontSize: 12, fill: "var(--text-muted)" }}
+                axisLine={false}
+                tickLine={false}
+              />
+              <YAxis
+                domain={[0, 100]}
+                tick={{ fontSize: 12, fill: "var(--text-muted)" }}
+                axisLine={false}
+                tickLine={false}
+                tickFormatter={(v) => `${v}%`}
+              />
+              <Tooltip
+                contentStyle={TOOLTIP_STYLE}
+                formatter={(value: number, name: string) => [
+                  `${value}%`,
+                  name.charAt(0).toUpperCase() + name.slice(1),
+                ]}
+              />
+              <Legend
+                wrapperStyle={{ fontSize: 12, paddingTop: 16 }}
+                payload={(["overall", "sleep", "nutrition", "body", "workout", "running"] as const).map((key) => ({
+                  value: key.charAt(0).toUpperCase() + key.slice(1),
+                  type: "line" as const,
+                  color: COLORS[key],
+                }))}
+              />
+              <Area type="monotone" dataKey="overall" name="overall" stroke="none" fill="url(#overallGrad)" isAnimationActive={false} legendType="none" />
+              <Line type="monotone" dataKey="sleep"     name="sleep"     stroke={COLORS.sleep}     strokeWidth={2} dot={false} />
+              <Line type="monotone" dataKey="nutrition" name="nutrition" stroke={COLORS.nutrition} strokeWidth={2} dot={false} />
+              <Line type="monotone" dataKey="body"      name="body"      stroke={COLORS.body}      strokeWidth={2} dot={false} />
+              <Line type="monotone" dataKey="workout"   name="workout"   stroke={COLORS.workout}   strokeWidth={2} dot={false} />
+              <Line type="monotone" dataKey="running"   name="running"   stroke={COLORS.running}   strokeWidth={2} dot={false} />
+              <Line type="monotone" dataKey="overall"   name="overall"   stroke={COLORS.overall}   strokeWidth={2} dot={false} activeDot={{ r: 5, strokeWidth: 2, stroke: "var(--surface)" }} />
+            </ComposedChart>
+          </ResponsiveContainer>
+        </div>
+
+        <div
+          style={{
+            width: 190,
+            flexShrink: 0,
+            borderLeft: "1px solid var(--border-subtle)",
+            paddingLeft: 24,
+            display: "flex",
+            flexDirection: "column",
+            justifyContent: "space-evenly",
+          }}
+        >
+          {DOMAIN_META.map(({ key, label }) => (
+            <DomainRing
+              key={key}
+              label={label}
+              value={data[data.length - 1]?.[key] ?? 0}
+              color={COLORS[key]}
+              track={TRACK_COLORS[key]}
+            />
+          ))}
+        </div>
+      </div>
     </div>
   );
 }

@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Moon, Plus, Trash2 } from "lucide-react";
+import { Plus, Trash2 } from "lucide-react";
 import { useAppDispatch, useAppSelector } from "../../store/hooks";
 import { addSleepEntry, removeSleepEntry } from "../../store/slices/biomarkersSlice";
 import type { CreateSleepEntry } from "../../store/types";
@@ -55,11 +55,6 @@ export default function SleepLogger() {
         onSubmit={handleSubmit}
         style={{ ...CARD_STYLE, padding: 20, display: "flex", flexDirection: "column", gap: 16 }}
       >
-        <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 4 }}>
-          <Moon size={16} color="var(--accent)" />
-          <span style={{ fontWeight: 600, color: "var(--text)" }}>Log Sleep</span>
-        </div>
-
         {/* Row 1: Date + Duration */}
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
           <div style={FIELD_GROUP}>

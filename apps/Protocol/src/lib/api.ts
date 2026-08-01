@@ -2,8 +2,9 @@ import { getSupabaseClient, USER_ID } from "./supabase";
 import type {
   BodyMetric, CreateBodyMetric,
   CreateNutritionEntry, CreateSleepEntry,
-  Exercise, NutritionEntry, RunningPlan, RunningSession,
+  Exercise, RunningPlan, RunningSession,
   SleepEntry, WorkoutPlan, WorkoutSession,
+  NutritionEntry, Habit, CreateHabit, HabitCompletion,
 } from "../store/types";
 
 // ── Sleep ────────────────────────────────────────────────────────────────────
@@ -365,5 +366,81 @@ export async function completeRunningSessionInCloud(
       ...(heartRateAvg != null && { heart_rate_avg: heartRateAvg }),
     })
     .eq("id", id);
+  if (error) throw new Error(error.message);
+}
+
+// ── Habits ────────────────────────────────────────────────────────────────────
+
+function rowToHabit(row: Record<string, unknown>): Habit {
+  return {
+    id: row.id as string,
+    name: row.name as string,
+    target_per_week: row.target_per_week as number,
+    sort_order: row.sort_order as number,
+    archived: row.archived as boolean,
+    created_at: row.created_at as string,
+  };
+}
+
+export async function fetchHabitsFromCloud(): Promise<Habit[]> {
+  const sb = getSupabaseClient();
+  const { data, error } = await sb
+    .from("protocol_habits")
+    .select("*")
+    .eq("user_id", USER_ID)
+    .eq("archived", false)
+    .order("sort_order", { ascending: true });
+  if (error) throw new Error(error.message);
+  return (data ?? []).map(rowToHabit);
+}
+
+export async function pushHabitToCloud(habit: CreateHabit & { id: string }): Promise<void> {
+  const sb = getSupabaseClient();
+  const { error } = await sb.from("protocol_habits").upsert({
+    id: habit.id,
+    user_id: USER_ID,
+    name: habit.name,
+    target_per_week: habit.target_per_week ?? 7,
+    sort_order: habit.sort_order ?? 0,
+  });
+  if (error) throw new Error(error.message);
+}
+
+export async function archiveHabitInCloud(id: string): Promise<void> {
+  const sb = getSupabaseClient();
+  const { error } = await sb.from("protocol_habits").update({ archived: true }).eq("id", id);
+  if (error) throw new Error(error.message);
+}
+
+export async function fetchHabitCompletionsFromCloud(sinceDate: string): Promise<HabitCompletion[]> {
+  const sb = getSupabaseClient();
+  const { data, error } = await sb
+    .from("protocol_habit_completions")
+    .select("id, habit_id, date")
+    .eq("user_id", USER_ID)
+    .gte("date", sinceDate);
+  if (error) throw new Error(error.message);
+  return (data ?? []) as HabitCompletion[];
+}
+
+export async function addHabitCompletionToCloud(habitId: string, date: string): Promise<HabitCompletion> {
+  const sb = getSupabaseClient();
+  const { data, error } = await sb
+    .from("protocol_habit_completions")
+    .insert({ habit_id: habitId, user_id: USER_ID, date })
+    .select("id, habit_id, date")
+    .single();
+  if (error) throw new Error(error.message);
+  return data as HabitCompletion;
+}
+
+export async function removeHabitCompletionFromCloud(habitId: string, date: string): Promise<void> {
+  const sb = getSupabaseClient();
+  const { error } = await sb
+    .from("protocol_habit_completions")
+    .delete()
+    .eq("habit_id", habitId)
+    .eq("date", date)
+    .eq("user_id", USER_ID);
   if (error) throw new Error(error.message);
 }
