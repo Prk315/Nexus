@@ -128,6 +128,50 @@ function reconstructText(items: TextItem[]): string {
   return out;
 }
 
+// ── Snap OCR highlights to clean parsed book text ───────────────────────────
+// When a book's PDF has a linked clean-text source (vault_book_sources), a
+// highlight's OCR text is matched against it and replaced with the pristine
+// version. Normalizing to alphanumerics only makes spacing corruption
+// ("choos ing") match the clean text ("choosing"); an index map recovers the
+// exact clean substring. No match (e.g. real OCR char errors) → keep the OCR.
+type CleanEntry = { norm: string; idx: number[]; text: string };
+
+function normMap(s: string): { norm: string; idx: number[] } {
+  const out: string[] = [];
+  const idx: number[] = [];
+  for (let i = 0; i < s.length; i++) {
+    const c = s[i];
+    if ((c >= "a" && c <= "z") || (c >= "A" && c <= "Z") || (c >= "0" && c <= "9")) {
+      out.push(c.toLowerCase());
+      idx.push(i);
+    }
+  }
+  return { norm: out.join(""), idx };
+}
+
+function buildCleanCorpus(items: { statement?: string }[]): CleanEntry[] {
+  return items
+    .filter((it): it is { statement: string } => !!it && !!it.statement)
+    .map((it) => {
+      const { norm, idx } = normMap(it.statement);
+      return { norm, idx, text: it.statement };
+    });
+}
+
+function snapToCleanText(ocr: string, corpus: CleanEntry[]): string | null {
+  if (!corpus.length) return null;
+  const q = normMap(ocr).norm;
+  if (q.length < 12) return null; // too short to match confidently
+  for (const e of corpus) {
+    const p = e.norm.indexOf(q);
+    if (p >= 0) return e.text.slice(e.idx[p], e.idx[p + q.length - 1] + 1).trim();
+  }
+  return null;
+}
+
+// Clean corpus cached per book node id (statements loaded once per session).
+const bookCorpusCache = new Map<string, CleanEntry[]>();
+
 // ─── Constants ───────────────────────────────────────────────────────────────
 
 const ZOOM_STEP = 0.25;
@@ -778,6 +822,23 @@ export function PdfViewer({ content: pdfPath, nodeId }: Props) {
     return () => { cancelled = true; };
   }, [nodeId]);
 
+  // Load this book's clean-text corpus (if linked) so highlights can snap to the
+  // pristine parsed text. Cached per node id for the session.
+  const cleanCorpusRef = useRef<CleanEntry[]>(bookCorpusCache.get(nodeId) ?? []);
+  useEffect(() => {
+    let cancelled = false;
+    const cached = bookCorpusCache.get(nodeId);
+    if (cached) { cleanCorpusRef.current = cached; return; }
+    (async () => {
+      const items = await api.readBookSources(nodeId);
+      if (cancelled) return;
+      const corpus = buildCleanCorpus(items);
+      bookCorpusCache.set(nodeId, corpus);
+      cleanCorpusRef.current = corpus;
+    })();
+    return () => { cancelled = true; };
+  }, [nodeId]);
+
   // Refs mirror the latest values so the memoised handleMarkHighlight (which must
   // not be recreated per keystroke) always reads the current category/palette.
   const highlightersRef = useRef<HighlighterCategory[]>([]);
@@ -1225,11 +1286,13 @@ export function PdfViewer({ content: pdfPath, nodeId }: Props) {
     const cat = highlightersRef.current.find(c => c.name === markCategoryRef.current)
       ?? highlightersRef.current[0];
     if (cat && text) {
+      // If this book has linked clean parsed text, snap the OCR text to it.
+      const finalText = snapToCleanText(text, cleanCorpusRef.current) ?? text;
       api.insertRecord({
         source_node_id: nodeId,
         category: cat.name,
         color: cat.color,
-        text,
+        text: finalText,
         location: `p.${pIdx + 1}`,
       }).catch(() => { /* non-fatal: the visual highlight is already saved */ });
     }

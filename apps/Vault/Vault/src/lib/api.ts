@@ -231,3 +231,19 @@ export async function deleteRecord(id: string): Promise<void> {
   const { error } = await supabase.from("vault_records").delete().eq("id", id);
   if (error) err(error);
 }
+
+// ── Book clean-text sources (parsed statements for snapping OCR highlights) ──
+
+export interface BookSourceItem {
+  type?: string;
+  number?: string;
+  title?: string;
+  statement: string;
+  key_terms?: string[];
+}
+
+export async function readBookSources(bookNodeId: string): Promise<BookSourceItem[]> {
+  const { data } = await supabase.from("vault_book_sources")
+    .select("items").eq("book_node_id", bookNodeId).eq("user_id", getUserId()).maybeSingle();
+  return (data?.items as BookSourceItem[]) ?? [];
+}
