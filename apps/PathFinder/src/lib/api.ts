@@ -1,4 +1,4 @@
-import { supabase } from "./supabase";
+import { supabase, getUserId } from "./supabase";
 import type {
   Goal, Plan, Task, TaskWithContext, SystemEntry, TodayFocus, SearchResult,
   DailyPlan, DailySection, DailyItemWithStatus, TimeBlock, Routines, RoutineItem,
@@ -13,7 +13,6 @@ import type {
   TrainingPlan, TrainingSession, SessionPerformance, Rule,
 } from "../types";
 
-const USER_ID = "default";
 
 // ─── helpers ────────────────────────────────────────────────────────────────
 
@@ -370,7 +369,7 @@ export const getGoalGroups = async (): Promise<GoalGroup[]> => {
   const { data, error } = await supabase
     .from("pf_goal_groups")
     .select("*")
-    .eq("user_id", USER_ID)
+    .eq("user_id", getUserId())
     .order("sort_order");
   if (error) err(error);
   return (data ?? []).map((r) => ({
@@ -381,7 +380,7 @@ export const getGoalGroups = async (): Promise<GoalGroup[]> => {
 export const createGoalGroup = async (name: string, color: string): Promise<GoalGroup> => {
   const { data, error } = await supabase
     .from("pf_goal_groups")
-    .insert({ user_id: USER_ID, name, color })
+    .insert({ user_id: getUserId(), name, color })
     .select()
     .single();
   if (error) err(error);
@@ -412,7 +411,7 @@ export const getGoals = async (): Promise<Goal[]> => {
   const { data: goals, error: gErr } = await supabase
     .from("pf_goals")
     .select("*, pf_goal_groups(name, color)")
-    .eq("user_id", USER_ID)
+    .eq("user_id", getUserId())
     .order("created_at", { ascending: false });
   if (gErr) err(gErr);
   if (!goals?.length) return [];
@@ -422,7 +421,7 @@ export const getGoals = async (): Promise<Goal[]> => {
   const { data: plans } = await supabase
     .from("pf_plans")
     .select("id, goal_id")
-    .eq("user_id", USER_ID)
+    .eq("user_id", getUserId())
     .in("goal_id", goalIds);
 
   const planIds = (plans ?? []).map((p) => num(p.id));
@@ -455,7 +454,7 @@ export const createGoal = async (payload: {
 }): Promise<Goal> => {
   const { data, error } = await supabase
     .from("pf_goals")
-    .insert({ user_id: USER_ID, ...payload })
+    .insert({ user_id: getUserId(), ...payload })
     .select("*, pf_goal_groups(name, color)")
     .single();
   if (error) err(error);
@@ -489,7 +488,7 @@ export const getPlans = async (): Promise<Plan[]> => {
   const { data: plans, error } = await supabase
     .from("pf_plans")
     .select("*")
-    .eq("user_id", USER_ID)
+    .eq("user_id", getUserId())
     .order("created_at", { ascending: false });
   if (error) err(error);
   if (!plans?.length) return [];
@@ -521,7 +520,7 @@ export const createPlan = async (payload: {
 }): Promise<Plan> => {
   const { data, error } = await supabase
     .from("pf_plans")
-    .insert({ user_id: USER_ID, ...payload })
+    .insert({ user_id: getUserId(), ...payload })
     .select()
     .single();
   if (error) err(error);
@@ -568,7 +567,7 @@ export const getAllTasks = async (): Promise<TaskWithContext[]> => {
   const { data, error } = await supabase
     .from("pf_tasks")
     .select("*, pf_plans(id, title, goal_id, pf_goals(id, title))")
-    .eq("user_id", USER_ID)
+    .eq("user_id", getUserId())
     .order("created_at", { ascending: false });
   if (error) err(error);
   return (data ?? []).map((r) => mapTaskWithContext(r));
@@ -580,7 +579,7 @@ export const createTask = async (payload: {
 }): Promise<Task> => {
   const { data, error } = await supabase
     .from("pf_tasks")
-    .insert({ user_id: USER_ID, ...payload })
+    .insert({ user_id: getUserId(), ...payload })
     .select()
     .single();
   if (error) err(error);
@@ -670,7 +669,7 @@ export const deleteProjectGoal = async (id: number): Promise<void> => {
 
 export const getSystems = async (): Promise<SystemEntry[]> => {
   const { data, error } = await supabase
-    .from("pf_systems").select("*").eq("user_id", USER_ID).order("created_at");
+    .from("pf_systems").select("*").eq("user_id", getUserId()).order("created_at");
   if (error) err(error);
   return (data ?? []).map(mapSystem);
 };
@@ -681,7 +680,7 @@ export const createSystem = async (payload: {
   is_lifestyle?: boolean; lifestyle_area_id?: number | null;
 }): Promise<SystemEntry> => {
   const { data, error } = await supabase
-    .from("pf_systems").insert({ user_id: USER_ID, ...payload }).select().single();
+    .from("pf_systems").insert({ user_id: getUserId(), ...payload }).select().single();
   if (error) err(error);
   return mapSystem(data!);
 };
@@ -796,10 +795,10 @@ export const getTodayFocus = async (): Promise<TodayFocus> => {
   const today = new Date().toISOString().split("T")[0];
 
   const [{ data: plans }, { data: tasks }, { data: systems }] = await Promise.all([
-    supabase.from("pf_plans").select("id, title, goal_id, pf_goals(id, title)").eq("user_id", USER_ID),
-    supabase.from("pf_tasks").select("*").eq("user_id", USER_ID).eq("done", false)
+    supabase.from("pf_plans").select("id, title, goal_id, pf_goals(id, title)").eq("user_id", getUserId()),
+    supabase.from("pf_tasks").select("*").eq("user_id", getUserId()).eq("done", false)
       .not("due_date", "is", null).lte("due_date", today),
-    supabase.from("pf_systems").select("*").eq("user_id", USER_ID),
+    supabase.from("pf_systems").select("*").eq("user_id", getUserId()),
   ]);
 
   const plansMap = new Map((plans ?? []).map((p) => [num(p.id), p]));
@@ -831,10 +830,10 @@ export const search = async (query: string): Promise<SearchResult[]> => {
   const q = `%${query}%`;
   const [{ data: goals }, { data: plans }, { data: tasks }, { data: systems }] =
     await Promise.all([
-      supabase.from("pf_goals").select("id, title, status").eq("user_id", USER_ID).ilike("title", q).limit(5),
-      supabase.from("pf_plans").select("id, title, status").eq("user_id", USER_ID).ilike("title", q).limit(5),
-      supabase.from("pf_tasks").select("id, title, pf_plans(title)").eq("user_id", USER_ID).ilike("title", q).limit(5),
-      supabase.from("pf_systems").select("id, title, frequency").eq("user_id", USER_ID).ilike("title", q).limit(5),
+      supabase.from("pf_goals").select("id, title, status").eq("user_id", getUserId()).ilike("title", q).limit(5),
+      supabase.from("pf_plans").select("id, title, status").eq("user_id", getUserId()).ilike("title", q).limit(5),
+      supabase.from("pf_tasks").select("id, title, pf_plans(title)").eq("user_id", getUserId()).ilike("title", q).limit(5),
+      supabase.from("pf_systems").select("id, title, frequency").eq("user_id", getUserId()).ilike("title", q).limit(5),
     ]);
 
   return [
@@ -864,41 +863,41 @@ export const getWeekItems = async (startDate: string, endDate: string): Promise<
   ] = await Promise.all([
     supabase.from("pf_tasks")
       .select("*, pf_plans(id, title, goal_id, pf_goals(id, title))")
-      .eq("user_id", USER_ID).eq("done", false)
+      .eq("user_id", getUserId()).eq("done", false)
       .gte("due_date", startDate).lte("due_date", endDate),
     supabase.from("pf_plans")
-      .select("*").eq("user_id", USER_ID).eq("status", "active")
+      .select("*").eq("user_id", getUserId()).eq("status", "active")
       .not("deadline", "is", null).gte("deadline", startDate).lte("deadline", endDate),
     supabase.from("pf_goals")
-      .select("*, pf_goal_groups(name, color)").eq("user_id", USER_ID).eq("status", "active"),
+      .select("*, pf_goal_groups(name, color)").eq("user_id", getUserId()).eq("status", "active"),
     supabase.from("pf_deadlines")
-      .select("*").eq("user_id", USER_ID).gte("due_date", startDate).lte("due_date", endDate),
+      .select("*").eq("user_id", getUserId()).gte("due_date", startDate).lte("due_date", endDate),
     supabase.from("pf_reminders")
-      .select("*").eq("user_id", USER_ID).not("due_date", "is", null)
+      .select("*").eq("user_id", getUserId()).not("due_date", "is", null)
       .gte("due_date", startDate).lte("due_date", endDate),
     supabase.from("pf_course_assignments")
       .select("*, pf_plans(title)").not("due_date", "is", null)
       .gte("due_date", startDate).lte("due_date", endDate),
     // Schedule entries — one-off (has a concrete date)
     supabase.from("pf_schedule_entries")
-      .select("*, pf_plans(title)").eq("user_id", USER_ID).eq("is_recurring", false)
+      .select("*, pf_plans(title)").eq("user_id", getUserId()).eq("is_recurring", false)
       .gte("date", startDate).lte("date", endDate),
     // Schedule entries — recurring (overlaps range)
     supabase.from("pf_schedule_entries")
-      .select("*, pf_plans(title)").eq("user_id", USER_ID).eq("is_recurring", true)
+      .select("*, pf_plans(title)").eq("user_id", getUserId()).eq("is_recurring", true)
       .lte("series_start_date", endDate)
       .or(`series_end_date.is.null,series_end_date.gte.${startDate}`),
     // Training sessions — one-off scheduled in range
     supabase.from("pf_training_sessions")
       .select("*, pf_training_plans(title, plan_type)")
-      .eq("user_id", USER_ID)
+      .eq("user_id", getUserId())
       .eq("is_recurring", false)
       .not("scheduled_date", "is", null)
       .gte("scheduled_date", startDate).lte("scheduled_date", endDate),
     // Training sessions — recurring (series overlaps range)
     supabase.from("pf_training_sessions")
       .select("*, pf_training_plans(title, plan_type)")
-      .eq("user_id", USER_ID)
+      .eq("user_id", getUserId())
       .eq("is_recurring", true)
       .lte("series_start_date", endDate)
       .or(`series_end_date.is.null,series_end_date.gte.${startDate}`),
@@ -935,7 +934,7 @@ export const getWeekItems = async (startDate: string, endDate: string): Promise<
 
 export const getRoutines = async (date: string): Promise<Routines> => {
   const { data: routines, error } = await supabase
-    .from("pf_routines").select("*").eq("user_id", USER_ID).order("sort_order");
+    .from("pf_routines").select("*").eq("user_id", getUserId()).order("sort_order");
   if (error) err(error);
   if (!routines?.length) return { morning: [], evening: [] };
 
@@ -969,7 +968,7 @@ export const toggleRoutine = async (id: number, date: string): Promise<boolean> 
 
 export const addRoutineItem = async (kind: string, title: string): Promise<void> => {
   const { error } = await supabase
-    .from("pf_routines").insert({ user_id: USER_ID, kind, title });
+    .from("pf_routines").insert({ user_id: getUserId(), kind, title });
   if (error) err(error);
 };
 
@@ -984,7 +983,7 @@ export const deleteRoutineItem = async (id: number): Promise<void> => {
 
 export const getTimeBlocks = async (date: string): Promise<TimeBlock[]> => {
   const { data, error } = await supabase
-    .from("pf_time_blocks").select("*").eq("user_id", USER_ID).eq("date", date);
+    .from("pf_time_blocks").select("*").eq("user_id", getUserId()).eq("date", date);
   if (error) err(error);
   return (data ?? []).map((r) => ({ id: num(r.id), date: r.date, slot: r.slot, label: r.label }));
 };
@@ -992,7 +991,7 @@ export const getTimeBlocks = async (date: string): Promise<TimeBlock[]> => {
 export const saveTimeBlock = async (date: string, slot: string, label: string): Promise<void> => {
   const { error } = await supabase
     .from("pf_time_blocks")
-    .upsert({ user_id: USER_ID, date, slot, label }, { onConflict: "user_id,date,slot" });
+    .upsert({ user_id: getUserId(), date, slot, label }, { onConflict: "user_id,date,slot" });
   if (error) err(error);
 };
 
@@ -1004,7 +1003,7 @@ export const getDailyPlan = async (date: string): Promise<DailyPlan> => {
   const { data: sections, error } = await supabase
     .from("pf_daily_sections")
     .select("*, pf_daily_items(*)")
-    .eq("user_id", USER_ID)
+    .eq("user_id", getUserId())
     .order("sort_order");
   if (error) err(error);
 
@@ -1049,7 +1048,7 @@ export const toggleDailyCompletion = async (itemId: number, date: string): Promi
 
 export const createDailySection = async (payload: { title: string; color?: string | null }): Promise<void> => {
   const { error } = await supabase
-    .from("pf_daily_sections").insert({ user_id: USER_ID, ...payload });
+    .from("pf_daily_sections").insert({ user_id: getUserId(), ...payload });
   if (error) err(error);
 };
 
@@ -1084,8 +1083,8 @@ export const deleteDailyItem = async (id: number): Promise<void> => {
 
 export const getDailyGoals = async (date: string): Promise<DailyGoals> => {
   const [{ data: primary }, { data: secondary }] = await Promise.all([
-    supabase.from("pf_daily_primary_goal").select("text, time_estimate_min").eq("user_id", USER_ID).eq("date", date).maybeSingle(),
-    supabase.from("pf_daily_secondary_goals").select("*").eq("user_id", USER_ID).eq("date", date).order("sort_order"),
+    supabase.from("pf_daily_primary_goal").select("text, time_estimate_min").eq("user_id", getUserId()).eq("date", date).maybeSingle(),
+    supabase.from("pf_daily_secondary_goals").select("*").eq("user_id", getUserId()).eq("date", date).order("sort_order"),
   ]);
   return {
     primary: primary ? { text: primary.text, time_estimate_min: primary.time_estimate_min ?? null } : null,
@@ -1098,19 +1097,19 @@ export const getDailyGoals = async (date: string): Promise<DailyGoals> => {
 export const setDailyPrimaryGoal = async (date: string, payload: DailyPrimaryGoal): Promise<void> => {
   const { error } = await supabase
     .from("pf_daily_primary_goal")
-    .upsert({ user_id: USER_ID, date, text: payload.text, time_estimate_min: payload.time_estimate_min }, { onConflict: "user_id,date" });
+    .upsert({ user_id: getUserId(), date, text: payload.text, time_estimate_min: payload.time_estimate_min }, { onConflict: "user_id,date" });
   if (error) err(error);
 };
 
 export const clearDailyPrimaryGoal = async (date: string): Promise<void> => {
   const { error } = await supabase
-    .from("pf_daily_primary_goal").delete().eq("user_id", USER_ID).eq("date", date);
+    .from("pf_daily_primary_goal").delete().eq("user_id", getUserId()).eq("date", date);
   if (error) err(error);
 };
 
 export const addDailySecondaryGoal = async (date: string, text: string, time_estimate_min?: number | null): Promise<DailySecGoal> => {
   const { data, error } = await supabase
-    .from("pf_daily_secondary_goals").insert({ user_id: USER_ID, date, text, time_estimate_min: time_estimate_min ?? null }).select().single();
+    .from("pf_daily_secondary_goals").insert({ user_id: getUserId(), date, text, time_estimate_min: time_estimate_min ?? null }).select().single();
   if (error) err(error);
   return { id: num(data!.id), date: data!.date, text: data!.text, sort_order: data!.sort_order, time_estimate_min: data!.time_estimate_min ?? null };
 };
@@ -1131,14 +1130,14 @@ export const deleteDailySecondaryGoal = async (id: number): Promise<void> => {
 
 export const getReminders = async (): Promise<Reminder[]> => {
   const { data, error } = await supabase
-    .from("pf_reminders").select("*").eq("user_id", USER_ID).order("created_at", { ascending: false });
+    .from("pf_reminders").select("*").eq("user_id", getUserId()).order("created_at", { ascending: false });
   if (error) err(error);
   return (data ?? []).map(mapReminder);
 };
 
 export const addReminder = async (title: string, dueDate?: string | null): Promise<Reminder> => {
   const { data, error } = await supabase
-    .from("pf_reminders").insert({ user_id: USER_ID, title, due_date: dueDate ?? null }).select().single();
+    .from("pf_reminders").insert({ user_id: getUserId(), title, due_date: dueDate ?? null }).select().single();
   if (error) err(error);
   return mapReminder(data!);
 };
@@ -1162,14 +1161,14 @@ export const deleteReminder = async (id: number): Promise<void> => {
 
 export const getQuickNotes = async (): Promise<QuickNote[]> => {
   const { data, error } = await supabase
-    .from("pf_quick_notes").select("*").eq("user_id", USER_ID).order("created_at", { ascending: false });
+    .from("pf_quick_notes").select("*").eq("user_id", getUserId()).order("created_at", { ascending: false });
   if (error) err(error);
   return (data ?? []).map((r) => ({ id: num(r.id), title: r.title, body: r.body, created_at: r.created_at }));
 };
 
 export const addQuickNote = async (title: string, body?: string | null): Promise<QuickNote> => {
   const { data, error } = await supabase
-    .from("pf_quick_notes").insert({ user_id: USER_ID, title, body: body ?? null }).select().single();
+    .from("pf_quick_notes").insert({ user_id: getUserId(), title, body: body ?? null }).select().single();
   if (error) err(error);
   return { id: num(data!.id), title: data!.title, body: data!.body, created_at: data!.created_at };
 };
@@ -1185,14 +1184,14 @@ export const deleteQuickNote = async (id: number): Promise<void> => {
 
 export const getBrainDump = async (): Promise<BrainEntry[]> => {
   const { data, error } = await supabase
-    .from("pf_brain_dump").select("*").eq("user_id", USER_ID).order("created_at", { ascending: false });
+    .from("pf_brain_dump").select("*").eq("user_id", getUserId()).order("created_at", { ascending: false });
   if (error) err(error);
   return (data ?? []).map((r) => ({ id: num(r.id), content: r.content, created_at: r.created_at }));
 };
 
 export const addBrainEntry = async (content: string): Promise<BrainEntry> => {
   const { data, error } = await supabase
-    .from("pf_brain_dump").insert({ user_id: USER_ID, content }).select().single();
+    .from("pf_brain_dump").insert({ user_id: getUserId(), content }).select().single();
   if (error) err(error);
   return { id: num(data!.id), content: data!.content, created_at: data!.created_at };
 };
@@ -1208,14 +1207,14 @@ export const deleteBrainEntry = async (id: number): Promise<void> => {
 
 export const getEvents = async (): Promise<CalEvent[]> => {
   const { data, error } = await supabase
-    .from("pf_events").select("*").eq("user_id", USER_ID).order("date");
+    .from("pf_events").select("*").eq("user_id", getUserId()).order("date");
   if (error) err(error);
   return (data ?? []).map((r) => ({ id: num(r.id), title: r.title, date: r.date, description: r.description, created_at: r.created_at }));
 };
 
 export const addEvent = async (title: string, date: string, description?: string | null): Promise<CalEvent> => {
   const { data, error } = await supabase
-    .from("pf_events").insert({ user_id: USER_ID, title, date, description: description ?? null }).select().single();
+    .from("pf_events").insert({ user_id: getUserId(), title, date, description: description ?? null }).select().single();
   if (error) err(error);
   return { id: num(data!.id), title: data!.title, date: data!.date, description: data!.description, created_at: data!.created_at };
 };
@@ -1231,14 +1230,14 @@ export const deleteEvent = async (id: number): Promise<void> => {
 
 export const getDeadlines = async (): Promise<Deadline[]> => {
   const { data, error } = await supabase
-    .from("pf_deadlines").select("*").eq("user_id", USER_ID).order("due_date");
+    .from("pf_deadlines").select("*").eq("user_id", getUserId()).order("due_date");
   if (error) err(error);
   return (data ?? []).map(mapDeadline);
 };
 
 export const addDeadline = async (title: string, due_date: string): Promise<Deadline> => {
   const { data, error } = await supabase
-    .from("pf_deadlines").insert({ user_id: USER_ID, title, due_date }).select().single();
+    .from("pf_deadlines").insert({ user_id: getUserId(), title, due_date }).select().single();
   if (error) err(error);
   return mapDeadline(data!);
 };
@@ -1262,14 +1261,14 @@ export const deleteDeadline = async (id: number): Promise<void> => {
 
 export const getAgreements = async (): Promise<Agreement[]> => {
   const { data, error } = await supabase
-    .from("pf_agreements").select("*").eq("user_id", USER_ID).order("created_at");
+    .from("pf_agreements").select("*").eq("user_id", getUserId()).order("created_at");
   if (error) err(error);
   return (data ?? []).map((r) => ({ id: num(r.id), title: r.title, notes: r.notes, created_at: r.created_at }));
 };
 
 export const addAgreement = async (title: string, notes?: string | null): Promise<Agreement> => {
   const { data, error } = await supabase
-    .from("pf_agreements").insert({ user_id: USER_ID, title, notes: notes ?? null }).select().single();
+    .from("pf_agreements").insert({ user_id: getUserId(), title, notes: notes ?? null }).select().single();
   if (error) err(error);
   return { id: num(data!.id), title: data!.title, notes: data!.notes, created_at: data!.created_at };
 };
@@ -1285,9 +1284,9 @@ export const deleteAgreement = async (id: number): Promise<void> => {
 
 export const getCalBlocks = async (startDate: string, endDate: string): Promise<CalBlock[]> => {
   const [{ data: regular }, { data: recurring }] = await Promise.all([
-    supabase.from("pf_cal_blocks").select("*").eq("user_id", USER_ID)
+    supabase.from("pf_cal_blocks").select("*").eq("user_id", getUserId())
       .gte("date", startDate).lte("date", endDate).order("start_time"),
-    supabase.from("pf_recurring_cal_blocks").select("*").eq("user_id", USER_ID)
+    supabase.from("pf_recurring_cal_blocks").select("*").eq("user_id", getUserId())
       .lte("start_date", endDate)
       .or(`end_date.is.null,end_date.gte.${startDate}`),
   ]);
@@ -1315,7 +1314,7 @@ export const createCalBlock = async (
 ): Promise<CalBlock> => {
   const { data, error } = await supabase
     .from("pf_cal_blocks")
-    .insert({ user_id: USER_ID, date, title, start_time: startTime, end_time: endTime, color, description, location, task_id: taskId ?? null })
+    .insert({ user_id: getUserId(), date, title, start_time: startTime, end_time: endTime, color, description, location, task_id: taskId ?? null })
     .select().single();
   if (error) err(error);
   return { id: num(data!.id), date: data!.date, title: data!.title, start_time: data!.start_time, end_time: data!.end_time, color: data!.color, description: data!.description, location: data!.location, created_at: data!.created_at, is_recurring: false, recurring_id: null, recurrence: null, days_of_week: null, series_start_date: null, series_end_date: null, task_id: data!.task_id ? num(data!.task_id) : null };
@@ -1348,7 +1347,7 @@ export const createRecurringCalBlock = async (
 ): Promise<RecurringCalBlock> => {
   const { data, error } = await supabase
     .from("pf_recurring_cal_blocks")
-    .insert({ user_id: USER_ID, title, start_time: startTime, end_time: endTime, color, recurrence, days_of_week: daysOfWeek, start_date: startDate, end_date: endDate, description, location })
+    .insert({ user_id: getUserId(), title, start_time: startTime, end_time: endTime, color, recurrence, days_of_week: daysOfWeek, start_date: startDate, end_date: endDate, description, location })
     .select().single();
   if (error) err(error);
   return data! as RecurringCalBlock;
@@ -1389,7 +1388,7 @@ export const getAllScheduleEntries = async (): Promise<ScheduleEntry[]> => {
   const { data, error } = await supabase
     .from("pf_schedule_entries")
     .select("*, pf_plans(title)")
-    .eq("user_id", USER_ID)
+    .eq("user_id", getUserId())
     .order("start_time");
   if (error) err(error);
   return (data ?? []).map((e) => mapScheduleEntry(e));
@@ -1400,10 +1399,10 @@ export const getScheduleEntriesForDate = async (date: string): Promise<ScheduleE
   const [{ data: oneOff }, { data: recurring }] = await Promise.all([
     supabase.from("pf_schedule_entries")
       .select("*, pf_plans(title)")
-      .eq("user_id", USER_ID).eq("is_recurring", false).eq("date", date),
+      .eq("user_id", getUserId()).eq("is_recurring", false).eq("date", date),
     supabase.from("pf_schedule_entries")
       .select("*, pf_plans(title)")
-      .eq("user_id", USER_ID).eq("is_recurring", true)
+      .eq("user_id", getUserId()).eq("is_recurring", true)
       .lte("series_start_date", date)
       .or(`series_end_date.is.null,series_end_date.gte.${date}`),
   ]);
@@ -1431,7 +1430,7 @@ export const createScheduleEntry = async (payload: {
 }): Promise<ScheduleEntry> => {
   const { data, error } = await supabase
     .from("pf_schedule_entries")
-    .insert({ user_id: USER_ID, ...payload })
+    .insert({ user_id: getUserId(), ...payload })
     .select("*, pf_plans(title)")
     .single();
   if (error) err(error);
@@ -1474,14 +1473,14 @@ export const deleteScheduleEntry = async (id: number): Promise<void> => {
 
 export const getJournalEntry = async (date: string): Promise<string> => {
   const { data } = await supabase
-    .from("pf_journal_entries").select("content").eq("user_id", USER_ID).eq("date", date).maybeSingle();
+    .from("pf_journal_entries").select("content").eq("user_id", getUserId()).eq("date", date).maybeSingle();
   return data?.content ?? "";
 };
 
 export const saveJournalEntry = async (date: string, content: string): Promise<void> => {
   const { error } = await supabase
     .from("pf_journal_entries")
-    .upsert({ user_id: USER_ID, date, content, updated_at: new Date().toISOString() }, { onConflict: "user_id,date" });
+    .upsert({ user_id: getUserId(), date, content, updated_at: new Date().toISOString() }, { onConflict: "user_id,date" });
   if (error) err(error);
 };
 
@@ -1489,7 +1488,7 @@ export const getJournalForPeriod = async (date: string, period: string): Promise
   const { data } = await supabase
     .from("pf_journal_entries")
     .select("content")
-    .eq("user_id", USER_ID)
+    .eq("user_id", getUserId())
     .eq("date", date)
     .eq("period", period)
     .maybeSingle();
@@ -1500,7 +1499,7 @@ export const saveJournalForPeriod = async (date: string, period: string, content
   const { error } = await supabase
     .from("pf_journal_entries")
     .upsert(
-      { user_id: USER_ID, date, period, content, updated_at: new Date().toISOString() },
+      { user_id: getUserId(), date, period, content, updated_at: new Date().toISOString() },
       { onConflict: "user_id,date,period" },
     );
   if (error) throw new Error(error.message);
@@ -1508,14 +1507,14 @@ export const saveJournalForPeriod = async (date: string, period: string, content
 
 export const getRules = async (): Promise<Rule[]> => {
   const { data, error } = await supabase
-    .from("pf_rules").select("*").eq("user_id", USER_ID).order("sort_order");
+    .from("pf_rules").select("*").eq("user_id", getUserId()).order("sort_order");
   if (error) throw new Error(error.message);
   return (data ?? []) as Rule[];
 };
 
 export const createRule = async (payload: { title: string; body?: string | null }): Promise<Rule> => {
   const { data, error } = await supabase
-    .from("pf_rules").insert({ user_id: USER_ID, ...payload }).select().single();
+    .from("pf_rules").insert({ user_id: getUserId(), ...payload }).select().single();
   if (error) throw new Error(error.message);
   return data as Rule;
 };
@@ -2041,14 +2040,14 @@ export const updateBookSection = async (sectionId: number, notes: string | null,
 
 export const getLifestyleAreas = async (): Promise<LifestyleArea[]> => {
   const { data, error } = await supabase
-    .from("pf_lifestyle_areas").select("*").eq("user_id", USER_ID).order("sort_order");
+    .from("pf_lifestyle_areas").select("*").eq("user_id", getUserId()).order("sort_order");
   if (error) err(error);
   return (data ?? []).map((r) => ({ id: num(r.id), name: r.name, color: r.color, sort_order: r.sort_order }));
 };
 
 export const createLifestyleArea = async (name: string, color: string): Promise<LifestyleArea> => {
   const { data, error } = await supabase
-    .from("pf_lifestyle_areas").insert({ user_id: USER_ID, name, color }).select().single();
+    .from("pf_lifestyle_areas").insert({ user_id: getUserId(), name, color }).select().single();
   if (error) err(error);
   return { id: num(data!.id), name: data!.name, color: data!.color, sort_order: data!.sort_order };
 };
@@ -2066,8 +2065,8 @@ export const deleteLifestyleArea = async (id: number): Promise<void> => {
 };
 
 export const getLifestyleItems = async (areaId: number | null): Promise<{ systems: SystemEntry[]; plans: Plan[] }> => {
-  let sQ = supabase.from("pf_systems").select("*").eq("user_id", USER_ID).eq("is_lifestyle", true);
-  let pQ = supabase.from("pf_plans").select("*").eq("user_id", USER_ID).eq("is_lifestyle", true);
+  let sQ = supabase.from("pf_systems").select("*").eq("user_id", getUserId()).eq("is_lifestyle", true);
+  let pQ = supabase.from("pf_plans").select("*").eq("user_id", getUserId()).eq("is_lifestyle", true);
   if (areaId !== null) {
     sQ = sQ.eq("lifestyle_area_id", areaId);
     pQ = pQ.eq("lifestyle_area_id", areaId);
@@ -2084,7 +2083,7 @@ export const getGames = async (): Promise<Game[]> => {
   const { data, error } = await supabase
     .from("pf_games")
     .select("*, pf_game_features(id, status)")
-    .eq("user_id", USER_ID).order("created_at", { ascending: false });
+    .eq("user_id", getUserId()).order("created_at", { ascending: false });
   if (error) err(error);
   return (data ?? []).map((g) => ({
     id: num(g.id), title: g.title, genre: g.genre, platform: g.platform, engine: g.engine,
@@ -2102,7 +2101,7 @@ export const createGame = async (payload: {
   target_audience?: string | null; inspiration?: string | null; color?: string;
 }): Promise<Game> => {
   const { data, error } = await supabase
-    .from("pf_games").insert({ user_id: USER_ID, ...payload }).select("*, pf_game_features(id, status)").single();
+    .from("pf_games").insert({ user_id: getUserId(), ...payload }).select("*, pf_game_features(id, status)").single();
   if (error) err(error);
   return { id: num(data!.id), title: data!.title, genre: data!.genre, platform: data!.platform, engine: data!.engine, status: data!.status, description: data!.description, core_mechanic: data!.core_mechanic, target_audience: data!.target_audience, inspiration: data!.inspiration, color: data!.color, created_at: data!.created_at, feature_count: 0, done_count: 0 };
 };
@@ -2181,7 +2180,7 @@ export const deleteGameDevlogEntry = async (id: number): Promise<void> => {
 
 export const getHabitsForDate = async (date: string): Promise<HabitWithCompletion[]> => {
   const { data: habits, error } = await supabase
-    .from("pf_daily_habits").select("*").eq("user_id", USER_ID).order("sort_order");
+    .from("pf_daily_habits").select("*").eq("user_id", getUserId()).order("sort_order");
   if (error) err(error);
   if (!habits?.length) return [];
 
@@ -2230,7 +2229,7 @@ export const getHabitsForDate = async (date: string): Promise<HabitWithCompletio
 
 export const createDailyHabit = async (payload: { title: string; color?: string; stack_id?: number | null }): Promise<DailyHabit> => {
   const { data, error } = await supabase
-    .from("pf_daily_habits").insert({ user_id: USER_ID, ...payload }).select().single();
+    .from("pf_daily_habits").insert({ user_id: getUserId(), ...payload }).select().single();
   if (error) err(error);
   return { id: num(data!.id), title: data!.title, color: data!.color, sort_order: data!.sort_order, stack_id: data!.stack_id ? num(data!.stack_id) : null };
 };
@@ -2249,14 +2248,14 @@ export const deleteDailyHabit = async (id: number): Promise<void> => {
 
 export const getHabitStacks = async (): Promise<HabitStack[]> => {
   const { data, error } = await supabase
-    .from("pf_habit_stacks").select("*").eq("user_id", USER_ID).order("sort_order");
+    .from("pf_habit_stacks").select("*").eq("user_id", getUserId()).order("sort_order");
   if (error) err(error);
   return (data ?? []).map((s) => ({ id: num(s.id), title: s.title, color: s.color, sort_order: s.sort_order }));
 };
 
 export const createHabitStack = async (payload: { title: string; color?: string }): Promise<HabitStack> => {
   const { data, error } = await supabase
-    .from("pf_habit_stacks").insert({ user_id: USER_ID, ...payload }).select().single();
+    .from("pf_habit_stacks").insert({ user_id: getUserId(), ...payload }).select().single();
   if (error) err(error);
   return { id: num(data!.id), title: data!.title, color: data!.color, sort_order: data!.sort_order };
 };
@@ -2306,7 +2305,7 @@ export const getHabitSubtasks = async (habitId: number, date: string): Promise<H
 
 export const addHabitSubtask = async (habitId: number, title: string, date: string): Promise<HabitSubtask[]> => {
   const { error } = await supabase
-    .from("pf_habit_subtasks").insert({ habit_id: habitId, user_id: USER_ID, title });
+    .from("pf_habit_subtasks").insert({ habit_id: habitId, user_id: getUserId(), title });
   if (error) err(error);
   return getHabitSubtasks(habitId, date);
 };
@@ -2338,14 +2337,14 @@ export const toggleHabitSubtask = async (subtaskId: number, date: string): Promi
 
 export const getRunLogs = async (): Promise<RunLog[]> => {
   const { data, error } = await supabase
-    .from("pf_run_logs").select("*").eq("user_id", USER_ID).order("date", { ascending: false });
+    .from("pf_run_logs").select("*").eq("user_id", getUserId()).order("date", { ascending: false });
   if (error) err(error);
   return (data ?? []).map((r) => ({ id: num(r.id), date: r.date, distance_km: r.distance_km, duration_min: r.duration_min, notes: r.notes, created_at: r.created_at }));
 };
 
 export const createRunLog = async (payload: { date: string; distance_km?: number | null; duration_min?: number | null; notes?: string | null }): Promise<RunLog> => {
   const { data, error } = await supabase
-    .from("pf_run_logs").insert({ user_id: USER_ID, ...payload }).select().single();
+    .from("pf_run_logs").insert({ user_id: getUserId(), ...payload }).select().single();
   if (error) err(error);
   return { id: num(data!.id), date: data!.date, distance_km: data!.distance_km, duration_min: data!.duration_min, notes: data!.notes, created_at: data!.created_at };
 };
@@ -2363,7 +2362,7 @@ export const getWorkoutLogs = async (): Promise<WorkoutLog[]> => {
   const { data, error } = await supabase
     .from("pf_workout_logs")
     .select("*, pf_workout_exercises(*)")
-    .eq("user_id", USER_ID).order("date", { ascending: false });
+    .eq("user_id", getUserId()).order("date", { ascending: false });
   if (error) err(error);
   return (data ?? []).map((w) => ({
     id: num(w.id), date: w.date, name: w.name, notes: w.notes, created_at: w.created_at,
@@ -2375,7 +2374,7 @@ export const getWorkoutLogs = async (): Promise<WorkoutLog[]> => {
 
 export const createWorkoutLog = async (payload: { date: string; name: string; notes?: string | null }): Promise<WorkoutLog> => {
   const { data, error } = await supabase
-    .from("pf_workout_logs").insert({ user_id: USER_ID, ...payload }).select().single();
+    .from("pf_workout_logs").insert({ user_id: getUserId(), ...payload }).select().single();
   if (error) err(error);
   return { id: num(data!.id), date: data!.date, name: data!.name, notes: data!.notes, created_at: data!.created_at, exercises: [] };
 };
@@ -2541,7 +2540,7 @@ function mapSessionPerformance(r: any): SessionPerformance {
 
 export const getTrainingPlans = async (): Promise<TrainingPlan[]> => {
   const { data, error } = await supabase
-    .from("pf_training_plans").select("*").eq("user_id", USER_ID).order("created_at");
+    .from("pf_training_plans").select("*").eq("user_id", getUserId()).order("created_at");
   if (error) err(error);
   return (data ?? []).map(mapTrainingPlan);
 };
@@ -2550,7 +2549,7 @@ export const createTrainingPlan = async (payload: {
   title: string; description?: string | null; color?: string; goal?: string | null; days_per_week?: number | null; plan_type?: string;
 }): Promise<TrainingPlan> => {
   const { data, error } = await supabase
-    .from("pf_training_plans").insert({ user_id: USER_ID, ...payload }).select().single();
+    .from("pf_training_plans").insert({ user_id: getUserId(), ...payload }).select().single();
   if (error) err(error);
   return mapTrainingPlan(data!);
 };
@@ -2577,7 +2576,7 @@ export const getTrainingSessions = async (planId?: number): Promise<TrainingSess
   let q = supabase
     .from("pf_training_sessions")
     .select("*, pf_training_plans(title, plan_type)")
-    .eq("user_id", USER_ID)
+    .eq("user_id", getUserId())
     .eq("is_recurring", false)
     .order("scheduled_date", { ascending: true, nullsFirst: false })
     .order("created_at", { ascending: false });
@@ -2591,7 +2590,7 @@ export const getRecurringTrainingSessions = async (planId?: number): Promise<Tra
   let q = supabase
     .from("pf_training_sessions")
     .select("*, pf_training_plans(title, plan_type)")
-    .eq("user_id", USER_ID)
+    .eq("user_id", getUserId())
     .eq("is_recurring", true)
     .order("series_start_date", { ascending: true });
   if (planId !== undefined) q = q.eq("plan_id", planId);
@@ -2605,14 +2604,14 @@ export const getTrainingSessionsForDate = async (date: string): Promise<Training
     supabase
       .from("pf_training_sessions")
       .select("*, pf_training_plans(title, plan_type)")
-      .eq("user_id", USER_ID)
+      .eq("user_id", getUserId())
       .eq("is_recurring", false)
       .eq("scheduled_date", date)
       .order("start_time", { ascending: true, nullsFirst: true }),
     supabase
       .from("pf_training_sessions")
       .select("*, pf_training_plans(title, plan_type)")
-      .eq("user_id", USER_ID)
+      .eq("user_id", getUserId())
       .eq("is_recurring", true)
       .lte("series_start_date", date)
       .or(`series_end_date.is.null,series_end_date.gte.${date}`),
@@ -2639,7 +2638,7 @@ export const createTrainingSession = async (payload: {
   series_end_date?: string | null;
 }): Promise<TrainingSession> => {
   const { data, error } = await supabase
-    .from("pf_training_sessions").insert({ user_id: USER_ID, ...payload }).select("*, pf_training_plans(title, plan_type)").single();
+    .from("pf_training_sessions").insert({ user_id: getUserId(), ...payload }).select("*, pf_training_plans(title, plan_type)").single();
   if (error) err(error);
   return mapTrainingSession(data!);
 };
@@ -2699,7 +2698,7 @@ export const addSessionPerformance = async (payload: {
   session_id: number; metric_name: string; value: string; unit?: string | null;
 }): Promise<SessionPerformance> => {
   const { data, error } = await supabase
-    .from("pf_session_performance").insert({ user_id: USER_ID, ...payload }).select().single();
+    .from("pf_session_performance").insert({ user_id: getUserId(), ...payload }).select().single();
   if (error) err(error);
   return mapSessionPerformance(data!);
 };

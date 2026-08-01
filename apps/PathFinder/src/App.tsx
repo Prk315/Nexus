@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { useNexusRegistration, NexusHeader } from "@nexus/core";
+import { useNexusRegistration, NexusHeader, useNexusAuth } from "@nexus/core";
 import "./App.css";
 import { Sidebar, type Page } from "./components/Sidebar";
 import { SchedulesProvider } from "./contexts/SchedulesContext";
@@ -21,6 +21,7 @@ const IS_IOS = /iPhone|iPad|iPod/.test(navigator.userAgent);
 
 function App() {
   useNexusRegistration("PathFinder");
+  const { user, signOut } = useNexusAuth();
   const [page, setPage] = useState<Page>("dashboard");
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
 
@@ -41,7 +42,12 @@ function App() {
             <span className="text-sm font-semibold">PathFinder</span>
           </div>
         ) : (
-          <NexusHeader appName="PathFinder" onHome={() => setPage("dashboard")} />
+          <NexusHeader
+            appName="PathFinder"
+            onHome={() => setPage("dashboard")}
+            userEmail={user?.email}
+            onSignOut={() => signOut()}
+          />
         )}
 
         <SchedulesProvider>
