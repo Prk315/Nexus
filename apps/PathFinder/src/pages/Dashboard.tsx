@@ -17,12 +17,11 @@ import {
   getEvents, addEvent, deleteEvent,
   getDeadlines, addDeadline, toggleDeadline, deleteDeadline,
   getAgreements, addAgreement, deleteAgreement,
-  getJournalEntry, saveJournalEntry,
   getCourseAssignments, updateCourseAssignment,
   getScheduleEntriesForDate,
   getHabitsForDate, toggleHabitCompletion, getHabitStacks,
   getHabitSubtasks, toggleHabitSubtask,
-  getTrainingSessionsForDate, toggleTrainingSession,
+  getTrainingSessionsForDate,
 } from "../lib/api";
 import { Progress } from "../components/ui/progress";
 import { Button } from "../components/ui/button";
@@ -971,13 +970,52 @@ function TodayPie({ doneMin, pendingMin, freeMin, capTotal, items }: {
 function WelcomeBox({
   goals, plans, tasks, systems, dailyGoals, courseAssignments, date,
   goalPrimaryDone, goalSecDone, todaySessions,
+  onTogglePrimaryDone, onToggleSecDone, onSetPrimary, onClearPrimary,
+  onAddSecondary, onUpdateSecondaryEstimate, onDeleteSecondary,
 }: {
   goals: Goal[]; plans: Plan[]; tasks: TaskWithContext[]; systems: SystemEntry[];
   dailyGoals: DailyGoals; courseAssignments: CourseAssignment[]; date: string;
   goalPrimaryDone: boolean; goalSecDone: Set<number>; todaySessions: TrainingSession[];
+  onTogglePrimaryDone: () => void;
+  onToggleSecDone: (id: number) => void;
+  onSetPrimary: (payload: DailyPrimaryGoal) => void;
+  onClearPrimary: () => void;
+  onAddSecondary: (text: string) => void;
+  onUpdateSecondaryEstimate: (id: number, min: number | null) => void;
+  onDeleteSecondary: (id: number) => void;
 }) {
   const hour     = new Date().getHours();
   const greeting = hour < 12 ? "Good morning" : hour < 18 ? "Good afternoon" : "Good evening";
+
+  // Inline goal editing state (primary + secondary edited directly in the header)
+  const [editingPrimary, setEditingPrimary] = useState(false);
+  const [primaryDraft, setPrimaryDraft] = useState(dailyGoals.primary?.text ?? "");
+  const [primaryEstDraft, setPrimaryEstDraft] = useState(dailyGoals.primary?.time_estimate_min ? formatMinutes(dailyGoals.primary.time_estimate_min) : "");
+  const [secDraft, setSecDraft] = useState("");
+  const [editingEstId, setEditingEstId] = useState<number | null>(null);
+  const [estDraft, setEstDraft] = useState("");
+
+  function commitPrimary() {
+    const text = primaryDraft.trim();
+    if (text) onSetPrimary({ text, time_estimate_min: parseMinutes(primaryEstDraft) });
+    else onClearPrimary();
+    setEditingPrimary(false);
+  }
+  function startEditPrimary() {
+    setPrimaryDraft(dailyGoals.primary?.text ?? "");
+    setPrimaryEstDraft(dailyGoals.primary?.time_estimate_min ? formatMinutes(dailyGoals.primary.time_estimate_min) : "");
+    setEditingPrimary(true);
+  }
+  function handleSecKey(e: React.KeyboardEvent<HTMLInputElement>) {
+    if (e.key === "Enter" && secDraft.trim()) {
+      onAddSecondary(secDraft.trim());
+      setSecDraft("");
+    }
+  }
+  function commitSecEst(g: DailySecGoal) {
+    onUpdateSecondaryEstimate(g.id, parseMinutes(estDraft));
+    setEditingEstId(null);
+  }
 
   // Stat pills
   const activeGoals = goals.filter((g) => g.status === "active").length;
@@ -1094,24 +1132,109 @@ function WelcomeBox({
 
       <div className="hidden md:block h-10 w-px bg-border shrink-0" />
 
-      {/* Primary goal + today's progress */}
-      <div className="flex flex-col gap-2 flex-1 min-w-0">
-        {dailyGoals.primary ? (
+      {/* Goals editor + today's progress */}
+      <div className="flex flex-col gap-1.5 flex-1 min-w-0">
+        {/* Primary goal */}
+        {editingPrimary ? (
           <div className="flex items-center gap-1.5 min-w-0">
-            <Star className="h-3.5 w-3.5 text-yellow-500 shrink-0" />
-            <span className="text-sm font-medium truncate text-foreground">{dailyGoals.primary.text}</span>
-            {dailyGoals.primary.time_estimate_min && (
-              <span className="inline-flex items-center gap-0.5 text-[10px] text-muted-foreground shrink-0">
-                <Clock className="h-2.5 w-2.5" />{formatMinutes(dailyGoals.primary.time_estimate_min)}
-              </span>
+            <input
+              autoFocus
+              className="flex-1 h-7 rounded-md border border-input bg-transparent px-2 text-sm focus:outline-none focus:ring-1 focus:ring-ring min-w-0"
+              placeholder="What's your main focus today?"
+              value={primaryDraft}
+              onChange={(e) => setPrimaryDraft(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") commitPrimary();
+                if (e.key === "Escape") setEditingPrimary(false);
+              }}
+            />
+            <TimeEstimateInput value={primaryEstDraft} onChange={setPrimaryEstDraft} onBlur={commitPrimary} className="w-16" />
+            {dailyGoals.primary && (
+              <button onClick={() => { onClearPrimary(); setEditingPrimary(false); }}
+                className="text-muted-foreground hover:text-destructive transition-colors shrink-0">
+                <X className="h-4 w-4" />
+              </button>
             )}
           </div>
-        ) : (
-          <div className="flex items-center gap-1.5 text-muted-foreground/40">
-            <Star className="h-3.5 w-3.5 shrink-0" />
-            <span className="text-xs italic">No primary goal set for today</span>
+        ) : dailyGoals.primary ? (
+          <div className="group flex items-center gap-1.5 min-w-0">
+            <button
+              onClick={onTogglePrimaryDone}
+              className={cn(
+                "h-4 w-4 shrink-0 rounded border-2 flex items-center justify-center transition-colors",
+                goalPrimaryDone ? "bg-emerald-500 border-emerald-500 text-white" : "border-yellow-500/50 hover:border-yellow-500"
+              )}
+            >
+              {goalPrimaryDone && <Check className="h-2.5 w-2.5" />}
+            </button>
+            <Star className="h-3.5 w-3.5 text-yellow-500 shrink-0" />
+            <button onClick={startEditPrimary} className="flex items-center gap-1.5 text-left min-w-0 flex-1">
+              <span className={cn("text-sm font-medium truncate", goalPrimaryDone ? "line-through text-muted-foreground" : "text-foreground")}>
+                {dailyGoals.primary.text}
+              </span>
+              <TimeEstimateBadge min={dailyGoals.primary.time_estimate_min} />
+              <Pencil className="h-3 w-3 text-muted-foreground opacity-0 group-hover:opacity-100 transition-opacity shrink-0" />
+            </button>
           </div>
+        ) : (
+          <button
+            onClick={startEditPrimary}
+            className="flex items-center gap-1.5 text-left text-muted-foreground/50 hover:text-muted-foreground transition-colors w-fit"
+          >
+            <Star className="h-3.5 w-3.5 shrink-0" />
+            <span className="text-xs italic">Set your primary goal for today…</span>
+          </button>
         )}
+
+        {/* Secondary goals — compact chips */}
+        <div className="flex items-center gap-1.5 flex-wrap">
+          {dailyGoals.secondary.map((g) => {
+            const done = goalSecDone.has(g.id);
+            return (
+              <div key={g.id} className="group flex items-center gap-1 rounded-full border border-border bg-background pl-1.5 pr-1 py-0.5">
+                <button
+                  onClick={() => onToggleSecDone(g.id)}
+                  className={cn(
+                    "h-3 w-3 shrink-0 rounded-full border flex items-center justify-center transition-colors",
+                    done ? "bg-emerald-500 border-emerald-500 text-white" : "border-muted-foreground/30 hover:border-muted-foreground"
+                  )}
+                >
+                  {done && <Check className="h-2 w-2" />}
+                </button>
+                <span className={cn("text-xs max-w-[120px] truncate", done ? "line-through text-muted-foreground" : "text-foreground")}>
+                  {g.text}
+                </span>
+                {editingEstId === g.id ? (
+                  <TimeEstimateInput value={estDraft} onChange={setEstDraft} onBlur={() => commitSecEst(g)} className="w-14 h-6" />
+                ) : (
+                  <button
+                    onClick={() => { setEditingEstId(g.id); setEstDraft(g.time_estimate_min ? formatMinutes(g.time_estimate_min) : ""); }}
+                    className={cn(
+                      "flex items-center transition-colors shrink-0",
+                      g.time_estimate_min
+                        ? "text-muted-foreground hover:text-foreground"
+                        : "opacity-0 group-hover:opacity-100 text-muted-foreground/50 hover:text-muted-foreground"
+                    )}
+                    title="Set time estimate"
+                  >
+                    {g.time_estimate_min ? <TimeEstimateBadge min={g.time_estimate_min} /> : <Clock className="h-3 w-3" />}
+                  </button>
+                )}
+                <button onClick={() => onDeleteSecondary(g.id)}
+                  className="opacity-0 group-hover:opacity-100 transition-opacity text-muted-foreground hover:text-destructive shrink-0">
+                  <X className="h-3 w-3" />
+                </button>
+              </div>
+            );
+          })}
+          <input
+            className="h-6 w-36 rounded-full border border-input bg-transparent px-2.5 text-xs placeholder:text-muted-foreground/50 focus:outline-none focus:ring-1 focus:ring-ring"
+            placeholder="+ secondary goal"
+            value={secDraft}
+            onChange={(e) => setSecDraft(e.target.value)}
+            onKeyDown={handleSecKey}
+          />
+        </div>
 
         {totalToday > 0 ? (
           <div className="flex items-center gap-2">
@@ -1155,7 +1278,7 @@ function WelcomeBox({
   );
 }
 
-// ── Daily Goals Section ───────────────────────────────────────────────────────
+// ── Goal time-estimate helpers ────────────────────────────────────────────────
 
 function formatMinutes(min: number): string {
   if (min < 60) return `${min}m`;
@@ -1202,252 +1325,6 @@ function TimeEstimateInput({ value, onChange, onBlur, className }: {
       placeholder="e.g. 30m, 1h"
       className={cn("h-7 w-20 rounded border border-input bg-transparent px-2 text-xs focus:outline-none focus:ring-1 focus:ring-ring placeholder:text-muted-foreground/40", className)}
     />
-  );
-}
-
-const TRAINING_TYPE_INFO: Record<string, { icon: string; accent: string }> = {
-  running:  { icon: "🏃", accent: "text-emerald-600" },
-  strength: { icon: "🏋️", accent: "text-orange-600" },
-  yoga:     { icon: "🧘", accent: "text-violet-600" },
-  other:    { icon: "⚡", accent: "text-slate-500" },
-};
-
-function DailyGoalsSection({ goals, primaryDone, secDone, onTogglePrimaryDone, onToggleSecDone, onSetPrimary, onClearPrimary, onAddSecondary, onUpdateSecondaryEstimate, onDeleteSecondary, todaySessions, onToggleSession }: {
-  goals: DailyGoals;
-  primaryDone: boolean;
-  secDone: Set<number>;
-  onTogglePrimaryDone: () => void;
-  onToggleSecDone: (id: number) => void;
-  onSetPrimary: (payload: DailyPrimaryGoal) => void;
-  onClearPrimary: () => void;
-  onAddSecondary: (text: string) => void;
-  onUpdateSecondaryEstimate: (id: number, min: number | null) => void;
-  onDeleteSecondary: (id: number) => void;
-  todaySessions: TrainingSession[];
-  onToggleSession: (id: number) => void;
-}) {
-  const [editingPrimary, setEditingPrimary] = useState(false);
-  const [primaryDraft, setPrimaryDraft] = useState(goals.primary?.text ?? "");
-  const [primaryEstDraft, setPrimaryEstDraft] = useState(goals.primary?.time_estimate_min ? formatMinutes(goals.primary.time_estimate_min) : "");
-  const [secDraft, setSecDraft] = useState("");
-  const [editingEstId, setEditingEstId] = useState<number | null>(null);
-  const [estDraft, setEstDraft] = useState("");
-
-  function commitPrimary() {
-    const text = primaryDraft.trim();
-    if (text) onSetPrimary({ text, time_estimate_min: parseMinutes(primaryEstDraft) });
-    else onClearPrimary();
-    setEditingPrimary(false);
-  }
-
-  function startEditPrimary() {
-    setPrimaryDraft(goals.primary?.text ?? "");
-    setPrimaryEstDraft(goals.primary?.time_estimate_min ? formatMinutes(goals.primary.time_estimate_min) : "");
-    setEditingPrimary(true);
-  }
-
-  function handleSecKey(e: React.KeyboardEvent<HTMLInputElement>) {
-    if (e.key === "Enter" && secDraft.trim()) {
-      onAddSecondary(secDraft.trim());
-      setSecDraft("");
-    }
-  }
-
-  function commitSecEst(g: DailySecGoal) {
-    onUpdateSecondaryEstimate(g.id, parseMinutes(estDraft));
-    setEditingEstId(null);
-  }
-
-  return (
-    <div className="flex flex-col gap-3">
-      {/* Primary goal */}
-      <div className="flex flex-col gap-1">
-        <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide flex items-center gap-1.5">
-          <Star className="h-3.5 w-3.5 text-yellow-500" /> Primary goal today
-        </p>
-        {editingPrimary ? (
-          <div className="flex flex-col gap-1.5">
-            <div className="flex items-center gap-1.5">
-              <input
-                autoFocus
-                className="flex-1 h-8 rounded-md border border-input bg-transparent px-2.5 text-sm focus:outline-none focus:ring-1 focus:ring-ring"
-                placeholder="What's your main focus today?"
-                value={primaryDraft}
-                onChange={(e) => setPrimaryDraft(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter") commitPrimary();
-                  if (e.key === "Escape") setEditingPrimary(false);
-                }}
-              />
-              {goals.primary && (
-                <button onClick={() => { onClearPrimary(); setEditingPrimary(false); }}
-                  className="text-muted-foreground hover:text-destructive transition-colors">
-                  <X className="h-4 w-4" />
-                </button>
-              )}
-            </div>
-            <div className="flex items-center gap-1.5 pl-0.5">
-              <Clock className="h-3 w-3 text-muted-foreground shrink-0" />
-              <TimeEstimateInput
-                value={primaryEstDraft}
-                onChange={setPrimaryEstDraft}
-                onBlur={commitPrimary}
-              />
-              <span className="text-[10px] text-muted-foreground">time estimate</span>
-            </div>
-          </div>
-        ) : goals.primary ? (
-          <div className={cn(
-            "group flex items-center gap-2 rounded-md px-2.5 py-1.5 border transition-colors",
-            primaryDone
-              ? "bg-emerald-500/10 border-emerald-400/20"
-              : "bg-yellow-500/10 border-yellow-500/20 hover:border-yellow-500/40"
-          )}>
-            <button
-              onClick={onTogglePrimaryDone}
-              className={cn(
-                "h-4 w-4 shrink-0 rounded border-2 flex items-center justify-center transition-colors",
-                primaryDone
-                  ? "bg-emerald-500 border-emerald-500 text-white"
-                  : "border-yellow-500/50 hover:border-yellow-500"
-              )}
-            >
-              {primaryDone && <Check className="h-2.5 w-2.5" />}
-            </button>
-            <button onClick={startEditPrimary} className="flex-1 flex items-center gap-2 text-left min-w-0">
-              <span className={cn(
-                "text-sm font-medium flex-1 truncate",
-                primaryDone ? "line-through text-muted-foreground" : "text-foreground"
-              )}>
-                {goals.primary.text}
-              </span>
-              <TimeEstimateBadge min={goals.primary.time_estimate_min} />
-              <Pencil className="h-3 w-3 text-muted-foreground opacity-0 group-hover:opacity-100 transition-opacity shrink-0" />
-            </button>
-          </div>
-        ) : (
-          <button
-            onClick={startEditPrimary}
-            className="flex items-center gap-2 text-left rounded-md px-2.5 py-1.5 border border-dashed border-border hover:border-muted-foreground/50 transition-colors"
-          >
-            <span className="text-sm text-muted-foreground/60">Set your primary goal for today…</span>
-          </button>
-        )}
-      </div>
-
-      {/* Secondary goals + Today's Training — two column layout */}
-      <div className="grid grid-cols-2 gap-3">
-        {/* Left: Secondary goals */}
-        <div className="flex flex-col gap-1.5">
-          <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">
-            Secondary goals
-          </p>
-          <div className="flex flex-col gap-0.5">
-            {goals.secondary.map((g) => {
-              const done = secDone.has(g.id);
-              return (
-                <div key={g.id} className="flex items-center gap-2 group py-0.5 pl-1">
-                  <button
-                    onClick={() => onToggleSecDone(g.id)}
-                    className={cn(
-                      "h-3.5 w-3.5 shrink-0 rounded border flex items-center justify-center transition-colors",
-                      done
-                        ? "bg-emerald-500 border-emerald-500 text-white"
-                        : "border-muted-foreground/30 hover:border-muted-foreground"
-                    )}
-                  >
-                    {done && <Check className="h-2 w-2" />}
-                  </button>
-                  <span className={cn("text-sm flex-1 min-w-0 truncate", done ? "line-through text-muted-foreground" : "text-foreground")}>
-                    {g.text}
-                  </span>
-                  {editingEstId === g.id ? (
-                    <TimeEstimateInput
-                      value={estDraft}
-                      onChange={setEstDraft}
-                      onBlur={() => commitSecEst(g)}
-                      className="w-20"
-                    />
-                  ) : (
-                    <button
-                      onClick={() => { setEditingEstId(g.id); setEstDraft(g.time_estimate_min ? formatMinutes(g.time_estimate_min) : ""); }}
-                      className={cn(
-                        "flex items-center gap-0.5 transition-colors shrink-0",
-                        g.time_estimate_min
-                          ? "text-muted-foreground hover:text-foreground"
-                          : "opacity-0 group-hover:opacity-100 text-muted-foreground/50 hover:text-muted-foreground"
-                      )}
-                      title="Set time estimate"
-                    >
-                      {g.time_estimate_min
-                        ? <TimeEstimateBadge min={g.time_estimate_min} />
-                        : <Clock className="h-3 w-3" />}
-                    </button>
-                  )}
-                  <button onClick={() => onDeleteSecondary(g.id)}
-                    className="opacity-0 group-hover:opacity-100 transition-opacity text-muted-foreground hover:text-destructive">
-                    <X className="h-3 w-3" />
-                  </button>
-                </div>
-              );
-            })}
-          </div>
-          <div className="flex items-center gap-1.5">
-            <input
-              className="flex-1 h-7 rounded border border-input bg-transparent px-2 text-xs placeholder:text-muted-foreground/50 focus:outline-none focus:ring-1 focus:ring-ring"
-              placeholder="Add secondary goal… (Enter)"
-              value={secDraft}
-              onChange={(e) => setSecDraft(e.target.value)}
-              onKeyDown={handleSecKey}
-            />
-            <button
-              onClick={() => { if (secDraft.trim()) { onAddSecondary(secDraft.trim()); setSecDraft(""); } }}
-              className="flex h-7 w-7 shrink-0 items-center justify-center rounded border border-input text-muted-foreground hover:text-foreground hover:bg-secondary transition-colors"
-            >
-              <Plus className="h-3.5 w-3.5" />
-            </button>
-          </div>
-        </div>
-
-        {/* Right: Today's Training */}
-        <div className="flex flex-col gap-1.5">
-          <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide flex items-center gap-1.5">
-            <Zap className="h-3 w-3" /> Today's Training
-          </p>
-          {todaySessions.length === 0 ? (
-            <p className="text-xs text-muted-foreground/50 italic pl-1">No training scheduled.</p>
-          ) : (
-            <div className="flex flex-col gap-0.5">
-              {todaySessions.map((s) => {
-                const ti = TRAINING_TYPE_INFO[s.plan_type ?? "other"] ?? TRAINING_TYPE_INFO.other;
-                return (
-                  <div key={s.id} className="flex items-center gap-2 group py-0.5 pl-1">
-                    <button
-                      onClick={() => onToggleSession(s.id)}
-                      className={cn(
-                        "h-3.5 w-3.5 shrink-0 rounded border flex items-center justify-center transition-colors",
-                        s.completed
-                          ? "bg-emerald-500 border-emerald-500 text-white"
-                          : "border-muted-foreground/30 hover:border-muted-foreground"
-                      )}
-                    >
-                      {s.completed && <Check className="h-2 w-2" />}
-                    </button>
-                    <span className="text-sm shrink-0" title={s.plan_type ?? "other"}>{ti.icon}</span>
-                    <span className={cn("text-sm flex-1 min-w-0 truncate", s.completed ? "line-through text-muted-foreground" : "text-foreground")}>
-                      {s.title}
-                    </span>
-                    {s.start_time && (
-                      <span className="text-[10px] text-muted-foreground shrink-0">{s.start_time.slice(0, 5)}</span>
-                    )}
-                  </div>
-                );
-              })}
-            </div>
-          )}
-        </div>
-      </div>
-    </div>
   );
 }
 
@@ -2453,62 +2330,6 @@ function TodoList({
   );
 }
 
-// ── Journal Strip ─────────────────────────────────────────────────────────────
-
-function JournalStrip({ content, onSave }: {
-  date: string;
-  content: string;
-  onSave: (text: string) => void;
-}) {
-  const [collapsed, setCollapsed] = useState(false);
-  const [draft, setDraft] = useState(content);
-  const savedRef = useRef(content);
-
-  useEffect(() => {
-    setDraft(content);
-    savedRef.current = content;
-  }, [content]);
-
-  function handleBlur() {
-    if (draft !== savedRef.current) {
-      savedRef.current = draft;
-      onSave(draft);
-    }
-  }
-
-  return (
-    <div className="flex flex-col gap-2">
-      <button
-        onClick={() => setCollapsed((v) => !v)}
-        className="flex items-center gap-1.5 text-xs font-semibold text-muted-foreground uppercase tracking-wide hover:text-foreground transition-colors w-fit"
-      >
-        <BookOpen className="h-3.5 w-3.5" />
-        Reflection
-        {collapsed
-          ? <ChevronRight className="h-3 w-3" />
-          : <ChevronDown  className="h-3 w-3" />
-        }
-      </button>
-
-      {!collapsed && (
-        <div className="flex flex-col gap-1">
-          <textarea
-            className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm leading-relaxed
-                       placeholder:text-muted-foreground/40 focus:outline-none focus:ring-1 focus:ring-ring
-                       resize-none"
-            rows={5}
-            placeholder="Write about your day, reflect on what went well, what you'd do differently…"
-            value={draft}
-            onChange={(e) => setDraft(e.target.value)}
-            onBlur={handleBlur}
-          />
-          <p className="text-[10px] text-muted-foreground/50">Auto-saves when you click away</p>
-        </div>
-      )}
-    </div>
-  );
-}
-
 // ── Dashboard ─────────────────────────────────────────────────────────────────
 
 export function Dashboard() {
@@ -2526,7 +2347,6 @@ export function Dashboard() {
   const [events,     setEvents]     = useState<CalEvent[]>([]);
   const [deadlines,  setDeadlines]  = useState<Deadline[]>([]);
   const [agreements, setAgreements] = useState<Agreement[]>([]);
-  const [journalContent, setJournalContent] = useState("");
   const [courseAssignments, setCourseAssignments] = useState<CourseAssignment[]>([]);
   const [scheduleEntries,  setScheduleEntries]  = useState<ScheduleEntry[]>([]);
   const [habits,           setHabits]           = useState<HabitWithCompletion[]>([]);
@@ -2569,15 +2389,14 @@ export function Dashboard() {
   }, [date]);
 
   const load = useCallback(async () => {
-    const [g, gr, p, t, s, cb, dg, rem, qn, bd, ev, dl, ag, jc, cas, ses, hb, hs, ts] = await Promise.all([
+    const [g, gr, p, t, s, cb, dg, rem, qn, bd, ev, dl, ag, cas, ses, hb, hs, ts] = await Promise.all([
       getGoals(), getGoalGroups(), getPlans(), getAllTasks(), getSystems(), getCalBlocks(date, date),
       getDailyGoals(date), getReminders(), getQuickNotes(), getBrainDump(), getEvents(), getDeadlines(), getAgreements(),
-      getJournalEntry(date), getCourseAssignments(), getScheduleEntriesForDate(date), getHabitsForDate(date), getHabitStacks(),
+      getCourseAssignments(), getScheduleEntriesForDate(date), getHabitsForDate(date), getHabitStacks(),
       getTrainingSessionsForDate(date),
     ]);
     setGoals(g); setGroups(gr); setPlans(p); setTasks(t); setSystems(s); setCalBlocks(cb);
     setDailyGoals(dg); setReminders(rem); setNotes(qn); setBrainEntries(bd); setEvents(ev); setDeadlines(dl); setAgreements(ag);
-    setJournalContent(jc);
     setCourseAssignments(cas.filter((ca) => ca.due_date === date));
     setScheduleEntries(ses);
     setHabits(hb);
@@ -2718,26 +2537,9 @@ export function Dashboard() {
     setCourseAssignments((prev) => prev.map((x) => x.id === ca.id ? updated : x));
   };
 
-  const handleSaveJournal = async (text: string) => {
-    await saveJournalEntry(date, text);
-    setJournalContent(text);
-  };
-
   const handleToggleHabit = async (id: number) => {
     const nowDone = await toggleHabitCompletion(id, date);
     setHabits((prev) => prev.map((h) => h.id === id ? { ...h, done: nowDone } : h));
-  };
-
-  const handleToggleSession = async (id: number) => {
-    const updated = await toggleTrainingSession(id);
-    const realId = id < 0 ? Math.floor(-id / 100_000) : id;
-    setTodaySessions((prev) =>
-      prev.map((s) => {
-        // match the exact id OR any virtual instance of the same recurring series
-        const sRealId = s.id < 0 ? Math.floor(-s.id / 100_000) : s.id;
-        return sRealId === realId ? { ...s, completed: updated.completed } : s;
-      })
-    );
   };
 
   const handleCreateCalBlock = async (d: DCBlockDraft) => {
@@ -2775,30 +2577,16 @@ export function Dashboard() {
 
       <WelcomeBox goals={goals} plans={plans} tasks={tasks} systems={systems}
         dailyGoals={dailyGoals} courseAssignments={courseAssignments} date={date}
-        goalPrimaryDone={goalPrimaryDone} goalSecDone={goalSecDone} todaySessions={todaySessions} />
+        goalPrimaryDone={goalPrimaryDone} goalSecDone={goalSecDone} todaySessions={todaySessions}
+        onTogglePrimaryDone={handleTogglePrimaryDone} onToggleSecDone={handleToggleSecDone}
+        onSetPrimary={handleSetPrimary} onClearPrimary={handleClearPrimary}
+        onAddSecondary={handleAddSecondary} onUpdateSecondaryEstimate={handleUpdateSecondaryEstimate}
+        onDeleteSecondary={handleDeleteSecondary} />
 
       <div className="flex-1 min-h-0 flex flex-col md:flex-row overflow-hidden">
 
         {/* ── Left column ─────────────────────────────────────────────────── */}
         <div className="flex-1 min-w-0 overflow-y-auto border-r border-border px-3 py-2 md:px-4 md:py-3 flex flex-col gap-3 md:gap-4">
-
-          {/* Daily Goals */}
-          <DailyGoalsSection
-            goals={dailyGoals}
-            primaryDone={goalPrimaryDone}
-            secDone={goalSecDone}
-            onTogglePrimaryDone={handleTogglePrimaryDone}
-            onToggleSecDone={handleToggleSecDone}
-            onSetPrimary={handleSetPrimary}
-            onClearPrimary={handleClearPrimary}
-            onAddSecondary={handleAddSecondary}
-            onUpdateSecondaryEstimate={handleUpdateSecondaryEstimate}
-            onDeleteSecondary={handleDeleteSecondary}
-            todaySessions={todaySessions}
-            onToggleSession={handleToggleSession}
-          />
-
-          <div className="h-px bg-border" />
 
           {/* Quick Cards */}
           <QuickCards
@@ -2834,10 +2622,6 @@ export function Dashboard() {
             onToggleAssignment={handleToggleAssignment}
           />
 
-          <div className="h-px bg-border" />
-
-          {/* Journal */}
-          <JournalStrip date={date} content={journalContent} onSave={handleSaveJournal} />
         </div>
 
         {/* ── Right column: Habits + Day Calendar ─────────────────────────── */}
