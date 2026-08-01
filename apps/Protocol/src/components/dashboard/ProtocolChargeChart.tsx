@@ -13,7 +13,7 @@ import {
   RadialBar,
   PolarAngleAxis,
 } from "recharts";
-import type { BodyMetric, NutritionEntry, RunningSession, SleepEntry, WorkoutSession } from "../../store/types";
+import type { BodyMetric, RunningSession, SleepEntry, WorkoutSession } from "../../store/types";
 import { isoDate } from "../../lib/uiHelpers";
 
 type Range = "7D" | "4W" | "6M";
@@ -98,9 +98,12 @@ function scoreSleep(entries: SleepEntry[]): number {
   return Math.round(scores.reduce((a, b) => a + b, 0) / scores.length);
 }
 
-function scoreNutrition(entries: NutritionEntry[]): number {
-  if (!entries.length) return 0;
-  return Math.min(100, entries.length * 34);
+/** Calories logged that day (from the Meal Planner) vs. the daily calorie goal, if set. */
+function scoreNutrition(calories: number, calorieGoal: number | null): number {
+  if (calories <= 0) return 0;
+  if (!calorieGoal) return Math.min(100, Math.round((calories / 2000) * 100));
+  const deviation = Math.abs(calories - calorieGoal) / calorieGoal;
+  return Math.max(0, Math.round(100 - deviation * 100));
 }
 
 function scoreBody(entries: BodyMetric[]): number {
@@ -113,8 +116,8 @@ function scoreBody(entries: BodyMetric[]): number {
 function scoreWorkout(sessions: WorkoutSession[]): number {
   if (!sessions.length) return 0;
   const completed = sessions.filter((s) => s.completed).length;
-  if (completed === 0) return 15;
-  return Math.min(100, 30 + completed * 35);
+  if (completed === 0) return 20;
+  return Math.min(100, completed * 100);
 }
 
 function scoreRunning(sessions: RunningSession[]): number {
@@ -147,7 +150,9 @@ function daysBetween(start: string, end: string): string[] {
 
 interface Props {
   sleep: SleepEntry[];
-  nutrition: NutritionEntry[];
+  /** Calories logged per date (Meal Planner, logged entries only). */
+  nutritionByDate: Map<string, number>;
+  calorieGoal: number | null;
   bodyMetrics: BodyMetric[];
   workoutSessions: WorkoutSession[];
   runningSessions: RunningSession[];
@@ -164,7 +169,7 @@ interface Point {
 }
 
 export default function ProtocolChargeChart({
-  sleep, nutrition, bodyMetrics, workoutSessions, runningSessions,
+  sleep, nutritionByDate, calorieGoal, bodyMetrics, workoutSessions, runningSessions,
 }: Props) {
   const [range, setRange] = useState<Range>("7D");
 
@@ -181,7 +186,6 @@ export default function ProtocolChargeChart({
     };
 
     const sleepMap    = byDate(sleep, (e) => e.date);
-    const nutriMap    = byDate(nutrition, (e) => e.date);
     const bodyMap     = byDate(bodyMetrics, (e) => e.date);
     const workoutMap  = byDate(workoutSessions, (s) => s.scheduled_date);
     const runningMap  = byDate(runningSessions, (s) => s.date);
@@ -189,7 +193,7 @@ export default function ProtocolChargeChart({
     function dayScore(date: string) {
       return {
         sleep:    scoreSleep(sleepMap.get(date) ?? []),
-        nutrition: scoreNutrition(nutriMap.get(date) ?? []),
+        nutrition: scoreNutrition(nutritionByDate.get(date) ?? 0, calorieGoal),
         body:     scoreBody(bodyMap.get(date) ?? []),
         workout:  scoreWorkout(workoutMap.get(date) ?? []),
         running:  scoreRunning(runningMap.get(date) ?? []),
@@ -239,7 +243,7 @@ export default function ProtocolChargeChart({
       const label = d.toLocaleDateString("en-US", { month: "short" });
       return bucket(daysBetween(isoDate(d), isoDate(end)), label);
     });
-  }, [range, sleep, nutrition, bodyMetrics, workoutSessions, runningSessions]);
+  }, [range, sleep, nutritionByDate, calorieGoal, bodyMetrics, workoutSessions, runningSessions]);
 
   const TOOLTIP_STYLE = {
     background: "var(--surface)",

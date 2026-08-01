@@ -1,15 +1,20 @@
 import { useEffect, useState } from "react";
 import { Moon, Apple, Activity, ChevronDown, ChevronUp } from "lucide-react";
 import { useAppDispatch, useAppSelector } from "../store/hooks";
-import { fetchSleep, fetchNutrition, fetchBodyMetrics } from "../store/slices/biomarkersSlice";
+import { fetchSleep, fetchBodyMetrics } from "../store/slices/biomarkersSlice";
+import {
+  fetchFoods, fetchMeals, fetchMealItems, fetchMealPlanEntries, fetchNutritionGoals,
+} from "../store/slices/mealPlannerSlice";
+import { entryNutrition } from "../lib/mealNutrition";
 import SleepLogger from "../components/biomarkers/SleepLogger";
-import NutritionLogger from "../components/biomarkers/NutritionLogger";
 import BodyMetricsLogger from "../components/biomarkers/BodyMetricsLogger";
 import OuraImportPanel from "../components/biomarkers/OuraImportPanel";
 import GarminSyncPanel from "../components/shared/GarminSyncPanel";
-import { StatTile, TrendChart, MacroBarChart, LegendRow, type MacroPoint } from "../components/biomarkers/BiomarkerCharts";
-import { todayISO, formatMinutes, isoDate } from "../lib/uiHelpers";
-import type { BodyMetric, NutritionEntry, SleepEntry } from "../store/types";
+import { StatTile, TrendChart } from "../components/biomarkers/BiomarkerCharts";
+import { formatMinutes, isoDate } from "../lib/uiHelpers";
+import type { BodyMetric, SleepEntry } from "../store/types";
+
+const NUTRITION_HISTORY_DAYS = 14;
 
 function subDays(n: number): string {
   const d = new Date();
@@ -138,64 +143,74 @@ function SleepModule() {
 }
 
 // ── Nutrition module ─────────────────────────────────────────────────────────
+// Sourced from the Meal Planner's own tables (protocol_foods/protocol_meals/
+// protocol_meal_plan_entries) — logging happens on the Meal Planner tab now,
+// this is a read-only glance.
 
 function NutritionModule() {
-  const entries = useAppSelector((s) => s.biomarkers.nutrition);
-  const [manageOpen, setManageOpen] = useState(false);
+  const dispatch = useAppDispatch();
+  const foods = useAppSelector((s) => s.mealPlanner.foods);
+  const meals = useAppSelector((s) => s.mealPlanner.meals);
+  const mealItemsById = useAppSelector((s) => s.mealPlanner.mealItems);
+  const planEntries = useAppSelector((s) => s.mealPlanner.planEntries);
+  const goals = useAppSelector((s) => s.mealPlanner.goals);
 
-  const today = todayISO();
+  useEffect(() => {
+    dispatch(fetchFoods());
+    dispatch(fetchMeals());
+    dispatch(fetchNutritionGoals());
+    dispatch(fetchMealPlanEntries({ start: subDays(NUTRITION_HISTORY_DAYS - 1), end: isoDate(new Date()) }));
+  }, [dispatch]);
+
+  useEffect(() => {
+    for (const meal of meals) {
+      if (!mealItemsById[meal.id]) dispatch(fetchMealItems(meal.id));
+    }
+  }, [dispatch, meals, mealItemsById]);
+
+  const foodsById = new Map(foods.map((f) => [f.id, f]));
+  const mealsById = new Map(meals.map((m) => [m.id, m]));
+
+  const today = isoDate(new Date());
+  const loggedEntries = planEntries.filter((e) => e.logged);
+  const todayEntries = loggedEntries.filter((e) => e.date === today);
+
+  const caloriesByDate = new Map<string, number>();
+  const proteinToday = todayEntries.reduce((sum, e) => {
+    const n = entryNutrition(e, foodsById, mealsById, mealItemsById);
+    return sum + (n?.protein_g ?? 0);
+  }, 0);
+  for (const e of loggedEntries) {
+    const n = entryNutrition(e, foodsById, mealsById, mealItemsById);
+    if (!n) continue;
+    caloriesByDate.set(e.date, (caloriesByDate.get(e.date) ?? 0) + n.calories);
+  }
+  const caloriesToday = caloriesByDate.get(today) ?? 0;
+
   const cutoff7 = subDays(6);
-  const cutoff14 = subDays(13);
+  const recentCalorieDays = [...caloriesByDate.entries()].filter(([date]) => date >= cutoff7).map(([, cal]) => cal);
+  const avgCalories = avg(recentCalorieDays);
 
-  const todayEntries = entries.filter((e) => e.date === today);
-  const sumToday = (field: keyof NutritionEntry) =>
-    todayEntries.reduce((s, e) => s + (Number(e[field]) || 0), 0);
-
-  const recent7ByDate = new Map<string, NutritionEntry[]>();
-  entries.filter((e) => e.date >= cutoff7).forEach((e) => {
-    if (!recent7ByDate.has(e.date)) recent7ByDate.set(e.date, []);
-    recent7ByDate.get(e.date)!.push(e);
-  });
-  const dailyCalorieTotals = [...recent7ByDate.values()].map((es) =>
-    es.reduce((s, e) => s + (e.calories ?? 0), 0),
-  );
-  const avgCalories = avg(dailyCalorieTotals);
-
-  const macroByDate = new Map<string, MacroPoint>();
-  entries.filter((e) => e.date >= cutoff14).forEach((e) => {
-    const existing = macroByDate.get(e.date) ?? { date: e.date, protein: 0, carbs: 0, fat: 0 };
-    existing.protein += e.protein_g ?? 0;
-    existing.carbs += e.carbs_g ?? 0;
-    existing.fat += e.fat_g ?? 0;
-    macroByDate.set(e.date, existing);
-  });
-  const macroData: MacroPoint[] = lastNDates(14).map((date) => {
-    const m = macroByDate.get(date);
-    return { date: date.slice(5), protein: m?.protein ?? 0, carbs: m?.carbs ?? 0, fat: m?.fat ?? 0 };
-  });
+  const chartData = lastNDates(NUTRITION_HISTORY_DAYS).map((date) => ({
+    date: date.slice(5),
+    value: caloriesByDate.get(date) ?? null,
+  }));
 
   return (
     <div style={MODULE_STYLE}>
       <ModuleHeader icon={<Apple size={16} />} title="Nutrition" color="var(--series-nutrition)" tint="var(--series-nutrition-track)">
-        <StatTile label="Calories today" value={todayEntries.length ? String(sumToday("calories")) : "—"} />
-        <StatTile label="Protein today" value={todayEntries.length ? `${sumToday("protein_g")}g` : "—"} />
+        <StatTile label="Calories today" value={todayEntries.length ? String(Math.round(caloriesToday)) : "—"} sub={goals?.calories ? `/ ${goals.calories}` : undefined} />
+        <StatTile label="Protein today" value={todayEntries.length ? `${Math.round(proteinToday)}g` : "—"} sub={goals?.protein_g ? `/ ${goals.protein_g}g` : undefined} />
         <StatTile label="Avg calories (7d)" value={avgCalories != null ? String(Math.round(avgCalories)) : "—"} sub="per day" />
       </ModuleHeader>
 
       <div>
-        <div style={{ marginBottom: 8 }}>
-          <LegendRow items={[
-            { label: "Protein", color: "var(--macro-protein)" },
-            { label: "Carbs", color: "var(--macro-carbs)" },
-            { label: "Fat", color: "var(--macro-fat)" },
-          ]} />
-        </div>
-        <MacroBarChart data={macroData} height={140} />
+        <TrendChart data={chartData} color="var(--series-nutrition)" gradientId="nutritionTrend" height={140} valueSuffix=" kcal" />
       </div>
 
-      <ManageToggle open={manageOpen} onToggle={() => setManageOpen((v) => !v)} label="Log & manage entries" />
-
-      {manageOpen && <NutritionLogger />}
+      <div style={{ fontSize: 12, color: "var(--text-muted)" }}>
+        Log meals and set goals in the Meal Planner tab.
+      </div>
     </div>
   );
 }
@@ -262,7 +277,6 @@ export default function BiomarkersPage() {
 
   useEffect(() => {
     dispatch(fetchSleep());
-    dispatch(fetchNutrition());
     dispatch(fetchBodyMetrics());
   }, [dispatch]);
 
@@ -279,7 +293,6 @@ export default function BiomarkersPage() {
 
       <OuraImportPanel onImported={() => {
         dispatch(fetchSleep());
-        dispatch(fetchNutrition());
         dispatch(fetchBodyMetrics());
       }} />
 
