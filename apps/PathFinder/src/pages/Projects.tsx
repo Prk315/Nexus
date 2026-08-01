@@ -19,7 +19,7 @@ import { Progress } from "../components/ui/progress";
 import { PriorityDot } from "../components/PriorityDot";
 import { daysUntil, deadlineLabel, deadlineVariant, cn } from "../lib/utils";
 import type { Goal, Plan, Task, Priority, ProjectGoal, PipelineTemplate, PipelineRun, RoadmapItem } from "../types";
-import { parseTags, TagChip, serializeTags } from "./Plans";
+import { parseTags, TagChip, serializeTags } from "../lib/tags";
 
 // ── Status helpers ─────────────────────────────────────────────────────────────
 
