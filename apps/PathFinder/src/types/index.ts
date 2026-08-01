@@ -9,13 +9,6 @@ export interface GoalGroup {
   sort_order: number;
 }
 
-export interface LifestyleArea {
-  id: number;
-  name: string;
-  color: string;
-  sort_order: number;
-}
-
 export interface Goal {
   id: number;
   group_id: number | null;
@@ -86,6 +79,7 @@ export interface TaskWithContext {
   due_date: string | null;
   created_at: string;
   time_estimate: number | null;
+  kanban_status?: string;
 }
 
 export interface SystemSubtask {
@@ -573,15 +567,6 @@ export interface SessionPerformance {
   value: string;
   unit: string | null;
   created_at: string;
-}
-
-export interface Rule {
-  id: number;
-  user_id: string;
-  title: string;
-  body: string | null;
-  sort_order: number;
-  updated_at: string;
 }
 
 export interface CourseBook {

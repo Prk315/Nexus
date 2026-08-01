@@ -1,21 +1,16 @@
 import { useState } from "react";
 import type { ReactNode } from "react";
-import { LayoutDashboard, CalendarDays, Target, MoreHorizontal } from "lucide-react";
+import { LayoutDashboard, CalendarDays, Kanban, MoreHorizontal } from "lucide-react";
 import type { Page } from "./Sidebar";
 
 const PRIMARY_TABS: { page: Page; label: string; icon: ReactNode }[] = [
-  { page: "dashboard", label: "Home",  icon: <LayoutDashboard size={22} /> },
-  { page: "week",      label: "Week",  icon: <CalendarDays size={22} /> },
-  { page: "goals",     label: "Goals", icon: <Target size={22} /> },
+  { page: "dashboard", label: "Home",      icon: <LayoutDashboard size={22} /> },
+  { page: "workspace", label: "Workspace", icon: <Kanban size={22} /> },
+  { page: "week",      label: "Week",      icon: <CalendarDays size={22} /> },
 ];
 
 const MORE_PAGES: { page: Page; label: string }[] = [
-  { page: "backlog",   label: "Backlog" },
-  { page: "planner",   label: "Planner" },
-  { page: "journal",   label: "Journal" },
-  { page: "systems",   label: "Systems" },
   { page: "projects",  label: "Projects" },
-  { page: "lifestyle", label: "Lifestyle" },
   { page: "courses",   label: "Courses" },
   { page: "schedules", label: "Schedules" },
   { page: "games",     label: "Games" },

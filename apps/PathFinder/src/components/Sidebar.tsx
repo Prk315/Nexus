@@ -1,19 +1,14 @@
-import { LayoutDashboard, Target, RefreshCw, ChevronLeft, ChevronRight, CalendarDays, BookOpen, Download, Heart, FolderKanban, Gamepad2, CalendarRange, Archive, CalendarClock, NotebookPen } from "lucide-react";
+import { LayoutDashboard, ChevronLeft, ChevronRight, CalendarDays, BookOpen, Download, FolderKanban, Gamepad2, CalendarRange, Kanban } from "lucide-react";
 import { cn } from "../lib/utils";
 import { exportData } from "../lib/api";
 
-export type Page = "dashboard" | "week" | "goals" | "projects" | "systems" | "lifestyle" | "courses" | "schedules" | "games" | "backlog" | "planner" | "journal";
+export type Page = "dashboard" | "workspace" | "week" | "projects" | "courses" | "schedules" | "games";
 
 const NAV: { id: Page; label: string; icon: React.ComponentType<{ className?: string }> }[] = [
   { id: "dashboard", label: "Dashboard",  icon: LayoutDashboard },
+  { id: "workspace", label: "Workspace",  icon: Kanban },
   { id: "week",      label: "Week",       icon: CalendarDays },
-  { id: "goals",     label: "Goals",      icon: Target },
   { id: "projects",  label: "Projects",   icon: FolderKanban },
-  { id: "backlog",   label: "Backlog",    icon: Archive },
-  { id: "planner",   label: "Planner",    icon: CalendarClock },
-  { id: "journal",   label: "Journal",    icon: NotebookPen },
-  { id: "systems",   label: "Systems",    icon: RefreshCw },
-  { id: "lifestyle", label: "Lifestyle",  icon: Heart },
   { id: "courses",   label: "Study",      icon: BookOpen },
   { id: "schedules", label: "Schedules",  icon: CalendarRange },
   { id: "games",     label: "Games",      icon: Gamepad2 },

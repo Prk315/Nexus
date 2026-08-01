@@ -17,7 +17,7 @@ import {
 } from "../lib/api";
 import { Button } from "../components/ui/button";
 import { cn, layoutCalItems } from "../lib/utils";
-import { isDue } from "./Systems";
+import { isDue } from "../components/workspace/systemForms";
 import type { Goal, Plan, TaskWithContext, SystemEntry, WeekItems, CalBlock, Deadline, Reminder, CourseAssignment, CaSubtask, ScheduleEntry } from "../types";
 
 // ── Date helpers ──────────────────────────────────────────────────────────────

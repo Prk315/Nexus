@@ -28,7 +28,7 @@ import { Button } from "../components/ui/button";
 import { Badge } from "../components/ui/badge";
 import { PriorityDot } from "../components/PriorityDot";
 import { daysUntil, deadlineLabel, deadlineVariant, cn, layoutCalItems } from "../lib/utils";
-import { isDue } from "./Systems";
+import { isDue } from "../components/workspace/systemForms";
 import type { Goal, GoalGroup, Plan, TaskWithContext, SystemEntry, SystemSubtask, CalBlock, DailyGoals, DailyPrimaryGoal, DailySecGoal, Reminder, QuickNote, BrainEntry, CalEvent, Deadline, Agreement, CourseAssignment, ScheduleEntry, HabitWithCompletion, HabitStack, HabitSubtask, TrainingSession } from "../types";
 
 const todayDate = () => new Date().toISOString().slice(0, 10);

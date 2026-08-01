@@ -5,17 +5,12 @@ import { Sidebar, type Page } from "./components/Sidebar";
 import { SchedulesProvider } from "./contexts/SchedulesContext";
 import { BottomNav } from "./components/BottomNav";
 import { Dashboard } from "./pages/Dashboard";
-import { GoalHub } from "./pages/GoalHub";
-import { Systems } from "./pages/Systems";
 import { Week } from "./pages/Week";
 import { Courses } from "./pages/Courses";
-import { Lifestyle } from "./pages/Lifestyle";
 import { Projects } from "./pages/Projects";
 import { Games } from "./pages/Games";
 import { Schedules } from "./pages/Schedules";
-import { Backlog } from "./pages/Backlog";
-import { Planner } from "./pages/Planner";
-import { Journal } from "./pages/Journal";
+import { Workspace } from "./pages/Workspace";
 
 const IS_IOS = /iPhone|iPad|iPod/.test(navigator.userAgent);
 
@@ -53,17 +48,12 @@ function App() {
         <SchedulesProvider>
         <main className={`flex-1 overflow-y-auto${IS_IOS ? " pb-24" : ""}`}>
           {page === "dashboard" && <Dashboard />}
+          {page === "workspace" && <Workspace />}
           {page === "week"      && <Week />}
-          {page === "goals"     && <GoalHub />}
-          {page === "systems"   && <Systems />}
           {page === "projects"  && <Projects />}
-          {page === "lifestyle" && <Lifestyle />}
           {page === "courses"   && <Courses />}
           {page === "schedules" && <Schedules />}
           {page === "games"     && <Games />}
-          {page === "backlog"   && <Backlog />}
-          {page === "planner"   && <Planner />}
-          {page === "journal"   && <Journal />}
         </main>
         </SchedulesProvider>
       </div>
