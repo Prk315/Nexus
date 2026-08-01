@@ -8,6 +8,9 @@ interface NexusHeaderProps {
   appName: string;
   /** Optional content rendered centered in the header bar (e.g. a mode switch). */
   center?: React.ReactNode;
+  /** When provided, the account menu shows this address and an enabled Sign Out. */
+  userEmail?: string;
+  onSignOut?: () => void;
   onHome?: () => void;
   onAppSelect?: (app: ConnectedApp) => void;
   onHub?: () => void;
@@ -48,6 +51,8 @@ const isMobileDevice =
 export function NexusHeader({
   appName,
   center,
+  userEmail,
+  onSignOut,
   onHome,
   onAppSelect,
   onHub,
@@ -91,8 +96,8 @@ export function NexusHeader({
               sideOffset={6}
               className="z-50 min-w-[160px] rounded-lg border border-border bg-popover text-popover-foreground shadow-lg p-1 data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 data-[state=closed]:zoom-out-95 data-[state=open]:zoom-in-95"
             >
-              <DropdownMenu.Label className="px-2 py-1 text-[11px] font-medium text-muted-foreground uppercase tracking-wider">
-                Account
+              <DropdownMenu.Label className="px-2 py-1 text-[11px] font-medium text-muted-foreground tracking-wider truncate max-w-[200px]">
+                {userEmail ?? "Account"}
               </DropdownMenu.Label>
               <DropdownMenu.Separator className="my-1 h-px bg-border" />
               <DropdownMenu.Item
@@ -104,8 +109,9 @@ export function NexusHeader({
               </DropdownMenu.Item>
               <DropdownMenu.Separator className="my-1 h-px bg-border" />
               <DropdownMenu.Item
-                disabled
-                className="relative flex cursor-default select-none items-center rounded-md px-2 py-1.5 text-sm gap-2 text-destructive data-[disabled]:opacity-50 hover:bg-accent focus:bg-accent outline-none"
+                disabled={!onSignOut}
+                onSelect={onSignOut}
+                className="relative flex cursor-pointer select-none items-center rounded-md px-2 py-1.5 text-sm gap-2 text-destructive data-[disabled]:opacity-50 data-[disabled]:cursor-default hover:bg-accent focus:bg-accent outline-none"
               >
                 <LogOut className="h-3.5 w-3.5" />
                 Sign Out

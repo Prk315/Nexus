@@ -565,6 +565,8 @@ function App() {
     <div style={{ display: "flex", flexDirection: "column", height: "100vh" }}>
       <NexusHeader
         appName="Vault"
+        userEmail={user?.email}
+        onSignOut={() => signOut()}
         center={
           <div className="app-mode-toggle">
             <button className={appMode === "vault" ? "active" : ""} onClick={() => setAppMode("vault")}>Vault</button>
@@ -715,13 +717,6 @@ function App() {
               <button className={sidebarView === "graph" ? "active" : ""} onClick={() => setSidebarView("graph")}>Graph</button>
               <button className={sidebarView === "tags" ? "active" : ""} onClick={() => setSidebarView("tags")}>Tags</button>
             </div>
-            <button
-              className="vault-signout-btn"
-              title={user?.email ? `Signed in as ${user.email} — sign out` : "Sign out"}
-              onClick={() => signOut()}
-            >
-              ⏻
-            </button>
           </div>
         </div>
 
