@@ -246,6 +246,106 @@ export interface HabitCompletion {
   date: string;
 }
 
+// ── Meal planner ─────────────────────────────────────────────────────────────
+
+export type FoodSource = "usda" | "openfoodfacts" | "manual";
+
+/** Nutrient values are always per 100g/100ml — servings apply a multiplier. */
+export interface Food {
+  id: string;
+  source: FoodSource;
+  external_id: string | null;
+  name: string;
+  brand: string | null;
+  serving_qty: number;
+  serving_unit: string;
+  calories: number | null;
+  protein_g: number | null;
+  carbs_g: number | null;
+  fat_g: number | null;
+  fiber_g: number | null;
+  sugar_g: number | null;
+  sodium_mg: number | null;
+  potassium_mg: number | null;
+  calcium_mg: number | null;
+  iron_mg: number | null;
+  vitamin_c_mg: number | null;
+  vitamin_d_mcg: number | null;
+  created_at: string;
+}
+
+export type CreateFood = Omit<Food, "id" | "created_at">;
+
+export interface Meal {
+  id: string;
+  name: string;
+  description: string | null;
+  created_at: string;
+}
+
+export interface CreateMeal {
+  name: string;
+  description?: string | null;
+}
+
+export interface MealItem {
+  id: string;
+  meal_id: string;
+  food_id: string;
+  quantity: number;
+  sort_order: number;
+}
+
+export interface CreateMealItem {
+  meal_id: string;
+  food_id: string;
+  quantity: number;
+  sort_order?: number;
+}
+
+export type MealSlot = "breakfast" | "lunch" | "dinner" | "snack";
+
+export interface MealPlanEntry {
+  id: string;
+  date: string;
+  slot: MealSlot;
+  food_id: string | null;
+  meal_id: string | null;
+  quantity: number;
+  logged: boolean;
+  sort_order: number;
+  created_at: string;
+}
+
+export interface CreateMealPlanEntry {
+  date: string;
+  slot: MealSlot;
+  food_id?: string | null;
+  meal_id?: string | null;
+  quantity?: number;
+  logged?: boolean;
+  sort_order?: number;
+}
+
+export interface NutritionGoals {
+  id: string;
+  calories: number | null;
+  protein_g: number | null;
+  carbs_g: number | null;
+  fat_g: number | null;
+  fiber_g: number | null;
+  sugar_g: number | null;
+  sodium_mg: number | null;
+  potassium_mg: number | null;
+  calcium_mg: number | null;
+  iron_mg: number | null;
+  vitamin_c_mg: number | null;
+  vitamin_d_mcg: number | null;
+  updated_at: string;
+}
+
+export type UpdateNutritionGoals = Partial<Omit<NutritionGoals, "id" | "updated_at">>;
+
 export type GarminSyncStatus = "idle" | "syncing" | "success" | "error";
 
 export interface GarminSyncState {

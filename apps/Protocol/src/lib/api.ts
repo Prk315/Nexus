@@ -6,6 +6,8 @@ import type {
   SleepEntry, WorkoutPlan, WorkoutSession,
   NutritionEntry, Habit, CreateHabit, UpdateHabit, HabitCompletion,
   HabitStack, CreateHabitStack,
+  Food, CreateFood, Meal, CreateMeal, MealItem, CreateMealItem,
+  MealPlanEntry, CreateMealPlanEntry, NutritionGoals, UpdateNutritionGoals,
 } from "../store/types";
 
 // ── Sleep ────────────────────────────────────────────────────────────────────
@@ -499,5 +501,177 @@ export async function removeHabitCompletionFromCloud(habitId: string, date: stri
     .eq("habit_id", habitId)
     .eq("date", date)
     .eq("user_id", USER_ID);
+  if (error) throw new Error(error.message);
+}
+
+// ── Meal planner: Foods ─────────────────────────────────────────────────────
+
+function rowToFood(row: Record<string, unknown>): Food {
+  return {
+    id: row.id as string,
+    source: row.source as Food["source"],
+    external_id: row.external_id as string | null,
+    name: row.name as string,
+    brand: row.brand as string | null,
+    serving_qty: row.serving_qty as number,
+    serving_unit: row.serving_unit as string,
+    calories: row.calories as number | null,
+    protein_g: row.protein_g as number | null,
+    carbs_g: row.carbs_g as number | null,
+    fat_g: row.fat_g as number | null,
+    fiber_g: row.fiber_g as number | null,
+    sugar_g: row.sugar_g as number | null,
+    sodium_mg: row.sodium_mg as number | null,
+    potassium_mg: row.potassium_mg as number | null,
+    calcium_mg: row.calcium_mg as number | null,
+    iron_mg: row.iron_mg as number | null,
+    vitamin_c_mg: row.vitamin_c_mg as number | null,
+    vitamin_d_mcg: row.vitamin_d_mcg as number | null,
+    created_at: row.created_at as string,
+  };
+}
+
+export async function fetchFoodsFromCloud(): Promise<Food[]> {
+  const sb = getSupabaseClient();
+  const { data, error } = await sb
+    .from("protocol_foods")
+    .select("*")
+    .eq("user_id", USER_ID)
+    .order("name", { ascending: true });
+  if (error) throw new Error(error.message);
+  return (data ?? []).map(rowToFood);
+}
+
+export async function pushFoodToCloud(food: CreateFood & { id: string }): Promise<void> {
+  const sb = getSupabaseClient();
+  const { error } = await sb.from("protocol_foods").upsert({ ...food, user_id: USER_ID });
+  if (error) throw new Error(error.message);
+}
+
+// ── Meal planner: Meals & meal items ────────────────────────────────────────
+
+export async function fetchMealsFromCloud(): Promise<Meal[]> {
+  const sb = getSupabaseClient();
+  const { data, error } = await sb
+    .from("protocol_meals")
+    .select("*")
+    .eq("user_id", USER_ID)
+    .order("name", { ascending: true });
+  if (error) throw new Error(error.message);
+  return (data ?? []) as Meal[];
+}
+
+export async function pushMealToCloud(meal: CreateMeal & { id: string }): Promise<void> {
+  const sb = getSupabaseClient();
+  const { error } = await sb.from("protocol_meals").upsert({
+    id: meal.id,
+    user_id: USER_ID,
+    name: meal.name,
+    description: meal.description ?? null,
+  });
+  if (error) throw new Error(error.message);
+}
+
+export async function deleteMealFromCloud(id: string): Promise<void> {
+  const sb = getSupabaseClient();
+  const { error } = await sb.from("protocol_meals").delete().eq("id", id);
+  if (error) throw new Error(error.message);
+}
+
+export async function fetchMealItemsFromCloud(mealId: string): Promise<MealItem[]> {
+  const sb = getSupabaseClient();
+  const { data, error } = await sb
+    .from("protocol_meal_items")
+    .select("*")
+    .eq("meal_id", mealId)
+    .order("sort_order", { ascending: true });
+  if (error) throw new Error(error.message);
+  return (data ?? []) as MealItem[];
+}
+
+export async function pushMealItemToCloud(item: CreateMealItem & { id: string }): Promise<void> {
+  const sb = getSupabaseClient();
+  const { error } = await sb.from("protocol_meal_items").upsert({
+    id: item.id,
+    meal_id: item.meal_id,
+    food_id: item.food_id,
+    quantity: item.quantity,
+    sort_order: item.sort_order ?? 0,
+  });
+  if (error) throw new Error(error.message);
+}
+
+export async function deleteMealItemFromCloud(id: string): Promise<void> {
+  const sb = getSupabaseClient();
+  const { error } = await sb.from("protocol_meal_items").delete().eq("id", id);
+  if (error) throw new Error(error.message);
+}
+
+// ── Meal planner: Weekly plan entries ───────────────────────────────────────
+
+export async function fetchMealPlanEntriesFromCloud(startDate: string, endDate: string): Promise<MealPlanEntry[]> {
+  const sb = getSupabaseClient();
+  const { data, error } = await sb
+    .from("protocol_meal_plan_entries")
+    .select("*")
+    .eq("user_id", USER_ID)
+    .gte("date", startDate)
+    .lte("date", endDate)
+    .order("sort_order", { ascending: true });
+  if (error) throw new Error(error.message);
+  return (data ?? []) as MealPlanEntry[];
+}
+
+export async function pushMealPlanEntryToCloud(entry: CreateMealPlanEntry & { id: string }): Promise<void> {
+  const sb = getSupabaseClient();
+  const { error } = await sb.from("protocol_meal_plan_entries").upsert({
+    id: entry.id,
+    user_id: USER_ID,
+    date: entry.date,
+    slot: entry.slot,
+    food_id: entry.food_id ?? null,
+    meal_id: entry.meal_id ?? null,
+    quantity: entry.quantity ?? 1,
+    logged: entry.logged ?? false,
+    sort_order: entry.sort_order ?? 0,
+  });
+  if (error) throw new Error(error.message);
+}
+
+export async function setMealPlanEntryLoggedInCloud(id: string, logged: boolean): Promise<void> {
+  const sb = getSupabaseClient();
+  const { error } = await sb.from("protocol_meal_plan_entries").update({ logged }).eq("id", id);
+  if (error) throw new Error(error.message);
+}
+
+export async function deleteMealPlanEntryFromCloud(id: string): Promise<void> {
+  const sb = getSupabaseClient();
+  const { error } = await sb.from("protocol_meal_plan_entries").delete().eq("id", id);
+  if (error) throw new Error(error.message);
+}
+
+// ── Meal planner: Nutrition goals ───────────────────────────────────────────
+
+export async function fetchNutritionGoalsFromCloud(): Promise<NutritionGoals | null> {
+  const sb = getSupabaseClient();
+  const { data, error } = await sb
+    .from("protocol_nutrition_goals")
+    .select("*")
+    .eq("user_id", USER_ID)
+    .order("updated_at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  if (error) throw new Error(error.message);
+  return data as NutritionGoals | null;
+}
+
+export async function upsertNutritionGoalsInCloud(id: string, goals: UpdateNutritionGoals): Promise<void> {
+  const sb = getSupabaseClient();
+  const { error } = await sb.from("protocol_nutrition_goals").upsert({
+    id,
+    user_id: USER_ID,
+    ...goals,
+    updated_at: new Date().toISOString(),
+  });
   if (error) throw new Error(error.message);
 }

@@ -11,6 +11,8 @@ import type {
   Exercise, NutritionEntry, RunningPlan, RunningSession,
   SleepEntry, WorkoutPlan, WorkoutSession,
   Habit, CreateHabit, UpdateHabit, HabitCompletion, HabitStack, CreateHabitStack,
+  Food, CreateFood, Meal, CreateMeal, MealItem, CreateMealItem,
+  MealPlanEntry, CreateMealPlanEntry, NutritionGoals, UpdateNutritionGoals,
 } from "../store/types";
 import {
   fetchSleepFromCloud, pushSleepToCloud, deleteSleepFromCloud,
@@ -26,6 +28,11 @@ import {
   fetchHabitsFromCloud, pushHabitToCloud, updateHabitInCloud, archiveHabitInCloud,
   fetchHabitCompletionsFromCloud, addHabitCompletionToCloud, removeHabitCompletionFromCloud,
   fetchHabitStacksFromCloud, pushHabitStackToCloud, deleteHabitStackFromCloud,
+  fetchFoodsFromCloud, pushFoodToCloud,
+  fetchMealsFromCloud, pushMealToCloud, deleteMealFromCloud,
+  fetchMealItemsFromCloud, pushMealItemToCloud, deleteMealItemFromCloud,
+  fetchMealPlanEntriesFromCloud, pushMealPlanEntryToCloud, setMealPlanEntryLoggedInCloud, deleteMealPlanEntryFromCloud,
+  fetchNutritionGoalsFromCloud, upsertNutritionGoalsInCloud,
 } from "./api";
 
 // ── Sleep ─────────────────────────────────────────────────────────────────────
@@ -269,3 +276,81 @@ export async function createHabitStack(stack: CreateHabitStack): Promise<HabitSt
 }
 
 export const deleteHabitStack = (id: string): Promise<void> => deleteHabitStackFromCloud(id);
+
+// ── Meal planner: Foods ──────────────────────────────────────────────────────
+
+export const getFoods = (): Promise<Food[]> => fetchFoodsFromCloud();
+
+export async function createFood(food: CreateFood): Promise<Food> {
+  const id = crypto.randomUUID();
+  await pushFoodToCloud({ ...food, id });
+  return { id, ...food, created_at: new Date().toISOString() };
+}
+
+// ── Meal planner: Meals & meal items ────────────────────────────────────────
+
+export const getMeals = (): Promise<Meal[]> => fetchMealsFromCloud();
+
+export async function createMeal(meal: CreateMeal): Promise<Meal> {
+  const id = crypto.randomUUID();
+  await pushMealToCloud({ ...meal, id });
+  return { id, name: meal.name, description: meal.description ?? null, created_at: new Date().toISOString() };
+}
+
+export const deleteMeal = (id: string): Promise<void> => deleteMealFromCloud(id);
+
+export const getMealItems = (mealId: string): Promise<MealItem[]> => fetchMealItemsFromCloud(mealId);
+
+export async function addMealItem(item: CreateMealItem): Promise<MealItem> {
+  const id = crypto.randomUUID();
+  await pushMealItemToCloud({ ...item, id });
+  return { id, meal_id: item.meal_id, food_id: item.food_id, quantity: item.quantity, sort_order: item.sort_order ?? 0 };
+}
+
+export const removeMealItem = (id: string): Promise<void> => deleteMealItemFromCloud(id);
+
+// ── Meal planner: Weekly plan entries ───────────────────────────────────────
+
+export const getMealPlanEntries = (startDate: string, endDate: string): Promise<MealPlanEntry[]> =>
+  fetchMealPlanEntriesFromCloud(startDate, endDate);
+
+export async function addMealPlanEntry(entry: CreateMealPlanEntry): Promise<MealPlanEntry> {
+  const id = crypto.randomUUID();
+  await pushMealPlanEntryToCloud({ ...entry, id });
+  return {
+    id,
+    date: entry.date,
+    slot: entry.slot,
+    food_id: entry.food_id ?? null,
+    meal_id: entry.meal_id ?? null,
+    quantity: entry.quantity ?? 1,
+    logged: entry.logged ?? false,
+    sort_order: entry.sort_order ?? 0,
+    created_at: new Date().toISOString(),
+  };
+}
+
+export const setMealPlanEntryLogged = (id: string, logged: boolean): Promise<void> =>
+  setMealPlanEntryLoggedInCloud(id, logged);
+
+export const removeMealPlanEntry = (id: string): Promise<void> => deleteMealPlanEntryFromCloud(id);
+
+// ── Meal planner: Nutrition goals ───────────────────────────────────────────
+
+export const getNutritionGoals = (): Promise<NutritionGoals | null> => fetchNutritionGoalsFromCloud();
+
+export async function saveNutritionGoals(
+  current: NutritionGoals | null,
+  goals: UpdateNutritionGoals,
+): Promise<NutritionGoals> {
+  const id = current?.id ?? crypto.randomUUID();
+  await upsertNutritionGoalsInCloud(id, goals);
+  return {
+    calories: null, protein_g: null, carbs_g: null, fat_g: null, fiber_g: null, sugar_g: null,
+    sodium_mg: null, potassium_mg: null, calcium_mg: null, iron_mg: null, vitamin_c_mg: null, vitamin_d_mcg: null,
+    ...current,
+    ...goals,
+    id,
+    updated_at: new Date().toISOString(),
+  };
+}
