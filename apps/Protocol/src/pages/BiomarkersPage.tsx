@@ -47,17 +47,18 @@ const MODULE_STYLE: React.CSSProperties = {
 };
 
 function ModuleHeader({
-  icon, title, color, children,
+  icon, title, color, tint, children,
 }: {
   icon: React.ReactNode;
   title: string;
   color: string;
+  tint: string;
   children: React.ReactNode;
 }) {
   return (
     <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", flexWrap: "wrap", gap: 16 }}>
       <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-        <div style={{ width: 32, height: 32, borderRadius: 8, background: color + "1f", display: "flex", alignItems: "center", justifyContent: "center", color, flexShrink: 0 }}>
+        <div style={{ width: 32, height: 32, borderRadius: 8, background: tint, display: "flex", alignItems: "center", justifyContent: "center", color, flexShrink: 0 }}>
           {icon}
         </div>
         <span style={{ fontSize: 18, fontWeight: 700, color: "var(--text)" }}>{title}</span>
@@ -114,7 +115,7 @@ function SleepModule() {
 
   return (
     <div style={MODULE_STYLE}>
-      <ModuleHeader icon={<Moon size={16} />} title="Sleep" color="var(--series-sleep)">
+      <ModuleHeader icon={<Moon size={16} />} title="Sleep" color="var(--series-sleep)" tint="var(--series-sleep-track)">
         <StatTile label="Avg quality (7d)" value={avgQuality != null ? `${avgQuality.toFixed(1)}` : "—"} sub="/ 10" />
         <StatTile label="Avg duration (7d)" value={avgDuration != null ? formatMinutes(avgDuration) : "—"} sub="per night" />
         <StatTile label="Nights logged (30d)" value={String(recent30.length)} />
@@ -175,7 +176,7 @@ function NutritionModule() {
 
   return (
     <div style={MODULE_STYLE}>
-      <ModuleHeader icon={<Apple size={16} />} title="Nutrition" color="var(--series-nutrition)">
+      <ModuleHeader icon={<Apple size={16} />} title="Nutrition" color="var(--series-nutrition)" tint="var(--series-nutrition-track)">
         <StatTile label="Calories today" value={todayEntries.length ? String(sumToday("calories")) : "—"} />
         <StatTile label="Protein today" value={todayEntries.length ? `${sumToday("protein_g")}g` : "—"} />
         <StatTile label="Avg calories (7d)" value={avgCalories != null ? String(Math.round(avgCalories)) : "—"} sub="per day" />
@@ -224,7 +225,7 @@ function BodyModule() {
 
   return (
     <div style={MODULE_STYLE}>
-      <ModuleHeader icon={<Activity size={16} />} title="Body Metrics" color="var(--series-body)">
+      <ModuleHeader icon={<Activity size={16} />} title="Body Metrics" color="var(--series-body)" tint="var(--series-body-track)">
         <StatTile label="Weight (latest)" value={latestWeight != null ? latestWeight.toFixed(1) : "—"} sub="kg" />
         <StatTile label="HRV (latest)" value={latestHRV != null ? String(latestHRV) : "—"} sub="ms" />
         <StatTile label="Resting HR (latest)" value={latestRHR != null ? String(latestRHR) : "—"} sub="bpm" />

@@ -40,6 +40,11 @@
   --macro-protein: #e87ba4;
   --macro-carbs: #008300;
   --macro-fat: #e34948;
+
+  /* Accent at ~13% alpha — tinted icon/badge backgrounds */
+  --accent-tint: #05966922;
+  /* Accent at ~27% alpha — tinted borders */
+  --accent-border-tint: #05966944;
 }
 
 :root[data-theme="dark"] {
@@ -84,4 +89,9 @@
   --macro-protein: #d55181;
   --macro-carbs: #008300;
   --macro-fat: #e66767;
+
+  /* Accent at ~13% alpha — tinted icon/badge backgrounds */
+  --accent-tint: #10b98122;
+  /* Accent at ~27% alpha — tinted borders */
+  --accent-border-tint: #10b98144;
 }

@@ -1,4 +1,15 @@
 import { Brain, PersonStanding, Sparkles, Droplet, BookOpen, Footprints, Moon, NotebookPen, CircleDot, type LucideIcon } from "lucide-react";
+import type { HabitCompletion } from "../../store/types";
+
+/** Share of habits completed on each date, for heatmap coloring. */
+export function computeFractionByDate(completions: HabitCompletion[], totalHabits: number): Map<string, number> {
+  const m = new Map<string, number>();
+  if (totalHabits === 0) return m;
+  const countByDate = new Map<string, number>();
+  for (const c of completions) countByDate.set(c.date, (countByDate.get(c.date) ?? 0) + 1);
+  for (const [date, count] of countByDate) m.set(date, Math.min(1, count / totalHabits));
+  return m;
+}
 
 /** Infer a fitting icon from a habit's name — a light touch, not a picker UI. */
 export function habitIcon(name: string): LucideIcon {

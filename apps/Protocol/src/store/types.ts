@@ -189,9 +189,29 @@ export interface CreateRunningSession {
   notes?: string | null;
 }
 
+export interface HabitStack {
+  id: string;
+  name: string;
+  sort_order: number;
+  created_at: string;
+}
+
+export interface CreateHabitStack {
+  name: string;
+  sort_order?: number;
+}
+
+/** Days of week a habit repeats on, 0=Monday..6=Sunday. `null` means every day. */
+export type RepeatDays = number[] | null;
+
 export interface Habit {
   id: string;
   name: string;
+  description: string | null;
+  scheduled_time: string | null;
+  duration_min: number | null;
+  repeat_days: RepeatDays;
+  stack_id: string | null;
   target_per_week: number;
   sort_order: number;
   archived: boolean;
@@ -200,7 +220,23 @@ export interface Habit {
 
 export interface CreateHabit {
   name: string;
+  description?: string | null;
+  scheduled_time?: string | null;
+  duration_min?: number | null;
+  repeat_days?: RepeatDays;
+  stack_id?: string | null;
   target_per_week?: number;
+  sort_order?: number;
+}
+
+export interface UpdateHabit {
+  id: string;
+  name?: string;
+  description?: string | null;
+  scheduled_time?: string | null;
+  duration_min?: number | null;
+  repeat_days?: RepeatDays;
+  stack_id?: string | null;
   sort_order?: number;
 }
 

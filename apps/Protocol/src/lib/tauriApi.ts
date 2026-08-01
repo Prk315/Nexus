@@ -10,7 +10,7 @@ import type {
   CreateRunningPlan, CreateRunningSession,
   Exercise, NutritionEntry, RunningPlan, RunningSession,
   SleepEntry, WorkoutPlan, WorkoutSession,
-  Habit, CreateHabit, HabitCompletion,
+  Habit, CreateHabit, UpdateHabit, HabitCompletion, HabitStack, CreateHabitStack,
 } from "../store/types";
 import {
   fetchSleepFromCloud, pushSleepToCloud, deleteSleepFromCloud,
@@ -23,8 +23,9 @@ import {
   fetchRunningPlansFromCloud, pushRunningPlanToCloud, deleteRunningPlanFromCloud,
   fetchRunningSessionsFromCloud, pushRunningSessionToCloud,
   completeRunningSessionInCloud, deleteRunningSessionFromCloud,
-  fetchHabitsFromCloud, pushHabitToCloud, archiveHabitInCloud,
+  fetchHabitsFromCloud, pushHabitToCloud, updateHabitInCloud, archiveHabitInCloud,
   fetchHabitCompletionsFromCloud, addHabitCompletionToCloud, removeHabitCompletionFromCloud,
+  fetchHabitStacksFromCloud, pushHabitStackToCloud, deleteHabitStackFromCloud,
 } from "./api";
 
 // ── Sleep ─────────────────────────────────────────────────────────────────────
@@ -227,12 +228,19 @@ export async function createHabit(habit: CreateHabit): Promise<Habit> {
   return {
     id,
     name: habit.name,
+    description: habit.description ?? null,
+    scheduled_time: habit.scheduled_time ?? null,
+    duration_min: habit.duration_min ?? null,
+    repeat_days: habit.repeat_days ?? null,
+    stack_id: habit.stack_id ?? null,
     target_per_week: habit.target_per_week ?? 7,
     sort_order: habit.sort_order ?? 0,
     archived: false,
     created_at: new Date().toISOString(),
   };
 }
+
+export const updateHabit = (habit: UpdateHabit): Promise<void> => updateHabitInCloud(habit);
 
 export const archiveHabit = (id: string): Promise<void> => archiveHabitInCloud(id);
 
@@ -244,3 +252,20 @@ export const addHabitCompletion = (habitId: string, date: string): Promise<Habit
 
 export const removeHabitCompletion = (habitId: string, date: string): Promise<void> =>
   removeHabitCompletionFromCloud(habitId, date);
+
+// ── Habit stacks ─────────────────────────────────────────────────────────────
+
+export const getHabitStacks = (): Promise<HabitStack[]> => fetchHabitStacksFromCloud();
+
+export async function createHabitStack(stack: CreateHabitStack): Promise<HabitStack> {
+  const id = crypto.randomUUID();
+  await pushHabitStackToCloud({ ...stack, id });
+  return {
+    id,
+    name: stack.name,
+    sort_order: stack.sort_order ?? 0,
+    created_at: new Date().toISOString(),
+  };
+}
+
+export const deleteHabitStack = (id: string): Promise<void> => deleteHabitStackFromCloud(id);

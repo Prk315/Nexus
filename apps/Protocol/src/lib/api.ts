@@ -4,7 +4,8 @@ import type {
   CreateNutritionEntry, CreateSleepEntry,
   Exercise, RunningPlan, RunningSession,
   SleepEntry, WorkoutPlan, WorkoutSession,
-  NutritionEntry, Habit, CreateHabit, HabitCompletion,
+  NutritionEntry, Habit, CreateHabit, UpdateHabit, HabitCompletion,
+  HabitStack, CreateHabitStack,
 } from "../store/types";
 
 // ── Sleep ────────────────────────────────────────────────────────────────────
@@ -375,6 +376,11 @@ function rowToHabit(row: Record<string, unknown>): Habit {
   return {
     id: row.id as string,
     name: row.name as string,
+    description: row.description as string | null,
+    scheduled_time: row.scheduled_time as string | null,
+    duration_min: row.duration_min as number | null,
+    repeat_days: row.repeat_days as number[] | null,
+    stack_id: row.stack_id as string | null,
     target_per_week: row.target_per_week as number,
     sort_order: row.sort_order as number,
     archived: row.archived as boolean,
@@ -400,15 +406,66 @@ export async function pushHabitToCloud(habit: CreateHabit & { id: string }): Pro
     id: habit.id,
     user_id: USER_ID,
     name: habit.name,
+    description: habit.description ?? null,
+    scheduled_time: habit.scheduled_time ?? null,
+    duration_min: habit.duration_min ?? null,
+    repeat_days: habit.repeat_days ?? null,
+    stack_id: habit.stack_id ?? null,
     target_per_week: habit.target_per_week ?? 7,
     sort_order: habit.sort_order ?? 0,
   });
   if (error) throw new Error(error.message);
 }
 
+export async function updateHabitInCloud(habit: UpdateHabit): Promise<void> {
+  const sb = getSupabaseClient();
+  const { id, ...fields } = habit;
+  const { error } = await sb.from("protocol_habits").update(fields).eq("id", id);
+  if (error) throw new Error(error.message);
+}
+
 export async function archiveHabitInCloud(id: string): Promise<void> {
   const sb = getSupabaseClient();
   const { error } = await sb.from("protocol_habits").update({ archived: true }).eq("id", id);
+  if (error) throw new Error(error.message);
+}
+
+// ── Habit stacks ─────────────────────────────────────────────────────────────
+
+function rowToHabitStack(row: Record<string, unknown>): HabitStack {
+  return {
+    id: row.id as string,
+    name: row.name as string,
+    sort_order: row.sort_order as number,
+    created_at: row.created_at as string,
+  };
+}
+
+export async function fetchHabitStacksFromCloud(): Promise<HabitStack[]> {
+  const sb = getSupabaseClient();
+  const { data, error } = await sb
+    .from("protocol_habit_stacks")
+    .select("*")
+    .eq("user_id", USER_ID)
+    .order("sort_order", { ascending: true });
+  if (error) throw new Error(error.message);
+  return (data ?? []).map(rowToHabitStack);
+}
+
+export async function pushHabitStackToCloud(stack: CreateHabitStack & { id: string }): Promise<void> {
+  const sb = getSupabaseClient();
+  const { error } = await sb.from("protocol_habit_stacks").upsert({
+    id: stack.id,
+    user_id: USER_ID,
+    name: stack.name,
+    sort_order: stack.sort_order ?? 0,
+  });
+  if (error) throw new Error(error.message);
+}
+
+export async function deleteHabitStackFromCloud(id: string): Promise<void> {
+  const sb = getSupabaseClient();
+  const { error } = await sb.from("protocol_habit_stacks").delete().eq("id", id);
   if (error) throw new Error(error.message);
 }
 

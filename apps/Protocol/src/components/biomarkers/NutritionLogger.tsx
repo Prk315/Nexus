@@ -189,7 +189,7 @@ export default function NutritionLogger() {
                       fontSize: 12,
                       fontWeight: 600,
                       color: "var(--accent)",
-                      background: "var(--accent)22",
+                      background: "var(--accent-tint)",
                       borderRadius: "var(--radius-sm)",
                       padding: "1px 8px",
                       textTransform: "capitalize",
