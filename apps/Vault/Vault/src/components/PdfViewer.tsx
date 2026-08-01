@@ -91,6 +91,43 @@ function strokesBoundingBox(stks: Stroke[]): LassoRect | null {
   return { x1, y1, x2, y2 };
 }
 
+// Reconstruct readable text from a run of pdf.js text items. Joining items with
+// a space (the naive approach) shatters words on PDFs that emit per-fragment
+// items ("t i t l e", "netW orth"). Instead use item geometry: concatenate items
+// that touch (same word), insert a space only on a real horizontal gap, and
+// de-hyphenate words split across a line break.
+function reconstructText(items: TextItem[]): string {
+  let out = "";
+  let prev: TextItem | null = null;
+  for (const it of items) {
+    if (!it.str) {
+      // Empty item / end-of-line marker → treat as a soft line break.
+      if (it.hasEOL && out && !/[\s-]$/.test(out)) out += " ";
+      continue;
+    }
+    if (prev) {
+      const fontH = Math.abs(prev.transform[3]) || Math.abs(it.transform[3]) || 1;
+      const sameLine = Math.abs(it.transform[5] - prev.transform[5]) < fontH * 0.5;
+      if (!sameLine) {
+        if (out.endsWith("-")) out = out.slice(0, -1);      // join hyphenated wrap
+        else if (!/\s$/.test(out)) out += " ";
+      } else {
+        const gap = it.transform[4] - (prev.transform[4] + prev.width);
+        if (gap > fontH * 0.25 && !/\s$/.test(out)) out += " ";
+      }
+    }
+    out += it.str;
+    prev = it;
+  }
+  out = out.replace(/[ \t]{2,}/g, " ").trim();
+  // Some PDFs (esp. OCR'd ones) emit spurious spaces between glyphs, shattering
+  // words into single letters ("t i t l e"). Collapse runs of 3+ single letters
+  // back into one token — real text almost never has 3+ single-letter words in a
+  // row, so this is safe and fixes the worst of the fragmentation.
+  out = out.replace(/\b[A-Za-z](?: [A-Za-z]){2,}\b/g, (m) => m.replace(/ /g, ""));
+  return out;
+}
+
 // ─── Constants ───────────────────────────────────────────────────────────────
 
 const ZOOM_STEP = 0.25;
@@ -645,8 +682,7 @@ const PdfPage = memo(function PdfPage({
         const stroke = buildHighlightStroke(s, eIdx);
         if (stroke) {
           const lo = Math.min(s, eIdx), hi = Math.max(s, eIdx);
-          const text = textItems.slice(lo, hi + 1)
-            .map(it => it.str).join(" ").replace(/\s+/g, " ").trim();
+          const text = reconstructText(textItems.slice(lo, hi + 1));
           onMarkHighlight(pageIdx, stroke, text);
         } else {
           redraw(canvas, strokesRef.current, selectedStrokesRef.current, null);
