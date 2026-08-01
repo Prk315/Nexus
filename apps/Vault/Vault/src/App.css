@@ -5913,3 +5913,37 @@ body {
   line-height: 1;
 }
 .vault-signout-btn:hover { background: var(--destructive-bg); color: var(--destructive); border-color: var(--destructive-border); }
+
+/* ── Home dashboard: Folders / Concept Map toggle + embedded concept map ──── */
+.home-view-toggle {
+  display: inline-flex;
+  gap: 2px;
+  background: var(--bg-raised);
+  border: 1px solid var(--border-base);
+  border-radius: 9px;
+  padding: 3px;
+}
+.home-view-toggle button {
+  border: 0;
+  background: transparent;
+  color: var(--fg-muted);
+  font-size: 12.5px;
+  font-weight: 600;
+  padding: 5px 13px;
+  border-radius: 7px;
+  cursor: pointer;
+}
+.home-view-toggle button:hover { color: var(--fg-main); }
+.home-view-toggle button.active {
+  background: var(--bg-base);
+  color: var(--fg-main);
+  box-shadow: var(--shadow-xs);
+}
+.home-conceptmap {
+  flex: 1;
+  min-height: 520px;
+  width: 100%;
+  border: 1px solid var(--border-base);
+  border-radius: 14px;
+  background: #c6c5cb;
+}

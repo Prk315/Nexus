@@ -10,6 +10,7 @@ interface HomePageProps {
 export function HomePage({ graph, onSelectNode }: HomePageProps) {
   const [search, setSearch]       = useState("");
   const [openFolder, setOpenFolder] = useState<string | null>(null);
+  const [view, setView]           = useState<"folders" | "concept">("folders");
 
   const q = search.toLowerCase().trim();
 
@@ -78,10 +79,14 @@ export function HomePage({ graph, onSelectNode }: HomePageProps) {
 
         </aside>
 
-        {/* ── Main folder overview ── */}
+        {/* ── Main area: folder overview or embedded concept map ── */}
         <main className="home-main">
           <div className="home-main-header">
-            {openFolder ? (
+            <div className="home-view-toggle">
+              <button className={view === "folders" ? "active" : ""} onClick={() => setView("folders")}>Folders</button>
+              <button className={view === "concept" ? "active" : ""} onClick={() => setView("concept")}>Concept Map</button>
+            </div>
+            {view === "folders" && (openFolder ? (
               <div className="home-folder-breadcrumb">
                 <button className="home-folder-back" onClick={() => setOpenFolder(null)}>‹ Folders</button>
                 <span className="home-folder-breadcrumb-sep">/</span>
@@ -89,15 +94,24 @@ export function HomePage({ graph, onSelectNode }: HomePageProps) {
               </div>
             ) : (
               <span className="home-main-heading">Folders</span>
+            ))}
+            {view === "folders" && (
+              <input
+                className="home-search home-main-search"
+                placeholder="Search…"
+                value={search}
+                onChange={e => setSearch(e.target.value)}
+              />
             )}
-            <input
-              className="home-search home-main-search"
-              placeholder="Search…"
-              value={search}
-              onChange={e => setSearch(e.target.value)}
-            />
           </div>
 
+          {view === "concept" ? (
+            <iframe
+              src="/conceptmap.html"
+              title="Concept Map"
+              className="home-conceptmap"
+            />
+          ) : (
           <div className="home-notes-grid">
             {openFolder ? (
               folderChildren.length === 0
@@ -129,6 +143,7 @@ export function HomePage({ graph, onSelectNode }: HomePageProps) {
                 ))
             )}
           </div>
+          )}
         </main>
 
       </div>
