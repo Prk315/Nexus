@@ -4,6 +4,7 @@ export interface SleepEntry {
   id: string;
   date: string;
   duration_min: number;
+  /** 0-10 scale (manual entry, Oura import, and all UI/scoring agree on this — importers must normalize to it). */
   quality_score: number;
   deep_sleep_min: number | null;
   rem_sleep_min: number | null;
@@ -20,6 +21,7 @@ export interface SleepEntry {
 export interface CreateSleepEntry {
   date: string;
   duration_min: number;
+  /** 0-10 scale (manual entry, Oura import, and all UI/scoring agree on this — importers must normalize to it). */
   quality_score: number;
   deep_sleep_min?: number | null;
   rem_sleep_min?: number | null;

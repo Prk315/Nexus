@@ -37,7 +37,9 @@ function mapSleepRaw(raw: GarminSleepRaw): CreateSleepEntry & { id: string } {
     id: crypto.randomUUID(),
     date: raw.date,
     duration_min: raw.duration_min,
-    quality_score: raw.quality_score,
+    // Garmin's sleep score is 0-100 natively; the app's quality_score column
+    // is 0-10 everywhere else (manual entry, Oura import, all UI/scoring).
+    quality_score: Math.round(raw.quality_score) / 10,
     deep_sleep_min: raw.deep_sleep_min,
     rem_sleep_min: raw.rem_sleep_min,
     light_sleep_min: raw.light_sleep_min,
