@@ -6,6 +6,8 @@ import type { ConnectedApp } from "../types";
 
 interface NexusHeaderProps {
   appName: string;
+  /** Optional content rendered centered in the header bar (e.g. a mode switch). */
+  center?: React.ReactNode;
   onHome?: () => void;
   onAppSelect?: (app: ConnectedApp) => void;
   onHub?: () => void;
@@ -45,6 +47,7 @@ const isMobileDevice =
 
 export function NexusHeader({
   appName,
+  center,
   onHome,
   onAppSelect,
   onHub,
@@ -58,10 +61,16 @@ export function NexusHeader({
 
   return (
     <header
-      className="h-11 border-b border-border bg-background/95 backdrop-blur-sm flex items-center px-3 gap-2 shrink-0"
+      className="relative h-11 border-b border-border bg-background/95 backdrop-blur-sm flex items-center px-3 gap-2 shrink-0"
       // Allow dragging the window by the header on desktop only
       data-tauri-drag-region={isMobileDevice ? undefined : ""}
     >
+      {/* ── Center slot (e.g. app mode switch) ──────────────────── */}
+      {center && (
+        <div className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 z-10">
+          {center}
+        </div>
+      )}
       {/* ── Left: avatar + app name ──────────────────────────────── */}
       <div className="flex items-center gap-2 min-w-0">
 

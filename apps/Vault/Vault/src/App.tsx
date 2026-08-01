@@ -563,13 +563,15 @@ function App() {
 
   return (
     <div style={{ display: "flex", flexDirection: "column", height: "100vh" }}>
-      <NexusHeader appName="Vault" />
-      <div className="app-mode-bar">
-        <div className="app-mode-toggle">
-          <button className={appMode === "vault" ? "active" : ""} onClick={() => setAppMode("vault")}>Vault</button>
-          <button className={appMode === "learn" ? "active" : ""} onClick={() => { setLearnMounted(true); setAppMode("learn"); }}>Learn &amp; Retain</button>
-        </div>
-      </div>
+      <NexusHeader
+        appName="Vault"
+        center={
+          <div className="app-mode-toggle">
+            <button className={appMode === "vault" ? "active" : ""} onClick={() => setAppMode("vault")}>Vault</button>
+            <button className={appMode === "learn" ? "active" : ""} onClick={() => { setLearnMounted(true); setAppMode("learn"); }}>Learn &amp; Retain</button>
+          </div>
+        }
+      />
     <div className="app" style={{ flex: 1, minHeight: 0, height: "auto", display: appMode === "vault" ? undefined : "none" }}>
       {fullGraph && (
         <div className="fullgraph-overlay">

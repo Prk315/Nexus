@@ -5948,31 +5948,23 @@ body {
   background: #c6c5cb;
 }
 
-/* ── Top-level dual mode: Vault ⇄ Learn & Retain ──────────────────────────── */
-.app-mode-bar {
-  flex-shrink: 0;
-  display: flex;
-  justify-content: center;
-  padding: 7px 12px;
-  border-bottom: 1px solid var(--border-faint);
-  background: var(--bg-base);
-}
+/* ── Top-level dual mode toggle (lives centered in the header) ─────────────── */
 .app-mode-toggle {
   display: inline-flex;
   gap: 2px;
   background: var(--bg-raised);
   border: 1px solid var(--border-base);
-  border-radius: 10px;
-  padding: 3px;
+  border-radius: 9px;
+  padding: 2px;
 }
 .app-mode-toggle button {
   border: 0;
   background: transparent;
   color: var(--fg-muted);
-  font-size: 13px;
+  font-size: 12px;
   font-weight: 600;
-  padding: 6px 20px;
-  border-radius: 8px;
+  padding: 4px 14px;
+  border-radius: 7px;
   cursor: pointer;
   transition: background var(--duration) var(--ease), color var(--duration) var(--ease);
 }
