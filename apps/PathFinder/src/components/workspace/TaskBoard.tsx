@@ -11,6 +11,7 @@ import { cn } from "../../lib/utils";
 import type { TaskWithContext, Plan, Priority } from "../../types";
 import { TaskRow } from "./TaskRow";
 import { EditTaskForm, AddTaskForm, ReschedulePopover, type TaskFormState } from "./TaskDialogs";
+import { StudySection } from "./StudySection";
 
 type GroupMode = "time" | "plan" | "goal" | "priority" | "status";
 
@@ -295,6 +296,8 @@ export function TaskBoard({ selectedPlanId, selectedGoalId, reloadSignal }: {
             </div>
           </section>
         ))}
+
+        <StudySection />
       </div>
 
       {/* Dialogs */}
