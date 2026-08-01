@@ -100,6 +100,7 @@ function mapTaskWithContext(r: any, plansMap?: Map<number, any>): TaskWithContex
     due_date: r.due_date,
     created_at: r.created_at,
     time_estimate: r.time_estimate,
+    kanban_status: r.kanban_status ?? "backlog",
   };
 }
 
@@ -627,6 +628,29 @@ export const setTaskKanbanStatus = async (id: number, status: string): Promise<T
     .single();
   if (error) err(error);
   return mapTask(data!);
+};
+
+// Move a task to a different plan (null = unassigned). Goal linkage follows the plan.
+export const moveTask = async (id: number, planId: number | null): Promise<Task> => {
+  const { data, error } = await supabase
+    .from("pf_tasks")
+    .update({ plan_id: planId })
+    .eq("id", id)
+    .select()
+    .single();
+  if (error) err(error);
+  return mapTask(data!);
+};
+
+// Persist a new ordering: assigns sort_order = position for each id in the list.
+export const reorderTasks = async (orderedIds: number[]): Promise<void> => {
+  const results = await Promise.all(
+    orderedIds.map((id, index) =>
+      supabase.from("pf_tasks").update({ sort_order: index }).eq("id", id),
+    ),
+  );
+  const failed = results.find((r) => r.error);
+  if (failed?.error) err(failed.error);
 };
 
 // ═══════════════════════════════════════════════════════════════════════════

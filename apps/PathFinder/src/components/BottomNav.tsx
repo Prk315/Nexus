@@ -10,6 +10,7 @@ const PRIMARY_TABS: { page: Page; label: string; icon: ReactNode }[] = [
 ];
 
 const MORE_PAGES: { page: Page; label: string }[] = [
+  { page: "workspace", label: "Workspace" },
   { page: "backlog",   label: "Backlog" },
   { page: "planner",   label: "Planner" },
   { page: "systems",   label: "Systems" },

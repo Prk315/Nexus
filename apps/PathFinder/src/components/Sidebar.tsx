@@ -1,11 +1,12 @@
-import { LayoutDashboard, Target, RefreshCw, ChevronLeft, ChevronRight, CalendarDays, BookOpen, Download, FolderKanban, Gamepad2, CalendarRange, Archive, CalendarClock } from "lucide-react";
+import { LayoutDashboard, Target, RefreshCw, ChevronLeft, ChevronRight, CalendarDays, BookOpen, Download, FolderKanban, Gamepad2, CalendarRange, Archive, CalendarClock, Kanban } from "lucide-react";
 import { cn } from "../lib/utils";
 import { exportData } from "../lib/api";
 
-export type Page = "dashboard" | "week" | "goals" | "projects" | "systems" | "courses" | "schedules" | "games" | "backlog" | "planner";
+export type Page = "dashboard" | "workspace" | "week" | "goals" | "projects" | "systems" | "courses" | "schedules" | "games" | "backlog" | "planner";
 
 const NAV: { id: Page; label: string; icon: React.ComponentType<{ className?: string }> }[] = [
   { id: "dashboard", label: "Dashboard",  icon: LayoutDashboard },
+  { id: "workspace", label: "Workspace",  icon: Kanban },
   { id: "week",      label: "Week",       icon: CalendarDays },
   { id: "goals",     label: "Goals",      icon: Target },
   { id: "projects",  label: "Projects",   icon: FolderKanban },

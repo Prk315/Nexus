@@ -14,6 +14,7 @@ import { Games } from "./pages/Games";
 import { Schedules } from "./pages/Schedules";
 import { Backlog } from "./pages/Backlog";
 import { Planner } from "./pages/Planner";
+import { Workspace } from "./pages/Workspace";
 
 const IS_IOS = /iPhone|iPad|iPod/.test(navigator.userAgent);
 
@@ -51,6 +52,7 @@ function App() {
         <SchedulesProvider>
         <main className={`flex-1 overflow-y-auto${IS_IOS ? " pb-24" : ""}`}>
           {page === "dashboard" && <Dashboard />}
+          {page === "workspace" && <Workspace />}
           {page === "week"      && <Week />}
           {page === "goals"     && <GoalHub />}
           {page === "systems"   && <Systems />}

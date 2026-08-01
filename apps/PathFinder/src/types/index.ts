@@ -79,6 +79,7 @@ export interface TaskWithContext {
   due_date: string | null;
   created_at: string;
   time_estimate: number | null;
+  kanban_status?: string;
 }
 
 export interface SystemSubtask {
