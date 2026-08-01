@@ -44,9 +44,10 @@ function byDueThenPriority(a: TaskWithContext, b: TaskWithContext) {
   return PRIORITY_RANK[a.priority] - PRIORITY_RANK[b.priority];
 }
 
-export function TaskBoard({ selectedPlanId, selectedGoalId }: {
+export function TaskBoard({ selectedPlanId, selectedGoalId, reloadSignal }: {
   selectedPlanId?: number | null;
   selectedGoalId?: number | null;
+  reloadSignal?: number;
 }) {
   const [tasks, setTasks] = useState<TaskWithContext[]>([]);
   const [plans, setPlans] = useState<Plan[]>([]);
@@ -63,7 +64,7 @@ export function TaskBoard({ selectedPlanId, selectedGoalId }: {
     () => Promise.all([getAllTasks(), getPlans()]).then(([t, p]) => { setTasks(t); setPlans(p); }),
     [],
   );
-  useEffect(() => { load(); }, [load]);
+  useEffect(() => { load(); }, [load, reloadSignal]);
 
   // Plans that hold tasks (exclude schedule/course containers).
   const taskPlans = useMemo(() => plans.filter((p) => !p.is_schedule && !p.is_course), [plans]);
