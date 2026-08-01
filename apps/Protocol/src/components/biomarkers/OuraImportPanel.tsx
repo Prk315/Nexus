@@ -86,8 +86,8 @@ export default function OuraImportPanel({ onImported }: Props) {
           style={{
             display: "inline-flex", alignItems: "center", gap: 6,
             padding: "6px 12px",
-            background: "var(--accent)22", color: "var(--accent)",
-            border: "1px solid var(--accent)44",
+            background: "var(--accent-tint)", color: "var(--accent)",
+            border: "1px solid var(--accent-border-tint)",
             borderRadius: "var(--radius-sm)",
             fontSize: 13, fontWeight: 600, cursor: "pointer",
           }}

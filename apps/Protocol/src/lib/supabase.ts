@@ -18,4 +18,19 @@ export function getSupabaseClient(): SupabaseClient {
   return _client;
 }
 
-export const USER_ID = "default";
+// Cache the authed user id outside React so plain api.ts functions can read it
+// synchronously. RLS (user_id = auth.uid()) is the real enforcement.
+let currentUserId: string | null = null;
+getSupabaseClient()
+  .auth.getSession()
+  .then(({ data }) => {
+    currentUserId = data.session?.user.id ?? null;
+  });
+getSupabaseClient().auth.onAuthStateChange((_event, session) => {
+  currentUserId = session?.user.id ?? null;
+});
+
+export function getUserId(): string {
+  if (!currentUserId) throw new Error("Not authenticated");
+  return currentUserId;
+}

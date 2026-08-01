@@ -4,6 +4,7 @@ import workoutsReducer from "./slices/workoutsSlice";
 import runningReducer from "./slices/runningSlice";
 import settingsReducer from "./slices/settingsSlice";
 import habitsReducer from "./slices/habitsSlice";
+import mealPlannerReducer from "./slices/mealPlannerSlice";
 
 export const store = configureStore({
   reducer: {
@@ -12,6 +13,7 @@ export const store = configureStore({
     running: runningReducer,
     settings: settingsReducer,
     habits: habitsReducer,
+    mealPlanner: mealPlannerReducer,
   },
 });
 

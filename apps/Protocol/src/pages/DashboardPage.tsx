@@ -10,13 +10,18 @@ import {
   Tooltip,
   ResponsiveContainer,
 } from "recharts";
-import { Moon, Activity, TrendingUp } from "lucide-react";
+import { Moon, Activity, TrendingUp, Flame } from "lucide-react";
 import { useAppDispatch, useAppSelector } from "../store/hooks";
 import { fetchSleep, fetchNutrition, fetchBodyMetrics } from "../store/slices/biomarkersSlice";
 import { fetchWorkoutSessions } from "../store/slices/workoutsSlice";
 import { fetchRunningSessions } from "../store/slices/runningSlice";
+import { fetchHabits, fetchHabitCompletions } from "../store/slices/habitsSlice";
 import { formatMinutes, CARD_STYLE, isoDate } from "../lib/uiHelpers";
 import ProtocolChargeChart from "../components/dashboard/ProtocolChargeChart";
+import { ConsistencyHeatmap, buildHeatmapGrid, computeFractionByDate } from "../components/habits/HabitCharts";
+
+const HABITS_HISTORY_DAYS = 90;
+const HEATMAP_WEEKS = 12;
 
 function subDays(n: number): string {
   const d = new Date();
@@ -52,6 +57,8 @@ export default function DashboardPage() {
   const bodyMetrics = useAppSelector((s) => s.biomarkers.bodyMetrics);
   const workoutSessions = useAppSelector((s) => s.workouts.sessions);
   const runningSessions = useAppSelector((s) => s.running.sessions);
+  const habits = useAppSelector((s) => s.habits.habits);
+  const habitCompletions = useAppSelector((s) => s.habits.completions);
 
   useEffect(() => {
     dispatch(fetchSleep());
@@ -59,10 +66,16 @@ export default function DashboardPage() {
     dispatch(fetchBodyMetrics());
     dispatch(fetchWorkoutSessions());
     dispatch(fetchRunningSessions());
+    dispatch(fetchHabits());
+    dispatch(fetchHabitCompletions(subDays(HABITS_HISTORY_DAYS)));
   }, [dispatch]);
 
   const cutoff7 = subDays(7);
   const cutoff14 = subDays(14);
+
+  const today = isoDate(new Date());
+  const heatmapGrid = buildHeatmapGrid(today, HEATMAP_WEEKS);
+  const fractionByDate = computeFractionByDate(habitCompletions, habits.length);
 
   const recentSleep = sleep.filter((e) => e.date >= cutoff7);
   const avgQuality = avg(recentSleep.map((e) => e.quality_score));
@@ -100,7 +113,7 @@ export default function DashboardPage() {
       <div style={{ padding: 24, display: "flex", flexDirection: "column", gap: 24, maxWidth: 900 }}>
       <div
         style={{
-          background: "linear-gradient(135deg, var(--accent)22 0%, var(--surface) 100%)",
+          background: "linear-gradient(135deg, var(--accent-tint) 0%, var(--surface) 100%)",
           border: "1px solid var(--border)",
           borderRadius: "var(--radius)",
           padding: "20px 24px",
@@ -113,6 +126,19 @@ export default function DashboardPage() {
           Your health OS — track biomarkers, plan workouts, and optimize your performance.
         </p>
       </div>
+
+      {habits.length > 0 && (
+        <div style={{ ...CARD_STYLE, padding: "20px 24px" }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 4 }}>
+            <Flame size={15} color="var(--warning)" />
+            <span style={{ fontWeight: 600, color: "var(--text)", fontSize: 14 }}>Habit Consistency</span>
+          </div>
+          <div style={{ fontSize: 12, color: "var(--text-muted)", marginBottom: 16 }}>
+            Share of habits completed each day, last {HEATMAP_WEEKS} weeks
+          </div>
+          <ConsistencyHeatmap grid={heatmapGrid} today={today} fractionByDate={fractionByDate} />
+        </div>
+      )}
 
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 16 }}>
         <div style={STAT_CARD}>

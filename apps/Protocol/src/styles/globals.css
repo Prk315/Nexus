@@ -12,6 +12,13 @@ html, body, #root {
   overflow: hidden;
 }
 
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+.spin {
+  animation: spin 0.8s linear infinite;
+}
+
 html {
   padding-top: env(safe-area-inset-top);
   padding-bottom: env(safe-area-inset-bottom);
