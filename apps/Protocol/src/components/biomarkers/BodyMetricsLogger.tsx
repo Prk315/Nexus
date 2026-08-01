@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Activity, Plus, Trash2 } from "lucide-react";
+import { Plus, Trash2 } from "lucide-react";
 import { useAppDispatch, useAppSelector } from "../../store/hooks";
 import { addBodyMetric, removeBodyMetric } from "../../store/slices/biomarkersSlice";
 import type { BodyMetric, CreateBodyMetric } from "../../store/types";
@@ -81,11 +81,6 @@ export default function BodyMetricsLogger() {
         onSubmit={handleSubmit}
         style={{ ...CARD_STYLE, padding: 20, display: "flex", flexDirection: "column", gap: 16 }}
       >
-        <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 4 }}>
-          <Activity size={16} color="var(--accent)" />
-          <span style={{ fontWeight: 600, color: "var(--text)" }}>Log Body Metrics</span>
-        </div>
-
         <div style={FIELD_GROUP}>
           <label style={LABEL_STYLE}>Date</label>
           <input type="date" value={form.date} onChange={(e) => set("date", e.target.value)} required />

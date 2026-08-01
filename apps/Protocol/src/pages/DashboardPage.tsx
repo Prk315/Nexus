@@ -15,13 +15,13 @@ import { useAppDispatch, useAppSelector } from "../store/hooks";
 import { fetchSleep, fetchNutrition, fetchBodyMetrics } from "../store/slices/biomarkersSlice";
 import { fetchWorkoutSessions } from "../store/slices/workoutsSlice";
 import { fetchRunningSessions } from "../store/slices/runningSlice";
-import { formatMinutes, CARD_STYLE } from "../lib/uiHelpers";
+import { formatMinutes, CARD_STYLE, isoDate } from "../lib/uiHelpers";
 import ProtocolChargeChart from "../components/dashboard/ProtocolChargeChart";
 
 function subDays(n: number): string {
   const d = new Date();
   d.setDate(d.getDate() - n);
-  return d.toISOString().slice(0, 10);
+  return isoDate(d);
 }
 
 function avg(values: number[]): number | null {
@@ -88,7 +88,16 @@ export default function DashboardPage() {
   const STAT_CARD: React.CSSProperties = { ...CARD_STYLE, padding: "16px 20px", display: "flex", flexDirection: "column", gap: 4 };
 
   return (
-    <div style={{ padding: 24, display: "flex", flexDirection: "column", gap: 24, maxWidth: 900 }}>
+    <div style={{ display: "flex", flexDirection: "column" }}>
+      <ProtocolChargeChart
+        sleep={sleep}
+        nutrition={nutrition}
+        bodyMetrics={bodyMetrics}
+        workoutSessions={workoutSessions}
+        runningSessions={runningSessions}
+      />
+
+      <div style={{ padding: 24, display: "flex", flexDirection: "column", gap: 24, maxWidth: 900 }}>
       <div
         style={{
           background: "linear-gradient(135deg, var(--accent)22 0%, var(--surface) 100%)",
@@ -104,14 +113,6 @@ export default function DashboardPage() {
           Your health OS — track biomarkers, plan workouts, and optimize your performance.
         </p>
       </div>
-
-      <ProtocolChargeChart
-        sleep={sleep}
-        nutrition={nutrition}
-        bodyMetrics={bodyMetrics}
-        workoutSessions={workoutSessions}
-        runningSessions={runningSessions}
-      />
 
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 16 }}>
         <div style={STAT_CARD}>
@@ -219,6 +220,7 @@ export default function DashboardPage() {
             </button>
           ))}
         </div>
+      </div>
       </div>
     </div>
   );

@@ -10,6 +10,7 @@ import type {
   CreateRunningPlan, CreateRunningSession,
   Exercise, NutritionEntry, RunningPlan, RunningSession,
   SleepEntry, WorkoutPlan, WorkoutSession,
+  Habit, CreateHabit, HabitCompletion,
 } from "../store/types";
 import {
   fetchSleepFromCloud, pushSleepToCloud, deleteSleepFromCloud,
@@ -22,6 +23,8 @@ import {
   fetchRunningPlansFromCloud, pushRunningPlanToCloud, deleteRunningPlanFromCloud,
   fetchRunningSessionsFromCloud, pushRunningSessionToCloud,
   completeRunningSessionInCloud, deleteRunningSessionFromCloud,
+  fetchHabitsFromCloud, pushHabitToCloud, archiveHabitInCloud,
+  fetchHabitCompletionsFromCloud, addHabitCompletionToCloud, removeHabitCompletionFromCloud,
 } from "./api";
 
 // ── Sleep ─────────────────────────────────────────────────────────────────────
@@ -213,3 +216,31 @@ export async function completeRunningSessionApi(
 
 export const deleteRunningSession = (id: string): Promise<void> =>
   deleteRunningSessionFromCloud(id);
+
+// ── Habits ────────────────────────────────────────────────────────────────────
+
+export const getHabits = (): Promise<Habit[]> => fetchHabitsFromCloud();
+
+export async function createHabit(habit: CreateHabit): Promise<Habit> {
+  const id = crypto.randomUUID();
+  await pushHabitToCloud({ ...habit, id });
+  return {
+    id,
+    name: habit.name,
+    target_per_week: habit.target_per_week ?? 7,
+    sort_order: habit.sort_order ?? 0,
+    archived: false,
+    created_at: new Date().toISOString(),
+  };
+}
+
+export const archiveHabit = (id: string): Promise<void> => archiveHabitInCloud(id);
+
+export const getHabitCompletions = (sinceDate: string): Promise<HabitCompletion[]> =>
+  fetchHabitCompletionsFromCloud(sinceDate);
+
+export const addHabitCompletion = (habitId: string, date: string): Promise<HabitCompletion> =>
+  addHabitCompletionToCloud(habitId, date);
+
+export const removeHabitCompletion = (habitId: string, date: string): Promise<void> =>
+  removeHabitCompletionFromCloud(habitId, date);

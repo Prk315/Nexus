@@ -82,7 +82,13 @@ export default function SettingsPage() {
     try {
       const result = await garminAuth(email, password, needsMfa ? otp : undefined);
       if (result.mfa_required) {
-        setNeedsMfa(true);
+        if (result.error) {
+          // MFA is required but this bridge can't complete it (each call is a
+          // fresh subprocess) — showing the OTP field would be a dead end.
+          setAuthError(result.error);
+        } else {
+          setNeedsMfa(true);
+        }
       } else if (result.ok) {
         setNeedsMfa(false);
         setEmail("");

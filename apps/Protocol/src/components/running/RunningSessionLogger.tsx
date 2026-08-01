@@ -6,7 +6,7 @@ import {
   completeRunningSession,
   removeRunningSession,
 } from "../../store/slices/runningSlice";
-import { CARD_PADDED, CARD_TIGHT, INPUT_STYLE, SECTION_LABEL, BTN_PRIMARY, ICON_BTN } from "../../lib/uiHelpers";
+import { CARD_PADDED, CARD_TIGHT, INPUT_STYLE, SECTION_LABEL, BTN_PRIMARY, ICON_BTN, todayISO } from "../../lib/uiHelpers";
 
 interface RunningSessionLoggerProps {
   planId?: string | null;
@@ -99,7 +99,7 @@ export default function RunningSessionLogger({ planId }: RunningSessionLoggerPro
     ? allSessions.filter((s) => s.plan_id === planId)
     : allSessions;
 
-  const [date, setDate] = useState(new Date().toISOString().slice(0, 10));
+  const [date, setDate] = useState(todayISO());
   const [plannedKm, setPlannedKm] = useState("");
   const [actualKm, setActualKm] = useState("");
   const [pace, setPace] = useState("");

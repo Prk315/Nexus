@@ -21,6 +21,25 @@
   --radius-sm: 4px;
   --radius-lg: 12px;
   --radius-xl: 16px;
+
+  /* Categorical series — validated CVD-safe order, do not reorder or reuse for status */
+  --series-sleep: #2a78d6;
+  --series-nutrition: #eda100;
+  --series-body: #4a3aa7;
+  --series-workout: #1baf7a;
+  --series-running: #eb6834;
+
+  /* Same hues at ~18% alpha — gauge/meter tracks (fill carries the value, track is a lighter step of the same ramp) */
+  --series-sleep-track: #2a78d62e;
+  --series-nutrition-track: #eda1002e;
+  --series-body-track: #4a3aa72e;
+  --series-workout-track: #1baf7a2e;
+  --series-running-track: #eb68342e;
+
+  /* Macro breakdown — validated as its own 3-slot set (order matters: protein, carbs, fat) */
+  --macro-protein: #e87ba4;
+  --macro-carbs: #008300;
+  --macro-fat: #e34948;
 }
 
 :root[data-theme="dark"] {
@@ -46,4 +65,23 @@
   --radius-sm: 4px;
   --radius-lg: 12px;
   --radius-xl: 16px;
+
+  /* Categorical series — same hues, stepped for the dark surface; validated separately */
+  --series-sleep: #3987e5;
+  --series-nutrition: #c98500;
+  --series-body: #9085e9;
+  --series-workout: #199e70;
+  --series-running: #d95926;
+
+  /* Same hues at ~18% alpha — gauge/meter tracks */
+  --series-sleep-track: #3987e52e;
+  --series-nutrition-track: #c985002e;
+  --series-body-track: #9085e92e;
+  --series-workout-track: #199e702e;
+  --series-running-track: #d959262e;
+
+  /* Macro breakdown — validated as its own 3-slot set (order matters: protein, carbs, fat) */
+  --macro-protein: #d55181;
+  --macro-carbs: #008300;
+  --macro-fat: #e66767;
 }

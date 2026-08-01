@@ -189,6 +189,27 @@ export interface CreateRunningSession {
   notes?: string | null;
 }
 
+export interface Habit {
+  id: string;
+  name: string;
+  target_per_week: number;
+  sort_order: number;
+  archived: boolean;
+  created_at: string;
+}
+
+export interface CreateHabit {
+  name: string;
+  target_per_week?: number;
+  sort_order?: number;
+}
+
+export interface HabitCompletion {
+  id: string;
+  habit_id: string;
+  date: string;
+}
+
 export type GarminSyncStatus = "idle" | "syncing" | "success" | "error";
 
 export interface GarminSyncState {

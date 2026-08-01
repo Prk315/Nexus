@@ -20,8 +20,7 @@ def get_client():
     from garminconnect import Garmin
 
     client = Garmin()
-    client.garth.load(str(TOKEN_STORE))
-    client.get_user_summary(date.today().isoformat())
+    client.login(str(TOKEN_STORE))
     return client
 
 
@@ -42,20 +41,25 @@ def cmd_auth(args):
     client = Garmin(email=email, password=password)
 
     try:
-        client.login(args.otp or None)
+        client.login(str(TOKEN_STORE))
     except Exception as exc:
         msg = str(exc).lower()
         # garminconnect signals MFA requirement via various exception messages
         if any(k in msg for k in ("mfa", "2fa", "one-time", "verification")):
-            # Return structured response so the UI can show the OTP field
-            print(json.dumps({"mfa_required": True}))
+            # NOTE: garminconnect's resume_login() relies on in-memory state
+            # held by the *same* Python object that started the login — it
+            # can't be resumed from a fresh subprocess. Since each CLI
+            # invocation of this bridge is its own process, there is no way
+            # to complete an MFA login this way today; that would need a
+            # persistent bridge process instead of one-shot CLI calls.
+            print(json.dumps({
+                "mfa_required": True,
+                "error": "This Garmin account has MFA enabled, which isn't supported "
+                         "by the current sync bridge yet.",
+            }))
             return
-
-        # If an OTP was already supplied, fall through to the normal error path
         raise
 
-    TOKEN_STORE.mkdir(parents=True, exist_ok=True)
-    client.garth.dump(str(TOKEN_STORE))
     print(json.dumps({"ok": True}))
 
 

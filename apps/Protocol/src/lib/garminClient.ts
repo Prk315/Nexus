@@ -48,7 +48,7 @@ export interface GarminStatus {
 }
 
 async function run<T>(command: string, args: string[]): Promise<T> {
-  const raw = await invoke<string>("garminRun", { command, args });
+  const raw = await invoke<string>("garmin_run", { command, args });
   return JSON.parse(raw) as T;
 }
 
@@ -69,12 +69,13 @@ export async function garminFetchActivities(date: string, days: number): Promise
 }
 
 export async function garminBridgePath(): Promise<string> {
-  return invoke<string>("garminBridgePath");
+  return invoke<string>("garmin_bridge_path");
 }
 
 export interface GarminAuthResult {
   ok?: boolean;
   mfa_required?: boolean;
+  error?: string;
 }
 
 export async function garminAuth(
@@ -82,7 +83,7 @@ export async function garminAuth(
   password: string,
   otp?: string,
 ): Promise<GarminAuthResult> {
-  const raw = await invoke<string>("garminAuth", {
+  const raw = await invoke<string>("garmin_auth", {
     email,
     password,
     otp: otp ?? null,
