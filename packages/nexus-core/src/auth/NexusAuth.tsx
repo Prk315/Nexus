@@ -93,29 +93,19 @@ export function AuthGate({ appName, children }: { appName?: string; children: Re
 }
 
 export function LoginScreen({ appName }: { appName?: string }) {
-  const { signIn, signUp } = useNexusAuth();
-  const [mode, setMode] = useState<"signin" | "signup">("signin");
+  const { signIn } = useNexusAuth();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [notice, setNotice] = useState<string | null>(null);
 
   async function submit(e: React.FormEvent) {
     e.preventDefault();
     setBusy(true);
     setError(null);
-    setNotice(null);
     try {
-      if (mode === "signin") {
-        const { error } = await signIn(email.trim(), password);
-        if (error) setError(error);
-      } else {
-        const { error, needsConfirmation } = await signUp(email.trim(), password);
-        if (error) setError(error);
-        else if (needsConfirmation)
-          setNotice("Check your inbox to confirm your email, then sign in.");
-      }
+      const { error } = await signIn(email.trim(), password);
+      if (error) setError(error);
     } finally {
       setBusy(false);
     }
@@ -131,9 +121,7 @@ export function LoginScreen({ appName }: { appName?: string }) {
           <h1 className="text-xl font-semibold text-neutral-100">
             {appName ?? "Nexus"}
           </h1>
-          <p className="mt-1 text-sm text-neutral-500">
-            {mode === "signin" ? "Sign in to your account" : "Create your account"}
-          </p>
+          <p className="mt-1 text-sm text-neutral-500">Sign in to your account</p>
         </div>
 
         <label className="mb-1 block text-xs font-medium text-neutral-400">Email</label>
@@ -150,9 +138,8 @@ export function LoginScreen({ appName }: { appName?: string }) {
         <label className="mb-1 block text-xs font-medium text-neutral-400">Password</label>
         <input
           type="password"
-          autoComplete={mode === "signin" ? "current-password" : "new-password"}
+          autoComplete="current-password"
           required
-          minLength={6}
           value={password}
           onChange={(e) => setPassword(e.target.value)}
           className="mb-5 w-full rounded-lg border border-neutral-700 bg-neutral-800 px-3 py-2 text-sm text-neutral-100 outline-none focus:border-neutral-500"
@@ -164,33 +151,18 @@ export function LoginScreen({ appName }: { appName?: string }) {
             {error}
           </div>
         )}
-        {notice && (
-          <div className="mb-4 rounded-lg border border-emerald-900 bg-emerald-950/60 px-3 py-2 text-xs text-emerald-300">
-            {notice}
-          </div>
-        )}
 
         <button
           type="submit"
           disabled={busy}
           className="w-full rounded-lg bg-neutral-100 py-2 text-sm font-medium text-neutral-900 transition hover:bg-white disabled:opacity-60"
         >
-          {busy ? "…" : mode === "signin" ? "Log in" : "Sign up"}
+          {busy ? "…" : "Log in"}
         </button>
 
-        <button
-          type="button"
-          onClick={() => {
-            setMode(mode === "signin" ? "signup" : "signin");
-            setError(null);
-            setNotice(null);
-          }}
-          className="mt-4 w-full text-center text-xs text-neutral-500 hover:text-neutral-300"
-        >
-          {mode === "signin"
-            ? "Need an account? Sign up"
-            : "Already have an account? Log in"}
-        </button>
+        <p className="mt-4 text-center text-[11px] text-neutral-600">
+          Accounts are created by the administrator.
+        </p>
       </form>
     </div>
   );
