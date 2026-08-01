@@ -35,6 +35,11 @@ function App() {
   const [graphFilters, setGraphFilters] = useState<GraphFilters>(DEFAULT_GRAPH_FILTERS);
   const [expandedNodes, setExpandedNodes] = useState<Set<string>>(new Set());
   const [sidebarOpen, setSidebarOpen] = useState(true);
+  // Top-level dual mode: the Vault workspace vs. the Learn & Retain concept map.
+  const [appMode, setAppMode] = useState<"vault" | "learn">("vault");
+  // Mount the Learn iframe once, then keep it (hidden) — remounting the heavy 3D
+  // app churns WebGL contexts and hangs the tab.
+  const [learnMounted, setLearnMounted] = useState(false);
 
   const [is3D, setIs3D] = useState(true);
 
@@ -559,7 +564,13 @@ function App() {
   return (
     <div style={{ display: "flex", flexDirection: "column", height: "100vh" }}>
       <NexusHeader appName="Vault" />
-    <div className="app" style={{ flex: 1, minHeight: 0, height: "auto" }}>
+      <div className="app-mode-bar">
+        <div className="app-mode-toggle">
+          <button className={appMode === "vault" ? "active" : ""} onClick={() => setAppMode("vault")}>Vault</button>
+          <button className={appMode === "learn" ? "active" : ""} onClick={() => { setLearnMounted(true); setAppMode("learn"); }}>Learn &amp; Retain</button>
+        </div>
+      </div>
+    <div className="app" style={{ flex: 1, minHeight: 0, height: "auto", display: appMode === "vault" ? undefined : "none" }}>
       {fullGraph && (
         <div className="fullgraph-overlay">
           {filteredGraphData.nodes.length === 0 ? (
@@ -837,6 +848,14 @@ function App() {
         ))}
       </main>
     </div>
+    {learnMounted && (
+      <iframe
+        src="/conceptmap.html"
+        title="Learn & Retain"
+        className="learn-fullbleed"
+        style={{ display: appMode === "learn" ? "block" : "none" }}
+      />
+    )}
     </div>
   );
 }

@@ -5947,3 +5947,45 @@ body {
   border-radius: 14px;
   background: #c6c5cb;
 }
+
+/* ── Top-level dual mode: Vault ⇄ Learn & Retain ──────────────────────────── */
+.app-mode-bar {
+  flex-shrink: 0;
+  display: flex;
+  justify-content: center;
+  padding: 7px 12px;
+  border-bottom: 1px solid var(--border-faint);
+  background: var(--bg-base);
+}
+.app-mode-toggle {
+  display: inline-flex;
+  gap: 2px;
+  background: var(--bg-raised);
+  border: 1px solid var(--border-base);
+  border-radius: 10px;
+  padding: 3px;
+}
+.app-mode-toggle button {
+  border: 0;
+  background: transparent;
+  color: var(--fg-muted);
+  font-size: 13px;
+  font-weight: 600;
+  padding: 6px 20px;
+  border-radius: 8px;
+  cursor: pointer;
+  transition: background var(--duration) var(--ease), color var(--duration) var(--ease);
+}
+.app-mode-toggle button:hover { color: var(--fg-main); }
+.app-mode-toggle button.active {
+  background: var(--bg-base);
+  color: var(--fg-main);
+  box-shadow: var(--shadow-xs);
+}
+.learn-fullbleed {
+  flex: 1;
+  min-height: 0;
+  width: 100%;
+  border: 0;
+  background: #c6c5cb;
+}
