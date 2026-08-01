@@ -4,6 +4,15 @@ import { useConnectedApps } from "../hooks/useConnectedApps";
 import { cn } from "../utils";
 import type { ConnectedApp } from "../types";
 
+// Deployed ecosystem web apps, from per-deployment env vars. Entries with no URL
+// are hidden. Used by the header's app switcher to jump between the web apps.
+const WEB_APPS: { name: string; url: string }[] = (
+  [
+    { name: "Vault", url: (import.meta as any).env?.VITE_VAULT_URL as string | undefined },
+    { name: "PathFinder", url: (import.meta as any).env?.VITE_PATHFINDER_URL as string | undefined },
+  ].filter((a) => !!a.url) as { name: string; url: string }[]
+);
+
 interface NexusHeaderProps {
   appName: string;
   /** Optional content rendered centered in the header bar (e.g. a mode switch). */
@@ -165,6 +174,33 @@ export function NexusHeader({
               sideOffset={6}
               className="z-50 min-w-[160px] rounded-lg border border-border bg-popover text-popover-foreground shadow-lg p-1 data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 data-[state=closed]:zoom-out-95 data-[state=open]:zoom-in-95"
             >
+              {/* Ecosystem web apps (navigate between deployed apps) */}
+              {WEB_APPS.length > 0 && (
+                <>
+                  <DropdownMenu.Label className="px-2 py-1 text-[11px] font-medium text-muted-foreground uppercase tracking-wider">
+                    Apps
+                  </DropdownMenu.Label>
+                  {WEB_APPS.map((a) => {
+                    const current = a.name === appName;
+                    return (
+                      <DropdownMenu.Item
+                        key={a.name}
+                        disabled={current}
+                        onSelect={() => { if (!current) window.location.href = a.url; }}
+                        className="flex cursor-pointer select-none items-center gap-2 rounded-md px-2 py-1.5 text-sm outline-none hover:bg-accent hover:text-accent-foreground focus:bg-accent focus:text-accent-foreground data-[disabled]:opacity-50 data-[disabled]:cursor-default"
+                      >
+                        <span className="h-5 w-5 rounded bg-muted flex items-center justify-center text-xs font-medium shrink-0">
+                          {a.name.charAt(0).toUpperCase()}
+                        </span>
+                        {a.name}
+                        {current && <span className="ml-auto text-[10px] text-muted-foreground">current</span>}
+                      </DropdownMenu.Item>
+                    );
+                  })}
+                  <DropdownMenu.Separator className="my-1 h-px bg-border" />
+                </>
+              )}
+
               {/* Nexus IPC status indicator */}
               <div className="flex items-center gap-2 px-2 py-1.5 border-b border-border mb-1">
                 <div className={cn(
