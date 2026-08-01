@@ -45,6 +45,8 @@ export interface CalendarEvent {
   startTime: string; // HH:MM
   endTime: string;   // HH:MM
   color?: string;
+  /** Marks the event as an instance of a recurring series (shows a 🔁 badge). */
+  recurring?: boolean;
 }
 
 export interface AgentProject {

@@ -1,6 +1,8 @@
 import React, { useState, useEffect, useRef, useMemo } from "react";
-import { useNexusRegistration, NexusHeader, useNexusAuth } from "@nexus/core";
+import { useNexusRegistration, NexusHeader, useNexusAuth, CalendarSidebar } from "@nexus/core";
 import * as api from "./lib/api";
+import { loadPathfinderDay, entryToEvent, toIsoDate, type PfCalEntry } from "./lib/pathfinderCalendar";
+import { CalendarBlockEditor, type CalEditorState } from "./components/CalendarBlockEditor";
 import ForceGraph2D from "react-force-graph-2d";
 import ForceGraph3D from "react-force-graph-3d";
 import * as THREE from "three";
@@ -37,6 +39,17 @@ function App() {
   const [sidebarOpen, setSidebarOpen] = useState(true);
   // Top-level dual mode: the Vault workspace vs. the Learn & Retain concept map.
   const [appMode, setAppMode] = useState<"vault" | "learn">("vault");
+  // Cross-app calendar (PathFinder's day, read+written via shared Supabase session)
+  const [calendarOpen, setCalendarOpen] = useState(false);
+  const [calendarEntries, setCalendarEntries] = useState<PfCalEntry[]>([]);
+  const [calEditor, setCalEditor] = useState<CalEditorState | null>(null);
+  const refreshCalendar = async () => {
+    try {
+      setCalendarEntries(await loadPathfinderDay(new Date()));
+    } catch {
+      setCalendarEntries([]);
+    }
+  };
   // Mount the Learn iframe once, then keep it (hidden) — remounting the heavy 3D
   // app churns WebGL contexts and hangs the tab.
   const [learnMounted, setLearnMounted] = useState(false);
@@ -567,6 +580,7 @@ function App() {
         appName="Vault"
         userEmail={user?.email}
         onSignOut={() => signOut()}
+        onCalendar={() => { setCalendarOpen(true); void refreshCalendar(); }}
         center={
           <div className="app-mode-toggle">
             <button className={appMode === "vault" ? "active" : ""} onClick={() => setAppMode("vault")}>Vault</button>
@@ -574,7 +588,9 @@ function App() {
           </div>
         }
       />
-    <div className="app" style={{ flex: 1, minHeight: 0, height: "auto", display: appMode === "vault" ? undefined : "none" }}>
+    <div style={{ flex: 1, minHeight: 0, display: "flex" }}>
+    <div style={{ flex: 1, minWidth: 0, display: "flex", flexDirection: "column" }}>
+    <div className="app" style={{ flex: 1, minHeight: 0, minWidth: 0, height: "auto", display: appMode === "vault" ? undefined : "none" }}>
       {fullGraph && (
         <div className="fullgraph-overlay">
           {filteredGraphData.nodes.length === 0 ? (
@@ -851,6 +867,32 @@ function App() {
         title="Learn & Retain"
         className="learn-fullbleed"
         style={{ display: appMode === "learn" ? "block" : "none" }}
+      />
+    )}
+    </div>
+      <CalendarSidebar
+        isOpen={calendarOpen}
+        onClose={() => setCalendarOpen(false)}
+        date={new Date()}
+        events={calendarEntries.map(entryToEvent)}
+        onSlotClick={(hour) =>
+          setCalEditor({
+            mode: "create",
+            date: toIsoDate(new Date()),
+            startTime: `${String(hour).padStart(2, "0")}:00`,
+          })
+        }
+        onEventClick={(ev) => {
+          const entry = calendarEntries.find((e) => e.key === ev.id);
+          if (entry) setCalEditor({ mode: "edit", entry });
+        }}
+      />
+    </div>
+    {calEditor && (
+      <CalendarBlockEditor
+        state={calEditor}
+        onClose={() => setCalEditor(null)}
+        onSaved={() => { setCalEditor(null); void refreshCalendar(); }}
       />
     )}
     </div>
