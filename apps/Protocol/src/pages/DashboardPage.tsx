@@ -1,7 +1,5 @@
 import { useEffect } from "react";
 import {
-  AreaChart,
-  Area,
   LineChart,
   Line,
   XAxis,
@@ -34,15 +32,6 @@ function subDays(n: number): string {
   const d = new Date();
   d.setDate(d.getDate() - n);
   return isoDate(d);
-}
-
-function avg(values: number[]): number | null {
-  if (values.length === 0) return null;
-  return values.reduce((a, b) => a + b, 0) / values.length;
-}
-
-function avgNullable(values: (number | null)[]): number | null {
-  return avg(values.filter((v): v is number => v != null));
 }
 
 /** 1 if any session that day was completed, 0 if scheduled but not, absent otherwise. */
@@ -104,7 +93,6 @@ export default function DashboardPage() {
     }
   }, [dispatch, meals, mealItemsById]);
 
-  const cutoff7 = subDays(7);
   const cutoff14 = subDays(14);
 
   const today = isoDate(new Date());
@@ -122,15 +110,13 @@ export default function DashboardPage() {
     nutritionByDate.set(entry.date, (nutritionByDate.get(entry.date) ?? 0) + n.calories);
   }
 
-  const recentSleep = sleep.filter((e) => e.date >= cutoff7);
-  const avgQuality = avg(recentSleep.map((e) => e.quality_score));
-  const avgDuration = avg(recentSleep.map((e) => e.duration_min));
-  const avgDeepSleep = avgNullable(recentSleep.map((e) => e.deep_sleep_min));
-  const avgRemSleep = avgNullable(recentSleep.map((e) => e.rem_sleep_min));
-  const avgLightSleep = avgNullable(recentSleep.map((e) => e.light_sleep_min));
-  const avgAwakeTime = avgNullable(recentSleep.map((e) => e.awake_time_min));
-  const avgRespRate = avgNullable(recentSleep.map((e) => e.respiratory_rate));
-  const avgTempDeviation = avgNullable(recentSleep.map((e) => e.temperature_deviation));
+  // Most recent logged night, not an average — broader trends live on Biomarkers.
+  const lastNight = [...sleep].sort((a, b) => b.date.localeCompare(a.date))[0] ?? null;
+  const lastNightLabel = lastNight
+    ? lastNight.date === today
+      ? "last night"
+      : new Date(`${lastNight.date}T00:00:00`).toLocaleDateString(undefined, { month: "short", day: "numeric" })
+    : "no data";
 
   // Single-pass: find the entry with the most-recent date that has a weight reading
   const lastWeight = bodyMetrics.reduce<{ date: string; weight: number } | null>((best, e) => {
@@ -138,11 +124,6 @@ export default function DashboardPage() {
     if (best == null || e.date > best.date) return { date: e.date, weight: e.weight_kg };
     return best;
   }, null)?.weight ?? null;
-
-  const sleepChartData = [...sleep]
-    .filter((e) => e.date >= cutoff14)
-    .sort((a, b) => a.date.localeCompare(b.date))
-    .map((e) => ({ date: e.date.slice(5), quality: e.quality_score }));
 
   const weightChartData = [...bodyMetrics]
     .filter((e) => e.date >= cutoff14 && e.weight_kg != null)
@@ -197,23 +178,23 @@ export default function DashboardPage() {
         <div style={STAT_CARD}>
           <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 4 }}>
             <Moon size={14} color="var(--accent)" />
-            <span style={{ fontSize: 12, color: "var(--text-muted)", fontWeight: 500 }}>Avg Sleep Quality (7d)</span>
+            <span style={{ fontSize: 12, color: "var(--text-muted)", fontWeight: 500 }}>Sleep Quality</span>
           </div>
           <span style={{ fontSize: 28, fontWeight: 700, color: "var(--text)" }}>
-            {avgQuality != null ? avgQuality.toFixed(1) : "—"}
+            {lastNight ? lastNight.quality_score.toFixed(1) : "—"}
           </span>
-          <span style={{ fontSize: 12, color: "var(--text-muted)" }}>/ 10</span>
+          <span style={{ fontSize: 12, color: "var(--text-muted)" }}>/ 10, {lastNightLabel}</span>
         </div>
 
         <div style={STAT_CARD}>
           <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 4 }}>
             <Moon size={14} color="var(--accent)" />
-            <span style={{ fontSize: 12, color: "var(--text-muted)", fontWeight: 500 }}>Avg Sleep Duration (7d)</span>
+            <span style={{ fontSize: 12, color: "var(--text-muted)", fontWeight: 500 }}>Sleep Duration</span>
           </div>
           <span style={{ fontSize: 28, fontWeight: 700, color: "var(--text)" }}>
-            {avgDuration != null ? formatMinutes(avgDuration) : "—"}
+            {lastNight ? formatMinutes(lastNight.duration_min) : "—"}
           </span>
-          <span style={{ fontSize: 12, color: "var(--text-muted)" }}>per night</span>
+          <span style={{ fontSize: 12, color: "var(--text-muted)" }}>{lastNightLabel}</span>
         </div>
 
         <div style={STAT_CARD}>
@@ -231,47 +212,29 @@ export default function DashboardPage() {
       <div style={{ ...CARD_STYLE, padding: "20px 20px 16px" }}>
         <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 16 }}>
           <Moon size={15} color="var(--accent)" />
-          <span style={{ fontWeight: 600, color: "var(--text)", fontSize: 14 }}>Sleep Quality — Last 14 Days</span>
+          <span style={{ fontWeight: 600, color: "var(--text)", fontSize: 14 }}>Last Night's Sleep</span>
         </div>
-        <div style={{ display: "flex", gap: 20, flexWrap: "wrap" }}>
-          <div style={{ flex: "2 1 320px", minWidth: 260 }}>
-            {sleepChartData.length === 0 ? NO_DATA : (
-              <ResponsiveContainer width="100%" height={180}>
-                <AreaChart data={sleepChartData} margin={CHART_MARGIN}>
-                  <defs>
-                    <linearGradient id="sleepGrad" x1="0" y1="0" x2="0" y2="1">
-                      <stop offset="5%" stopColor="var(--accent)" stopOpacity={0.3} />
-                      <stop offset="95%" stopColor="var(--accent)" stopOpacity={0} />
-                    </linearGradient>
-                  </defs>
-                  <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" vertical={false} />
-                  <XAxis dataKey="date" tick={{ fontSize: 11, fill: "var(--text-muted)" }} axisLine={false} tickLine={false} />
-                  <YAxis domain={[0, 10]} tick={{ fontSize: 11, fill: "var(--text-muted)" }} axisLine={false} tickLine={false} />
-                  <Tooltip contentStyle={TOOLTIP_STYLE} />
-                  <Area type="monotone" dataKey="quality" stroke="var(--accent)" strokeWidth={2} fill="url(#sleepGrad)" dot={{ fill: "var(--accent)", r: 3 }} name="Quality" />
-                </AreaChart>
-              </ResponsiveContainer>
-            )}
-          </div>
-          <div style={{ flex: "1 1 140px", display: "flex", flexDirection: "column", gap: 14, justifyContent: "center" }}>
-            <StatTile label="Deep sleep" value={avgDeepSleep != null ? formatMinutes(avgDeepSleep) : "—"} sub="avg, 7d" />
-            <StatTile label="REM sleep" value={avgRemSleep != null ? formatMinutes(avgRemSleep) : "—"} sub="avg, 7d" />
-            <StatTile label="Light sleep" value={avgLightSleep != null ? formatMinutes(avgLightSleep) : "—"} sub="avg, 7d" />
-          </div>
-        </div>
-        <div style={{ display: "flex", gap: 24, flexWrap: "wrap", marginTop: 16, paddingTop: 16, borderTop: "1px solid var(--border-subtle)" }}>
-          <StatTile label="Awake time" value={avgAwakeTime != null ? formatMinutes(avgAwakeTime) : "—"} sub="avg, 7d" />
-          <StatTile
-            label="Respiratory rate"
-            value={avgRespRate != null ? avgRespRate.toFixed(1) : "—"}
-            sub="breaths/min, avg 7d"
-          />
-          <StatTile
-            label="Temp deviation"
-            value={avgTempDeviation != null ? `${avgTempDeviation > 0 ? "+" : ""}${avgTempDeviation.toFixed(2)}°` : "—"}
-            sub="avg, 7d"
-          />
-        </div>
+        {!lastNight ? NO_DATA : (
+          <>
+            <div style={{ display: "flex", gap: 24, flexWrap: "wrap" }}>
+              <StatTile label="Deep sleep" value={lastNight.deep_sleep_min != null ? formatMinutes(lastNight.deep_sleep_min) : "—"} />
+              <StatTile label="REM sleep" value={lastNight.rem_sleep_min != null ? formatMinutes(lastNight.rem_sleep_min) : "—"} />
+              <StatTile label="Light sleep" value={lastNight.light_sleep_min != null ? formatMinutes(lastNight.light_sleep_min) : "—"} />
+              <StatTile label="Awake time" value={lastNight.awake_time_min != null ? formatMinutes(lastNight.awake_time_min) : "—"} />
+            </div>
+            <div style={{ display: "flex", gap: 24, flexWrap: "wrap", marginTop: 16, paddingTop: 16, borderTop: "1px solid var(--border-subtle)" }}>
+              <StatTile
+                label="Respiratory rate"
+                value={lastNight.respiratory_rate != null ? lastNight.respiratory_rate.toFixed(1) : "—"}
+                sub="breaths/min"
+              />
+              <StatTile
+                label="Temp deviation"
+                value={lastNight.temperature_deviation != null ? `${lastNight.temperature_deviation > 0 ? "+" : ""}${lastNight.temperature_deviation.toFixed(2)}°` : "—"}
+              />
+            </div>
+          </>
+        )}
       </div>
 
       <div style={{ ...CARD_STYLE, padding: "20px 20px 12px" }}>
