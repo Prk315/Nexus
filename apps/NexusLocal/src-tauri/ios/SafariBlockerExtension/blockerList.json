@@ -1,0 +1,1 @@
+[{"trigger":{"url-filter":".*example\\.com"},"action":{"type":"block"}}]

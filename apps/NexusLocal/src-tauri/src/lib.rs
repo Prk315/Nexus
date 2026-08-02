@@ -1,4 +1,5 @@
 mod config;
+mod content_blocker;
 mod device;
 mod grid;
 mod ios_bridge;
@@ -95,7 +96,8 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             grid_status,
             ios_bridge::store_session,
-            ios_bridge::clear_session
+            ios_bridge::clear_session,
+            content_blocker::apply_content_blocker
         ])
         .run(tauri::generate_context!())
         .expect("error while running Nexus Local");
