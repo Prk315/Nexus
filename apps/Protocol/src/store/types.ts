@@ -68,6 +68,18 @@ export interface BodyMetric {
   readiness_score: number | null;
   temperature_deviation: number | null;
   recovery_index: number | null;
+  avg_heart_rate_bpm: number | null;
+  min_heart_rate_bpm: number | null;
+  max_heart_rate_bpm: number | null;
+  stress_high_min: number | null;
+  stress_recovery_min: number | null;
+  stress_summary: string | null;
+  resilience_level: string | null;
+  resilience_sleep_recovery: number | null;
+  resilience_daytime_recovery: number | null;
+  resilience_stress: number | null;
+  cardio_age: number | null;
+  pulse_wave_velocity: number | null;
   notes: string | null;
   created_at: string;
 }
@@ -81,6 +93,18 @@ export interface CreateBodyMetric {
   readiness_score?: number | null;
   temperature_deviation?: number | null;
   recovery_index?: number | null;
+  avg_heart_rate_bpm?: number | null;
+  min_heart_rate_bpm?: number | null;
+  max_heart_rate_bpm?: number | null;
+  stress_high_min?: number | null;
+  stress_recovery_min?: number | null;
+  stress_summary?: string | null;
+  resilience_level?: string | null;
+  resilience_sleep_recovery?: number | null;
+  resilience_daytime_recovery?: number | null;
+  resilience_stress?: number | null;
+  cardio_age?: number | null;
+  pulse_wave_velocity?: number | null;
   notes?: string | null;
 }
 

@@ -29,6 +29,48 @@ async function ouraGet(
   return json.data ?? [];
 }
 
+/** The heartrate endpoint is a flat time series (not day-keyed like the others)
+ * and takes start_datetime/end_datetime instead of start_date/end_date. */
+async function ouraGetHeartRate(
+  accessToken: string,
+  startDate: string,
+  endDate: string,
+): Promise<{ bpm: number; timestamp: string }[]> {
+  const url = new URL("https://api.ouraring.com/v2/usercollection/heartrate");
+  url.searchParams.set("start_datetime", `${startDate}T00:00:00`);
+  url.searchParams.set("end_datetime", `${endDate}T23:59:59`);
+  const res = await fetch(url, { headers: { Authorization: `Bearer ${accessToken}` } });
+  if (!res.ok) {
+    console.error("Oura heartrate request failed", res.status, await res.text());
+    return [];
+  }
+  const json = await res.json();
+  return json.data ?? [];
+}
+
+/** Groups intraday heart rate samples by local calendar day (matching isoDate's
+ * convention) and reduces each day to avg/min/max bpm. */
+function aggregateHeartRateByDay(
+  samples: { bpm: number; timestamp: string }[],
+): Map<string, { avg: number; min: number; max: number }> {
+  const byDay = new Map<string, number[]>();
+  for (const s of samples) {
+    const day = s.timestamp.slice(0, 10);
+    const list = byDay.get(day) ?? [];
+    list.push(s.bpm);
+    byDay.set(day, list);
+  }
+  const result = new Map<string, { avg: number; min: number; max: number }>();
+  for (const [day, bpms] of byDay) {
+    result.set(day, {
+      avg: Math.round((bpms.reduce((a, b) => a + b, 0) / bpms.length) * 10) / 10,
+      min: Math.min(...bpms),
+      max: Math.max(...bpms),
+    });
+  }
+  return result;
+}
+
 async function ensureFreshToken(
   supabase: SupabaseClient,
   userId: string,
@@ -110,11 +152,15 @@ async function syncUser(
   start.setDate(end.getDate() - SYNC_WINDOW_DAYS);
   const params = { start_date: isoDate(start), end_date: isoDate(end) };
 
-  const [dailySleep, sleepPeriods, dailyReadiness, dailySpo2] = await Promise.all([
+  const [dailySleep, sleepPeriods, dailyReadiness, dailySpo2, dailyStress, heartRateSamples, dailyResilience, dailyCardioAge] = await Promise.all([
     ouraGet(accessToken, "daily_sleep", params),
     ouraGet(accessToken, "sleep", params),
     ouraGet(accessToken, "daily_readiness", params),
     ouraGet(accessToken, "daily_spo2", params),
+    ouraGet(accessToken, "daily_stress", params),
+    ouraGetHeartRate(accessToken, params.start_date, params.end_date),
+    ouraGet(accessToken, "daily_resilience", params),
+    ouraGet(accessToken, "daily_cardiovascular_age", params),
   ]);
 
   const sleepByDay = new Map(dailySleep.map((d) => [d.day as string, d]));
@@ -123,8 +169,15 @@ async function syncUser(
   );
   const readinessByDay = new Map(dailyReadiness.map((d) => [d.day as string, d]));
   const spo2ByDay = new Map(dailySpo2.map((d) => [d.day as string, d]));
+  const stressByDay = new Map(dailyStress.map((d) => [d.day as string, d]));
+  const heartRateByDay = aggregateHeartRateByDay(heartRateSamples);
+  const resilienceByDay = new Map(dailyResilience.map((d) => [d.day as string, d]));
+  const cardioAgeByDay = new Map(dailyCardioAge.map((d) => [d.day as string, d]));
 
-  const days = new Set([...sleepByDay.keys(), ...periodByDay.keys(), ...readinessByDay.keys(), ...spo2ByDay.keys()]);
+  const days = new Set([
+    ...sleepByDay.keys(), ...periodByDay.keys(), ...readinessByDay.keys(), ...spo2ByDay.keys(),
+    ...stressByDay.keys(), ...heartRateByDay.keys(), ...resilienceByDay.keys(), ...cardioAgeByDay.keys(),
+  ]);
 
   let sleepDays = 0;
   let bodyDays = 0;
@@ -134,6 +187,10 @@ async function syncUser(
     const period = periodByDay.get(day) as Record<string, any> | undefined;
     const readiness = readinessByDay.get(day) as Record<string, any> | undefined;
     const spo2 = spo2ByDay.get(day) as Record<string, any> | undefined;
+    const stress = stressByDay.get(day) as Record<string, any> | undefined;
+    const heartRate = heartRateByDay.get(day);
+    const resilience = resilienceByDay.get(day) as Record<string, any> | undefined;
+    const cardioAge = cardioAgeByDay.get(day) as Record<string, any> | undefined;
 
     if (ds || period) {
       const durationMin = period?.total_sleep_duration != null
@@ -160,7 +217,7 @@ async function syncUser(
       }
     }
 
-    if (readiness || period || spo2) {
+    if (readiness || period || spo2 || stress || heartRate || resilience || cardioAge) {
       await upsertByDate(supabase, "protocol_body_metrics", userId, day, {
         weight_kg: null,
         hrv_ms: period?.average_hrv ?? null,
@@ -169,6 +226,18 @@ async function syncUser(
         readiness_score: readiness?.score ?? null,
         temperature_deviation: readiness?.temperature_deviation ?? null,
         recovery_index: readiness?.contributors?.recovery_index ?? null,
+        avg_heart_rate_bpm: heartRate?.avg ?? null,
+        min_heart_rate_bpm: heartRate?.min ?? null,
+        max_heart_rate_bpm: heartRate?.max ?? null,
+        stress_high_min: stress?.stress_high != null ? Math.round(stress.stress_high / 60) : null,
+        stress_recovery_min: stress?.recovery_high != null ? Math.round(stress.recovery_high / 60) : null,
+        stress_summary: stress?.day_summary ?? null,
+        resilience_level: resilience?.level ?? null,
+        resilience_sleep_recovery: resilience?.contributors?.sleep_recovery ?? null,
+        resilience_daytime_recovery: resilience?.contributors?.daytime_recovery ?? null,
+        resilience_stress: resilience?.contributors?.stress ?? null,
+        cardio_age: cardioAge?.vascular_age ?? null,
+        pulse_wave_velocity: cardioAge?.pulse_wave_velocity ?? null,
         notes: "Synced from Oura",
       });
       bodyDays++;

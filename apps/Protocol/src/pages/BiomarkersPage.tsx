@@ -32,11 +32,11 @@ function lastNDates(n: number): string[] {
 }
 
 /** Most recent entry (by date) that has a non-null value for `field`. */
-function latestNonNull<T extends { date: string }>(entries: T[], field: keyof T): number | null {
+function latestNonNull<T extends { date: string }, K extends keyof T>(entries: T[], field: K): T[K] | null {
   const found = [...entries]
     .sort((a, b) => b.date.localeCompare(a.date))
     .find((e) => e[field] != null);
-  return found ? (found[field] as number) : null;
+  return found ? found[field] : null;
 }
 
 // ── Module shell ─────────────────────────────────────────────────────────────
@@ -218,6 +218,11 @@ function BodyModule() {
   const latestWeight = latestNonNull(entries, "weight_kg");
   const latestHRV = latestNonNull(entries, "hrv_ms");
   const latestRHR = latestNonNull(entries, "resting_hr_bpm");
+  const latestAvgHR = latestNonNull(entries, "avg_heart_rate_bpm");
+  const latestCardioAge = latestNonNull(entries, "cardio_age");
+  const latestResilience = latestNonNull(entries, "resilience_level");
+  const latestStressHigh = latestNonNull(entries, "stress_high_min");
+  const latestStressSummary = latestNonNull(entries, "stress_summary");
 
   const cutoff30 = subDays(29);
   const byDate = new Map(entries.map((e: BodyMetric) => [e.date, e]));
@@ -228,6 +233,14 @@ function BodyModule() {
   const hrvData = lastNDates(30).map((date) => ({
     date: date.slice(5),
     value: byDate.get(date)?.hrv_ms ?? null,
+  }));
+  const heartRateData = lastNDates(30).map((date) => ({
+    date: date.slice(5),
+    value: byDate.get(date)?.avg_heart_rate_bpm ?? null,
+  }));
+  const stressData = lastNDates(30).map((date) => ({
+    date: date.slice(5),
+    value: byDate.get(date)?.stress_high_min ?? null,
   }));
   const loggedCount = entries.filter((e) => e.date >= cutoff30).length;
 
@@ -249,6 +262,25 @@ function BodyModule() {
           <div style={{ fontSize: 12, fontWeight: 600, color: "var(--text-muted)", marginBottom: 6 }}>HRV trend</div>
           <TrendChart data={hrvData} color="var(--series-workout)" gradientId="hrvTrend" height={130} valueSuffix=" ms" />
         </div>
+        <div>
+          <div style={{ fontSize: 12, fontWeight: 600, color: "var(--text-muted)", marginBottom: 6 }}>Heart rate trend (avg)</div>
+          <TrendChart data={heartRateData} color="var(--series-running)" gradientId="hrTrend" height={130} valueSuffix=" bpm" />
+        </div>
+        <div>
+          <div style={{ fontSize: 12, fontWeight: 600, color: "var(--text-muted)", marginBottom: 6 }}>Stress (high, daily)</div>
+          <TrendChart data={stressData} color="var(--series-nutrition)" gradientId="stressTrend" height={130} valueSuffix=" min" />
+        </div>
+      </div>
+
+      <div style={{ display: "flex", gap: 24, flexWrap: "wrap", paddingTop: 4, borderTop: "1px solid var(--border-subtle)", marginTop: -4 }}>
+        <StatTile label="Avg heart rate" value={latestAvgHR != null ? String(latestAvgHR) : "—"} sub="bpm, latest" />
+        <StatTile label="Cardio age" value={latestCardioAge != null ? String(latestCardioAge) : "—"} sub="latest" />
+        <StatTile label="Resilience" value={latestResilience ?? "—"} sub="latest" />
+        <StatTile
+          label="Stress high"
+          value={latestStressHigh != null ? formatMinutes(latestStressHigh) : "—"}
+          sub={latestStressSummary ? `latest · ${latestStressSummary}` : "latest"}
+        />
       </div>
 
       <ManageToggle open={manageOpen} onToggle={() => setManageOpen((v) => !v)} label="Log & manage entries" />
