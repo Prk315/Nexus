@@ -125,6 +125,14 @@ export default function DashboardPage() {
     return best;
   }, null)?.weight ?? null;
 
+  // Most recent logged body-metrics day, not an average — same convention as lastNight.
+  const lastVitals = [...bodyMetrics].sort((a, b) => b.date.localeCompare(a.date))[0] ?? null;
+  const lastVitalsLabel = lastVitals
+    ? lastVitals.date === today
+      ? "today"
+      : new Date(`${lastVitals.date}T00:00:00`).toLocaleDateString(undefined, { month: "short", day: "numeric" })
+    : "no data";
+
   const weightChartData = [...bodyMetrics]
     .filter((e) => e.date >= cutoff14 && e.weight_kg != null)
     .sort((a, b) => a.date.localeCompare(b.date))
@@ -231,6 +239,38 @@ export default function DashboardPage() {
               <StatTile
                 label="Temp deviation"
                 value={lastNight.temperature_deviation != null ? `${lastNight.temperature_deviation > 0 ? "+" : ""}${lastNight.temperature_deviation.toFixed(2)}°` : "—"}
+              />
+            </div>
+          </>
+        )}
+      </div>
+
+      <div style={{ ...CARD_STYLE, padding: "20px 20px 16px" }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 16 }}>
+          <Activity size={15} color="#8b5cf6" />
+          <span style={{ fontWeight: 600, color: "var(--text)", fontSize: 14 }}>Recovery & Vitals</span>
+          <span style={{ fontSize: 12, color: "var(--text-muted)" }}>· {lastVitalsLabel}</span>
+        </div>
+        {!lastVitals ? NO_DATA : (
+          <>
+            <div style={{ display: "flex", gap: 24, flexWrap: "wrap" }}>
+              <StatTile label="HRV" value={lastVitals.hrv_ms != null ? String(lastVitals.hrv_ms) : "—"} sub="ms" />
+              <StatTile label="Resting HR" value={lastVitals.resting_hr_bpm != null ? String(lastVitals.resting_hr_bpm) : "—"} sub="bpm" />
+              <StatTile label="Avg heart rate" value={lastVitals.avg_heart_rate_bpm != null ? String(lastVitals.avg_heart_rate_bpm) : "—"} sub="bpm" />
+              <StatTile label="Readiness" value={lastVitals.readiness_score != null ? String(lastVitals.readiness_score) : "—"} sub="/ 100" />
+              <StatTile label="SpO2" value={lastVitals.spo2_pct != null ? lastVitals.spo2_pct.toFixed(1) : "—"} sub="%" />
+            </div>
+            <div style={{ display: "flex", gap: 24, flexWrap: "wrap", marginTop: 16, paddingTop: 16, borderTop: "1px solid var(--border-subtle)" }}>
+              <StatTile
+                label="Stress high"
+                value={lastVitals.stress_high_min != null ? formatMinutes(lastVitals.stress_high_min) : "—"}
+                sub={lastVitals.stress_summary ?? undefined}
+              />
+              <StatTile label="Resilience" value={lastVitals.resilience_level ?? "—"} />
+              <StatTile label="Cardio age" value={lastVitals.cardio_age != null ? String(lastVitals.cardio_age) : "—"} />
+              <StatTile
+                label="Temp deviation"
+                value={lastVitals.temperature_deviation != null ? `${lastVitals.temperature_deviation > 0 ? "+" : ""}${lastVitals.temperature_deviation.toFixed(2)}°` : "—"}
               />
             </div>
           </>
