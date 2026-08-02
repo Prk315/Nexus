@@ -24,8 +24,13 @@ function ActivePage({ tab }: { tab: Tab }) {
   }
 }
 
+function initialTab(): Tab {
+  const params = new URLSearchParams(window.location.search);
+  return params.has("oura") ? "Biomarkers" : "Dashboard";
+}
+
 export default function AppShell() {
-  const [activeTab, setActiveTab] = useState<Tab>("Dashboard");
+  const [activeTab, setActiveTab] = useState<Tab>(initialTab);
   const { user, signOut } = useNexusAuth();
 
   return (

@@ -9,6 +9,7 @@ import { entryNutrition } from "../lib/mealNutrition";
 import SleepLogger from "../components/biomarkers/SleepLogger";
 import BodyMetricsLogger from "../components/biomarkers/BodyMetricsLogger";
 import OuraImportPanel from "../components/biomarkers/OuraImportPanel";
+import OuraConnectPanel from "../components/biomarkers/OuraConnectPanel";
 import GarminSyncPanel from "../components/shared/GarminSyncPanel";
 import { StatTile, TrendChart } from "../components/biomarkers/BiomarkerCharts";
 import { formatMinutes, isoDate } from "../lib/uiHelpers";
@@ -274,11 +275,23 @@ function BodyModule() {
 
 export default function BiomarkersPage() {
   const dispatch = useAppDispatch();
+  const [ouraBounce, setOuraBounce] = useState<{ status: string; error?: string } | null>(null);
 
   useEffect(() => {
     dispatch(fetchSleep());
     dispatch(fetchBodyMetrics());
   }, [dispatch]);
+
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const status = params.get("oura");
+    if (!status) return;
+    setOuraBounce({ status, error: params.get("oura_error") ?? undefined });
+    params.delete("oura");
+    params.delete("oura_error");
+    const rest = params.toString();
+    window.history.replaceState(null, "", window.location.pathname + (rest ? `?${rest}` : ""));
+  }, []);
 
   return (
     <div style={{ padding: 28, display: "flex", flexDirection: "column", gap: 20 }}>
@@ -290,6 +303,29 @@ export default function BiomarkersPage() {
           Sleep, nutrition, and body metrics — all in one view.
         </p>
       </div>
+
+      {ouraBounce && (
+        <div
+          style={{
+            padding: "10px 16px",
+            borderRadius: "var(--radius-sm)",
+            fontSize: 13,
+            fontWeight: 500,
+            background: ouraBounce.status === "connected" ? "#10b98122" : "#ef444422",
+            color: ouraBounce.status === "connected" ? "#10b981" : "#ef4444",
+            border: `1px solid ${ouraBounce.status === "connected" ? "#10b98144" : "#ef444444"}`,
+          }}
+        >
+          {ouraBounce.status === "connected"
+            ? "Oura connected — hit Sync now below to pull your data."
+            : `Oura connection failed${ouraBounce.error ? `: ${ouraBounce.error}` : ""}.`}
+        </div>
+      )}
+
+      <OuraConnectPanel onSynced={() => {
+        dispatch(fetchSleep());
+        dispatch(fetchBodyMetrics());
+      }} />
 
       <OuraImportPanel onImported={() => {
         dispatch(fetchSleep());
