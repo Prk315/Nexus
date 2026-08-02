@@ -20,6 +20,7 @@ import {
 import { formatMinutes, CARD_STYLE, isoDate } from "../lib/uiHelpers";
 import { entryNutrition } from "../lib/mealNutrition";
 import { StatTile } from "../components/shared/StatTile";
+import MuscleMapCard from "../components/shared/MuscleMapCard";
 import ProtocolChargeChart from "../components/dashboard/ProtocolChargeChart";
 import { ConsistencyHeatmap, buildHeatmapGrid, computeFractionByDate } from "../components/habits/HabitCharts";
 import type { WorkoutSession } from "../store/types";
@@ -276,6 +277,8 @@ export default function DashboardPage() {
           </>
         )}
       </div>
+
+      <MuscleMapCard />
 
       <div style={{ ...CARD_STYLE, padding: "20px 20px 12px" }}>
         <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 16 }}>

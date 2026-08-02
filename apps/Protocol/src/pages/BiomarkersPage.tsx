@@ -10,6 +10,7 @@ import SleepLogger from "../components/biomarkers/SleepLogger";
 import BodyMetricsLogger from "../components/biomarkers/BodyMetricsLogger";
 import OuraImportPanel from "../components/biomarkers/OuraImportPanel";
 import OuraConnectPanel from "../components/biomarkers/OuraConnectPanel";
+import MuscleMapCard from "../components/shared/MuscleMapCard";
 import { StatTile, TrendChart } from "../components/biomarkers/BiomarkerCharts";
 import { formatMinutes, isoDate } from "../lib/uiHelpers";
 import type { BodyMetric, SleepEntry } from "../store/types";
@@ -354,6 +355,7 @@ export default function BiomarkersPage() {
       <SleepModule />
       <NutritionModule />
       <BodyModule />
+      <MuscleMapCard />
     </div>
   );
 }
