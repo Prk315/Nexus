@@ -8,7 +8,7 @@ import {
   Tooltip,
   ResponsiveContainer,
 } from "recharts";
-import { Moon, Activity, TrendingUp, Flame, Dumbbell } from "lucide-react";
+import { Moon, Activity, TrendingUp, Flame } from "lucide-react";
 import { useAppDispatch, useAppSelector } from "../store/hooks";
 import { fetchSleep, fetchBodyMetrics } from "../store/slices/biomarkersSlice";
 import { fetchWorkoutSessions } from "../store/slices/workoutsSlice";
@@ -277,15 +277,8 @@ export default function DashboardPage() {
           </div>
 
           {workoutSessions.length > 0 && (
-            <div style={{ flex: "1 1 220px" }}>
-              <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 4 }}>
-                <Dumbbell size={14} color="#8b5cf6" />
-                <span style={{ fontWeight: 600, color: "var(--text)", fontSize: 13 }}>Workout Consistency</span>
-              </div>
-              <div style={{ fontSize: 11, color: "var(--text-muted)", marginBottom: 12 }}>
-                Days with a completed workout, last {HEATMAP_WEEKS} weeks
-              </div>
-              <ConsistencyHeatmap grid={heatmapGrid} today={today} fractionByDate={workoutFractionByDate} />
+            <div style={{ flex: "1 1 280px" }}>
+              <ConsistencyHeatmap grid={heatmapGrid} today={today} fractionByDate={workoutFractionByDate} cellSize={16} />
             </div>
           )}
         </div>
