@@ -156,33 +156,16 @@ export default function DashboardPage() {
       />
 
       <div style={{ padding: "24px 40px", display: "flex", flexDirection: "column", gap: 24 }}>
-      {(habits.length > 0 || workoutSessions.length > 0) && (
-        <div style={{ display: "flex", gap: 16, flexWrap: "wrap" }}>
-          {habits.length > 0 && (
-            <div style={{ ...CARD_STYLE, padding: "20px 24px", flex: "1 1 260px" }}>
-              <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 4 }}>
-                <Flame size={15} color="var(--warning)" />
-                <span style={{ fontWeight: 600, color: "var(--text)", fontSize: 14 }}>Habit Consistency</span>
-              </div>
-              <div style={{ fontSize: 12, color: "var(--text-muted)", marginBottom: 16 }}>
-                Share of habits completed each day, last {HEATMAP_WEEKS} weeks
-              </div>
-              <ConsistencyHeatmap grid={heatmapGrid} today={today} fractionByDate={fractionByDate} />
-            </div>
-          )}
-
-          {workoutSessions.length > 0 && (
-            <div style={{ ...CARD_STYLE, padding: "20px 24px", flex: "1 1 260px" }}>
-              <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 4 }}>
-                <Dumbbell size={15} color="#8b5cf6" />
-                <span style={{ fontWeight: 600, color: "var(--text)", fontSize: 14 }}>Workout Consistency</span>
-              </div>
-              <div style={{ fontSize: 12, color: "var(--text-muted)", marginBottom: 16 }}>
-                Days with a completed workout, last {HEATMAP_WEEKS} weeks
-              </div>
-              <ConsistencyHeatmap grid={heatmapGrid} today={today} fractionByDate={workoutFractionByDate} />
-            </div>
-          )}
+      {habits.length > 0 && (
+        <div style={{ ...CARD_STYLE, padding: "20px 24px" }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 4 }}>
+            <Flame size={15} color="var(--warning)" />
+            <span style={{ fontWeight: 600, color: "var(--text)", fontSize: 14 }}>Habit Consistency</span>
+          </div>
+          <div style={{ fontSize: 12, color: "var(--text-muted)", marginBottom: 16 }}>
+            Share of habits completed each day, last {HEATMAP_WEEKS} weeks
+          </div>
+          <ConsistencyHeatmap grid={heatmapGrid} today={today} fractionByDate={fractionByDate} />
         </div>
       )}
 
@@ -292,6 +275,19 @@ export default function DashboardPage() {
               </>
             )}
           </div>
+
+          {workoutSessions.length > 0 && (
+            <div style={{ flex: "1 1 220px" }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 4 }}>
+                <Dumbbell size={14} color="#8b5cf6" />
+                <span style={{ fontWeight: 600, color: "var(--text)", fontSize: 13 }}>Workout Consistency</span>
+              </div>
+              <div style={{ fontSize: 11, color: "var(--text-muted)", marginBottom: 12 }}>
+                Days with a completed workout, last {HEATMAP_WEEKS} weeks
+              </div>
+              <ConsistencyHeatmap grid={heatmapGrid} today={today} fractionByDate={workoutFractionByDate} />
+            </div>
+          )}
         </div>
       </div>
 
