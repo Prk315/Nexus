@@ -40,10 +40,11 @@ struct TimeTrackerProvider: TimelineProvider {
     }
 
     private func fetchEntry() async -> TimeTrackerEntry {
-        guard let auth = await SessionStore.validAuth() else { return .signedOut }
-        // TimeTracker rows are stored under a fixed user_id ("default"), not the
-        // auth uid; its tables are anon-open so the JWT still reads them fine.
-        let client = SupabaseClient(accessToken: auth.token)
+        guard await SessionStore.validAuth() != nil else { return .signedOut }
+        // TimeTracker rows live under user_id="default" and its RLS grants the
+        // anon role only — read with the anon key (no user JWT), or authed reads
+        // return nothing.
+        let client = SupabaseClient()
         let today = todayString()
 
         async let sessionRows: [ActiveSessionRow] = (try? client.fetch(

@@ -5,6 +5,7 @@ import App from "./App";
 import { supabase } from "./lib/supabase";
 import { SessionBridge } from "./lib/SessionBridge";
 import { ContentBlockerSync } from "./lib/ContentBlockerSync";
+import { LiveActivitySync } from "./lib/LiveActivitySync";
 import "./index.css";
 
 ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(
@@ -13,6 +14,7 @@ ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(
       {/* Run regardless of the auth gate */}
       <SessionBridge />
       <ContentBlockerSync />
+      <LiveActivitySync />
       <AuthGate appName="Nexus Local">
         <App />
       </AuthGate>

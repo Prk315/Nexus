@@ -51,6 +51,11 @@ targets:
         NSLocalNetworkUsageDescription: "Nexus Local connects to the Tauri development server on your local network during development."
         NSBonjourServices:
           - _http._tcp
+        NSSupportsLiveActivities: true
+        CFBundleURLTypes:
+          - CFBundleURLName: com.bastianthomsen.nexuslocal
+            CFBundleURLSchemes:
+              - nexuslocal
         UISupportedInterfaceOrientations:
           - UIInterfaceOrientationPortrait
           - UIInterfaceOrientationLandscapeLeft
@@ -93,6 +98,8 @@ targets:
       - sdk: UIKit.framework
       - sdk: WebKit.framework
       - sdk: SafariServices.framework
+      - sdk: ActivityKit.framework
+        weak: true
       - target: NexusLocalWidgets
         embed: true
       - target: nexus-local_SafariBlocker
@@ -114,6 +121,7 @@ targets:
           - "Info.plist"            # provided via INFOPLIST_FILE below
           - "Secrets.swift.template" # copied to Secrets.swift (gitignored) by the developer
           - "*.entitlements"         # wired via the entitlements block, not a source
+      - path: ../../ios/TimerAttributes.swift  # shared ActivityAttributes (also compiled into the app)
     entitlements:
       path: NexusLocalWidgets/NexusLocalWidgets.entitlements
       properties:
@@ -122,6 +130,7 @@ targets:
     dependencies:
       - sdk: WidgetKit.framework
       - sdk: SwiftUI.framework
+      - sdk: ActivityKit.framework
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.bastianthomsen.nexuslocal.widgets
@@ -130,7 +139,7 @@ targets:
         ARCHS: [arm64]
         VALID_ARCHS: arm64
         EXCLUDED_ARCHS[sdk=iphoneos*]: x86_64
-        IPHONEOS_DEPLOYMENT_TARGET: "16.0"
+        IPHONEOS_DEPLOYMENT_TARGET: "16.2"
         ENABLE_USER_SCRIPT_SANDBOXING: NO
         ENABLE_BITCODE: false
         INFOPLIST_FILE: $(SRCROOT)/NexusLocalWidgets/Info.plist

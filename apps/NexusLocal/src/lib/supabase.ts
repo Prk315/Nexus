@@ -12,3 +12,10 @@ export const supabase = createClient(url, key, {
     detectSessionInUrl: false,
   },
 });
+
+// A session-less (anon-role) client for TimeTracker's tables (active_sessions,
+// time_entries), whose RLS policies grant the anon role only — reading them with
+// the authenticated user's JWT returns nothing (data is keyed user_id="default").
+export const supabasePublic = createClient(url, key, {
+  auth: { persistSession: false, autoRefreshToken: false },
+});

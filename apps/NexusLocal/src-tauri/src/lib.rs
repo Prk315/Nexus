@@ -3,6 +3,7 @@ mod content_blocker;
 mod device;
 mod grid;
 mod ios_bridge;
+mod live_activities;
 mod modules;
 #[cfg(not(mobile))]
 mod tray;
@@ -97,7 +98,9 @@ pub fn run() {
             grid_status,
             ios_bridge::store_session,
             ios_bridge::clear_session,
-            content_blocker::apply_content_blocker
+            content_blocker::apply_content_blocker,
+            live_activities::start_live_activity,
+            live_activities::end_live_activity
         ])
         .run(tauri::generate_context!())
         .expect("error while running Nexus Local");
