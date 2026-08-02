@@ -113,15 +113,49 @@ fn bridge_script_path() -> Result<PathBuf, String> {
     Err("garmin_bridge.py not found — set GARMIN_BRIDGE_PATH to override".to_string())
 }
 
-/// `py -3` (Windows launcher) → `python` → `python3`, matching Protocol.
+/// Interpreters to try, in order. A module-owned venv is preferred so the module
+/// carries its own pinned `garminconnect` and doesn't depend on whatever Python
+/// happens to be on PATH (the system one is often too old). Falls back to
+/// `GARMIN_PYTHON`, then `py -3` / `python` / `python3`.
+fn python_candidates() -> Vec<Vec<String>> {
+    let mut cands: Vec<Vec<String>> = Vec::new();
+
+    if let Ok(p) = std::env::var("GARMIN_PYTHON") {
+        if !p.is_empty() {
+            cands.push(vec![p]);
+        }
+    }
+
+    // ~/.nexuslocal/venvs/garmin/bin/python — the module's dedicated venv.
+    let venv = crate::config::state_dir()
+        .join("venvs")
+        .join("garmin")
+        .join("bin")
+        .join("python");
+    if venv.exists() {
+        cands.push(vec![venv.to_string_lossy().to_string()]);
+    }
+
+    cands.push(vec!["py".to_string(), "-3".to_string()]);
+    cands.push(vec!["python".to_string()]);
+    cands.push(vec!["python3".to_string()]);
+    cands
+}
+
 fn invoke_python(args: &[String]) -> Result<std::process::Output, String> {
-    std::process::Command::new("py")
-        .arg("-3")
-        .args(args)
-        .output()
-        .or_else(|_| std::process::Command::new("python").args(args).output())
-        .or_else(|_| std::process::Command::new("python3").args(args).output())
-        .map_err(|e| format!("Failed to launch Python: {e}"))
+    let mut last_err = "no python interpreter available".to_string();
+    for cand in python_candidates() {
+        let (bin, prefix) = cand.split_first().expect("candidate is non-empty");
+        match std::process::Command::new(bin)
+            .args(prefix)
+            .args(args)
+            .output()
+        {
+            Ok(output) => return Ok(output),
+            Err(e) => last_err = format!("{bin}: {e}"),
+        }
+    }
+    Err(format!("Failed to launch Python: {last_err}"))
 }
 
 fn run_bridge(cmd_args: Vec<String>) -> Result<String, String> {
