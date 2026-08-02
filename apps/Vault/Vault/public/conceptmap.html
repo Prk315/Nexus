@@ -283,6 +283,37 @@ if(CTRL){ CTRL.autoRotate=true; CTRL.autoRotateSpeed=0.5;
   CTRL.addEventListener('start',()=>{ CTRL.autoRotate=false; clearTimeout(__rt); });
   CTRL.addEventListener('end',rotResume); }
 
+// --- Vault visibility handshake ---------------------------------------------
+// The Vault shell keeps this iframe mounted but hidden when you switch away.
+// A hidden WebGL context still holds GPU memory and (via autoRotate) keeps
+// rendering, and two live contexts (this + Vault's graph) can crash Chrome's
+// GPU process. So on 'vault:hidden' we pause the render loop and drop the GL
+// context; on 'vault:visible' we restore it. All JS/DOM state stays in memory,
+// so nothing reloads and the camera position is preserved.
+(function(){
+  var released=false;
+  function glExt(){ try{ return G.renderer().getContext().getExtension('WEBGL_lose_context'); }catch(e){ return null; } }
+  function release(){
+    if(released) return; released=true;
+    try{ G.pauseAnimation(); }catch(e){}
+    var ext=glExt(); if(ext){ try{ ext.loseContext(); }catch(e){} }
+  }
+  function restore(){
+    if(!released) return; released=false;
+    var canvas=null; try{ canvas=G.renderer().domElement; }catch(e){}
+    var resumed=false;
+    function go(){ if(resumed) return; resumed=true; try{ G.resumeAnimation(); fitGraph(); }catch(e){} }
+    if(canvas){ canvas.addEventListener('webglcontextrestored', go, { once:true }); }
+    var ext=glExt(); if(ext){ try{ ext.restoreContext(); }catch(e){} }
+    setTimeout(go, 250); // fallback if webglcontextrestored never fires
+  }
+  addEventListener('message', function(e){
+    var t = e && e.data && e.data.type;
+    if(t==='vault:hidden') release();
+    else if(t==='vault:visible') restore();
+  });
+})();
+
 function bar(lab,val,col,note){ const p=Math.round(Math.max(0,Math.min(1,val))*100);
   return '<div class=gauge><div class=lab><span>'+lab+'</span><span>'+note+'</span></div><div class=bar><i style="width:'+p+'%;background:'+col+'"></i></div></div>'; }
 function openPanel(n){

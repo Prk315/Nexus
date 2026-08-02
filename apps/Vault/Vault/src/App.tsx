@@ -95,6 +95,7 @@ function App() {
 
   const graphContainerRef = useRef<HTMLDivElement>(null);
   const fullGraphRef = useRef<any>(undefined);
+  const learnFrameRef = useRef<HTMLIFrameElement>(null);
   // Cluster bubble meshes and label sprites keyed by tag name
   const clusterMeshesRef = useRef<Map<string, THREE.Mesh>>(new Map());
   const clusterLabelsRef = useRef<Map<string, any>>(new Map()); // SpriteText objects
@@ -131,7 +132,9 @@ function App() {
   useEffect(() => { loadGraph(); }, []);
 
   useEffect(() => {
-    if (!fullGraph) return;
+    // Graph is only mounted in Vault mode (see render gate) — skip force setup
+    // when it's unmounted, and re-run when we return so forces re-apply.
+    if (!fullGraph || appMode !== "vault") return;
 
     // ForceGraph3D may not have finished mounting when this effect fires.
     // Retry until the ref and its d3Force API are available.
@@ -209,7 +212,7 @@ function App() {
     // _updateGraph has set state.layout before we flip engineRunning=true.
     retryId = setTimeout(applyForces, 50);
     return () => clearTimeout(retryId);
-  }, [fullGraph, is3D, graphFilters.gravity, graphFilters.showClusters, graphFilters.clusterStrength, graphFilters.clusterRepulsion]);
+  }, [fullGraph, appMode, is3D, graphFilters.gravity, graphFilters.showClusters, graphFilters.clusterStrength, graphFilters.clusterRepulsion]);
 
   // Clean up cluster meshes and labels when switching to 2D or disabling clusters
   useEffect(() => {
@@ -234,7 +237,7 @@ function App() {
 
   // rAF loop: drive cluster mesh updates independently of the D3 tick timing
   useEffect(() => {
-    if (!fullGraph || !is3D || !graphFilters.showClusters) return;
+    if (!fullGraph || appMode !== "vault" || !is3D || !graphFilters.showClusters) return;
     let rafId: number;
     function loop() {
       updateClusterMeshesRef.current();
@@ -242,7 +245,7 @@ function App() {
     }
     rafId = requestAnimationFrame(loop);
     return () => cancelAnimationFrame(rafId);
-  }, [fullGraph, is3D, graphFilters.showClusters]);
+  }, [fullGraph, appMode, is3D, graphFilters.showClusters]);
 
   useEffect(() => {
     if (sidebarView === "graph" && graphContainerRef.current) {
@@ -254,6 +257,18 @@ function App() {
   useEffect(() => {
     if (!searchOpen) setSearchQuery("");
   }, [searchOpen]);
+
+  // Learn & Retain visibility handshake. The iframe stays mounted (so its JS/DOM
+  // state and camera position survive), but we tell it to release its WebGL
+  // context + pause its render loop whenever it's hidden, and restore on return.
+  // Keeps at most one live GL context (this or the Vault graph), which is what
+  // stops Chrome's GPU process from crashing — without reloading the Learn app.
+  useEffect(() => {
+    if (!learnMounted) return;
+    const win = learnFrameRef.current?.contentWindow;
+    if (!win) return;
+    win.postMessage({ type: appMode === "learn" ? "vault:visible" : "vault:hidden" }, "*");
+  }, [appMode, learnMounted]);
 
   function addPaneAfter(afterPaneId: string) {
     const newPane = { id: crypto.randomUUID() };
@@ -650,7 +665,7 @@ function App() {
     <div style={{ flex: 1, minHeight: 0, display: "flex" }}>
     <div style={{ flex: 1, minWidth: 0, display: "flex", flexDirection: "column" }}>
     <div className="app" style={{ flex: 1, minHeight: 0, minWidth: 0, height: "auto", display: appMode === "vault" ? undefined : "none" }}>
-      {fullGraph && (
+      {fullGraph && appMode === "vault" && (
         <div className="fullgraph-overlay">
           {filteredGraphData.nodes.length === 0 ? (
             <div style={{ display: "flex", alignItems: "center", justifyContent: "center", height: "100%", color: "#888" }}>
@@ -907,7 +922,11 @@ function App() {
       </main>
     </div>
     {learnMounted && (
+      // Mounted once and kept alive so its state/camera survive. It releases its
+      // WebGL context while hidden via the visibility-handshake effect above, so
+      // keeping it mounted no longer costs a live GL context.
       <iframe
+        ref={learnFrameRef}
         src="/conceptmap.html"
         title="Learn & Retain"
         className="learn-fullbleed"
