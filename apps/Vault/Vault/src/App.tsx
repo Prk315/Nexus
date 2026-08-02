@@ -18,6 +18,41 @@ import { TagsPanel } from "./components/TagsPanel";
 import { EditorPane, EditorPaneHandle } from "./components/EditorPane";
 import "./App.css";
 
+// Some WebViews / browsers (hardware accel off, sandboxed GPU) can't create a
+// WebGL context. ForceGraph3D throws synchronously in that case and white-screens
+// the whole view, so we detect support up front and default to the 2D canvas graph.
+function detectWebGL(): boolean {
+  try {
+    const canvas = document.createElement("canvas");
+    return !!(
+      window.WebGLRenderingContext &&
+      (canvas.getContext("webgl") || canvas.getContext("experimental-webgl"))
+    );
+  } catch {
+    return false;
+  }
+}
+
+// Catches a WebGL context failure that slips past detectWebGL (e.g. the context
+// is created then lost mid-render) and falls back to the 2D graph instead of
+// crashing React.
+class WebGLErrorBoundary extends React.Component<
+  { fallback: React.ReactNode; onError?: () => void; children: React.ReactNode },
+  { hasError: boolean }
+> {
+  state = { hasError: false };
+  static getDerivedStateFromError() {
+    return { hasError: true };
+  }
+  componentDidCatch(error: unknown) {
+    console.warn("[Vault] 3D graph failed, falling back to 2D:", error);
+    this.props.onError?.();
+  }
+  render() {
+    return this.state.hasError ? this.props.fallback : this.props.children;
+  }
+}
+
 function App() {
   useNexusRegistration("Vault");
   const { user, signOut } = useNexusAuth();
@@ -54,7 +89,9 @@ function App() {
   // app churns WebGL contexts and hangs the tab.
   const [learnMounted, setLearnMounted] = useState(false);
 
-  const [is3D, setIs3D] = useState(true);
+  // WebGL support is fixed for the page's lifetime; compute once.
+  const webglSupported = useMemo(detectWebGL, []);
+  const [is3D, setIs3D] = useState(webglSupported);
 
   const graphContainerRef = useRef<HTMLDivElement>(null);
   const fullGraphRef = useRef<any>(undefined);
@@ -574,6 +611,28 @@ function App() {
   // Keep the ref pointing at the latest version so the rAF loop is always current
   updateClusterMeshesRef.current = updateClusterMeshes;
 
+  // 2D canvas graph — used both as the explicit 2D mode and as the WebGL fallback.
+  const twoDGraph = (
+    <ForceGraph2D
+      ref={fullGraphRef}
+      graphData={filteredGraphData}
+      backgroundColor="#f8f9fa"
+      nodeLabel=""
+      nodeCanvasObject={fullGraphPaint}
+      nodeCanvasObjectMode={() => "replace" as const}
+      nodeRelSize={5}
+      linkCanvasObject={fullGraphPaintLink}
+      linkCanvasObjectMode={() => "replace" as const}
+      warmupTicks={60}
+      cooldownTime={4000}
+      d3VelocityDecay={0.35}
+      width={window.innerWidth - 260}
+      height={window.innerHeight}
+      onEngineStop={() => savePositions(filteredGraphData.nodes)}
+      onNodeClick={(node: any) => handleGraphNodeClick(node.id)}
+    />
+  );
+
   return (
     <div style={{ display: "flex", flexDirection: "column", height: "100vh" }}>
       <NexusHeader
@@ -598,49 +657,34 @@ function App() {
               {graph && Object.keys(graph.nodes).length === 0 ? "No nodes in vault yet" : "Loading graph…"}
             </div>
           ) : is3D ? (
-            <ForceGraph3D
-              ref={fullGraphRef}
-              graphData={filteredGraphData}
-              backgroundColor="#f8f9fa"
-              nodeLabel={(node: any) => node.name}
-              nodeColor={(node: any) => resolveNodeColor(node, graph.tag_colors)}
-              nodeRelSize={5}
-              linkColor={() => "#9ca3af"}
-              linkWidth={1.5}
-              linkCurvature={0.08}
-              linkDirectionalArrowLength={4}
-              linkDirectionalArrowRelPos={0.88}
-              linkDirectionalArrowColor={() => "#9ca3af"}
-              warmupTicks={60}
-              cooldownTime={4000}
-              d3VelocityDecay={0.35}
-              width={window.innerWidth - 260}
-              height={window.innerHeight}
-              onNodeClick={(node: any) => handleGraphNodeClick(node.id)}
-              onEngineStop={() => {
-                savePositions(filteredGraphData.nodes);
-                fullGraphRef.current?.zoomToFit(400, 120);
-              }}
-            />
+            <WebGLErrorBoundary onError={() => setIs3D(false)} fallback={twoDGraph}>
+              <ForceGraph3D
+                ref={fullGraphRef}
+                graphData={filteredGraphData}
+                backgroundColor="#f8f9fa"
+                nodeLabel={(node: any) => node.name}
+                nodeColor={(node: any) => resolveNodeColor(node, graph.tag_colors)}
+                nodeRelSize={5}
+                linkColor={() => "#9ca3af"}
+                linkWidth={1.5}
+                linkCurvature={0.08}
+                linkDirectionalArrowLength={4}
+                linkDirectionalArrowRelPos={0.88}
+                linkDirectionalArrowColor={() => "#9ca3af"}
+                warmupTicks={60}
+                cooldownTime={4000}
+                d3VelocityDecay={0.35}
+                width={window.innerWidth - 260}
+                height={window.innerHeight}
+                onNodeClick={(node: any) => handleGraphNodeClick(node.id)}
+                onEngineStop={() => {
+                  savePositions(filteredGraphData.nodes);
+                  fullGraphRef.current?.zoomToFit(400, 120);
+                }}
+              />
+            </WebGLErrorBoundary>
           ) : (
-            <ForceGraph2D
-              ref={fullGraphRef}
-              graphData={filteredGraphData}
-              backgroundColor="#f8f9fa"
-              nodeLabel=""
-              nodeCanvasObject={fullGraphPaint}
-              nodeCanvasObjectMode={() => "replace" as const}
-              nodeRelSize={5}
-              linkCanvasObject={fullGraphPaintLink}
-              linkCanvasObjectMode={() => "replace" as const}
-              warmupTicks={60}
-              cooldownTime={4000}
-              d3VelocityDecay={0.35}
-              width={window.innerWidth - 260}
-              height={window.innerHeight}
-              onEngineStop={() => savePositions(filteredGraphData.nodes)}
-              onNodeClick={(node: any) => handleGraphNodeClick(node.id)}
-            />
+            twoDGraph
           )}
           <div className="fullgraph-toolbar">
             {!fullGraphCreating ? (
@@ -659,7 +703,8 @@ function App() {
                 <button
                   className={`link-mode-btn${is3D ? " active" : ""}`}
                   onClick={() => setIs3D(v => !v)}
-                  title="Toggle 3D view"
+                  disabled={!webglSupported}
+                  title={webglSupported ? "Toggle 3D view" : "3D unavailable — WebGL is disabled in this browser/WebView"}
                 >
                   {is3D ? "2D" : "3D"}
                 </button>
