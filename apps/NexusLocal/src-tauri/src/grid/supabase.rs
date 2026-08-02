@@ -51,6 +51,23 @@ impl Supabase {
         format!("{}/rest/v1/{table}", self.url)
     }
 
+    /// Generic PostgREST GET, so modules can read their own config tables
+    /// (e.g. the blocking module reading `blocked_sites`).
+    pub async fn select(
+        &self,
+        table: &str,
+        query: &[(&str, &str)],
+    ) -> Result<Value, String> {
+        let resp = self
+            .auth(self.client.get(self.rest(table)))
+            .query(query)
+            .send()
+            .await
+            .map_err(|e| e.to_string())?;
+        let resp = error_for_status(resp).await?;
+        resp.json::<Value>().await.map_err(|e| e.to_string())
+    }
+
     fn auth(&self, req: reqwest::RequestBuilder) -> reqwest::RequestBuilder {
         req.header("apikey", &self.key)
             .header("Authorization", format!("Bearer {}", self.key))

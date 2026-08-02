@@ -38,7 +38,7 @@ pub fn run() {
             let device_id = device::get_or_create();
             let supabase = Supabase::new(config.supabase.url.clone(), config.supabase.key.clone());
 
-            let grid = Grid::new(modules::registry());
+            let grid = Grid::new(modules::registry(&config));
             let manifests = grid.manifests();
 
             let status = Arc::new(GridStatus {

@@ -24,6 +24,12 @@ pub struct AppConfig {
     /// Seconds between command-queue polls / presence heartbeats.
     #[serde(default = "default_poll_secs")]
     pub poll_secs: u64,
+    /// Master switch for autonomous site-blocking enforcement (the blocking
+    /// module's tick). Off by default so the node never edits /etc/hosts —
+    /// which needs an admin prompt — unless the user opts in. Explicit
+    /// apply/clear commands still work regardless.
+    #[serde(default)]
+    pub blocking_enabled: bool,
 }
 
 fn default_user_id() -> String {
@@ -48,6 +54,7 @@ impl Default for AppConfig {
                 key: DEFAULT_SUPABASE_KEY.to_string(),
             },
             poll_secs: default_poll_secs(),
+            blocking_enabled: false,
         }
     }
 }
