@@ -23,6 +23,7 @@ import { StatTile } from "../components/shared/StatTile";
 import MuscleMap from "../components/workouts/MuscleMap";
 import RingGauge from "../components/mealplanner/RingGauge";
 import ProtocolChargeChart from "../components/dashboard/ProtocolChargeChart";
+import TodayHabitsCard from "../components/dashboard/TodayHabitsCard";
 import { ConsistencyHeatmap, buildHeatmapGrid, computeFractionByDate } from "../components/habits/HabitCharts";
 import { useExerciseSets } from "../lib/useExerciseSets";
 import type { WorkoutSession } from "../store/types";
@@ -157,15 +158,19 @@ export default function DashboardPage() {
 
       <div style={{ padding: "24px 40px", display: "flex", flexDirection: "column", gap: 24 }}>
       {habits.length > 0 && (
-        <div style={{ ...CARD_STYLE, padding: "20px 24px" }}>
-          <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 4 }}>
-            <Flame size={15} color="var(--warning)" />
-            <span style={{ fontWeight: 600, color: "var(--text)", fontSize: 14 }}>Habit Consistency</span>
+        <div style={{ display: "flex", gap: 16, flexWrap: "wrap" }}>
+          <div style={{ ...CARD_STYLE, padding: "20px 24px", height: 224, flex: "1 1 260px" }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 4 }}>
+              <Flame size={15} color="var(--warning)" />
+              <span style={{ fontWeight: 600, color: "var(--text)", fontSize: 14 }}>Habit Consistency</span>
+            </div>
+            <div style={{ fontSize: 12, color: "var(--text-muted)", marginBottom: 16 }}>
+              Share of habits completed each day, last {HEATMAP_WEEKS} weeks
+            </div>
+            <ConsistencyHeatmap grid={heatmapGrid} today={today} fractionByDate={fractionByDate} />
           </div>
-          <div style={{ fontSize: 12, color: "var(--text-muted)", marginBottom: 16 }}>
-            Share of habits completed each day, last {HEATMAP_WEEKS} weeks
-          </div>
-          <ConsistencyHeatmap grid={heatmapGrid} today={today} fractionByDate={fractionByDate} />
+
+          <TodayHabitsCard />
         </div>
       )}
 
