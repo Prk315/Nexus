@@ -1,7 +1,7 @@
 import { Check } from "lucide-react";
 import { useAppDispatch, useAppSelector } from "../../store/hooks";
 import { checkHabit, uncheckHabit } from "../../store/slices/habitsSlice";
-import { habitIcon } from "../habits/HabitCharts";
+import { habitIcon, groupHabitsByStack } from "../habits/HabitCharts";
 import { CARD_STYLE, todayISO } from "../../lib/uiHelpers";
 import type { Habit } from "../../store/types";
 
@@ -29,9 +29,7 @@ export default function TodayHabitsCard() {
   const today = todayISO();
 
   const doneToday = new Set(completions.filter((c) => c.date === today).map((c) => c.habit_id));
-  const scheduled = habits
-    .filter((h) => isScheduledToday(h, today))
-    .sort((a, b) => a.sort_order - b.sort_order);
+  const scheduled = groupHabitsByStack(habits.filter((h) => isScheduledToday(h, today)));
   const doneCount = scheduled.filter((h) => doneToday.has(h.id)).length;
 
   function toggle(habitId: string, done: boolean) {

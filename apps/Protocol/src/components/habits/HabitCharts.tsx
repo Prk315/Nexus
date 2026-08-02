@@ -1,5 +1,28 @@
 import { Brain, PersonStanding, Sparkles, Droplet, BookOpen, Footprints, Moon, NotebookPen, CircleDot, type LucideIcon } from "lucide-react";
-import type { HabitCompletion } from "../../store/types";
+import type { Habit, HabitCompletion } from "../../store/types";
+
+/**
+ * Orders habits the same way the Habits tab does: grouped by stack (each
+ * stack's habits kept together, in the order the stack was first seen — not
+ * globally interleaved by sort_order, since stacks don't reserve contiguous
+ * sort_order ranges), each group internally sorted by sort_order, then
+ * unstacked habits sorted by their own sort_order.
+ */
+export function groupHabitsByStack(habits: Habit[]): Habit[] {
+  const groups = new Map<string, Habit[]>();
+  const unstacked: Habit[] = [];
+  for (const h of habits) {
+    if (!h.stack_id) {
+      unstacked.push(h);
+      continue;
+    }
+    if (!groups.has(h.stack_id)) groups.set(h.stack_id, []);
+    groups.get(h.stack_id)!.push(h);
+  }
+  for (const list of groups.values()) list.sort((a, b) => a.sort_order - b.sort_order);
+  unstacked.sort((a, b) => a.sort_order - b.sort_order);
+  return [...groups.values()].flat().concat(unstacked);
+}
 
 /** Share of habits completed on each date, for heatmap coloring. */
 export function computeFractionByDate(completions: HabitCompletion[], totalHabits: number): Map<string, number> {
