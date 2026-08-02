@@ -179,6 +179,72 @@ def cmd_body_stats(args):
     print(json.dumps(results))
 
 
+def cmd_exercise_sets(args):
+    client = get_client()
+    end = date.fromisoformat(args.date)
+    start = end - timedelta(days=args.days - 1)
+
+    try:
+        activities = client.get_activities_by_date(start.isoformat(), end.isoformat())
+    except Exception as e:
+        print(str(e), file=sys.stderr)
+        sys.exit(1)
+
+    results = []
+    for act in activities or []:
+        type_key = (act.get("activityType") or {}).get("typeKey", "")
+        if "strength" not in type_key:
+            continue
+
+        activity_id = act.get("activityId")
+        start_ts = act.get("startTimeLocal", "")
+        act_date = start_ts[:10] if start_ts else ""
+        act_name = act.get("activityName", "")
+
+        try:
+            raw = client.get_activity_exercise_sets(activity_id)
+        except Exception:
+            continue
+
+        # NOTE: /exerciseSets is an undocumented Garmin Connect endpoint. The
+        # keys below (exerciseSets/setType/exercises/category/repetitionCount/
+        # weight) are a best-effort read of the shape implied by
+        # set_activity_exercise_sets' docstring and Garmin's own workout-step
+        # field naming (see workout.py's weightValue = kg * 1000 convention).
+        # Unverified against a live account — if a real sync comes back empty,
+        # this is the first place to check against actual response JSON.
+        for s in (raw or {}).get("exerciseSets", []) or []:
+            set_type = (s.get("setType") or "").upper()
+            if set_type and set_type != "ACTIVE":
+                continue
+
+            exercises = s.get("exercises") or []
+            if not exercises:
+                continue
+
+            primary = exercises[0]
+            category = primary.get("category")
+            if not category:
+                continue
+
+            reps = s.get("repetitionCount") or s.get("reps")
+            weight_raw = s.get("weight")
+            weight_kg = None
+            if weight_raw is not None:
+                weight_kg = round(weight_raw / 1000, 2) if weight_raw > 500 else round(weight_raw, 2)
+
+            results.append({
+                "date": act_date,
+                "activity_name": act_name,
+                "category": category,
+                "exercise_name": primary.get("name"),
+                "reps": reps,
+                "weight_kg": weight_kg,
+            })
+
+    print(json.dumps(results))
+
+
 def cmd_activities(args):
     client = get_client()
     end = date.fromisoformat(args.date)
@@ -251,6 +317,10 @@ def main():
     p_act.add_argument("--date", required=True, help="End date YYYY-MM-DD")
     p_act.add_argument("--days", type=int, default=7)
 
+    p_ex = sub.add_parser("exercise_sets", help="Fetch strength-training exercise sets")
+    p_ex.add_argument("--date", required=True, help="End date YYYY-MM-DD")
+    p_ex.add_argument("--days", type=int, default=30)
+
     args = parser.parse_args()
 
     dispatch = {
@@ -261,6 +331,7 @@ def main():
         "sleep": cmd_sleep,
         "body_stats": cmd_body_stats,
         "activities": cmd_activities,
+        "exercise_sets": cmd_exercise_sets,
     }
 
     try:

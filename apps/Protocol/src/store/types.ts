@@ -108,6 +108,28 @@ export interface CreateBodyMetric {
   notes?: string | null;
 }
 
+export interface ExerciseSet {
+  id: string;
+  date: string;
+  activity_name: string | null;
+  category: string;
+  exercise_name: string | null;
+  reps: number | null;
+  weight_kg: number | null;
+  notes: string | null;
+  created_at: string;
+}
+
+export interface CreateExerciseSet {
+  date: string;
+  activity_name?: string | null;
+  category: string;
+  exercise_name?: string | null;
+  reps?: number | null;
+  weight_kg?: number | null;
+  notes?: string | null;
+}
+
 export interface WorkoutPlan {
   id: string;
   name: string;

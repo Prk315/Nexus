@@ -3,16 +3,20 @@ import {
   pushBodyMetricToCloud,
   pushRunningSessionToCloud,
   pushWorkoutSessionToCloud,
+  replaceExerciseSetsInCloud,
 } from "../api";
 import {
   garminFetchSleep,
   garminFetchBodyStats,
   garminFetchActivities,
+  garminFetchExerciseSets,
   type GarminSleepRaw,
   type GarminBodyRaw,
   type GarminActivityRaw,
+  type GarminExerciseSetRaw,
 } from "../garminClient";
-import type { CreateSleepEntry, CreateBodyMetric, CreateRunningSession, CreateWorkoutSession } from "../../store/types";
+import type { CreateSleepEntry, CreateBodyMetric, CreateRunningSession, CreateWorkoutSession, CreateExerciseSet } from "../../store/types";
+import { isoDate } from "../uiHelpers";
 
 async function syncItems<T>(
   items: T[],
@@ -130,6 +134,31 @@ export async function syncGarminBodyStats(
     pushBodyMetricToCloud,
     (e) => `Body ${e.date}`,
   );
+}
+
+function mapExerciseSetRaw(raw: GarminExerciseSetRaw): CreateExerciseSet & { id: string } {
+  return {
+    id: crypto.randomUUID(),
+    date: raw.date,
+    activity_name: raw.activity_name || null,
+    category: raw.category,
+    exercise_name: raw.exercise_name,
+    reps: raw.reps,
+    weight_kg: raw.weight_kg,
+    notes: "Garmin import",
+  };
+}
+
+export async function syncGarminExerciseSets(
+  date: string,
+  days: number,
+): Promise<{ count: number }> {
+  const raw = await garminFetchExerciseSets(date, days);
+  const end = new Date(`${date}T00:00:00`);
+  const start = new Date(end);
+  start.setDate(start.getDate() - (days - 1));
+  await replaceExerciseSetsInCloud(isoDate(start), isoDate(end), raw.map(mapExerciseSetRaw));
+  return { count: raw.length };
 }
 
 export async function syncGarminActivities(

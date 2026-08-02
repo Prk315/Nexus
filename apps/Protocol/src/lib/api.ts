@@ -8,6 +8,7 @@ import type {
   HabitStack, CreateHabitStack,
   Food, CreateFood, Meal, CreateMeal, MealItem, CreateMealItem,
   MealPlanEntry, CreateMealPlanEntry, NutritionGoals, UpdateNutritionGoals,
+  ExerciseSet, CreateExerciseSet,
 } from "../store/types";
 
 // ── Sleep ────────────────────────────────────────────────────────────────────
@@ -686,4 +687,44 @@ export async function upsertNutritionGoalsInCloud(id: string, goals: UpdateNutri
     updated_at: new Date().toISOString(),
   });
   if (error) throw new Error(error.message);
+}
+
+// ── Exercise Sets (Garmin) ──────────────────────────────────────────────────
+
+export async function fetchExerciseSetsFromCloud(sinceDate: string): Promise<ExerciseSet[]> {
+  const sb = getSupabaseClient();
+  const { data, error } = await sb
+    .from("protocol_exercise_sets")
+    .select("*")
+    .eq("user_id", getUserId())
+    .gte("date", sinceDate)
+    .order("date", { ascending: false });
+  if (error) throw new Error(error.message);
+  return (data ?? []) as ExerciseSet[];
+}
+
+/** Replaces every set in [startDate, endDate] with `entries` — re-running a
+ * sync over the same window shouldn't accumulate duplicate set rows. */
+export async function replaceExerciseSetsInCloud(
+  startDate: string,
+  endDate: string,
+  entries: (CreateExerciseSet & { id: string })[],
+): Promise<void> {
+  const sb = getSupabaseClient();
+  const userId = getUserId();
+
+  const { error: deleteError } = await sb
+    .from("protocol_exercise_sets")
+    .delete()
+    .eq("user_id", userId)
+    .gte("date", startDate)
+    .lte("date", endDate);
+  if (deleteError) throw new Error(deleteError.message);
+
+  if (entries.length === 0) return;
+
+  const { error: insertError } = await sb.from("protocol_exercise_sets").insert(
+    entries.map((e) => ({ ...e, user_id: userId })),
+  );
+  if (insertError) throw new Error(insertError.message);
 }

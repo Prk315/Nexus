@@ -43,6 +43,15 @@ export interface GarminActivityRaw {
   avg_heart_rate?: number;
 }
 
+export interface GarminExerciseSetRaw {
+  date: string;
+  activity_name: string;
+  category: string;
+  exercise_name: string | null;
+  reps: number | null;
+  weight_kg: number | null;
+}
+
 export interface GarminStatus {
   connected: boolean;
 }
@@ -66,6 +75,10 @@ export async function garminFetchBodyStats(date: string, days: number): Promise<
 
 export async function garminFetchActivities(date: string, days: number): Promise<GarminActivityRaw[]> {
   return run<GarminActivityRaw[]>("activities", ["--date", date, "--days", String(days)]);
+}
+
+export async function garminFetchExerciseSets(date: string, days: number): Promise<GarminExerciseSetRaw[]> {
+  return run<GarminExerciseSetRaw[]>("exercise_sets", ["--date", date, "--days", String(days)]);
 }
 
 export async function garminBridgePath(): Promise<string> {

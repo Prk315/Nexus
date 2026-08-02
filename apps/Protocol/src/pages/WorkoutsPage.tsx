@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, useCallback } from "react";
 import { Dumbbell } from "lucide-react";
 import { useAppDispatch, useAppSelector } from "../store/hooks";
 import { fetchWorkoutPlans, fetchWorkoutSessions } from "../store/slices/workoutsSlice";
@@ -6,7 +6,18 @@ import WorkoutPlanner from "../components/workouts/WorkoutPlanner";
 import WorkoutSessionLogger from "../components/workouts/WorkoutSessionLogger";
 import StravaImportPanel from "../components/shared/StravaImportPanel";
 import GarminSyncPanel from "../components/shared/GarminSyncPanel";
-import type { WorkoutPlan } from "../store/types";
+import MuscleMap from "../components/workouts/MuscleMap";
+import { fetchExerciseSetsFromCloud } from "../lib/api";
+import { isoDate, CARD_STYLE } from "../lib/uiHelpers";
+import type { WorkoutPlan, ExerciseSet } from "../store/types";
+
+const MUSCLE_MAP_HISTORY_DAYS = 45;
+
+function subDays(n: number): string {
+  const d = new Date();
+  d.setDate(d.getDate() - n);
+  return isoDate(d);
+}
 
 const sectionHeader: React.CSSProperties = {
   display: "flex",
@@ -33,11 +44,17 @@ export default function WorkoutsPage() {
   const dispatch = useAppDispatch();
   const loading = useAppSelector((s) => s.workouts.loading);
   const [selectedPlan, setSelectedPlan] = useState<WorkoutPlan | null>(null);
+  const [exerciseSets, setExerciseSets] = useState<ExerciseSet[]>([]);
+
+  const loadExerciseSets = useCallback(() => {
+    fetchExerciseSetsFromCloud(subDays(MUSCLE_MAP_HISTORY_DAYS)).then(setExerciseSets);
+  }, []);
 
   useEffect(() => {
     dispatch(fetchWorkoutPlans());
     dispatch(fetchWorkoutSessions());
-  }, [dispatch]);
+    loadExerciseSets();
+  }, [dispatch, loadExerciseSets]);
 
   return (
     <div style={{ padding: 32, maxWidth: 800, margin: "0 auto" }}>
@@ -62,6 +79,19 @@ export default function WorkoutsPage() {
         dispatch(fetchWorkoutPlans());
         dispatch(fetchWorkoutSessions());
       }} />
+      <GarminSyncPanel mode="exercise_sets" onSynced={loadExerciseSets} />
+
+      <div style={{ ...CARD_STYLE, padding: "20px 24px", marginTop: 16 }}>
+        <div style={sectionHeader}>
+          <div>
+            <div style={sectionTitle}>Muscle Map</div>
+            <div style={sectionSubtitle}>
+              Recency by muscle group, from Garmin strength-training sets — brighter = trained more recently
+            </div>
+          </div>
+        </div>
+        <MuscleMap sets={exerciseSets} />
+      </div>
 
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 28, alignItems: "start", marginTop: 24 }}>
         <div>

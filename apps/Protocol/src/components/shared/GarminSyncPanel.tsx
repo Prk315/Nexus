@@ -1,13 +1,13 @@
 import { useEffect, useState } from "react";
 import { Activity, CheckCircle, AlertCircle } from "lucide-react";
 import { garminCheckStatus } from "../../lib/garminClient";
-import { syncGarminSleep, syncGarminBodyStats, syncGarminActivities } from "../../lib/importers/garmin";
+import { syncGarminSleep, syncGarminBodyStats, syncGarminActivities, syncGarminExerciseSets } from "../../lib/importers/garmin";
 import { CARD_STYLE, todayISO } from "../../lib/uiHelpers";
 
 const GARMIN_BLUE = "#009CDE";
 
 interface GarminSyncPanelProps {
-  mode: "all" | "sleep" | "body" | "activities";
+  mode: "all" | "sleep" | "body" | "activities" | "exercise_sets";
   onSynced: () => void;
 }
 
@@ -54,6 +54,13 @@ export default function GarminSyncPanel({ mode, onSynced }: GarminSyncPanelProps
     return runSync(async (date, d) => {
       const { runCount, workoutCount } = await syncGarminActivities(date, d);
       return `Imported ${runCount + workoutCount} activities`;
+    });
+  }
+
+  async function handleSyncExerciseSets() {
+    return runSync(async (date, d) => {
+      const { count } = await syncGarminExerciseSets(date, d);
+      return `Imported ${count} exercise sets`;
     });
   }
 
@@ -141,6 +148,11 @@ export default function GarminSyncPanel({ mode, onSynced }: GarminSyncPanelProps
             {(mode === "activities" || mode === "all") && (
               <button onClick={handleSyncActivities} disabled={syncing} style={syncBtnStyle}>
                 Sync Activities
+              </button>
+            )}
+            {mode === "exercise_sets" && (
+              <button onClick={handleSyncExerciseSets} disabled={syncing} style={syncBtnStyle}>
+                Sync Exercise Sets
               </button>
             )}
           </div>
