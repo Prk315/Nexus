@@ -88,7 +88,7 @@ function Figure({
   return <div ref={containerRef} style={{ width: 170, height: 320 }} />;
 }
 
-export default function MuscleMap({ sets }: { sets: ExerciseSet[] }) {
+export default function MuscleMap({ sets, minimal = false }: { sets: ExerciseSet[]; minimal?: boolean }) {
   const today = isoDate(new Date());
   const status = useMemo(() => computeMuscleStatus(sets, today), [sets, today]);
   const data = useMemo(() => buildData(status), [status]);
@@ -101,6 +101,21 @@ export default function MuscleMap({ sets }: { sets: ExerciseSet[] }) {
   const [active, setActive] = useState<MuscleGroup | null>(null);
   const shown = active ?? sortedByFatigue[0] ?? null;
   const shownStatus = shown ? status[shown] : null;
+
+  if (minimal) {
+    return (
+      <div style={{ display: "flex", gap: 24, justifyContent: "center", flexWrap: "wrap" }}>
+        <div style={{ textAlign: "center" }}>
+          <Figure type="anterior" data={data} onSelect={setActive} />
+          <div style={{ fontSize: 11, color: "var(--text-muted)", marginTop: 4 }}>Front</div>
+        </div>
+        <div style={{ textAlign: "center" }}>
+          <Figure type="posterior" data={data} onSelect={setActive} />
+          <div style={{ fontSize: 11, color: "var(--text-muted)", marginTop: 4 }}>Back</div>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>

@@ -20,9 +20,11 @@ import {
 import { formatMinutes, CARD_STYLE, isoDate } from "../lib/uiHelpers";
 import { entryNutrition } from "../lib/mealNutrition";
 import { StatTile } from "../components/shared/StatTile";
-import MuscleMapCard from "../components/shared/MuscleMapCard";
+import MuscleMap from "../components/workouts/MuscleMap";
+import RingGauge from "../components/mealplanner/RingGauge";
 import ProtocolChargeChart from "../components/dashboard/ProtocolChargeChart";
 import { ConsistencyHeatmap, buildHeatmapGrid, computeFractionByDate } from "../components/habits/HabitCharts";
+import { useExerciseSets } from "../lib/useExerciseSets";
 import type { WorkoutSession } from "../store/types";
 
 const HABITS_HISTORY_DAYS = 90;
@@ -74,6 +76,7 @@ export default function DashboardPage() {
   const mealItemsById = useAppSelector((s) => s.mealPlanner.mealItems);
   const planEntries = useAppSelector((s) => s.mealPlanner.planEntries);
   const nutritionGoals = useAppSelector((s) => s.mealPlanner.goals);
+  const { exerciseSets } = useExerciseSets();
 
   useEffect(() => {
     dispatch(fetchSleep());
@@ -246,39 +249,51 @@ export default function DashboardPage() {
         )}
       </div>
 
-      <div style={{ ...CARD_STYLE, padding: "20px 20px 16px" }}>
+      <div style={{ ...CARD_STYLE, padding: "20px 24px" }}>
         <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 16 }}>
-          <Activity size={15} color="#8b5cf6" />
-          <span style={{ fontWeight: 600, color: "var(--text)", fontSize: 14 }}>Recovery & Vitals</span>
+          <Activity size={15} color="var(--series-workout)" />
+          <span style={{ fontWeight: 600, color: "var(--text)", fontSize: 14 }}>Recovery</span>
           <span style={{ fontSize: 12, color: "var(--text-muted)" }}>· {lastVitalsLabel}</span>
         </div>
-        {!lastVitals ? NO_DATA : (
-          <>
-            <div style={{ display: "flex", gap: 24, flexWrap: "wrap" }}>
-              <StatTile label="HRV" value={lastVitals.hrv_ms != null ? String(lastVitals.hrv_ms) : "—"} sub="ms" />
-              <StatTile label="Resting HR" value={lastVitals.resting_hr_bpm != null ? String(lastVitals.resting_hr_bpm) : "—"} sub="bpm" />
-              <StatTile label="Avg heart rate" value={lastVitals.avg_heart_rate_bpm != null ? String(lastVitals.avg_heart_rate_bpm) : "—"} sub="bpm" />
-              <StatTile label="Readiness" value={lastVitals.readiness_score != null ? String(lastVitals.readiness_score) : "—"} sub="/ 100" />
-              <StatTile label="SpO2" value={lastVitals.spo2_pct != null ? lastVitals.spo2_pct.toFixed(1) : "—"} sub="%" />
-            </div>
-            <div style={{ display: "flex", gap: 24, flexWrap: "wrap", marginTop: 16, paddingTop: 16, borderTop: "1px solid var(--border-subtle)" }}>
-              <StatTile
-                label="Stress high"
-                value={lastVitals.stress_high_min != null ? formatMinutes(lastVitals.stress_high_min) : "—"}
-                sub={lastVitals.stress_summary ?? undefined}
-              />
-              <StatTile label="Resilience" value={lastVitals.resilience_level ?? "—"} />
-              <StatTile label="Cardio age" value={lastVitals.cardio_age != null ? String(lastVitals.cardio_age) : "—"} />
-              <StatTile
-                label="Temp deviation"
-                value={lastVitals.temperature_deviation != null ? `${lastVitals.temperature_deviation > 0 ? "+" : ""}${lastVitals.temperature_deviation.toFixed(2)}°` : "—"}
-              />
-            </div>
-          </>
-        )}
-      </div>
+        <div style={{ display: "flex", gap: 28, flexWrap: "wrap", alignItems: "flex-start" }}>
+          <MuscleMap sets={exerciseSets} minimal />
 
-      <MuscleMapCard />
+          <div style={{ flex: "1 1 260px", display: "flex", flexDirection: "column", gap: 16 }}>
+            {!lastVitals ? NO_DATA : (
+              <>
+                <div style={{ display: "flex", gap: 20, flexWrap: "wrap", alignItems: "center" }}>
+                  {lastVitals.readiness_score != null ? (
+                    <RingGauge label="Readiness" value={lastVitals.readiness_score} goal={100} unit="" color="var(--series-workout)" track="var(--series-workout-track)" />
+                  ) : (
+                    <StatTile label="Readiness" value="—" sub="/ 100" />
+                  )}
+                  {lastVitals.spo2_pct != null ? (
+                    <RingGauge label="SpO2" value={lastVitals.spo2_pct} goal={100} unit="%" color="var(--series-sleep)" track="var(--series-sleep-track)" />
+                  ) : (
+                    <StatTile label="SpO2" value="—" sub="%" />
+                  )}
+                  <StatTile label="HRV" value={lastVitals.hrv_ms != null ? String(lastVitals.hrv_ms) : "—"} sub="ms" />
+                  <StatTile label="Resting HR" value={lastVitals.resting_hr_bpm != null ? String(lastVitals.resting_hr_bpm) : "—"} sub="bpm" />
+                </div>
+                <div style={{ display: "flex", gap: 20, flexWrap: "wrap", paddingTop: 16, borderTop: "1px solid var(--border-subtle)" }}>
+                  <StatTile label="Avg heart rate" value={lastVitals.avg_heart_rate_bpm != null ? String(lastVitals.avg_heart_rate_bpm) : "—"} sub="bpm" />
+                  <StatTile
+                    label="Stress high"
+                    value={lastVitals.stress_high_min != null ? formatMinutes(lastVitals.stress_high_min) : "—"}
+                    sub={lastVitals.stress_summary ?? undefined}
+                  />
+                  <StatTile label="Resilience" value={lastVitals.resilience_level ?? "—"} />
+                  <StatTile label="Cardio age" value={lastVitals.cardio_age != null ? String(lastVitals.cardio_age) : "—"} />
+                  <StatTile
+                    label="Temp deviation"
+                    value={lastVitals.temperature_deviation != null ? `${lastVitals.temperature_deviation > 0 ? "+" : ""}${lastVitals.temperature_deviation.toFixed(2)}°` : "—"}
+                  />
+                </div>
+              </>
+            )}
+          </div>
+        </div>
+      </div>
 
       <div style={{ ...CARD_STYLE, padding: "20px 20px 12px" }}>
         <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 16 }}>
