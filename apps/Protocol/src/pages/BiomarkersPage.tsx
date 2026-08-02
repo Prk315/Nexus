@@ -10,7 +10,6 @@ import SleepLogger from "../components/biomarkers/SleepLogger";
 import BodyMetricsLogger from "../components/biomarkers/BodyMetricsLogger";
 import OuraImportPanel from "../components/biomarkers/OuraImportPanel";
 import OuraConnectPanel from "../components/biomarkers/OuraConnectPanel";
-import GarminSyncPanel from "../components/shared/GarminSyncPanel";
 import { StatTile, TrendChart } from "../components/biomarkers/BiomarkerCharts";
 import { formatMinutes, isoDate } from "../lib/uiHelpers";
 import type { BodyMetric, SleepEntry } from "../store/types";
@@ -101,7 +100,6 @@ function ManageToggle({
 // ── Sleep module ─────────────────────────────────────────────────────────────
 
 function SleepModule() {
-  const dispatch = useAppDispatch();
   const entries = useAppSelector((s) => s.biomarkers.sleep);
   const [manageOpen, setManageOpen] = useState(false);
 
@@ -131,12 +129,7 @@ function SleepModule() {
         <TrendChart data={chartData} color="var(--series-sleep)" gradientId="sleepTrend" domain={[0, 10]} height={140} />
       </div>
 
-      <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
-        <ManageToggle open={manageOpen} onToggle={() => setManageOpen((v) => !v)} label="Log & manage entries" />
-        <div style={{ flex: 1, minWidth: 220 }}>
-          <GarminSyncPanel mode="sleep" onSynced={() => dispatch(fetchSleep())} />
-        </div>
-      </div>
+      <ManageToggle open={manageOpen} onToggle={() => setManageOpen((v) => !v)} label="Log & manage entries" />
 
       {manageOpen && <SleepLogger />}
     </div>
@@ -219,7 +212,6 @@ function NutritionModule() {
 // ── Body metrics module ───────────────────────────────────────────────────────
 
 function BodyModule() {
-  const dispatch = useAppDispatch();
   const entries = useAppSelector((s) => s.biomarkers.bodyMetrics);
   const [manageOpen, setManageOpen] = useState(false);
 
@@ -259,12 +251,7 @@ function BodyModule() {
         </div>
       </div>
 
-      <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
-        <ManageToggle open={manageOpen} onToggle={() => setManageOpen((v) => !v)} label="Log & manage entries" />
-        <div style={{ flex: 1, minWidth: 220 }}>
-          <GarminSyncPanel mode="body" onSynced={() => dispatch(fetchBodyMetrics())} />
-        </div>
-      </div>
+      <ManageToggle open={manageOpen} onToggle={() => setManageOpen((v) => !v)} label="Log & manage entries" />
 
       {manageOpen && <BodyMetricsLogger />}
     </div>
