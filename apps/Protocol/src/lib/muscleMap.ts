@@ -1,7 +1,9 @@
+import { MuscleType, type Muscle } from "body-highlighter";
+
 /**
  * Garmin's FIT SDK exercise_category enum (47 values, from the strength-training
- * workout editor) mapped to the muscle regions MuscleMap.tsx draws. Category is
- * the only field reliably present on every logged set — exercise_name (the
+ * workout editor) mapped to `body-highlighter`'s muscle slugs. Category is the
+ * only field reliably present on every logged set — exercise_name (the
  * ~1,500-value sub-category) varies too much per category to map individually,
  * so this is a category-level approximation, not anatomically exact.
  *
@@ -10,92 +12,108 @@
  * map to an empty array and are excluded from the heatmap.
  */
 
-export type MuscleGroup =
-  | "chest"
-  | "back"
-  | "shoulders"
-  | "biceps"
-  | "triceps"
-  | "forearms"
-  | "abs"
-  | "obliques"
-  | "glutes"
-  | "quads"
-  | "hamstrings"
-  | "calves"
-  | "traps";
+export type MuscleGroup = Muscle;
 
 export const MUSCLE_GROUP_LABELS: Record<MuscleGroup, string> = {
-  chest: "Chest",
-  back: "Back",
-  shoulders: "Shoulders",
-  biceps: "Biceps",
-  triceps: "Triceps",
-  forearms: "Forearms",
-  abs: "Abs",
-  obliques: "Obliques",
-  glutes: "Glutes",
-  quads: "Quads",
-  hamstrings: "Hamstrings",
-  calves: "Calves",
-  traps: "Traps",
+  [MuscleType.TRAPEZIUS]: "Trapezius",
+  [MuscleType.UPPER_BACK]: "Upper Back",
+  [MuscleType.LOWER_BACK]: "Lower Back",
+  [MuscleType.CHEST]: "Chest",
+  [MuscleType.BICEPS]: "Biceps",
+  [MuscleType.TRICEPS]: "Triceps",
+  [MuscleType.FOREARM]: "Forearms",
+  [MuscleType.BACK_DELTOIDS]: "Rear Delts",
+  [MuscleType.FRONT_DELTOIDS]: "Front Delts",
+  [MuscleType.ABS]: "Abs",
+  [MuscleType.OBLIQUES]: "Obliques",
+  [MuscleType.ABDUCTOR]: "Adductors",
+  [MuscleType.ABDUCTORS]: "Abductors",
+  [MuscleType.HAMSTRING]: "Hamstrings",
+  [MuscleType.QUADRICEPS]: "Quads",
+  [MuscleType.CALVES]: "Calves",
+  [MuscleType.GLUTEAL]: "Glutes",
+  [MuscleType.HEAD]: "Head",
+  [MuscleType.NECK]: "Neck",
+  [MuscleType.KNEES]: "Knees",
+  [MuscleType.LEFT_SOLEUS]: "Left Soleus",
+  [MuscleType.RIGHT_SOLEUS]: "Right Soleus",
 };
+
+/** Only the groups a Garmin category can ever map to — the anatomical extras
+ * (head, neck, knees, soleus) never appear as sync output, so they're excluded
+ * from the UI's "every group gets a legend row" list. */
+export const TRACKED_MUSCLE_GROUPS: MuscleGroup[] = [
+  MuscleType.CHEST,
+  MuscleType.UPPER_BACK,
+  MuscleType.LOWER_BACK,
+  MuscleType.FRONT_DELTOIDS,
+  MuscleType.BACK_DELTOIDS,
+  MuscleType.BICEPS,
+  MuscleType.TRICEPS,
+  MuscleType.FOREARM,
+  MuscleType.ABS,
+  MuscleType.OBLIQUES,
+  MuscleType.TRAPEZIUS,
+  MuscleType.GLUTEAL,
+  MuscleType.ABDUCTORS,
+  MuscleType.QUADRICEPS,
+  MuscleType.HAMSTRING,
+  MuscleType.CALVES,
+];
 
 const CATEGORY_TO_MUSCLES: Record<string, MuscleGroup[]> = {
   BANDED_EXERCISES: [],
-  BATTLE_ROPE: ["shoulders"],
-  BENCH_PRESS: ["chest", "triceps", "shoulders"],
+  BATTLE_ROPE: [MuscleType.FRONT_DELTOIDS, MuscleType.BACK_DELTOIDS],
+  BENCH_PRESS: [MuscleType.CHEST, MuscleType.TRICEPS, MuscleType.FRONT_DELTOIDS],
   BIKE_OUTDOOR: [],
-  CALF_RAISE: ["calves"],
+  CALF_RAISE: [MuscleType.CALVES],
   CARDIO: [],
-  CARRY: ["forearms", "traps"],
-  CHOP: ["obliques", "abs"],
-  CORE: ["abs", "obliques"],
-  CRUNCH: ["abs"],
-  CURL: ["biceps"],
-  DEADLIFT: ["back", "glutes", "hamstrings"],
+  CARRY: [MuscleType.FOREARM, MuscleType.TRAPEZIUS],
+  CHOP: [MuscleType.OBLIQUES, MuscleType.ABS],
+  CORE: [MuscleType.ABS, MuscleType.OBLIQUES],
+  CRUNCH: [MuscleType.ABS],
+  CURL: [MuscleType.BICEPS],
+  DEADLIFT: [MuscleType.LOWER_BACK, MuscleType.GLUTEAL, MuscleType.HAMSTRING],
   ELLIPTICAL: [],
   FLOOR_CLIMB: [],
-  FLYE: ["chest"],
-  HIP_RAISE: ["glutes", "hamstrings"],
-  HIP_STABILITY: ["glutes"],
-  HIP_SWING: ["glutes", "hamstrings"],
-  HYPEREXTENSION: ["back", "glutes"],
+  FLYE: [MuscleType.CHEST],
+  HIP_RAISE: [MuscleType.GLUTEAL, MuscleType.HAMSTRING],
+  HIP_STABILITY: [MuscleType.ABDUCTORS],
+  HIP_SWING: [MuscleType.GLUTEAL, MuscleType.HAMSTRING],
+  HYPEREXTENSION: [MuscleType.LOWER_BACK, MuscleType.GLUTEAL],
   INDOOR_BIKE: [],
   LADDER: [],
-  LATERAL_RAISE: ["shoulders"],
-  LEG_CURL: ["hamstrings"],
-  LEG_RAISE: ["abs"],
-  LUNGE: ["quads", "glutes", "hamstrings"],
-  OLYMPIC_LIFT: ["back", "quads", "shoulders", "glutes"],
-  PLANK: ["abs"],
-  PLYO: ["quads", "calves"],
-  PULL_UP: ["back", "biceps"],
-  PUSH_UP: ["chest", "triceps", "shoulders"],
-  ROW: ["back", "biceps"],
+  LATERAL_RAISE: [MuscleType.FRONT_DELTOIDS, MuscleType.BACK_DELTOIDS],
+  LEG_CURL: [MuscleType.HAMSTRING],
+  LEG_RAISE: [MuscleType.ABS],
+  LUNGE: [MuscleType.QUADRICEPS, MuscleType.GLUTEAL, MuscleType.HAMSTRING],
+  OLYMPIC_LIFT: [MuscleType.UPPER_BACK, MuscleType.QUADRICEPS, MuscleType.FRONT_DELTOIDS, MuscleType.GLUTEAL],
+  PLANK: [MuscleType.ABS],
+  PLYO: [MuscleType.QUADRICEPS, MuscleType.CALVES],
+  PULL_UP: [MuscleType.UPPER_BACK, MuscleType.BICEPS],
+  PUSH_UP: [MuscleType.CHEST, MuscleType.TRICEPS, MuscleType.FRONT_DELTOIDS],
+  ROW: [MuscleType.UPPER_BACK, MuscleType.BICEPS],
   RUN: [],
   RUN_INDOOR: [],
-  SANDBAG: ["back", "quads", "shoulders"],
-  SHOULDER_PRESS: ["shoulders", "triceps"],
-  SHOULDER_STABILITY: ["shoulders"],
-  SHRUG: ["traps"],
-  SIT_UP: ["abs"],
-  SLED: ["quads", "glutes"],
-  SLEDGE_HAMMER: ["shoulders", "abs"],
-  SQUAT: ["quads", "glutes", "hamstrings"],
+  SANDBAG: [MuscleType.UPPER_BACK, MuscleType.QUADRICEPS, MuscleType.FRONT_DELTOIDS],
+  SHOULDER_PRESS: [MuscleType.FRONT_DELTOIDS, MuscleType.TRICEPS],
+  SHOULDER_STABILITY: [MuscleType.FRONT_DELTOIDS, MuscleType.BACK_DELTOIDS],
+  SHRUG: [MuscleType.TRAPEZIUS],
+  SIT_UP: [MuscleType.ABS],
+  SLED: [MuscleType.QUADRICEPS, MuscleType.GLUTEAL],
+  SLEDGE_HAMMER: [MuscleType.BACK_DELTOIDS, MuscleType.ABS],
+  SQUAT: [MuscleType.QUADRICEPS, MuscleType.GLUTEAL, MuscleType.HAMSTRING],
   STAIR_STEPPER: [],
-  SUSPENSION: ["chest", "back", "abs"],
-  TIRE: ["quads", "back", "shoulders"],
-  TOTAL_BODY: ["chest", "back", "quads", "shoulders", "abs"],
-  TRICEPS_EXTENSION: ["triceps"],
+  SUSPENSION: [MuscleType.CHEST, MuscleType.UPPER_BACK, MuscleType.ABS],
+  TIRE: [MuscleType.QUADRICEPS, MuscleType.UPPER_BACK, MuscleType.FRONT_DELTOIDS],
+  TOTAL_BODY: [MuscleType.CHEST, MuscleType.UPPER_BACK, MuscleType.QUADRICEPS, MuscleType.FRONT_DELTOIDS, MuscleType.ABS],
+  TRICEPS_EXTENSION: [MuscleType.TRICEPS],
   WARM_UP: [],
 };
 
 export function categoryToMuscles(category: string): MuscleGroup[] {
   return CATEGORY_TO_MUSCLES[category.toUpperCase()] ?? [];
 }
-
-export const ALL_MUSCLE_GROUPS = Object.keys(MUSCLE_GROUP_LABELS) as MuscleGroup[];
 
 export interface MuscleStatus {
   lastTrainedDate: string | null;
@@ -122,7 +140,7 @@ export function computeMuscleStatus(
   today: string,
 ): Record<MuscleGroup, MuscleStatus> {
   const result = {} as Record<MuscleGroup, MuscleStatus>;
-  for (const group of ALL_MUSCLE_GROUPS) {
+  for (const group of TRACKED_MUSCLE_GROUPS) {
     result[group] = { lastTrainedDate: null, daysSince: null, sets7d: 0, sets30d: 0 };
   }
 
@@ -146,8 +164,7 @@ export function computeMuscleStatus(
   return result;
 }
 
-/** 1.0 = trained today, fading toward 0 by RECENCY_FADE_DAYS; null (never
- * trained) renders as an untouched outline by the caller. */
+/** 1.0 = trained today, fading toward 0 by RECENCY_FADE_DAYS. */
 const RECENCY_FADE_DAYS = 14;
 
 export function recencyIntensity(daysSince: number | null): number {
