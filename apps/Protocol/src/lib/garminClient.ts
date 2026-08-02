@@ -1,4 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
+import { isDesktop, isNodeOnline, runViaGrid } from "./gridClient";
 
 export interface GarminSleepRaw {
   date: string;
@@ -47,25 +48,40 @@ export interface GarminStatus {
   connected: boolean;
 }
 
+// Desktop: call the bundled Tauri command directly. Web: route through the
+// Nexus Local grid (enqueue → a node runs the bridge → poll the result).
 async function run<T>(command: string, args: string[]): Promise<T> {
   const raw = await invoke<string>("garmin_run", { command, args });
   return JSON.parse(raw) as T;
 }
 
+async function callGarmin<T>(
+  action: string,
+  payload: Record<string, unknown>,
+  desktopArgs: string[],
+): Promise<T> {
+  if (isDesktop()) return run<T>(action, desktopArgs);
+  return runViaGrid<T>("garmin", action, payload);
+}
+
 export async function garminCheckStatus(): Promise<GarminStatus> {
-  return run<GarminStatus>("status", []);
+  if (isDesktop()) return run<GarminStatus>("status", []);
+  // On web, "connected" requires a live node with the garmin module. Short-
+  // circuit when none is online so the panel doesn't hang on a queued command.
+  if (!(await isNodeOnline("garmin"))) return { connected: false };
+  return runViaGrid<GarminStatus>("garmin", "status");
 }
 
 export async function garminFetchSleep(date: string, days: number): Promise<GarminSleepRaw[]> {
-  return run<GarminSleepRaw[]>("sleep", ["--date", date, "--days", String(days)]);
+  return callGarmin<GarminSleepRaw[]>("sleep", { date, days }, ["--date", date, "--days", String(days)]);
 }
 
 export async function garminFetchBodyStats(date: string, days: number): Promise<GarminBodyRaw[]> {
-  return run<GarminBodyRaw[]>("body_stats", ["--date", date, "--days", String(days)]);
+  return callGarmin<GarminBodyRaw[]>("body_stats", { date, days }, ["--date", date, "--days", String(days)]);
 }
 
 export async function garminFetchActivities(date: string, days: number): Promise<GarminActivityRaw[]> {
-  return run<GarminActivityRaw[]>("activities", ["--date", date, "--days", String(days)]);
+  return callGarmin<GarminActivityRaw[]>("activities", { date, days }, ["--date", date, "--days", String(days)]);
 }
 
 export async function garminBridgePath(): Promise<string> {
