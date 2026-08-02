@@ -5,5 +5,9 @@ import SwiftUI
 struct NexusLocalWidgetsBundle: WidgetBundle {
     var body: some Widget {
         TodayWidget()
+        HabitsWidget()
+        SleepWidget()
+        TasksWidget()
+        TimeTrackerWidget()
     }
 }
