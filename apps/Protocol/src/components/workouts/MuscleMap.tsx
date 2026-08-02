@@ -4,7 +4,6 @@ import {
   TRACKED_MUSCLE_GROUPS,
   MUSCLE_GROUP_LABELS,
   computeMuscleStatus,
-  recencyIntensity,
   type MuscleGroup,
   type MuscleStatus,
 } from "../../lib/muscleMap";
@@ -18,16 +17,15 @@ const HIGHLIGHTED_COLORS = Array.from({ length: COLOR_STEPS }, (_, i) => {
   return `color-mix(in srgb, var(--series-workout) ${pct}%, var(--progress-bg))`;
 });
 
-function frequencyFor(daysSince: number | null): number {
-  if (daysSince == null) return 0;
-  const intensity = recencyIntensity(daysSince);
-  return Math.max(1, Math.round(intensity * (COLOR_STEPS - 1)) + 1);
+function frequencyFor(fatiguePct: number): number {
+  if (fatiguePct <= 0) return 0;
+  return Math.max(1, Math.round((fatiguePct / 100) * (COLOR_STEPS - 1)) + 1);
 }
 
 function buildData(status: Record<MuscleGroup, MuscleStatus>): IExerciseData[] {
   const entries: IExerciseData[] = [];
   for (const group of TRACKED_MUSCLE_GROUPS) {
-    const freq = frequencyFor(status[group].daysSince);
+    const freq = frequencyFor(status[group].fatiguePct);
     if (freq > 0) entries.push({ name: group, muscles: [group], frequency: freq });
   }
   return entries;
@@ -38,6 +36,20 @@ function formatDaysSince(days: number | null): string {
   if (days === 0) return "Today";
   if (days === 1) return "Yesterday";
   return `${days} days ago`;
+}
+
+function formatHours(hours: number): string {
+  if (hours < 1) return "<1h";
+  if (hours < 24) return `${Math.round(hours)}h`;
+  const days = Math.floor(hours / 24);
+  const rem = Math.round(hours % 24);
+  return rem > 0 ? `${days}d ${rem}h` : `${days}d`;
+}
+
+function readinessLabel(status: MuscleStatus): string {
+  if (status.daysSince == null) return "Never trained";
+  if (status.readyInHours <= 0) return "Recovered";
+  return `Ready in ${formatHours(status.readyInHours)}`;
 }
 
 function Figure({
@@ -81,21 +93,13 @@ export default function MuscleMap({ sets }: { sets: ExerciseSet[] }) {
   const status = useMemo(() => computeMuscleStatus(sets, today), [sets, today]);
   const data = useMemo(() => buildData(status), [status]);
 
-  const sortedByRecency = useMemo(
-    () =>
-      [...TRACKED_MUSCLE_GROUPS].sort((a, b) => {
-        const da = status[a].daysSince;
-        const db = status[b].daysSince;
-        if (da == null && db == null) return 0;
-        if (da == null) return 1;
-        if (db == null) return -1;
-        return da - db;
-      }),
+  const sortedByFatigue = useMemo(
+    () => [...TRACKED_MUSCLE_GROUPS].sort((a, b) => status[b].fatiguePct - status[a].fatiguePct),
     [status],
   );
 
   const [active, setActive] = useState<MuscleGroup | null>(null);
-  const shown = active ?? sortedByRecency[0] ?? null;
+  const shown = active ?? sortedByFatigue[0] ?? null;
   const shownStatus = shown ? status[shown] : null;
 
   return (
@@ -114,21 +118,22 @@ export default function MuscleMap({ sets }: { sets: ExerciseSet[] }) {
       {shown && shownStatus && (
         <div
           style={{
-            display: "flex", alignItems: "baseline", gap: 10, justifyContent: "center",
+            display: "flex", alignItems: "baseline", gap: 10, justifyContent: "center", flexWrap: "wrap",
             padding: "8px 16px", background: "var(--bg)", border: "1px solid var(--border)",
             borderRadius: "var(--radius-sm)",
           }}
         >
           <span style={{ fontWeight: 700, fontSize: 14, color: "var(--text)" }}>{MUSCLE_GROUP_LABELS[shown]}</span>
-          <span style={{ fontSize: 12, color: "var(--text-muted)" }}>{formatDaysSince(shownStatus.daysSince)}</span>
+          <span style={{ fontSize: 12, color: "var(--text-muted)" }}>{Math.round(shownStatus.fatiguePct)}% fatigued</span>
+          <span style={{ fontSize: 12, color: "var(--text-muted)" }}>· {readinessLabel(shownStatus)}</span>
+          <span style={{ fontSize: 12, color: "var(--text-muted)" }}>· {formatDaysSince(shownStatus.daysSince)}</span>
           <span style={{ fontSize: 12, color: "var(--text-muted)" }}>· {shownStatus.sets7d} sets (7d)</span>
         </div>
       )}
 
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(120px, 1fr))", gap: 8 }}>
-        {sortedByRecency.map((group) => {
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(130px, 1fr))", gap: 8 }}>
+        {sortedByFatigue.map((group) => {
           const s = status[group];
-          const intensity = recencyIntensity(s.daysSince);
           return (
             <button
               key={group}
@@ -143,12 +148,12 @@ export default function MuscleMap({ sets }: { sets: ExerciseSet[] }) {
               <span
                 style={{
                   width: 10, height: 10, borderRadius: "50%", flexShrink: 0,
-                  background: "var(--series-workout)", opacity: Math.max(intensity, 0.12),
+                  background: "var(--series-workout)", opacity: Math.max(s.fatiguePct / 100, 0.12),
                 }}
               />
               <span style={{ display: "flex", flexDirection: "column", minWidth: 0 }}>
                 <span style={{ fontSize: 12, fontWeight: 600, color: "var(--text)" }}>{MUSCLE_GROUP_LABELS[group]}</span>
-                <span style={{ fontSize: 10, color: "var(--text-muted)" }}>{formatDaysSince(s.daysSince)}</span>
+                <span style={{ fontSize: 10, color: "var(--text-muted)" }}>{readinessLabel(s)}</span>
               </span>
             </button>
           );

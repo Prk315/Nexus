@@ -86,7 +86,7 @@ export default function WorkoutsPage() {
           <div>
             <div style={sectionTitle}>Muscle Map</div>
             <div style={sectionSubtitle}>
-              Recency by muscle group, from Garmin strength-training sets — brighter = trained more recently
+              Fatigue by muscle group, from Garmin strength-training sets — brighter = more fatigued, fades as it recovers
             </div>
           </div>
         </div>
