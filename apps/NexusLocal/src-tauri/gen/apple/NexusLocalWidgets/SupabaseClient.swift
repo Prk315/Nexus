@@ -12,10 +12,14 @@ enum SupabaseError: Error {
 struct SupabaseClient {
     private let baseURL: String
     private let anonKey: String
+    private let bearer: String
 
-    init(url: String = Secrets.supabaseURL, key: String = Secrets.supabaseAnon) {
+    /// Pass `accessToken` (a user JWT) to make RLS-scoped requests; without it
+    /// the anon key is used as the bearer (only works on anon-open tables).
+    init(url: String = Secrets.supabaseURL, key: String = Secrets.supabaseAnon, accessToken: String? = nil) {
         self.baseURL = url
         self.anonKey = key
+        self.bearer = accessToken ?? key
     }
 
     func fetch<T: Decodable>(
@@ -34,7 +38,7 @@ struct SupabaseClient {
 
         var request = URLRequest(url: url)
         request.setValue(anonKey, forHTTPHeaderField: "apikey")
-        request.setValue("Bearer \(anonKey)", forHTTPHeaderField: "Authorization")
+        request.setValue("Bearer \(bearer)", forHTTPHeaderField: "Authorization")
         request.setValue("application/json", forHTTPHeaderField: "Accept")
 
         let data: Data

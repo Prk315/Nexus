@@ -39,12 +39,16 @@ targets:
         buildPhase: resources
         type: folder
       - path: LaunchScreen.storyboard
+      - path: ../../ios   # native bridges (WidgetBridge.swift) linked into the app target
     info:
       path: nexus-local_iOS/Info.plist
       properties:
         LSRequiresIPhoneOS: true
         UILaunchStoryboardName: LaunchScreen
         UIRequiredDeviceCapabilities: [arm64, metal]
+        NSLocalNetworkUsageDescription: "Nexus Local connects to the Tauri development server on your local network during development."
+        NSBonjourServices:
+          - _http._tcp
         UISupportedInterfaceOrientations:
           - UIInterfaceOrientationPortrait
           - UIInterfaceOrientationLandscapeLeft
@@ -58,6 +62,9 @@ targets:
         CFBundleVersion: "0.1.0"
     entitlements:
       path: nexus-local_iOS/nexus-local_iOS.entitlements
+      properties:
+        com.apple.security.application-groups:
+          - group.com.bastianthomsen.nexuslocal
     scheme:
       environmentVariables:
         RUST_BACKTRACE: full
@@ -101,6 +108,12 @@ targets:
         excludes:
           - "Info.plist"            # provided via INFOPLIST_FILE below
           - "Secrets.swift.template" # copied to Secrets.swift (gitignored) by the developer
+          - "*.entitlements"         # wired via the entitlements block, not a source
+    entitlements:
+      path: NexusLocalWidgets/NexusLocalWidgets.entitlements
+      properties:
+        com.apple.security.application-groups:
+          - group.com.bastianthomsen.nexuslocal
     dependencies:
       - sdk: WidgetKit.framework
       - sdk: SwiftUI.framework

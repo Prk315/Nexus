@@ -1,6 +1,7 @@
 mod config;
 mod device;
 mod grid;
+mod ios_bridge;
 mod modules;
 #[cfg(not(mobile))]
 mod tray;
@@ -51,12 +52,21 @@ pub fn run() {
             });
             app.manage(Arc::clone(&status));
 
-            // macOS: run as a menubar accessory (no dock icon).
+            // macOS: show in the Dock while we're trying it out (a plain menubar
+            // accessory is easy to miss, especially behind a MacBook notch).
+            // Flip back to ActivationPolicy::Accessory for the background-only look.
             #[cfg(target_os = "macos")]
-            app.set_activation_policy(tauri::ActivationPolicy::Accessory);
+            app.set_activation_policy(tauri::ActivationPolicy::Regular);
 
             #[cfg(not(mobile))]
             tray::setup(app.handle())?;
+
+            // Show the status window on launch so there's an obvious entry point.
+            #[cfg(desktop)]
+            if let Some(win) = app.get_webview_window("main") {
+                let _ = win.show();
+                let _ = win.set_focus();
+            }
 
             // Launch the grid: startup hooks, per-module tick loops, and the
             // Supabase command-queue poller. tokio::spawn inside needs a runtime
@@ -82,7 +92,11 @@ pub fn run() {
                 api.prevent_close();
             }
         })
-        .invoke_handler(tauri::generate_handler![grid_status])
+        .invoke_handler(tauri::generate_handler![
+            grid_status,
+            ios_bridge::store_session,
+            ios_bridge::clear_session
+        ])
         .run(tauri::generate_context!())
         .expect("error while running Nexus Local");
 }

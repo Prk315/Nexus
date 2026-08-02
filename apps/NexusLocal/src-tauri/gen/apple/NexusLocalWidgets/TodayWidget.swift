@@ -9,21 +9,21 @@ struct TodayEntry: TimelineEntry {
     let secondaryCount: Int
     let dueToday: Int
     let overdue: Int
+    var signedOut: Bool = false
 
     static let placeholder = TodayEntry(
         date: Date(), primaryGoal: "Ship Nexus Local",
         secondaryCount: 3, dueToday: 5, overdue: 1
     )
-    static let empty = TodayEntry(
-        date: Date(), primaryGoal: nil, secondaryCount: 0, dueToday: 0, overdue: 0
+    static let signedOut = TodayEntry(
+        date: Date(), primaryGoal: nil, secondaryCount: 0,
+        dueToday: 0, overdue: 0, signedOut: true
     )
 }
 
-// MARK: - Provider (direct Supabase REST, refreshes every 15 min)
+// MARK: - Provider (authenticated Supabase REST, refreshes every 15 min)
 
 struct TodayProvider: TimelineProvider {
-    let client = SupabaseClient()
-
     func placeholder(in context: Context) -> TodayEntry { .placeholder }
 
     func getSnapshot(in context: Context, completion: @escaping (TodayEntry) -> Void) {
@@ -34,6 +34,12 @@ struct TodayProvider: TimelineProvider {
     func getTimeline(in context: Context, completion: @escaping (Timeline<TodayEntry>) -> Void) {
         Task {
             let entry = await fetchEntry()
+            if entry.signedOut {
+                // Re-check sooner so the widget lights up shortly after sign-in.
+                let next = Calendar.current.date(byAdding: .minute, value: 10, to: Date()) ?? Date()
+                completion(Timeline(entries: [entry], policy: .after(next)))
+                return
+            }
             let entries = (0..<4).map { offset -> TodayEntry in
                 let d = Calendar.current.date(byAdding: .minute, value: offset * 15, to: Date()) ?? Date()
                 return TodayEntry(date: d, primaryGoal: entry.primaryGoal,
@@ -45,8 +51,12 @@ struct TodayProvider: TimelineProvider {
     }
 
     private func fetchEntry() async -> TodayEntry {
+        guard let auth = await SessionStore.validAuth() else {
+            return .signedOut
+        }
+        let client = SupabaseClient(accessToken: auth.token)
+        let uid = auth.userID
         let today = todayString()
-        let uid   = Secrets.userID
 
         async let primaryRows: [PrimaryGoalRow] = (try? client.fetch(
             table: "pf_daily_primary_goal",
@@ -68,7 +78,7 @@ struct TodayProvider: TimelineProvider {
 
         let (primary, secondary, tasks) = await (primaryRows, secondaryRows, taskRows)
         let dueToday = tasks.filter { $0.due_date == today }.count
-        let overdue  = tasks.filter { t in
+        let overdue = tasks.filter { t in
             guard let d = t.due_date else { return false }
             return d < today
         }.count
@@ -79,7 +89,29 @@ struct TodayProvider: TimelineProvider {
     }
 }
 
-// MARK: - Views
+// MARK: - Signed-out view
+
+struct SignedOutView: View {
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            CleanHeader(label: "TODAY").padding(.bottom, 10)
+            CleanDivider().padding(.bottom, 12)
+            Spacer(minLength: 0)
+            Image(systemName: "lock.fill")
+                .font(.system(size: 20, weight: .medium))
+                .foregroundColor(wAccent)
+                .padding(.bottom, 8)
+            Text("Open Nexus Local\nto sign in")
+                .font(.system(size: 12, weight: .medium))
+                .foregroundColor(wSecondary)
+                .lineSpacing(2)
+            Spacer(minLength: 0)
+        }
+        .padding(14)
+    }
+}
+
+// MARK: - Data views
 
 struct TodaySmallView: View {
     let entry: TodayEntry
@@ -176,13 +208,19 @@ struct TodayMediumView: View {
     }
 }
 
+// MARK: - Widget definition
+
 struct TodayWidgetEntryView: View {
     @Environment(\.widgetFamily) var family
     let entry: TodayEntry
     var body: some View {
-        switch family {
-        case .systemMedium: TodayMediumView(entry: entry)
-        default:            TodaySmallView(entry: entry)
+        if entry.signedOut {
+            SignedOutView()
+        } else {
+            switch family {
+            case .systemMedium: TodayMediumView(entry: entry)
+            default:            TodaySmallView(entry: entry)
+            }
         }
     }
 }
