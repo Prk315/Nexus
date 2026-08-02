@@ -178,7 +178,26 @@ async function syncUser(
   return { user_id: userId, status: "ok", sleepDays, bodyDays };
 }
 
+// Browser calls (Connect/Sync UI) trigger a CORS preflight; pg_cron's net.http_post
+// call does not, but sending these headers on every response is harmless either way.
+const CORS_HEADERS = {
+  "Access-Control-Allow-Origin": "*",
+  "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
+  "Access-Control-Allow-Methods": "POST, OPTIONS",
+};
+
+function jsonResponse(body: unknown, status = 200): Response {
+  return new Response(JSON.stringify(body), {
+    status,
+    headers: { ...CORS_HEADERS, "Content-Type": "application/json" },
+  });
+}
+
 Deno.serve(async (req: Request) => {
+  if (req.method === "OPTIONS") {
+    return new Response(null, { headers: CORS_HEADERS });
+  }
+
   const authHeader = req.headers.get("Authorization") ?? "";
   const jwt = authHeader.replace(/^Bearer\s+/i, "");
 
@@ -186,7 +205,7 @@ Deno.serve(async (req: Request) => {
   try {
     claims = decodeJwtPayload(jwt);
   } catch {
-    return new Response(JSON.stringify({ error: "unauthorized" }), { status: 401 });
+    return jsonResponse({ error: "unauthorized" }, 401);
   }
 
   const supabase = createClient(
@@ -199,7 +218,7 @@ Deno.serve(async (req: Request) => {
     supabase.rpc("get_protocol_secret", { secret_name: "oura_client_secret" }),
   ]);
   if (!clientId || !clientSecret) {
-    return new Response(JSON.stringify({ error: "missing_oura_credentials" }), { status: 500 });
+    return jsonResponse({ error: "missing_oura_credentials" }, 500);
   }
 
   let userIds: string[];
@@ -211,7 +230,7 @@ Deno.serve(async (req: Request) => {
     // A real user session — sync just that account.
     userIds = [claims.sub];
   } else {
-    return new Response(JSON.stringify({ error: "unauthorized" }), { status: 401 });
+    return jsonResponse({ error: "unauthorized" }, 401);
   }
 
   const results = [];
@@ -219,7 +238,5 @@ Deno.serve(async (req: Request) => {
     results.push(await syncUser(supabase, userId, clientId, clientSecret));
   }
 
-  return new Response(JSON.stringify({ synced: results }), {
-    headers: { "Content-Type": "application/json" },
-  });
+  return jsonResponse({ synced: results });
 });
