@@ -56,10 +56,14 @@ function Figure({
   type,
   data,
   onSelect,
+  width,
+  height,
 }: {
   type: "anterior" | "posterior";
   data: IExerciseData[];
   onSelect: (group: MuscleGroup) => void;
+  width: number;
+  height: number;
 }) {
   const containerRef = useRef<HTMLDivElement>(null);
   const instanceRef = useRef<BodyHighlighterInstance | null>(null);
@@ -85,7 +89,7 @@ function Figure({
     instanceRef.current?.update({ data });
   }, [data]);
 
-  return <div ref={containerRef} style={{ width: 170, height: 320 }} />;
+  return <div ref={containerRef} style={{ width, height }} />;
 }
 
 export default function MuscleMap({ sets, minimal = false }: { sets: ExerciseSet[]; minimal?: boolean }) {
@@ -104,13 +108,13 @@ export default function MuscleMap({ sets, minimal = false }: { sets: ExerciseSet
 
   if (minimal) {
     return (
-      <div style={{ display: "flex", gap: 24, justifyContent: "center", flexWrap: "wrap" }}>
+      <div style={{ display: "flex", gap: 16, justifyContent: "center", flexWrap: "wrap" }}>
         <div style={{ textAlign: "center" }}>
-          <Figure type="anterior" data={data} onSelect={setActive} />
+          <Figure type="anterior" data={data} onSelect={setActive} width={110} height={200} />
           <div style={{ fontSize: 11, color: "var(--text-muted)", marginTop: 4 }}>Front</div>
         </div>
         <div style={{ textAlign: "center" }}>
-          <Figure type="posterior" data={data} onSelect={setActive} />
+          <Figure type="posterior" data={data} onSelect={setActive} width={110} height={200} />
           <div style={{ fontSize: 11, color: "var(--text-muted)", marginTop: 4 }}>Back</div>
         </div>
       </div>
@@ -121,11 +125,11 @@ export default function MuscleMap({ sets, minimal = false }: { sets: ExerciseSet
     <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
       <div style={{ display: "flex", gap: 24, justifyContent: "center", flexWrap: "wrap" }}>
         <div style={{ textAlign: "center" }}>
-          <Figure type="anterior" data={data} onSelect={setActive} />
+          <Figure type="anterior" data={data} onSelect={setActive} width={170} height={320} />
           <div style={{ fontSize: 11, color: "var(--text-muted)", marginTop: 4 }}>Front</div>
         </div>
         <div style={{ textAlign: "center" }}>
-          <Figure type="posterior" data={data} onSelect={setActive} />
+          <Figure type="posterior" data={data} onSelect={setActive} width={170} height={320} />
           <div style={{ fontSize: 11, color: "var(--text-muted)", marginTop: 4 }}>Back</div>
         </div>
       </div>

@@ -238,7 +238,7 @@ export default function DashboardPage() {
           <span style={{ fontWeight: 600, color: "var(--text)", fontSize: 14 }}>Recovery</span>
           <span style={{ fontSize: 12, color: "var(--text-muted)" }}>· {lastVitalsLabel}</span>
         </div>
-        <div style={{ display: "flex", gap: 28, flexWrap: "wrap", alignItems: "flex-start" }}>
+        <div style={{ display: "flex", gap: 28, flexWrap: "wrap", alignItems: "center" }}>
           <MuscleMap sets={exerciseSets} minimal />
 
           <div style={{ flex: "1 1 260px", display: "flex", flexDirection: "column", gap: 16 }}>
