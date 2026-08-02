@@ -203,7 +203,13 @@ export function computeMuscleStatus(
     const age = daysBetween(set.date, today);
     if (age < 0) continue;
 
-    const impulse = (set.reps ?? 1) * (set.weight_kg ?? BODYWEIGHT_FALLBACK_KG);
+    // Garmin logs bodyweight sets (pull-ups, rows with no added plate) as
+    // weight_kg = 0, not null — `??` alone wouldn't catch that, so this needs
+    // an explicit positivity check or every bodyweight set's impulse silently
+    // computes to zero (and, worse, a muscle trained only by bodyweight work
+    // ends up with a zero normalizer, producing NaN fatigue).
+    const load = set.weight_kg != null && set.weight_kg > 0 ? set.weight_kg : BODYWEIGHT_FALLBACK_KG;
+    const impulse = (set.reps ?? 1) * load;
 
     for (const group of muscles) {
       const status = result[group];
@@ -224,6 +230,7 @@ export function computeMuscleStatus(
     if (byDate.size === 0) continue;
 
     const normalizer = Math.max(...byDate.values());
+    if (normalizer <= 0) continue;
     const halfLife = halfLifeHours(group);
     let fatigue = 0;
     for (const [date, impulse] of byDate) {
