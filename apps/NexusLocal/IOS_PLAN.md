@@ -1,8 +1,15 @@
 # Nexus Local — iOS Container App Plan
 
-> Status: **PLAN — no iOS code written yet.** This is the proposal to approve
-> before Step 4 begins. Grounded in the existing TimeTracker + PathFinder iOS
-> precedents in this repo.
+> Status: **Phase A + B done** (container scaffolded, first widget builds for
+> iOS — `xcodebuild -target NexusLocalWidgets` → BUILD SUCCEEDED). Remaining:
+> full app build + device install (needs your Xcode signing), then Phases C–E.
+> Grounded in the TimeTracker + PathFinder iOS precedents in this repo.
+>
+> **Your one-time device step:** `Secrets.swift` is already created locally
+> (gitignored, publishable key). Open Xcode signing on both targets (team
+> G9D6JYJSLT) and run `npx tauri ios dev` from `apps/NexusLocal` — first build
+> cross-compiles Rust for iOS (10–20 min). Then add the "Today" widget to your
+> home screen.
 
 ## The goal, and the math that motivates it
 
