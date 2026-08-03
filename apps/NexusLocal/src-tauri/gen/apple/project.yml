@@ -67,8 +67,8 @@ targets:
           - UIInterfaceOrientationPortraitUpsideDown
           - UIInterfaceOrientationLandscapeLeft
           - UIInterfaceOrientationLandscapeRight
-        CFBundleShortVersionString: 0.1.0
-        CFBundleVersion: "0.1.0"
+        CFBundleShortVersionString: 0.2.0
+        CFBundleVersion: "0.2.0"
     entitlements:
       path: nexus-local_iOS/nexus-local_iOS.entitlements
       properties:
@@ -105,8 +105,9 @@ targets:
       - sdk: CoreBluetooth.framework
       - target: NexusLocalWidgets
         embed: true
-      - target: nexus-local_SafariBlocker
-        embed: true
+      # nexus-local_SafariBlocker temporarily dropped: on a free Apple ID each
+      # extension is its own App ID (10-App-ID SideStore budget). App + widgets = 2
+      # App IDs fits current headroom; re-add the blocker on a paid dev account.
     preBuildScripts:
       - script: npm run -- tauri ios xcode-script -v --platform ${PLATFORM_DISPLAY_NAME:?} --sdk-root ${SDKROOT:?} --framework-search-paths "${FRAMEWORK_SEARCH_PATHS:?}" --header-search-paths "${HEADER_SEARCH_PATHS:?}" --gcc-preprocessor-definitions "${GCC_PREPROCESSOR_DEFINITIONS:-}" --configuration ${CONFIGURATION:?} ${FORCE_COLOR} ${ARCHS:?}
         name: Build Rust Code
@@ -147,29 +148,6 @@ targets:
         ENABLE_BITCODE: false
         INFOPLIST_FILE: $(SRCROOT)/NexusLocalWidgets/Info.plist
 
-  nexus-local_SafariBlocker:
-    type: app-extension
-    platform: iOS
-    sources:
-      - path: ../../ios/SafariBlockerExtension
-        excludes:
-          - "Info.plist"
-          - "blockerList.json"
-      - path: ../../ios/SafariBlockerExtension/blockerList.json
-        buildPhase: resources
-    dependencies:
-      - sdk: SafariServices.framework
-      - sdk: WebKit.framework
-    settings:
-      base:
-        PRODUCT_BUNDLE_IDENTIFIER: com.bastianthomsen.nexuslocal.SafariBlocker
-        DEVELOPMENT_TEAM: G9D6JYJSLT
-        SWIFT_VERSION: "5.0"
-        ARCHS: [arm64]
-        VALID_ARCHS: arm64
-        EXCLUDED_ARCHS[sdk=iphoneos*]: x86_64
-        IPHONEOS_DEPLOYMENT_TARGET: "14.0"
-        ENABLE_USER_SCRIPT_SANDBOXING: NO
-        ENABLE_BITCODE: false
-        INFOPLIST_FILE: $(SRCROOT)/../../ios/SafariBlockerExtension/Info.plist
-        CODE_SIGN_ENTITLEMENTS: $(SRCROOT)/../../ios/SafariBlockerExtension/SafariBlocker.entitlements
+  # nexus-local_SafariBlocker target removed for the free-tier (widgets-only)
+  # build — see the comment in the app target's dependencies. The Swift sources
+  # under ios/SafariBlockerExtension remain in the tree, ready to restore.
