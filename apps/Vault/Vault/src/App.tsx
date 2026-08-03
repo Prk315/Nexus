@@ -3,6 +3,7 @@ import { useNexusRegistration, NexusHeader, useNexusAuth, CalendarSidebar } from
 import * as api from "./lib/api";
 import { loadPathfinderDay, entryToEvent, toIsoDate, type PfCalEntry } from "./lib/pathfinderCalendar";
 import { CalendarBlockEditor, type CalEditorState } from "./components/CalendarBlockEditor";
+import { markdownToParsedHtml, blockifyDisplayMath } from "./lib/parsedImport";
 import ForceGraph2D from "react-force-graph-2d";
 import ForceGraph3D from "react-force-graph-3d";
 import * as THREE from "three";
@@ -110,6 +111,8 @@ function App() {
   const newNameInputRef = useRef<HTMLInputElement>(null);
   const pdfImportRef = useRef<HTMLInputElement>(null);
   const videoImportRef = useRef<HTMLInputElement>(null);
+  const parsedImportRef = useRef<HTMLInputElement>(null);
+  const [importingParsed, setImportingParsed] = useState(false);
 
   // Multi-pane state
   const initialPaneId = React.useRef(crypto.randomUUID()).current;
@@ -418,6 +421,62 @@ function App() {
       selectNode(newId);
     }
     e.target.value = "";
+  }
+
+  // Import a folder of parsed book chapters (chNN_*/*.md + figure images) as a
+  // Parsed node: upload figures, convert markdown→full-fidelity HTML, save it.
+  async function handleImportParsed(e: React.ChangeEvent<HTMLInputElement>) {
+    const files = Array.from(e.target.files ?? []);
+    e.target.value = "";
+    if (!files.length) return;
+
+    type Chapter = { md?: File; images: Map<string, File> };
+    const byChapter = new Map<string, Chapter>();
+    let topFolder = "";
+    for (const f of files) {
+      const rel = (f as any).webkitRelativePath || f.name;
+      const parts = rel.split("/");
+      if (!topFolder && parts.length > 1) topFolder = parts[0];
+      const chapter = parts.length >= 2 ? parts[parts.length - 2] : "root";
+      const fname = parts[parts.length - 1];
+      if (!byChapter.has(chapter)) byChapter.set(chapter, { images: new Map() });
+      const entry = byChapter.get(chapter)!;
+      if (/\.md$/i.test(fname)) entry.md = f;
+      else if (/\.(jpe?g|png|gif|webp|svg)$/i.test(fname)) entry.images.set(fname, f);
+    }
+    const chapters = [...byChapter.keys()].filter((c) => byChapter.get(c)!.md).sort();
+    if (!chapters.length) { alert("No chapter .md files found in that folder."); return; }
+
+    const pretty = (topFolder || "Parsed book").replace(/[_-]+/g, " ").trim();
+    const name = window.prompt("Name for the imported parsed book:", pretty);
+    if (!name) return;
+
+    setImportingParsed(true);
+    try {
+      const oldIds = new Set(Object.keys(graph.nodes));
+      const g = await createNode(name, "Parsed");
+      const newId = Object.keys(g.nodes).find((id) => !oldIds.has(id));
+      if (!newId) throw new Error("Could not create Parsed node");
+
+      const combined: string[] = [];
+      for (const chapter of chapters) {
+        const { md, images } = byChapter.get(chapter)!;
+        let text = await md!.text();
+        for (const [fname, file] of images) {
+          const url = await api.uploadParsedFigure(newId, chapter, fname, file);
+          text = text.split(`](${fname})`).join(`](${url})`);
+        }
+        combined.push(blockifyDisplayMath(text));
+      }
+      const html = markdownToParsedHtml(combined.join("\n\n"));
+      await api.saveContent(newId, html);
+      selectNode(newId);
+    } catch (err) {
+      console.error("Parsed import failed:", err);
+      alert("Import failed: " + (err instanceof Error ? err.message : String(err)));
+    } finally {
+      setImportingParsed(false);
+    }
   }
 
   async function handleDeleteNode(id: string) {
@@ -834,11 +893,24 @@ function App() {
                 style={{ display: "none" }}
                 onChange={handleImportVideo}
               />
+              <input
+                ref={parsedImportRef}
+                type="file"
+                // @ts-expect-error non-standard folder-picker attributes
+                webkitdirectory=""
+                directory=""
+                multiple
+                style={{ display: "none" }}
+                onChange={handleImportParsed}
+              />
               <button className="import-pdf-btn" onClick={() => pdfImportRef.current?.click()}>
                 Import PDF
               </button>
               <button className="import-pdf-btn" onClick={() => videoImportRef.current?.click()}>
                 Import Video
+              </button>
+              <button className="import-pdf-btn" disabled={importingParsed} onClick={() => parsedImportRef.current?.click()}>
+                {importingParsed ? "Importing…" : "Import Parsed"}
               </button>
             </div>
             <ul className="node-list">

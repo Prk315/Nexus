@@ -33,7 +33,10 @@ CHECK_ONLY=false
 
 # Apps that live on the phone long-term. `--app all` and `--refresh` walk this
 # list. Free Apple IDs allow only 3 sideloaded apps at once, so keep it short.
-PHONE_APPS=(timetracker pathfinder)
+# PathFinder retired 2026-08-03 to free a slot for Nexus Local (installed via
+# SideStore's own source, so it isn't listed here). Re-add pathfinder if you
+# want the Mac/Xcode refresh flow to manage it again.
+PHONE_APPS=(timetracker)
 
 # ── Argument parsing ──────────────────────────────────────────────────────────
 while [[ $# -gt 0 ]]; do

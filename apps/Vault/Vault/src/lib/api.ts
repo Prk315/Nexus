@@ -163,6 +163,14 @@ export async function saveJournal(id: string, data: string): Promise<void> {
 
 // ── Assets (PDFs, videos) → Supabase Storage ─────────────────────────────────
 
+// Upload a parsed-book figure into a per-node/chapter folder; returns public URL.
+export async function uploadParsedFigure(nodeId: string, chapter: string, filename: string, file: File | Blob): Promise<string> {
+  const path = `${getUserId()}/parsed/${nodeId}/${chapter}/${filename}`;
+  const { error } = await supabase.storage.from("vault-assets").upload(path, file, { upsert: true });
+  if (error) err(error);
+  return supabase.storage.from("vault-assets").getPublicUrl(path).data.publicUrl;
+}
+
 export async function uploadAsset(nodeId: string, file: File): Promise<string> {
   const ext = file.name.split(".").pop() ?? "bin";
   const path = `${getUserId()}/${nodeId}.${ext}`;
