@@ -1,14 +1,16 @@
-import { useEffect, useMemo, useState, useCallback } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { useQueryClient } from "@tanstack/react-query";
 import { Plus, Search, ListChecks } from "lucide-react";
 import {
-  getAllTasks, getPlans, createTask, updateTask, toggleTask, deleteTask,
-  moveTask, reorderTasks,
-} from "../../lib/api";
+  useTasks, usePlans, useToggleTask, useDeleteTask, useUpdateTask,
+  useRescheduleTask, useMoveTask, useCreateTask, useReorderTasks,
+} from "../../hooks/useTasks";
+import { qk } from "../../lib/queryClient";
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
 import { Dialog, DialogContent } from "../ui/dialog";
 import { cn } from "../../lib/utils";
-import type { TaskWithContext, Plan, Priority } from "../../types";
+import type { TaskWithContext, Priority } from "../../types";
 import { TaskRow } from "./TaskRow";
 import { EditTaskForm, AddTaskForm, ReschedulePopover, type TaskFormState } from "./TaskDialogs";
 import { StudySection } from "./StudySection";
@@ -50,8 +52,8 @@ export function TaskBoard({ selectedPlanId, selectedGoalId, reloadSignal }: {
   selectedGoalId?: number | null;
   reloadSignal?: number;
 }) {
-  const [tasks, setTasks] = useState<TaskWithContext[]>([]);
-  const [plans, setPlans] = useState<Plan[]>([]);
+  const { data: tasks = [] } = useTasks();
+  const { data: plans = [] } = usePlans();
   const [group, setGroup] = useState<GroupMode>("time");
   const [search, setSearch] = useState("");
   const [showDone, setShowDone] = useState(false);
@@ -61,14 +63,27 @@ export function TaskBoard({ selectedPlanId, selectedGoalId, reloadSignal }: {
   const [adding, setAdding] = useState(false);
   const [rescheduling, setRescheduling] = useState<TaskWithContext | null>(null);
 
-  const load = useCallback(
-    () => Promise.all([getAllTasks(), getPlans()]).then(([t, p]) => { setTasks(t); setPlans(p); }),
-    [],
-  );
-  useEffect(() => { load(); }, [load, reloadSignal]);
+  // Sibling rails (Navigator, Systems) still mutate via direct api calls and bump
+  // `reloadSignal`; refresh our cached reads when that happens (skip the initial mount).
+  const qc = useQueryClient();
+  const firstRun = useRef(true);
+  useEffect(() => {
+    if (firstRun.current) { firstRun.current = false; return; }
+    qc.invalidateQueries({ queryKey: qk.tasks });
+    qc.invalidateQueries({ queryKey: qk.plans });
+  }, [reloadSignal, qc]);
 
   // Plans that hold tasks (exclude schedule/course containers).
   const taskPlans = useMemo(() => plans.filter((p) => !p.is_schedule && !p.is_course), [plans]);
+
+  // Mutation hooks — each optimistically patches the tasks cache (see useTasks.ts).
+  const toggle = useToggleTask();
+  const del = useDeleteTask();
+  const update = useUpdateTask();
+  const reschedule = useRescheduleTask();
+  const move = useMoveTask(plans);
+  const create = useCreateTask();
+  const reorder = useReorderTasks();
 
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase();
@@ -149,36 +164,32 @@ export function TaskBoard({ selectedPlanId, selectedGoalId, reloadSignal }: {
 
   const totalShown = filtered.length;
 
-  // ── Mutations ──────────────────────────────────────────────────────────────
-  const handleToggle = async (id: number) => { await toggleTask(id); load(); };
-  const handleDelete = async (id: number) => { await deleteTask(id); load(); };
+  // ── Mutations (optimistic; UI updates before the network round-trip) ─────────
+  const handleToggle = (id: number) => toggle.mutate(id);
+  const handleDelete = (id: number) => del.mutate(id);
 
-  const handleReschedule = async (date: string) => {
+  const handleReschedule = (date: string) => {
     if (!rescheduling) return;
-    await updateTask(rescheduling.id, {
-      title: rescheduling.title, priority: rescheduling.priority,
-      due_date: date, time_estimate: rescheduling.time_estimate,
-    });
+    reschedule.mutate({ task: rescheduling, due_date: date });
     setRescheduling(null);
-    load();
   };
 
   const saveEdit = async (form: TaskFormState) => {
     if (!editing) return;
-    await updateTask(editing.id, {
+    update.mutate({
+      id: editing.id,
       title: form.title.trim(),
       priority: form.priority,
       due_date: form.due_date || null,
       time_estimate: form.time_estimate ? Number(form.time_estimate) : null,
     });
     const newPlan = form.plan_id ? Number(form.plan_id) : null;
-    if (newPlan !== editing.plan_id) await moveTask(editing.id, newPlan);
+    if (newPlan !== editing.plan_id) move.mutate({ id: editing.id, planId: newPlan });
     setEditing(null);
-    load();
   };
 
   const addTask = async (form: TaskFormState) => {
-    await createTask({
+    await create.mutateAsync({
       plan_id: form.plan_id ? Number(form.plan_id) : null,
       title: form.title.trim(),
       priority: form.priority,
@@ -186,17 +197,15 @@ export function TaskBoard({ selectedPlanId, selectedGoalId, reloadSignal }: {
       time_estimate: form.time_estimate ? Number(form.time_estimate) : null,
     });
     setAdding(false);
-    load();
   };
 
   // Reorder within a plan bucket (only offered when group === "plan").
-  const reorderWithin = async (bucketTasks: TaskWithContext[], index: number, dir: -1 | 1) => {
+  const reorderWithin = (bucketTasks: TaskWithContext[], index: number, dir: -1 | 1) => {
     const ids = bucketTasks.map((t) => t.id);
     const j = index + dir;
     if (j < 0 || j >= ids.length) return;
     [ids[index], ids[j]] = [ids[j], ids[index]];
-    await reorderTasks(ids);
-    load();
+    reorder.mutate(ids);
   };
 
   return (
