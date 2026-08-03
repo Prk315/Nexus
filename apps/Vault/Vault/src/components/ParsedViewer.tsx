@@ -4,6 +4,7 @@ import "katex/dist/katex.min.css";
 import { HighlighterCatEditor } from "./HighlighterCatEditor";
 import * as api from "../lib/api";
 import { DEFAULT_HIGHLIGHTERS } from "../nodeUtils";
+import { useResizableWidth } from "../hooks/useResizableWidth";
 import type { VaultGraph, HighlighterCategory } from "../types";
 
 interface Props {
@@ -40,6 +41,7 @@ export function ParsedViewer({ content, nodeId }: Props) {
   const [sidebarTab, setSidebarTab] = useState<"outline" | "bookmarks">("outline");
   const [outline, setOutline] = useState<OutlineItem[]>([]);
   const [activeId, setActiveId] = useState<string | null>(null);
+  const outlineResize = useResizableWidth("nexus.parsed.outlineWidth", 260, 180, 520);
   const [bookmarks, setBookmarks] = useState<Set<string>>(new Set());
   const [fontScale, setFontScale] = useState(() => {
     const v = Number(localStorage.getItem(`nexus.parsed.font.${nodeId}`));
@@ -339,7 +341,10 @@ export function ParsedViewer({ content, nodeId }: Props) {
       )}
       <div className="parsed-body">
         {sidebarOpen && (
-          <aside className="parsed-outline">
+          <aside
+            className="parsed-outline"
+            style={{ width: outlineResize.width, flexBasis: outlineResize.width }}
+          >
             <div className="parsed-outline-tabs">
               <button className={sidebarTab === "outline" ? "active" : ""} onClick={() => setSidebarTab("outline")}>Outline</button>
               <button className={sidebarTab === "bookmarks" ? "active" : ""} onClick={() => setSidebarTab("bookmarks")}>★ {bookmarks.size || ""}</button>
@@ -362,6 +367,9 @@ export function ParsedViewer({ content, nodeId }: Props) {
               <div className="parsed-bm-empty">No bookmarks yet — tap ☆ next to a section.</div>
             )}
           </aside>
+        )}
+        {sidebarOpen && (
+          <div className="pv-resize" onPointerDown={outlineResize.startResize} title="Drag to resize" />
         )}
         <div ref={scrollRef} className="parsed-scroll">
           <div ref={rootRef} className="parsed-content" />

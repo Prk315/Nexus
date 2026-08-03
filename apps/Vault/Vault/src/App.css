@@ -104,7 +104,43 @@ body {
   flex-direction: column;
   flex-shrink: 0;
   overflow: hidden;
+  position: relative;
   transition: width 0.22s ease, min-width 0.22s ease, border-color 0.22s ease;
+}
+
+/* Drag-to-resize handle on a panel's right edge */
+.resize-handle {
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  width: 6px;
+  cursor: col-resize;
+  z-index: 6;
+  touch-action: none;
+  transition: background 0.12s ease;
+}
+.resize-handle:hover,
+.resize-handle:active {
+  background: var(--accent, #14b8a6);
+  opacity: 0.5;
+}
+
+/* Flex-sibling resize handle (for panels that are themselves scroll containers) */
+.pv-resize {
+  flex: 0 0 5px;
+  align-self: stretch;
+  cursor: col-resize;
+  background: transparent;
+  z-index: 6;
+  touch-action: none;
+  margin-left: -3px;
+  transition: background 0.12s ease;
+}
+.pv-resize:hover,
+.pv-resize:active {
+  background: var(--accent, #14b8a6);
+  opacity: 0.5;
 }
 
 .sidebar-hidden {
@@ -6013,6 +6049,7 @@ body {
   border-right: 1px solid var(--border-base, #e2e2e6);
   background: var(--bg-subtle, rgba(0,0,0,0.02));
   padding: 12px 8px 60px;
+  position: relative;
 }
 .parsed-outline-title {
   font-size: 11px;

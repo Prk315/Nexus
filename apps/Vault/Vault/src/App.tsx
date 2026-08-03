@@ -4,6 +4,7 @@ import * as api from "./lib/api";
 import { loadPathfinderDay, entryToEvent, toIsoDate, type PfCalEntry } from "./lib/pathfinderCalendar";
 import { CalendarBlockEditor, type CalEditorState } from "./components/CalendarBlockEditor";
 import { markdownToParsedHtml, blockifyDisplayMath } from "./lib/parsedImport";
+import { useResizableWidth } from "./hooks/useResizableWidth";
 import ForceGraph2D from "react-force-graph-2d";
 import ForceGraph3D from "react-force-graph-3d";
 import * as THREE from "three";
@@ -113,6 +114,7 @@ function App() {
   const videoImportRef = useRef<HTMLInputElement>(null);
   const parsedImportRef = useRef<HTMLInputElement>(null);
   const [importingParsed, setImportingParsed] = useState(false);
+  const sidebarResize = useResizableWidth("nexus.vault.sidebarWidth", 240, 200, 520);
 
   // Multi-pane state
   const initialPaneId = React.useRef(crypto.randomUUID()).current;
@@ -841,9 +843,18 @@ function App() {
         className={`sidebar-toggle-tab${sidebarOpen ? "" : " closed"}`}
         onClick={() => setSidebarOpen(v => !v)}
         title={sidebarOpen ? "Hide sidebar" : "Show sidebar"}
+        style={sidebarOpen ? { left: sidebarResize.width } : undefined}
       >{sidebarOpen ? "‹" : "›"}</button>
 
-      <aside className={`sidebar${sidebarOpen ? "" : " sidebar-hidden"}`}>
+      <aside
+        className={`sidebar${sidebarOpen ? "" : " sidebar-hidden"}`}
+        style={{
+          width: sidebarOpen ? sidebarResize.width : 0,
+          minWidth: sidebarOpen ? sidebarResize.width : 0,
+          transition: sidebarResize.dragging ? "none" : undefined,
+        }}
+      >
+        {sidebarOpen && <div className="resize-handle" onPointerDown={sidebarResize.startResize} title="Drag to resize" />}
         <div className="sidebar-header">
           <h2 className="vault-title-btn" onClick={() => activePaneRef.current?.showHome()}>Vault</h2>
           <div className="sidebar-header-right">
