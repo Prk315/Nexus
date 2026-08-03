@@ -1,0 +1,209 @@
+name: Nexus Local — iOS (SideStore)
+
+# Builds an UNSIGNED iOS IPA of Nexus Local and (when publishing) ships it as a
+# GitHub Release + refreshes the SideStore source (apps.json) on GitHub Pages.
+# SideStore re-signs the unsigned IPA on-device with your own Apple ID, so no
+# Apple account or signing certificate is needed in CI.
+#
+# Triggers:
+#   • workflow_dispatch  — manual. `publish: false` (default) = diagnostic build
+#     that only uploads the IPA as a run artifact. `publish: true` = full release.
+#   • push tag nexuslocal-v*  — always a full release.
+
+on:
+  workflow_dispatch:
+    inputs:
+      publish:
+        description: "Publish a GitHub Release + update the SideStore source"
+        type: boolean
+        default: false
+  push:
+    tags:
+      - "nexuslocal-v*"
+
+permissions:
+  contents: write   # create releases / tags
+  pages: write      # deploy the source to Pages
+  id-token: write   # required by actions/deploy-pages
+
+concurrency:
+  group: nexuslocal-ios
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: macos-15
+    outputs:
+      version: ${{ steps.meta.outputs.version }}
+      tag: ${{ steps.meta.outputs.tag }}
+      ipa_name: ${{ steps.package.outputs.ipa_name }}
+      ipa_size: ${{ steps.package.outputs.ipa_size }}
+      publish: ${{ steps.meta.outputs.publish }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Select Xcode
+        run: sudo xcode-select -switch /Applications/Xcode.app
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+
+      - name: Rust toolchain (+ iOS target)
+        run: |
+          rustup update stable
+          rustup default stable
+          rustup target add aarch64-apple-ios
+
+      - name: Cache Cargo + iOS target dir
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            apps/NexusLocal/src-tauri/target
+          key: nexuslocal-cargo-${{ runner.os }}-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: nexuslocal-cargo-${{ runner.os }}-
+
+      - name: Install xcodegen
+        run: brew install xcodegen
+
+      - name: Install JS dependencies
+        run: npm ci || npm install
+
+      - name: Compute version / tag / publish flag
+        id: meta
+        run: |
+          V=$(node -p "require('./apps/NexusLocal/src-tauri/tauri.conf.json').version")
+          echo "version=$V" >> "$GITHUB_OUTPUT"
+          if [ "${{ github.ref_type }}" = "tag" ]; then
+            echo "tag=${{ github.ref_name }}" >> "$GITHUB_OUTPUT"
+            echo "publish=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "tag=nexuslocal-v${V}-b${{ github.run_number }}" >> "$GITHUB_OUTPUT"
+            echo "publish=${{ inputs.publish }}" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Write frontend .env
+        run: |
+          cat > apps/NexusLocal/.env <<EOF
+          VITE_SUPABASE_URL=${SUPABASE_URL:-https://efxmzsdisaymtpebaxlp.supabase.co}
+          VITE_SUPABASE_ANON_KEY=${SUPABASE_ANON_KEY}
+          EOF
+        env:
+          SUPABASE_URL: ${{ vars.SUPABASE_URL }}
+          SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
+
+      - name: Regenerate iOS project skeleton
+        working-directory: apps/NexusLocal
+        # `tauri ios init` lays down the gen/apple skeleton that isn't committed
+        # (Sources/, Externals/, Assets.xcassets, LaunchScreen, xcodeproj). It
+        # rewrites project.yml with a stock single-target spec — we restore our
+        # multi-target one in the next step.
+        run: npx tauri ios init --ci
+
+      - name: Restore committed iOS project spec
+        run: |
+          git checkout -- apps/NexusLocal/src-tauri/gen/apple/project.yml
+          # Widget / SafariBlocker Swift sources are tracked; make sure init didn't
+          # leave them dirty or missing.
+          git checkout -- apps/NexusLocal/src-tauri/gen/apple/NexusLocalWidgets 2>/dev/null || true
+
+      - name: Write widget Secrets.swift
+        run: |
+          cat > apps/NexusLocal/src-tauri/gen/apple/NexusLocalWidgets/Secrets.swift <<EOF
+          // Generated in CI from repository secrets — do not commit.
+          enum Secrets {
+              static let supabaseURL  = "${SUPABASE_URL:-https://efxmzsdisaymtpebaxlp.supabase.co}"
+              static let supabaseAnon = "${SUPABASE_ANON_KEY}"
+              static let userID       = "${SUPABASE_USER_ID}"
+          }
+          EOF
+        env:
+          SUPABASE_URL: ${{ vars.SUPABASE_URL }}
+          SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
+          SUPABASE_USER_ID: ${{ secrets.SUPABASE_USER_ID }}
+
+      - name: Diagnostics — project tree before build
+        run: |
+          echo "== gen/apple (tracked spec restored) =="
+          ls -la apps/NexusLocal/src-tauri/gen/apple || true
+          echo "== xcodegen dry check =="
+          (cd apps/NexusLocal/src-tauri/gen/apple && xcodegen generate) || echo "xcodegen returned non-zero (tauri build will also run it)"
+
+      - name: Build unsigned IPA
+        working-directory: apps/NexusLocal
+        run: npx tauri ios build --no-sign --ci --verbose
+
+      - name: Locate & package IPA
+        id: package
+        run: bash apps/NexusLocal/ci/collect-ipa.sh "${{ steps.meta.outputs.version }}"
+
+      - name: Upload IPA artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: NexusLocal-ipa
+          path: dist-ipa/*.ipa
+          if-no-files-found: error
+
+  release:
+    needs: build
+    if: needs.build.outputs.publish == 'true'
+    runs-on: ubuntu-latest
+    outputs:
+      download_url: ${{ steps.urls.outputs.download_url }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Download IPA artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: NexusLocal-ipa
+          path: dist-ipa
+
+      - name: Compute asset URL
+        id: urls
+        run: |
+          TAG="${{ needs.build.outputs.tag }}"
+          NAME="${{ needs.build.outputs.ipa_name }}"
+          echo "download_url=https://github.com/${{ github.repository }}/releases/download/${TAG}/${NAME}" >> "$GITHUB_OUTPUT"
+
+      - name: Create / update GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ needs.build.outputs.tag }}
+          name: Nexus Local ${{ needs.build.outputs.version }}
+          body: |
+            Unsigned iOS build of Nexus Local ${{ needs.build.outputs.version }}.
+            Installed / updated via SideStore (source: https://prk315.github.io/Nexus/apps.json).
+          files: dist-ipa/*.ipa
+          make_latest: true
+
+      - name: Generate SideStore source (apps.json + landing page)
+        run: node apps/NexusLocal/ci/gen-source.mjs
+        env:
+          VERSION: ${{ needs.build.outputs.version }}
+          DOWNLOAD_URL: ${{ steps.urls.outputs.download_url }}
+          IPA_SIZE: ${{ needs.build.outputs.ipa_size }}
+          RELEASE_NOTES: "Nexus Local ${{ needs.build.outputs.version }}"
+          OUT_DIR: _site
+
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: _site
+
+  deploy-pages:
+    needs: release
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deploy
+        uses: actions/deploy-pages@v4
