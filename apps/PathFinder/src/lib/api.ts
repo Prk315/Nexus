@@ -34,8 +34,10 @@ function mapGoal(
   return {
     id: num(r.id),
     group_id: r.group_id ? num(r.group_id) : null,
-    group_name: r.pf_goal_groups?.name ?? null,
-    group_color: r.pf_goal_groups?.color ?? null,
+    // Accepts both shapes: flat columns from pf_goals_with_counts, or the
+    // embedded pf_goal_groups(...) join used by create/updateGoal.
+    group_name: r.group_name ?? r.pf_goal_groups?.name ?? null,
+    group_color: r.group_color ?? r.pf_goal_groups?.color ?? null,
     title: r.title,
     description: r.description,
     deadline: r.deadline,
@@ -409,44 +411,16 @@ export const deleteGoalGroup = async (id: number): Promise<void> => {
 // ═══════════════════════════════════════════════════════════════════════════
 
 export const getGoals = async (): Promise<Goal[]> => {
-  const { data: goals, error: gErr } = await supabase
-    .from("pf_goals")
-    .select("*, pf_goal_groups(name, color)")
+  // task_count/done_count are aggregated server-side by the pf_goals_with_counts
+  // view (goals ⋈ plans ⋈ tasks), so this is a single round-trip instead of the
+  // former goals→plans→tasks fan-out.
+  const { data: goals, error } = await supabase
+    .from("pf_goals_with_counts")
+    .select("*")
     .eq("user_id", getUserId())
     .order("created_at", { ascending: false });
-  if (gErr) err(gErr);
-  if (!goals?.length) return [];
-
-  // Compute task_count / done_count through plans → tasks
-  const goalIds = goals.map((g) => num(g.id));
-  const { data: plans } = await supabase
-    .from("pf_plans")
-    .select("id, goal_id")
-    .eq("user_id", getUserId())
-    .in("goal_id", goalIds);
-
-  const planIds = (plans ?? []).map((p) => num(p.id));
-  const counts: Record<number, { total: number; done: number }> = {};
-
-  if (planIds.length > 0) {
-    const { data: tasks } = await supabase
-      .from("pf_tasks")
-      .select("id, done, plan_id")
-      .in("plan_id", planIds);
-    for (const t of tasks ?? []) {
-      const plan = (plans ?? []).find((p) => num(p.id) === num(t.plan_id));
-      if (plan?.goal_id) {
-        const gid = num(plan.goal_id);
-        if (!counts[gid]) counts[gid] = { total: 0, done: 0 };
-        counts[gid].total++;
-        if (t.done) counts[gid].done++;
-      }
-    }
-  }
-
-  return goals.map((g) =>
-    mapGoal(g, counts[num(g.id)]?.total ?? 0, counts[num(g.id)]?.done ?? 0)
-  );
+  if (error) err(error);
+  return (goals ?? []).map((g) => mapGoal(g, num(g.task_count), num(g.done_count)));
 };
 
 export const createGoal = async (payload: {
@@ -486,31 +460,15 @@ export const deleteGoal = async (id: number): Promise<void> => {
 // ═══════════════════════════════════════════════════════════════════════════
 
 export const getPlans = async (): Promise<Plan[]> => {
+  // Counts aggregated server-side by pf_plans_with_counts — one round-trip, and
+  // no longer ships every task row just to tally it.
   const { data: plans, error } = await supabase
-    .from("pf_plans")
+    .from("pf_plans_with_counts")
     .select("*")
     .eq("user_id", getUserId())
     .order("created_at", { ascending: false });
   if (error) err(error);
-  if (!plans?.length) return [];
-
-  const planIds = plans.map((p) => num(p.id));
-  const { data: tasks } = await supabase
-    .from("pf_tasks")
-    .select("id, done, plan_id")
-    .in("plan_id", planIds);
-
-  const counts: Record<number, { total: number; done: number }> = {};
-  for (const t of tasks ?? []) {
-    const pid = num(t.plan_id);
-    if (!counts[pid]) counts[pid] = { total: 0, done: 0 };
-    counts[pid].total++;
-    if (t.done) counts[pid].done++;
-  }
-
-  return plans.map((p) =>
-    mapPlan(p, counts[num(p.id)]?.total ?? 0, counts[num(p.id)]?.done ?? 0)
-  );
+  return (plans ?? []).map((p) => mapPlan(p, num(p.task_count), num(p.done_count)));
 };
 
 export const createPlan = async (payload: {
