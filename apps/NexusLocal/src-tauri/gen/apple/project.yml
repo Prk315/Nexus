@@ -54,6 +54,8 @@ targets:
         NSSupportsLiveActivities: true
         NSBluetoothAlwaysUsageDescription: "Nexus Local connects to your BLE scale to read body-composition measurements."
         NSBluetoothPeripheralUsageDescription: "Nexus Local connects to your BLE scale to read body-composition measurements."
+        UIBackgroundModes:
+          - bluetooth-central
         CFBundleURLTypes:
           - CFBundleURLName: com.bastianthomsen.nexuslocal
             CFBundleURLSchemes:
@@ -67,8 +69,8 @@ targets:
           - UIInterfaceOrientationPortraitUpsideDown
           - UIInterfaceOrientationLandscapeLeft
           - UIInterfaceOrientationLandscapeRight
-        CFBundleShortVersionString: 0.4.0
-        CFBundleVersion: "0.4.0"
+        CFBundleShortVersionString: 0.5.0
+        CFBundleVersion: "0.5.0"
     entitlements:
       path: nexus-local_iOS/nexus-local_iOS.entitlements
       properties:

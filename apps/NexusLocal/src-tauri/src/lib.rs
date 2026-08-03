@@ -104,6 +104,7 @@ pub fn run() {
             live_activities::start_live_activity,
             live_activities::end_live_activity,
             ble_scan::ble_scan_start,
+            ble_scan::ble_write,
             ble_scan::ble_scan_stop,
             ble_scan::ble_scan_results
         ])
