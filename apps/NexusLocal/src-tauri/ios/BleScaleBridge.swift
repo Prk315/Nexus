@@ -194,7 +194,7 @@ final class BleScaleScanner: NSObject, CBCentralManagerDelegate, CBPeripheralDel
             "hex": data.hex,
             "len": data.count,
         ])
-        if frames.count > 120 { frames.removeFirst(frames.count - 120) }
+        if frames.count > 500 { frames.removeFirst(frames.count - 500) }  // keep a full session
         writeSnapshot(status: "frame")
     }
 

@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { supabasePublic } from "./supabase";
 
 type ScanDevice = {
   id: string;
@@ -39,12 +40,33 @@ export function BleScan() {
   const [hsChar, setHsChar] = useState("FFF1");
   const [snap, setSnap] = useState<Snapshot>({});
   const [scanning, setScanning] = useState(false);
+  const [uploadMsg, setUploadMsg] = useState("");
   const poll = useRef<number | null>(null);
 
   function refresh() {
     invoke<string>("ble_scan_results")
       .then((s) => { try { setSnap(JSON.parse(s)); } catch {} })
       .catch(() => {});
+  }
+
+  // Upload the full capture to Supabase so the complete be/df body-comp sequence
+  // is never lost to the rolling on-screen list (and no phone-juggling with hands
+  // on the electrodes). Reads the latest JSON straight from the bridge.
+  async function uploadCapture(label: string) {
+    setUploadMsg("saving…");
+    try {
+      const raw = await invoke<string>("ble_scan_results");
+      const s = JSON.parse(raw) as Snapshot;
+      const { error } = await supabasePublic.from("nexus_ble_captures").insert({
+        label,
+        device_name: s.connected?.name ?? null,
+        frame_count: s.frames?.length ?? 0,
+        snapshot: s,
+      });
+      setUploadMsg(error ? `save failed: ${error.message}` : `saved ✓ (${s.frames?.length ?? 0} frames)`);
+    } catch (e) {
+      setUploadMsg(`save failed: ${String(e)}`);
+    }
   }
 
   function startScan() {
@@ -62,6 +84,8 @@ export function BleScan() {
       if (poll.current) { clearInterval(poll.current); poll.current = null; }
       setScanning(false);
       refresh();
+      // Auto-save the full capture so nothing is lost with hands on the electrodes.
+      uploadCapture("auto");
     }, 63000);
   }
 
@@ -134,6 +158,16 @@ export function BleScan() {
             {p.label}
           </button>
         ))}
+      </div>
+
+      <div className="flex items-center gap-2">
+        <button
+          onClick={() => uploadCapture("manual")}
+          className="rounded-lg bg-emerald-500/20 px-3 py-1.5 text-xs font-medium text-emerald-300"
+        >
+          ☁ Save capture
+        </button>
+        {uploadMsg && <span className="text-[10px] text-white/45">{uploadMsg}</span>}
       </div>
 
       {snap.status && (
