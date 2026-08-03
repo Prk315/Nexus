@@ -11,6 +11,7 @@ import { Projects } from "./pages/Projects";
 import { Games } from "./pages/Games";
 import { Schedules } from "./pages/Schedules";
 import { Workspace } from "./pages/Workspace";
+import { CommandPalette } from "./components/CommandPalette";
 
 const IS_IOS = /iPhone|iPad|iPod/.test(navigator.userAgent);
 
@@ -22,6 +23,7 @@ function App() {
 
   return (
     <div className="flex h-screen w-screen overflow-hidden bg-background text-foreground">
+      <CommandPalette onNavigate={setPage} />
       {!IS_IOS && (
         <Sidebar
           current={page}
