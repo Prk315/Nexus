@@ -5,12 +5,16 @@ import BodyTypeGrid from "./BodyTypeGrid";
 import SegmentalBody from "./SegmentalBody";
 import { TrendChart } from "../BiomarkerCharts";
 import { SAMPLE, type BodyCompositionData, type CompositionEntry } from "./data";
+import { useBodyComposition } from "./useBodyComposition";
 
 /**
  * Body-composition report — the bio-impedance ("smart scale") read-out, laid
- * out to match the reference sheet but in Protocol's own tokens/cards. Fully
- * presentational: pass a `BodyCompositionData` via `data`, else it renders
- * `SAMPLE` so the layout is reviewable while the data layer is wired.
+ * out to match the reference sheet but in Protocol's own tokens/cards.
+ *
+ * Data resolution: an explicit `data` prop wins; otherwise the latest
+ * `protocol_body_metrics` scan is fetched via `useBodyComposition`; if there's
+ * no scan yet (or not authenticated) it falls back to `SAMPLE` and flags it so
+ * the placeholder is never mistaken for a real measurement.
  */
 
 const MODULE_STYLE: React.CSSProperties = {
@@ -56,7 +60,11 @@ function CompositionRow({ e }: { e: CompositionEntry }) {
   );
 }
 
-export default function BodyCompositionModule({ data = SAMPLE }: { data?: BodyCompositionData }) {
+export default function BodyCompositionModule({ data: dataProp }: { data?: BodyCompositionData }) {
+  const { data: fetched, loading } = useBodyComposition();
+  const data = dataProp ?? fetched ?? SAMPLE;
+  const isSample = !dataProp && !fetched;
+
   const weightPct = ((data.weightKg - data.weightLow) / (data.weightHigh - data.weightLow || 1)) * 100;
   const waterPct = ((data.cellWater.totalKg - data.cellWater.totalLow) / (data.cellWater.totalHigh - data.cellWater.totalLow || 1)) * 100;
 
@@ -69,7 +77,14 @@ export default function BodyCompositionModule({ data = SAMPLE }: { data?: BodyCo
             <PersonStanding size={18} />
           </div>
           <div style={{ display: "flex", flexDirection: "column" }}>
-            <span style={{ fontSize: 18, fontWeight: 700, color: "var(--text)" }}>Body Composition</span>
+            <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+              <span style={{ fontSize: 18, fontWeight: 700, color: "var(--text)" }}>Body Composition</span>
+              {isSample && (
+                <span style={{ fontSize: 10, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.05em", color: "var(--warning)", background: "var(--series-nutrition-track)", borderRadius: "var(--radius-sm)", padding: "2px 6px" }}>
+                  {loading ? "Loading…" : "Sample data"}
+                </span>
+              )}
+            </div>
             <span style={{ fontSize: 12, color: "var(--text-muted)" }}>Bio-impedance analysis — segmental fat, muscle & water</span>
           </div>
         </div>
