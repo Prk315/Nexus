@@ -18,6 +18,28 @@ pub fn get_or_create() -> String {
 }
 
 /// Best-effort human-readable machine name for the dashboard.
+///
+/// iOS sandboxes forbid spawning subprocesses, so the `hostname` command route
+/// used on desktop hard-fails there and leaves the dashboard showing "unknown".
+/// On iOS read the name straight from libc's `gethostname(2)` instead.
+#[cfg(target_os = "ios")]
+pub fn hostname() -> String {
+    let mut buf = [0u8; 256];
+    let rc = unsafe { libc::gethostname(buf.as_mut_ptr() as *mut libc::c_char, buf.len()) };
+    if rc == 0 {
+        let end = buf.iter().position(|&b| b == 0).unwrap_or(buf.len());
+        if let Ok(s) = std::str::from_utf8(&buf[..end]) {
+            let t = s.trim();
+            if !t.is_empty() {
+                return t.to_string();
+            }
+        }
+    }
+    "iPhone".to_string()
+}
+
+/// Best-effort human-readable machine name for the dashboard.
+#[cfg(not(target_os = "ios"))]
 pub fn hostname() -> String {
     std::env::var("HOSTNAME")
         .ok()

@@ -1,6 +1,6 @@
 [package]
 name = "nexus-local"
-version = "0.1.0"
+version = "0.3.0"
 description = "Nexus Local — the ecosystem's local grid of background service modules"
 authors = []
 edition = "2021"
@@ -31,6 +31,10 @@ dirs = "5"
 # tray-icon is not supported on iOS — only enable it for non-iOS targets
 [target.'cfg(not(target_os = "ios"))'.dependencies]
 tauri = { version = "2", features = ["tray-icon"] }
+
+# iOS reads the device name via libc gethostname (subprocess spawn is sandboxed)
+[target.'cfg(target_os = "ios")'.dependencies]
+libc = "0.2"
 
 [profile.release]
 codegen-units = 1

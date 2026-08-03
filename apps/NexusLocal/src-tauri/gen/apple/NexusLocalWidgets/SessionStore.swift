@@ -11,12 +11,13 @@ struct NexusSession: Codable {
 }
 
 enum SessionStore {
-    static let appGroup = "group.com.bastianthomsen.nexuslocal"
+    // Resolved at runtime via AppGroup.identifier so it matches the App Group
+    // SideStore actually assigns during re-signing (see AppGroup.swift).
     static let key = "nexusSession"
 
     static func load() -> NexusSession? {
         guard
-            let json = UserDefaults(suiteName: appGroup)?.string(forKey: key),
+            let json = AppGroup.defaults?.string(forKey: key),
             let data = json.data(using: .utf8),
             let s = try? JSONDecoder().decode(NexusSession.self, from: data)
         else { return nil }
@@ -28,7 +29,7 @@ enum SessionStore {
             let data = try? JSONEncoder().encode(s),
             let json = String(data: data, encoding: .utf8)
         else { return }
-        UserDefaults(suiteName: appGroup)?.set(json, forKey: key)
+        AppGroup.defaults?.set(json, forKey: key)
     }
 
     /// A currently-valid access token + the user id, refreshing if the stored

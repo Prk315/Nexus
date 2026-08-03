@@ -67,8 +67,8 @@ targets:
           - UIInterfaceOrientationPortraitUpsideDown
           - UIInterfaceOrientationLandscapeLeft
           - UIInterfaceOrientationLandscapeRight
-        CFBundleShortVersionString: 0.2.0
-        CFBundleVersion: "0.2.0"
+        CFBundleShortVersionString: 0.3.0
+        CFBundleVersion: "0.3.0"
     entitlements:
       path: nexus-local_iOS/nexus-local_iOS.entitlements
       properties:
@@ -126,6 +126,7 @@ targets:
           - "Secrets.swift.template" # copied to Secrets.swift (gitignored) by the developer
           - "*.entitlements"         # wired via the entitlements block, not a source
       - path: ../../ios/TimerAttributes.swift  # shared ActivityAttributes (also compiled into the app)
+      - path: ../../ios/AppGroup.swift         # shared App Group resolver (also compiled into the app)
     entitlements:
       path: NexusLocalWidgets/NexusLocalWidgets.entitlements
       properties:
