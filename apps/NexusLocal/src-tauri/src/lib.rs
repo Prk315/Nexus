@@ -1,3 +1,4 @@
+mod ble_scan;
 mod config;
 mod content_blocker;
 mod device;
@@ -100,7 +101,10 @@ pub fn run() {
             ios_bridge::clear_session,
             content_blocker::apply_content_blocker,
             live_activities::start_live_activity,
-            live_activities::end_live_activity
+            live_activities::end_live_activity,
+            ble_scan::ble_scan_start,
+            ble_scan::ble_scan_stop,
+            ble_scan::ble_scan_results
         ])
         .run(tauri::generate_context!())
         .expect("error while running Nexus Local");

@@ -52,6 +52,8 @@ targets:
         NSBonjourServices:
           - _http._tcp
         NSSupportsLiveActivities: true
+        NSBluetoothAlwaysUsageDescription: "Nexus Local connects to your BLE scale to read body-composition measurements."
+        NSBluetoothPeripheralUsageDescription: "Nexus Local connects to your BLE scale to read body-composition measurements."
         CFBundleURLTypes:
           - CFBundleURLName: com.bastianthomsen.nexuslocal
             CFBundleURLSchemes:
@@ -100,6 +102,7 @@ targets:
       - sdk: SafariServices.framework
       - sdk: ActivityKit.framework
         weak: true
+      - sdk: CoreBluetooth.framework
       - target: NexusLocalWidgets
         embed: true
       - target: nexus-local_SafariBlocker
