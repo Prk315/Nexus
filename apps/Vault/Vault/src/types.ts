@@ -3,6 +3,7 @@ export type NodeKind =
   | { type: "Note" }
   | { type: "Canvas" }
   | { type: "Pdf" }
+  | { type: "Parsed" }
   | { type: "Video" }
   | { type: "CodeFile"; language: string }
   | { type: "Table" }

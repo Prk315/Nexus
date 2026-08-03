@@ -52,6 +52,7 @@ export function kindColor(kind: NodeKind): string {
     case "Note":     return "#3b82f6";
     case "Canvas":   return "#0ea5e9";
     case "Pdf":      return "#ea7340";
+    case "Parsed":   return "#14b8a6";
     case "Video":    return "#8b5cf6";
     case "CodeFile": return "#22c55e";
     case "Table":    return "#a855f7";
@@ -68,6 +69,7 @@ export function nodeIcon(kind: NodeKind): string {
     case "Note":     return "≡";
     case "Canvas":   return "◻";
     case "Pdf":      return "⎕";
+    case "Parsed":   return "❖";
     case "Video":    return "▶";
     case "CodeFile": return "</>";
     case "Table":    return "⊞";

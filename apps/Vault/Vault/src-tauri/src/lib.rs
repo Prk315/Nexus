@@ -46,6 +46,7 @@ pub enum NodeKind {
     Note,
     Canvas,
     Pdf,
+    Parsed,
     Video,
     CodeFile { language: String },
     Table,

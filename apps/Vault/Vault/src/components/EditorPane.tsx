@@ -12,6 +12,7 @@ import { TagBar } from "./TagBar";
 import { NoteEditor } from "./NoteEditor";
 import { CanvasEditor } from "./CanvasEditor";
 import { PdfViewer } from "./PdfViewer";
+import { ParsedViewer } from "./ParsedViewer";
 import { VideoViewer } from "./VideoViewer";
 import { WorkbookEditor } from "./WorkbookEditor";
 import { BookshelfEditor } from "./BookshelfEditor";
@@ -547,6 +548,10 @@ export const EditorPane = forwardRef<EditorPaneHandle, EditorPaneProps>(
               />
             ) : selectedNode?.kind.type === "Pdf" ? (
               <PdfViewer key={selectedId} content={content} nodeId={selectedId!} />
+            ) : selectedNode?.kind.type === "Parsed" ? (
+              <EditorErrorBoundary key={selectedId} label="ParsedViewer">
+                <ParsedViewer content={content} onChange={setContent} nodeId={selectedId!} graph={graph} />
+              </EditorErrorBoundary>
             ) : selectedNode?.kind.type === "Video" ? (
               <VideoViewer content={content} />
             ) : selectedNode?.kind.type === "Workbook" ? (
