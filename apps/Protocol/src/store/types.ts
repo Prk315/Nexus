@@ -401,3 +401,19 @@ export interface GarminSyncState {
   lastSynced: string | null;
   error: string | null;
 }
+
+// ── Data source settings ────────────────────────────────────────────────────
+
+export type DataSource = "garmin" | "oura";
+
+export interface DataSourceSettings {
+  sleep_source: DataSource;
+  body_vitals_source: DataSource;
+  workouts_source: DataSource;
+}
+
+export const DEFAULT_DATA_SOURCE_SETTINGS: DataSourceSettings = {
+  sleep_source: "oura",
+  body_vitals_source: "oura",
+  workouts_source: "garmin",
+};

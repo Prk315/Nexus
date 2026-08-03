@@ -4,6 +4,7 @@ import {
   pushRunningSessionToCloud,
   pushWorkoutSessionToCloud,
   replaceExerciseSetsInCloud,
+  fetchDataSourceSettingsFromCloud,
 } from "../api";
 import {
   garminFetchSleep,
@@ -16,7 +17,17 @@ import {
   type GarminExerciseSetRaw,
 } from "../garminClient";
 import type { CreateSleepEntry, CreateBodyMetric, CreateRunningSession, CreateWorkoutSession, CreateExerciseSet } from "../../store/types";
+import { DEFAULT_DATA_SOURCE_SETTINGS } from "../../store/types";
 import { isoDate } from "../uiHelpers";
+
+/** Fetched fresh on every sync call (not cached) — these are explicit user
+ * button clicks, not a hot path, and staleness would be worse than the extra
+ * round trip. Falls back to the app-wide defaults when the user has never
+ * opened Settings, so behavior is unchanged until they touch a toggle. */
+async function getDataSourceSettings() {
+  const settings = await fetchDataSourceSettingsFromCloud();
+  return settings ?? DEFAULT_DATA_SOURCE_SETTINGS;
+}
 
 async function syncItems<T>(
   items: T[],
@@ -116,6 +127,10 @@ export async function syncGarminSleep(
   date: string,
   days: number,
 ): Promise<{ count: number; warnings: string[] }> {
+  const settings = await getDataSourceSettings();
+  if (settings.sleep_source !== "garmin") {
+    return { count: 0, warnings: ["Skipped — Oura is the selected sleep source (change in Settings)"] };
+  }
   const raw = await garminFetchSleep(date, days);
   return syncItems(
     raw.map(mapSleepRaw),
@@ -128,6 +143,10 @@ export async function syncGarminBodyStats(
   date: string,
   days: number,
 ): Promise<{ count: number; warnings: string[] }> {
+  const settings = await getDataSourceSettings();
+  if (settings.body_vitals_source !== "garmin") {
+    return { count: 0, warnings: ["Skipped — Oura is the selected body vitals source (change in Settings)"] };
+  }
   const raw = await garminFetchBodyStats(date, days);
   return syncItems(
     raw.map(mapBodyRaw),
@@ -165,23 +184,31 @@ export async function syncGarminActivities(
   date: string,
   days: number,
 ): Promise<{ runCount: number; workoutCount: number; warnings: string[] }> {
+  const settings = await getDataSourceSettings();
   const raw = await garminFetchActivities(date, days);
   const warnings: string[] = [];
   let runCount = 0;
   let workoutCount = 0;
+  let skippedWorkouts = 0;
   for (const r of raw) {
     try {
       const mapped = mapActivityRaw(r);
       if (mapped.kind === "run") {
+        // Running isn't one of the 3 gated data-source categories — always synced.
         await pushRunningSessionToCloud(mapped.entry);
         runCount++;
-      } else {
+      } else if (settings.workouts_source === "garmin") {
         await pushWorkoutSessionToCloud(mapped.entry);
         workoutCount++;
+      } else {
+        skippedWorkouts++;
       }
     } catch (e) {
       warnings.push(`Activity ${r.date} ${r.name}: ${String(e)}`);
     }
+  }
+  if (skippedWorkouts > 0) {
+    warnings.push(`Skipped ${skippedWorkouts} workout(s) — Oura is the selected workouts source (change in Settings)`);
   }
   return { runCount, workoutCount, warnings };
 }

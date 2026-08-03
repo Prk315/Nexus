@@ -1,6 +1,7 @@
 import { useState, useEffect } from "react";
 import { useAppDispatch, useAppSelector } from "../store/hooks";
 import { setTheme } from "../store/slices/settingsSlice";
+import { fetchDataSourceSettings, updateDataSourceSettings } from "../store/slices/dataSourceSettingsSlice";
 import {
   garminCheckStatus,
   garminCheckDeps,
@@ -8,8 +9,9 @@ import {
   garminLogout,
   garminBridgePath,
 } from "../lib/garminClient";
+import OuraConnectPanel from "../components/biomarkers/OuraConnectPanel";
 import { CARD_STYLE, BTN_GHOST, INPUT_STYLE, LABEL_STYLE } from "../lib/uiHelpers";
-import type { Theme } from "../store/types";
+import type { Theme, DataSource } from "../store/types";
 
 const GARMIN_BLUE = "#009CDE";
 
@@ -43,11 +45,16 @@ const connectBtn: React.CSSProperties = {
 export default function SettingsPage() {
   const dispatch = useAppDispatch();
   const theme = useAppSelector((s) => s.settings.theme);
+  const dataSources = useAppSelector((s) => s.dataSourceSettings.settings);
+  const [dataSourceError, setDataSourceError] = useState<string | null>(null);
 
   // Garmin connection state
   const [connected, setConnected] = useState<boolean | null>(null);
   const [depsOk, setDepsOk] = useState<boolean | null>(null);
   const [bridgePath, setBridgePath] = useState("");
+
+  // Oura OAuth redirect bounce-back banner
+  const [ouraBounce, setOuraBounce] = useState<{ status: string; error?: string } | null>(null);
 
   // Credential form state
   const [email, setEmail] = useState("");
@@ -73,7 +80,25 @@ export default function SettingsPage() {
       .then((r) => setDepsOk(r.garminconnect_installed))
       .catch(() => setDepsOk(false));
     garminBridgePath().then(setBridgePath).catch(() => {});
+    dispatch(fetchDataSourceSettings());
+  }, [dispatch]);
+
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const status = params.get("oura");
+    if (!status) return;
+    setOuraBounce({ status, error: params.get("oura_error") ?? undefined });
+    params.delete("oura");
+    params.delete("oura_error");
+    const rest = params.toString();
+    window.history.replaceState(null, "", window.location.pathname + (rest ? `?${rest}` : ""));
   }, []);
+
+  function handleDataSourceChange(key: keyof typeof dataSources, value: DataSource) {
+    setDataSourceError(null);
+    const next = { ...dataSources, [key]: value };
+    dispatch(updateDataSourceSettings(next)).unwrap().catch((e) => setDataSourceError(String(e)));
+  }
 
   async function handleConnect() {
     if (!email || !password) return;
@@ -363,6 +388,86 @@ export default function SettingsPage() {
                 </div>
               )}
             </div>
+          </div>
+        )}
+      </div>
+
+      {/* Oura Ring */}
+      <div>
+        {ouraBounce && (
+          <div
+            style={{
+              marginBottom: 12,
+              padding: "10px 16px",
+              borderRadius: "var(--radius-sm)",
+              fontSize: 13,
+              fontWeight: 500,
+              background: ouraBounce.status === "connected" ? "#10b98122" : "#ef444422",
+              color: ouraBounce.status === "connected" ? "#10b981" : "#ef4444",
+              border: `1px solid ${ouraBounce.status === "connected" ? "#10b98144" : "#ef444444"}`,
+            }}
+          >
+            {ouraBounce.status === "connected"
+              ? "Oura connected — hit Sync now below to pull your data."
+              : `Oura connection failed${ouraBounce.error ? `: ${ouraBounce.error}` : ""}.`}
+          </div>
+        )}
+        <OuraConnectPanel onSynced={() => {}} />
+      </div>
+
+      {/* Data Sources */}
+      <div style={{ ...CARD_STYLE, padding: "20px 24px" }}>
+        <div style={sectionTitle}>Data Sources</div>
+        <div style={sectionDesc}>
+          Choose which connected device feeds each kind of data, instead of the app guessing.
+        </div>
+        <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+          {(
+            [
+              { key: "sleep_source" as const, label: "Sleep" },
+              { key: "body_vitals_source" as const, label: "Body Vitals" },
+              { key: "workouts_source" as const, label: "Workouts" },
+            ]
+          ).map(({ key, label }) => (
+            <div key={key} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12 }}>
+              <span style={{ fontSize: 13, color: "var(--text)" }}>{label}</span>
+              <div style={{ display: "flex", gap: 8 }}>
+                {(["garmin", "oura"] as const).map((source) => (
+                  <button
+                    key={source}
+                    onClick={() => handleDataSourceChange(key, source)}
+                    style={{
+                      padding: "6px 14px",
+                      background: dataSources[key] === source ? "var(--accent)" : "none",
+                      color: dataSources[key] === source ? "#fff" : "var(--text-muted)",
+                      border: `1px solid ${dataSources[key] === source ? "var(--accent)" : "var(--border)"}`,
+                      borderRadius: "var(--radius-sm)",
+                      fontSize: 12,
+                      fontWeight: dataSources[key] === source ? 600 : 400,
+                      cursor: "pointer",
+                      textTransform: "capitalize",
+                    }}
+                  >
+                    {source}
+                  </button>
+                ))}
+              </div>
+            </div>
+          ))}
+        </div>
+        {dataSourceError && (
+          <div
+            style={{
+              marginTop: 12,
+              padding: "8px 12px",
+              background: "#fee2e2",
+              border: "1px solid #fca5a5",
+              borderRadius: "var(--radius-sm)",
+              fontSize: 13,
+              color: "#b91c1c",
+            }}
+          >
+            {dataSourceError}
           </div>
         )}
       </div>

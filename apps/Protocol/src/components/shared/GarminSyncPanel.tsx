@@ -38,22 +38,26 @@ export default function GarminSyncPanel({ mode, onSynced }: GarminSyncPanelProps
 
   async function handleSyncSleep() {
     return runSync(async (date, d) => {
-      const { count } = await syncGarminSleep(date, d);
+      const { count, warnings } = await syncGarminSleep(date, d);
+      if (count === 0 && warnings.length > 0) return warnings.join(", ");
       return `Imported ${count} sleep entries`;
     });
   }
 
   async function handleSyncBody() {
     return runSync(async (date, d) => {
-      const { count } = await syncGarminBodyStats(date, d);
+      const { count, warnings } = await syncGarminBodyStats(date, d);
+      if (count === 0 && warnings.length > 0) return warnings.join(", ");
       return `Imported ${count} body metric entries`;
     });
   }
 
   async function handleSyncActivities() {
     return runSync(async (date, d) => {
-      const { runCount, workoutCount } = await syncGarminActivities(date, d);
-      return `Imported ${runCount + workoutCount} activities`;
+      const { runCount, workoutCount, warnings } = await syncGarminActivities(date, d);
+      const base = `Imported ${runCount + workoutCount} activities`;
+      const skipWarning = warnings.find((w) => w.startsWith("Skipped"));
+      return skipWarning ? `${base} — ${skipWarning}` : base;
     });
   }
 

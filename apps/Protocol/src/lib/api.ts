@@ -9,6 +9,7 @@ import type {
   Food, CreateFood, Meal, CreateMeal, MealItem, CreateMealItem,
   MealPlanEntry, CreateMealPlanEntry, NutritionGoals, UpdateNutritionGoals,
   ExerciseSet, CreateExerciseSet,
+  DataSourceSettings,
 } from "../store/types";
 
 // ── Sleep ────────────────────────────────────────────────────────────────────
@@ -24,12 +25,16 @@ export async function fetchSleepFromCloud(): Promise<SleepEntry[]> {
   return (data ?? []).map(rowToSleep);
 }
 
+/** Keys on (user_id, date) rather than `entry.id` so repeat syncs for the same
+ * date update the existing row in place instead of accumulating duplicates —
+ * a blind `.upsert()` on a freshly client-generated id inserted a new row
+ * every call. Only `entry.id` is used (and only on first insert); an existing
+ * row's id is left untouched so manual-entry forms' optimistic UI (keyed on
+ * the id they generated) never gets silently swapped out from under them. */
 export async function pushSleepToCloud(entry: CreateSleepEntry & { id: string }): Promise<void> {
   const sb = getSupabaseClient();
-  const { error } = await sb.from("protocol_sleep").upsert({
-    id: entry.id,
-    user_id: getUserId(),
-    date: entry.date,
+  const userId = getUserId();
+  const fields = {
     duration_min: entry.duration_min,
     quality_score: entry.quality_score,
     deep_sleep_min: entry.deep_sleep_min ?? null,
@@ -41,8 +46,23 @@ export async function pushSleepToCloud(entry: CreateSleepEntry & { id: string })
     bedtime_start: entry.bedtime_start ?? null,
     bedtime_end: entry.bedtime_end ?? null,
     notes: entry.notes ?? null,
-  });
-  if (error) throw new Error(error.message);
+  };
+
+  const { data: existing, error: selectError } = await sb
+    .from("protocol_sleep")
+    .select("id")
+    .eq("user_id", userId)
+    .eq("date", entry.date)
+    .maybeSingle();
+  if (selectError) throw new Error(selectError.message);
+
+  if (existing) {
+    const { error } = await sb.from("protocol_sleep").update(fields).eq("id", existing.id);
+    if (error) throw new Error(error.message);
+  } else {
+    const { error } = await sb.from("protocol_sleep").insert({ id: entry.id, user_id: userId, date: entry.date, ...fields });
+    if (error) throw new Error(error.message);
+  }
 }
 
 function rowToSleep(row: Record<string, unknown>): SleepEntry {
@@ -122,12 +142,12 @@ export async function fetchBodyMetricsFromCloud(): Promise<BodyMetric[]> {
   return (data ?? []).map(rowToBodyMetric);
 }
 
+/** Same (user_id, date)-keyed update-or-insert as `pushSleepToCloud` — see
+ * its comment for why. */
 export async function pushBodyMetricToCloud(entry: CreateBodyMetric & { id: string }): Promise<void> {
   const sb = getSupabaseClient();
-  const { error } = await sb.from("protocol_body_metrics").upsert({
-    id: entry.id,
-    user_id: getUserId(),
-    date: entry.date,
+  const userId = getUserId();
+  const fields = {
     weight_kg: entry.weight_kg ?? null,
     hrv_ms: entry.hrv_ms ?? null,
     resting_hr_bpm: entry.resting_hr_bpm ?? null,
@@ -136,8 +156,23 @@ export async function pushBodyMetricToCloud(entry: CreateBodyMetric & { id: stri
     temperature_deviation: entry.temperature_deviation ?? null,
     recovery_index: entry.recovery_index ?? null,
     notes: entry.notes ?? null,
-  });
-  if (error) throw new Error(error.message);
+  };
+
+  const { data: existing, error: selectError } = await sb
+    .from("protocol_body_metrics")
+    .select("id")
+    .eq("user_id", userId)
+    .eq("date", entry.date)
+    .maybeSingle();
+  if (selectError) throw new Error(selectError.message);
+
+  if (existing) {
+    const { error } = await sb.from("protocol_body_metrics").update(fields).eq("id", existing.id);
+    if (error) throw new Error(error.message);
+  } else {
+    const { error } = await sb.from("protocol_body_metrics").insert({ id: entry.id, user_id: userId, date: entry.date, ...fields });
+    if (error) throw new Error(error.message);
+  }
 }
 
 function rowToBodyMetric(row: Record<string, unknown>): BodyMetric {
@@ -727,4 +762,29 @@ export async function replaceExerciseSetsInCloud(
     entries.map((e) => ({ ...e, user_id: userId })),
   );
   if (insertError) throw new Error(insertError.message);
+}
+
+// ── Data source settings ─────────────────────────────────────────────────────
+
+/** `null` means the user has never opened Settings — callers should fall
+ * back to `DEFAULT_DATA_SOURCE_SETTINGS` rather than treat this as an error. */
+export async function fetchDataSourceSettingsFromCloud(): Promise<DataSourceSettings | null> {
+  const sb = getSupabaseClient();
+  const { data, error } = await sb
+    .from("protocol_data_source_settings")
+    .select("sleep_source, body_vitals_source, workouts_source")
+    .eq("user_id", getUserId())
+    .maybeSingle();
+  if (error) throw new Error(error.message);
+  return data as DataSourceSettings | null;
+}
+
+export async function upsertDataSourceSettingsInCloud(settings: DataSourceSettings): Promise<void> {
+  const sb = getSupabaseClient();
+  const { error } = await sb.from("protocol_data_source_settings").upsert({
+    user_id: getUserId(),
+    ...settings,
+    updated_at: new Date().toISOString(),
+  });
+  if (error) throw new Error(error.message);
 }

@@ -115,7 +115,37 @@ async function ensureFreshToken(
   return tokens.access_token;
 }
 
-/** Check-then-write per (user_id, date) — no unique constraint to rely on, so this stays safe against existing duplicate rows in protocol_body_metrics. */
+type DataSource = "garmin" | "oura";
+interface DataSourceSettings {
+  sleep_source: DataSource;
+  body_vitals_source: DataSource;
+  workouts_source: DataSource;
+}
+const DEFAULT_DATA_SOURCE_SETTINGS: DataSourceSettings = {
+  sleep_source: "oura",
+  body_vitals_source: "oura",
+  workouts_source: "garmin",
+};
+
+/** No settings row means the user has never opened Settings — fall back to
+ * the same defaults the client uses, so behavior is unchanged until they
+ * actively pick a source. */
+async function getDataSourceSettings(
+  supabase: SupabaseClient,
+  userId: string,
+): Promise<DataSourceSettings> {
+  const { data } = await supabase
+    .from("protocol_data_source_settings")
+    .select("sleep_source, body_vitals_source, workouts_source")
+    .eq("user_id", userId)
+    .maybeSingle();
+  return (data as DataSourceSettings | null) ?? DEFAULT_DATA_SOURCE_SETTINGS;
+}
+
+/** Check-then-write per (user_id, date). A unique constraint now backs this
+ * as a defensive backstop, but the logic itself doesn't depend on it — only
+ * the keys present in `fields` are touched on update, which is what lets
+ * gated-off Oura vitals leave Garmin's existing values alone (see syncUser). */
 async function upsertByDate(
   supabase: SupabaseClient,
   table: "protocol_sleep" | "protocol_body_metrics",
@@ -138,21 +168,81 @@ async function upsertByDate(
   }
 }
 
+/** Oura's workout endpoint is session-level (activity/duration/calories), not
+ * set/rep/weight like Garmin's exerciseSets — it maps to protocol_workout_sessions,
+ * not protocol_exercise_sets. Field names below follow Oura's documented v2
+ * schema; this account has no Oura-logged workouts yet to verify against a
+ * live response, so double check on the first real sync (get_logs / a
+ * fresh query) once a workout actually lands here.
+ *
+ * Multiple workouts can land on the same day, unlike sleep/body-vitals — so
+ * this doesn't collapse to one-per-day. Re-running the sync must not
+ * accumulate duplicates, so (mirroring replaceExerciseSetsInCloud's proven
+ * pattern) it deletes-then-reinserts every Oura-sourced session in the sync
+ * window, scoped by `notes = 'Synced from Oura'` so Garmin/Strava/manual
+ * sessions in the same window are never touched. */
+async function syncOuraWorkouts(
+  supabase: SupabaseClient,
+  userId: string,
+  workouts: Record<string, unknown>[],
+  startDate: string,
+  endDate: string,
+): Promise<number> {
+  await supabase
+    .from("protocol_workout_sessions")
+    .delete()
+    .eq("user_id", userId)
+    .eq("notes", "Synced from Oura")
+    .gte("scheduled_date", startDate)
+    .lte("scheduled_date", endDate);
+
+  if (workouts.length === 0) return 0;
+
+  const rows = workouts.map((w) => {
+    const start = w.start_datetime as string | undefined;
+    const end = w.end_datetime as string | undefined;
+    const durationMin = start && end
+      ? Math.round((new Date(end).getTime() - new Date(start).getTime()) / 60000)
+      : null;
+    return {
+      id: crypto.randomUUID(),
+      user_id: userId,
+      plan_id: null,
+      name: (w.label as string | null) ?? (w.activity as string | null) ?? "Workout",
+      scheduled_date: w.day as string,
+      completed: true,
+      duration_min: durationMin,
+      calories_burned: (w.calories as number | null) ?? null,
+      avg_heart_rate: null,
+      notes: "Synced from Oura",
+    };
+  });
+
+  const { error } = await supabase.from("protocol_workout_sessions").insert(rows);
+  if (error) {
+    console.error(`Oura workout insert failed for ${userId}`, error.message);
+    return 0;
+  }
+  return rows.length;
+}
+
 async function syncUser(
   supabase: SupabaseClient,
   userId: string,
   clientId: string,
   clientSecret: string,
-): Promise<{ user_id: string; status: string; sleepDays?: number; bodyDays?: number }> {
+): Promise<{ user_id: string; status: string; sleepDays?: number; bodyDays?: number; workoutCount?: number }> {
   const accessToken = await ensureFreshToken(supabase, userId, clientId, clientSecret);
   if (!accessToken) return { user_id: userId, status: "no_token_or_refresh_failed" };
+
+  const settings = await getDataSourceSettings(supabase, userId);
 
   const end = new Date();
   const start = new Date();
   start.setDate(end.getDate() - SYNC_WINDOW_DAYS);
   const params = { start_date: isoDate(start), end_date: isoDate(end) };
 
-  const [dailySleep, sleepPeriods, dailyReadiness, dailySpo2, dailyStress, heartRateSamples, dailyResilience, dailyCardioAge] = await Promise.all([
+  const [dailySleep, sleepPeriods, dailyReadiness, dailySpo2, dailyStress, heartRateSamples, dailyResilience, dailyCardioAge, workouts] = await Promise.all([
     ouraGet(accessToken, "daily_sleep", params),
     ouraGet(accessToken, "sleep", params),
     ouraGet(accessToken, "daily_readiness", params),
@@ -161,6 +251,7 @@ async function syncUser(
     ouraGetHeartRate(accessToken, params.start_date, params.end_date),
     ouraGet(accessToken, "daily_resilience", params),
     ouraGet(accessToken, "daily_cardiovascular_age", params),
+    ouraGet(accessToken, "workout", params),
   ]);
 
   const sleepByDay = new Map(dailySleep.map((d) => [d.day as string, d]));
@@ -192,7 +283,7 @@ async function syncUser(
     const resilience = resilienceByDay.get(day) as Record<string, any> | undefined;
     const cardioAge = cardioAgeByDay.get(day) as Record<string, any> | undefined;
 
-    if (ds || period) {
+    if ((ds || period) && settings.sleep_source === "oura") {
       const durationMin = period?.total_sleep_duration != null
         ? Math.round(period.total_sleep_duration / 60)
         : period?.time_in_bed != null && period?.awake_time != null
@@ -218,7 +309,10 @@ async function syncUser(
     }
 
     if (readiness || period || spo2 || stress || heartRate || resilience || cardioAge) {
-      await upsertByDate(supabase, "protocol_body_metrics", userId, day, {
+      // Fields Garmin can also produce — only written when Oura is the
+      // selected body-vitals source, so a "garmin" selection isn't clobbered
+      // with Oura nulls/values on every sync.
+      const overlappingFields = settings.body_vitals_source === "oura" ? {
         weight_kg: null,
         hrv_ms: period?.average_hrv ?? null,
         resting_hr_bpm: period?.lowest_heart_rate ?? null,
@@ -229,6 +323,11 @@ async function syncUser(
         avg_heart_rate_bpm: heartRate?.avg ?? null,
         min_heart_rate_bpm: heartRate?.min ?? null,
         max_heart_rate_bpm: heartRate?.max ?? null,
+      } : {};
+      // Oura-exclusive — Garmin has no equivalent, so always write these
+      // regardless of the body-vitals toggle; there's no real conflict to
+      // arbitrate.
+      const exclusiveFields = {
         stress_high_min: stress?.stress_high != null ? Math.round(stress.stress_high / 60) : null,
         stress_recovery_min: stress?.recovery_high != null ? Math.round(stress.recovery_high / 60) : null,
         stress_summary: stress?.day_summary ?? null,
@@ -238,13 +337,21 @@ async function syncUser(
         resilience_stress: resilience?.contributors?.stress ?? null,
         cardio_age: cardioAge?.vascular_age ?? null,
         pulse_wave_velocity: cardioAge?.pulse_wave_velocity ?? null,
+      };
+      await upsertByDate(supabase, "protocol_body_metrics", userId, day, {
+        ...overlappingFields,
+        ...exclusiveFields,
         notes: "Synced from Oura",
       });
       bodyDays++;
     }
   }
 
-  return { user_id: userId, status: "ok", sleepDays, bodyDays };
+  const workoutCount = settings.workouts_source === "oura"
+    ? await syncOuraWorkouts(supabase, userId, workouts, params.start_date, params.end_date)
+    : 0;
+
+  return { user_id: userId, status: "ok", sleepDays, bodyDays, workoutCount };
 }
 
 // Browser calls (Connect/Sync UI) trigger a CORS preflight; pg_cron's net.http_post

@@ -36,7 +36,8 @@ export default function OuraConnectPanel({ onSynced }: Props) {
     setError(null);
     try {
       const r = await syncOuraNow();
-      setResult(`Synced ${r.sleepDays ?? 0} sleep + ${r.bodyDays ?? 0} body metric days`);
+      const workoutPart = r.workoutCount ? ` + ${r.workoutCount} workouts` : "";
+      setResult(`Synced ${r.sleepDays ?? 0} sleep + ${r.bodyDays ?? 0} body metric days${workoutPart}`);
       onSynced();
     } catch (e) {
       setError(String(e));

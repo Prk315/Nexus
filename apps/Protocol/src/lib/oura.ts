@@ -58,6 +58,7 @@ export interface OuraSyncResult {
   status: string;
   sleepDays?: number;
   bodyDays?: number;
+  workoutCount?: number;
 }
 
 export async function syncOuraNow(): Promise<OuraSyncResult> {
