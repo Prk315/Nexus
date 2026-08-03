@@ -10,15 +10,16 @@ struct TodayEntry: TimelineEntry {
     let dueToday: Int
     let overdue: Int
     var signedOut: Bool = false
+    var debug: String = ""  // App Group diagnostics, shown on the signed-out card
 
     static let placeholder = TodayEntry(
         date: Date(), primaryGoal: "Ship Nexus Local",
         secondaryCount: 3, dueToday: 5, overdue: 1
     )
-    static let signedOut = TodayEntry(
-        date: Date(), primaryGoal: nil, secondaryCount: 0,
-        dueToday: 0, overdue: 0, signedOut: true
-    )
+    static func signedOut(debug: String = "") -> TodayEntry {
+        TodayEntry(date: Date(), primaryGoal: nil, secondaryCount: 0,
+                   dueToday: 0, overdue: 0, signedOut: true, debug: debug)
+    }
 }
 
 // MARK: - Provider (authenticated Supabase REST, refreshes every 15 min)
@@ -52,7 +53,9 @@ struct TodayProvider: TimelineProvider {
 
     private func fetchEntry() async -> TodayEntry {
         guard let auth = await SessionStore.validAuth() else {
-            return .signedOut
+            // Surface the widget process's App Group state on the lock card so the
+            // session-bridge failure can be diagnosed from a screenshot.
+            return .signedOut(debug: AppGroup.debugInfo())
         }
         let client = SupabaseClient(accessToken: auth.token)
         let uid = auth.userID
@@ -92,22 +95,30 @@ struct TodayProvider: TimelineProvider {
 // MARK: - Signed-out view
 
 struct SignedOutView: View {
+    var debug: String = ""
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            CleanHeader(label: "TODAY").padding(.bottom, 10)
-            CleanDivider().padding(.bottom, 12)
-            Spacer(minLength: 0)
+            CleanHeader(label: "TODAY").padding(.bottom, 8)
+            CleanDivider().padding(.bottom, 8)
             Image(systemName: "lock.fill")
-                .font(.system(size: 20, weight: .medium))
+                .font(.system(size: 16, weight: .medium))
                 .foregroundColor(wAccent)
-                .padding(.bottom, 8)
-            Text("Open Nexus Local\nto sign in")
-                .font(.system(size: 12, weight: .medium))
+                .padding(.bottom, 6)
+            Text("Sign in via Nexus Local")
+                .font(.system(size: 11, weight: .medium))
                 .foregroundColor(wSecondary)
-                .lineSpacing(2)
+            if !debug.isEmpty {
+                // Temporary App Group diagnostics (v0.4.0) — screenshot this.
+                Text(debug)
+                    .font(.system(size: 8, weight: .regular, design: .monospaced))
+                    .foregroundColor(wTertiary)
+                    .lineLimit(4)
+                    .minimumScaleFactor(0.7)
+                    .padding(.top, 6)
+            }
             Spacer(minLength: 0)
         }
-        .padding(14)
+        .padding(12)
     }
 }
 
@@ -215,7 +226,7 @@ struct TodayWidgetEntryView: View {
     let entry: TodayEntry
     var body: some View {
         if entry.signedOut {
-            SignedOutView()
+            SignedOutView(debug: entry.debug)
         } else {
             switch family {
             case .systemMedium: TodayMediumView(entry: entry)

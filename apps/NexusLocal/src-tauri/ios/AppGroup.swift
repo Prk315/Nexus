@@ -30,4 +30,26 @@ enum AppGroup {
     /// Shared defaults for the resolved group (nil only if the process truly
     /// isn't entitled to any matching group).
     static var defaults: UserDefaults? { UserDefaults(suiteName: identifier) }
+
+    /// Compact human-readable diagnostics for the App Group plumbing, so the
+    /// app↔widget session bridge can be debugged from the UI (no cable needed).
+    /// Runs per-process: call it in the app AND the widget to compare both sides.
+    ///   alt  — how many groups SideStore injected into ALTAppGroups (0 = none →
+    ///          we fell back to `base`, which likely isn't entitled)
+    ///   grp  — the group actually resolved + used for UserDefaults(suiteName:)
+    ///   ctr  — whether this process is entitled to that group's container
+    ///          (NIL = the App Group entitlement didn't survive re-signing)
+    ///   sess — whether the shared session key is currently present
+    static func debugInfo() -> String {
+        let alt = (Bundle.main.object(forInfoDictionaryKey: "ALTAppGroups") as? [String]) ?? []
+        let id = identifier
+        let ctr = FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: id) != nil
+        let hasSession = UserDefaults(suiteName: id)?.string(forKey: "nexusSession") != nil
+        let altTails = alt.map { "…" + $0.suffix(14) }.joined(separator: " ")
+        return """
+        alt:\(alt.count) [\(altTails)]
+        grp:…\(id.suffix(20))
+        ctr:\(ctr ? "OK" : "NIL")  sess:\(hasSession ? "yes" : "no")
+        """
+    }
 }

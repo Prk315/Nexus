@@ -9,6 +9,7 @@
 extern "C" {
     fn store_session_c(json: *const std::os::raw::c_char);
     fn clear_session_c();
+    fn appgroup_debug_c();
 }
 
 /// Persist the Supabase session JSON ({access_token, refresh_token, expires_at,
@@ -37,4 +38,22 @@ pub fn clear_session() -> Result<(), String> {
         clear_session_c()
     };
     Ok(())
+}
+
+/// Diagnostics: the APP process's App Group resolution + write/read-back probe.
+/// Surfaced in the status UI to debug the widget session bridge (paired with the
+/// widget's own on-screen diagnostics).
+#[tauri::command]
+pub fn appgroup_debug() -> String {
+    #[cfg(target_os = "ios")]
+    {
+        // SAFETY: no args; Swift writes the diagnostic file synchronously.
+        unsafe { appgroup_debug_c() };
+        let path = std::env::temp_dir().join("appgroup_debug.txt");
+        std::fs::read_to_string(path).unwrap_or_else(|_| "no debug file written".to_string())
+    }
+    #[cfg(not(target_os = "ios"))]
+    {
+        "App Group debug is iOS-only".to_string()
+    }
 }

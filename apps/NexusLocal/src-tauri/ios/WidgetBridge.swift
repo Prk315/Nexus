@@ -27,4 +27,17 @@ public func clearSessionC() {
         WidgetCenter.shared.reloadAllTimelines()
     }
 }
+
+/// Diagnostics: write the APP process's App Group state + a write/read-back probe
+/// to tmp/appgroup_debug.txt for the Rust `appgroup_debug` command to surface in
+/// the UI. Lets us compare the app's view against the widget's without a cable.
+@_silgen_name("appgroup_debug_c")
+public func appgroupDebugC() {
+    let d = AppGroup.defaults
+    d?.set("probe", forKey: "debugProbe")
+    let readback = (d?.string(forKey: "debugProbe") == "probe")
+    let text = AppGroup.debugInfo() + "\nprobe:\(readback ? "OK" : "FAIL")"
+    let url = FileManager.default.temporaryDirectory.appendingPathComponent("appgroup_debug.txt")
+    try? text.write(to: url, atomically: true, encoding: .utf8)
+}
 #endif
