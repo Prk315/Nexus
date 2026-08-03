@@ -64,7 +64,8 @@ export function BleScan() {
   async function saveToProtocol() {
     if (!bodyComp) return;
     setSaveMsg("saving…");
-    const row = toBodyMetricsRow(bodyComp, segs.seg0, segs.seg1, todayLocal());
+    const rawFrames = (snap.frames ?? []).map((f) => f.hex);
+    const row = toBodyMetricsRow(bodyComp, segs.seg0, segs.seg1, todayLocal(), rawFrames);
     try {
       const { data: existing } = await supabasePublic
         .from("protocol_body_metrics")
