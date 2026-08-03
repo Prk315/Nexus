@@ -1,9 +1,14 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
+import {
+  DndContext, DragOverlay, PointerSensor, useSensor, useSensors,
+  useDraggable, useDroppable, type DragEndEvent, type DragStartEvent,
+} from "@dnd-kit/core";
 import { Plus, Search, ListChecks } from "lucide-react";
 import {
   useTasks, usePlans, useToggleTask, useDeleteTask, useUpdateTask,
   useRescheduleTask, useMoveTask, useCreateTask, useReorderTasks,
+  useSetKanbanStatus, useSetPriority,
 } from "../../hooks/useTasks";
 import { qk } from "../../lib/queryClient";
 import { Button } from "../ui/button";
@@ -34,6 +39,66 @@ function weekEnd(): string {
   return d.toISOString().slice(0, 10);
 }
 const WEEK_END = weekEnd();
+
+// A representative due date for the "Later" time bucket (a week past week-end).
+function laterDate(): string {
+  const d = new Date(WEEK_END + "T12:00:00");
+  d.setDate(d.getDate() + 7);
+  return d.toISOString().slice(0, 10);
+}
+const LATER_DATE = laterDate();
+
+// Which lenses support cross-bucket dragging, and how a drop is interpreted.
+const DND_LENSES = new Set<GroupMode>(["time", "plan", "priority", "status"]);
+
+// The bucket key a task currently lives in, for a given lens (mirrors `buckets`).
+function bucketKeyForTask(t: TaskWithContext, group: GroupMode): string {
+  if (group === "time") {
+    if (t.due_date == null) return "unscheduled";
+    if (t.due_date < TODAY) return "overdue";
+    if (t.due_date === TODAY) return "today";
+    if (t.due_date <= WEEK_END) return "week";
+    return "later";
+  }
+  if (group === "plan") return String(t.plan_id);
+  if (group === "priority") return t.priority;
+  if (group === "status") return t.kanban_status || "backlog";
+  return "";
+}
+
+// ── Drag-and-drop wrappers (whole-row drag; distance constraint keeps buttons clickable) ──
+
+function DraggableRow({ id, children }: { id: number; children: React.ReactNode }) {
+  const { attributes, listeners, setNodeRef, isDragging } = useDraggable({ id });
+  return (
+    <div
+      ref={setNodeRef}
+      {...attributes}
+      {...listeners}
+      className={cn("cursor-grab active:cursor-grabbing rounded-md", isDragging && "opacity-40")}
+    >
+      {children}
+    </div>
+  );
+}
+
+function DroppableSection({ id, isSource, children }: { id: string; isSource: boolean; children: React.ReactNode }) {
+  const { setNodeRef, isOver, active } = useDroppable({ id });
+  // Highlight only when a drag is in flight and this isn't the task's own bucket.
+  const armed = active != null && !isSource;
+  return (
+    <div
+      ref={setNodeRef}
+      className={cn(
+        "rounded-lg transition-colors",
+        armed && "outline-dashed outline-1 outline-border/60",
+        isOver && armed && "outline-primary/70 bg-primary/5",
+      )}
+    >
+      {children}
+    </div>
+  );
+}
 
 const PRIORITY_RANK: Record<Priority, number> = { high: 0, medium: 1, low: 2 };
 const STATUS_ORDER = ["backlog", "todo", "next", "in_progress", "doing", "blocked", "review", "done"];
@@ -84,6 +149,42 @@ export function TaskBoard({ selectedPlanId, selectedGoalId, reloadSignal }: {
   const move = useMoveTask(plans);
   const create = useCreateTask();
   const reorder = useReorderTasks();
+  const setStatus = useSetKanbanStatus();
+  const setPriority = useSetPriority();
+
+  // ── Drag and drop ────────────────────────────────────────────────────────────
+  // Drag a task onto another bucket to act on it — the action depends on the lens:
+  //   time → reschedule · plan → move plan · priority → set priority · status → set status.
+  const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 6 } }));
+  const [dragId, setDragId] = useState<number | null>(null);
+  const dndOn = DND_LENSES.has(group);
+  const draggingTask = dragId != null ? tasks.find((t) => t.id === dragId) ?? null : null;
+
+  const onDragStart = (e: DragStartEvent) => setDragId(Number(e.active.id));
+  const onDragEnd = (e: DragEndEvent) => {
+    setDragId(null);
+    const { active, over } = e;
+    if (!over) return;
+    const task = tasks.find((t) => t.id === Number(active.id));
+    if (!task) return;
+    const target = String(over.id);
+    if (target === bucketKeyForTask(task, group)) return; // dropped in its own bucket
+
+    if (group === "time") {
+      if (target === "today") reschedule.mutate({ task, due_date: TODAY });
+      else if (target === "week") reschedule.mutate({ task, due_date: WEEK_END });
+      else if (target === "later") reschedule.mutate({ task, due_date: LATER_DATE });
+      else if (target === "unscheduled") reschedule.mutate({ task, due_date: null });
+      // overdue / done are not valid drop destinations — ignore.
+    } else if (group === "plan") {
+      move.mutate({ id: task.id, planId: target === "null" ? null : Number(target) });
+    } else if (group === "priority") {
+      if (target === "high" || target === "medium" || target === "low")
+        setPriority.mutate({ task, priority: target });
+    } else if (group === "status") {
+      setStatus.mutate({ id: task.id, status: target });
+    }
+  };
 
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase();
@@ -272,41 +373,70 @@ export function TaskBoard({ selectedPlanId, selectedGoalId, reloadSignal }: {
       </div>
 
       {/* Groups */}
-      <div className="flex-1 min-h-0 overflow-y-auto px-4 py-3 flex flex-col gap-5">
-        {buckets.length === 0 ? (
-          <div className="flex flex-col items-center justify-center gap-2 py-20 text-center">
-            <ListChecks className="h-10 w-10 text-muted-foreground/30" />
-            <p className="text-sm font-medium text-muted-foreground">No tasks here</p>
-            <p className="text-xs text-muted-foreground/60">Adjust filters or add a task.</p>
-          </div>
-        ) : buckets.map((bkt) => (
-          <section key={bkt.key}>
-            <div className="flex items-center gap-2 mb-1.5">
-              <h2 className={cn("text-sm font-semibold", bkt.accent ?? "text-foreground")}>{bkt.label}</h2>
-              <span className="text-xs text-muted-foreground">({bkt.tasks.length})</span>
-            </div>
-            <div className="flex flex-col gap-0.5">
-              {bkt.tasks.map((t, i) => (
-                <TaskRow
-                  key={t.id}
-                  task={t}
-                  showContext={group !== "plan"}
-                  reorder={group === "plan" && !t.done ? {
-                    canUp: i > 0, canDown: i < bkt.tasks.length - 1,
-                    onUp: () => reorderWithin(bkt.tasks, i, -1),
-                    onDown: () => reorderWithin(bkt.tasks, i, 1),
-                  } : undefined}
-                  onToggle={() => handleToggle(t.id)}
-                  onEdit={() => setEditing(t)}
-                  onDelete={() => handleDelete(t.id)}
-                  onReschedule={() => setRescheduling(t)}
-                />
-              ))}
-            </div>
-          </section>
-        ))}
+      <div className="flex-1 min-h-0 overflow-y-auto px-4 py-3">
+        <DndContext sensors={sensors} onDragStart={onDragStart} onDragEnd={onDragEnd}>
+          <div className="flex flex-col gap-5">
+            {buckets.length === 0 ? (
+              <div className="flex flex-col items-center justify-center gap-2 py-20 text-center">
+                <ListChecks className="h-10 w-10 text-muted-foreground/30" />
+                <p className="text-sm font-medium text-muted-foreground">No tasks here</p>
+                <p className="text-xs text-muted-foreground/60">Adjust filters or add a task.</p>
+              </div>
+            ) : buckets.map((bkt) => {
+              const body = (
+                <section>
+                  <div className="flex items-center gap-2 mb-1.5">
+                    <h2 className={cn("text-sm font-semibold", bkt.accent ?? "text-foreground")}>{bkt.label}</h2>
+                    <span className="text-xs text-muted-foreground">({bkt.tasks.length})</span>
+                  </div>
+                  <div className="flex flex-col gap-0.5 min-h-[2px]">
+                    {bkt.tasks.map((t, i) => {
+                      const row = (
+                        <TaskRow
+                          task={t}
+                          showContext={group !== "plan"}
+                          reorder={group === "plan" && !t.done ? {
+                            canUp: i > 0, canDown: i < bkt.tasks.length - 1,
+                            onUp: () => reorderWithin(bkt.tasks, i, -1),
+                            onDown: () => reorderWithin(bkt.tasks, i, 1),
+                          } : undefined}
+                          onToggle={() => handleToggle(t.id)}
+                          onEdit={() => setEditing(t)}
+                          onDelete={() => handleDelete(t.id)}
+                          onReschedule={() => setRescheduling(t)}
+                        />
+                      );
+                      return dndOn && !t.done
+                        ? <DraggableRow key={t.id} id={t.id}>{row}</DraggableRow>
+                        : <div key={t.id}>{row}</div>;
+                    })}
+                  </div>
+                </section>
+              );
+              return dndOn ? (
+                <DroppableSection
+                  key={bkt.key}
+                  id={bkt.key}
+                  isSource={draggingTask ? bucketKeyForTask(draggingTask, group) === bkt.key : false}
+                >
+                  {body}
+                </DroppableSection>
+              ) : (
+                <div key={bkt.key}>{body}</div>
+              );
+            })}
 
-        <StudySection />
+            <StudySection />
+          </div>
+
+          <DragOverlay dropAnimation={null}>
+            {draggingTask ? (
+              <div className="rounded-md border border-primary/40 bg-background shadow-lg opacity-95">
+                <TaskRow task={draggingTask} showContext onToggle={() => {}} onEdit={() => {}} onDelete={() => {}} onReschedule={() => {}} />
+              </div>
+            ) : null}
+          </DragOverlay>
+        </DndContext>
       </div>
 
       {/* Dialogs */}

@@ -1,7 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   getAllTasks, getPlans, createTask, updateTask, toggleTask, deleteTask,
-  moveTask, reorderTasks,
+  moveTask, reorderTasks, setTaskKanbanStatus,
 } from "../lib/api";
 import { qk } from "../lib/queryClient";
 import type { TaskWithContext, Plan, Priority } from "../types";
@@ -101,6 +101,29 @@ export function useMoveTask(plans: Plan[]) {
           : t,
       );
     },
+  );
+}
+
+/** Set kanban status — used by the Status-lens drag-and-drop. */
+export function useSetKanbanStatus() {
+  return useTaskMutation<{ id: number; status: string }>(
+    ({ id, status }) => setTaskKanbanStatus(id, status),
+    (tasks, { id, status }) => tasks.map((t) => (t.id === id ? { ...t, kanban_status: status } : t)),
+  );
+}
+
+/** Set priority — used by the Priority-lens drag-and-drop. */
+export function useSetPriority() {
+  return useTaskMutation<{ task: TaskWithContext; priority: Priority }>(
+    ({ task, priority }) =>
+      updateTask(task.id, {
+        title: task.title,
+        priority,
+        due_date: task.due_date,
+        time_estimate: task.time_estimate,
+      }),
+    (tasks, { task, priority }) =>
+      tasks.map((t) => (t.id === task.id ? { ...t, priority } : t)),
   );
 }
 
