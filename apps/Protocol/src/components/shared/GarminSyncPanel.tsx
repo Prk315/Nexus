@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { Activity, CheckCircle, AlertCircle } from "lucide-react";
 import { garminCheckStatus } from "../../lib/garminClient";
+import { isDesktop } from "../../lib/gridClient";
 import { syncGarminSleep, syncGarminBodyStats, syncGarminActivities, syncGarminExerciseSets } from "../../lib/importers/garmin";
 import { CARD_STYLE, todayISO } from "../../lib/uiHelpers";
 
@@ -119,7 +120,12 @@ export default function GarminSyncPanel({ mode, onSynced }: GarminSyncPanelProps
 
       {connected === false && (
         <p style={{ marginTop: 10, fontSize: 13, color: "var(--text-muted)" }}>
-          Not connected — authenticate in the <strong>Settings</strong> tab first.
+          {isDesktop() ? (
+            <>Not connected — authenticate in the <strong>Settings</strong> tab first.</>
+          ) : (
+            <>Not connected — start <strong>Nexus Local</strong> on a machine that's
+            online (with the Garmin module authenticated) to sync from the web.</>
+          )}
         </p>
       )}
 

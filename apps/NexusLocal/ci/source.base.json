@@ -1,0 +1,22 @@
+{
+  "name": "Nexus Local — Bastian",
+  "identifier": "com.bastianthomsen.nexuslocal.source",
+  "subtitle": "Personal SideStore source for the Nexus ecosystem.",
+  "iconURL": "https://raw.githubusercontent.com/Prk315/Nexus/main/apps/NexusLocal/ci/source-icon.png",
+  "website": "https://github.com/Prk315/Nexus",
+  "tintColor": "6366F1",
+  "apps": [
+    {
+      "name": "Nexus Local",
+      "bundleIdentifier": "com.bastianthomsen.nexuslocal",
+      "developerName": "Bastian Thomsen",
+      "subtitle": "Local grid — Garmin, blocking, widgets, Live Activities.",
+      "localizedDescription": "Nexus Local is the on-device node of the Nexus life-OS. It runs the Garmin bridge, TimeTracker site blocking, home-screen widgets, and Live Activities, and talks to the shared Supabase backend. Installed and kept fresh through SideStore.",
+      "iconURL": "https://raw.githubusercontent.com/Prk315/Nexus/main/apps/NexusLocal/ci/source-icon.png",
+      "tintColor": "6366F1",
+      "category": "utilities",
+      "screenshotURLs": []
+    }
+  ],
+  "news": []
+}
