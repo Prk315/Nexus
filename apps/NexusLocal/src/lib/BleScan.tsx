@@ -1,6 +1,12 @@
 import { useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { supabasePublic } from "./supabase";
+import { decodeFrames, computeBodyComp, toBodyMetricsRow, type BodyComp, type Segments } from "./bodyScan";
+
+function todayLocal() {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+}
 
 type ScanDevice = {
   id: string;
@@ -41,7 +47,41 @@ export function BleScan() {
   const [snap, setSnap] = useState<Snapshot>({});
   const [scanning, setScanning] = useState(false);
   const [uploadMsg, setUploadMsg] = useState("");
+  const [bodyComp, setBodyComp] = useState<BodyComp | null>(null);
+  const [segs, setSegs] = useState<{ seg0: Segments | null; seg1: Segments | null }>({ seg0: null, seg1: null });
+  const [saveMsg, setSaveMsg] = useState("");
   const poll = useRef<number | null>(null);
+
+  // Decode weight + segment impedances + body composition whenever frames update.
+  useEffect(() => {
+    const frames = snap.frames ?? [];
+    if (!frames.length) return;
+    const { weightKg, seg0, seg1 } = decodeFrames(frames);
+    setSegs({ seg0, seg1 });
+    setBodyComp(weightKg && seg0 ? computeBodyComp(weightKg, seg0) : null);
+  }, [snap.frames]);
+
+  async function saveToProtocol() {
+    if (!bodyComp) return;
+    setSaveMsg("saving…");
+    const row = toBodyMetricsRow(bodyComp, segs.seg0, segs.seg1, todayLocal());
+    try {
+      const { data: existing } = await supabasePublic
+        .from("protocol_body_metrics")
+        .select("id")
+        .eq("user_id", row.user_id)
+        .eq("date", row.date)
+        .limit(1);
+      const q =
+        existing && existing.length
+          ? supabasePublic.from("protocol_body_metrics").update(row).eq("id", existing[0].id)
+          : supabasePublic.from("protocol_body_metrics").insert(row);
+      const { error } = await q;
+      setSaveMsg(error ? `save failed: ${error.message}` : `saved to Protocol ✓ (${row.date})`);
+    } catch (e) {
+      setSaveMsg(`save failed: ${String(e)}`);
+    }
+  }
 
   function refresh() {
     invoke<string>("ble_scan_results")
@@ -228,6 +268,36 @@ export function BleScan() {
         </div>
       )}
 
+      {bodyComp && (
+        <div className="rounded-xl border border-fuchsia-500/25 bg-fuchsia-500/[0.06] p-3">
+          <div className="mb-2 flex items-center justify-between">
+            <h3 className="text-xs uppercase tracking-wide text-fuchsia-300">Body composition</h3>
+            <span className="text-[9px] text-white/35">estimate · calibrating</span>
+          </div>
+          <div className="grid grid-cols-3 gap-2 text-xs">
+            <Metric label="Weight" value={`${bodyComp.weightKg}`} unit="kg" big />
+            <Metric label="Body fat" value={`${bodyComp.bodyFatPct}`} unit="%" />
+            <Metric label="Fat mass" value={`${bodyComp.fatMassKg}`} unit="kg" />
+            <Metric label="Muscle" value={`${bodyComp.muscleMassKg}`} unit="kg" />
+            <Metric label="Water" value={`${bodyComp.bodyWaterPct}`} unit="%" />
+            <Metric label="FFM" value={`${bodyComp.fatFreeMassKg}`} unit="kg" />
+            <Metric label="Skel. muscle" value={`${bodyComp.skeletalMuscleKg}`} unit="kg" />
+            <Metric label="Bone" value={`${bodyComp.boneMassKg}`} unit="kg" />
+            <Metric label="BMI" value={`${bodyComp.bmi}`} unit="" />
+            <Metric label="BMR" value={`${bodyComp.bmrKcal}`} unit="kcal" />
+          </div>
+          <div className="mt-3 flex items-center gap-2">
+            <button
+              onClick={saveToProtocol}
+              className="rounded-lg bg-fuchsia-500/25 px-3 py-1.5 text-xs font-medium text-fuchsia-200"
+            >
+              Save to Protocol
+            </button>
+            {saveMsg && <span className="text-[10px] text-white/45">{saveMsg}</span>}
+          </div>
+        </div>
+      )}
+
       {snap.log && snap.log.length > 0 && (
         <div className="rounded-lg border border-white/10 bg-white/[0.02] p-2">
           <div className="text-[10px] uppercase tracking-wide text-white/35">log</div>
@@ -243,5 +313,17 @@ export function BleScan() {
         </p>
       )}
     </section>
+  );
+}
+
+function Metric({ label, value, unit, big }: { label: string; value: string; unit: string; big?: boolean }) {
+  return (
+    <div className="rounded-lg border border-white/10 bg-white/[0.02] px-2 py-1.5">
+      <div className="text-[9px] uppercase tracking-wide text-white/35">{label}</div>
+      <div className="mt-0.5">
+        <span className={`font-semibold text-white/90 ${big ? "text-base" : "text-sm"}`}>{value}</span>
+        {unit && <span className="ml-0.5 text-[9px] text-white/40">{unit}</span>}
+      </div>
+    </div>
   );
 }

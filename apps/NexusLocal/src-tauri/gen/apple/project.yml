@@ -69,8 +69,8 @@ targets:
           - UIInterfaceOrientationPortraitUpsideDown
           - UIInterfaceOrientationLandscapeLeft
           - UIInterfaceOrientationLandscapeRight
-        CFBundleShortVersionString: 0.7.0
-        CFBundleVersion: "0.7.0"
+        CFBundleShortVersionString: 0.8.0
+        CFBundleVersion: "0.8.0"
     entitlements:
       path: nexus-local_iOS/nexus-local_iOS.entitlements
       properties:
