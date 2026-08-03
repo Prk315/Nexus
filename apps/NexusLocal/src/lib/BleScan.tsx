@@ -51,7 +51,7 @@ export function BleScan() {
     setScanning(true);
     setSnap({});
     invoke("ble_scan_start", {
-      seconds: 30,
+      seconds: 60,   // stay connected through the full body scan (impedance)
       connectFilter: filter.trim(),
       handshakeHex: handshake.trim(),
       handshakeChar: hsChar.trim() || "FFF1",
@@ -62,7 +62,7 @@ export function BleScan() {
       if (poll.current) { clearInterval(poll.current); poll.current = null; }
       setScanning(false);
       refresh();
-    }, 33000);
+    }, 63000);
   }
 
   function sendWrite(hex: string) {
@@ -95,7 +95,7 @@ export function BleScan() {
             scanning ? "bg-white/10 text-white/40" : "bg-indigo-500/20 text-indigo-300"
           }`}
         >
-          {scanning ? "Scanning…" : "Scan 30s"}
+          {scanning ? "Scanning…" : "Scan 60s"}
         </button>
       </div>
 

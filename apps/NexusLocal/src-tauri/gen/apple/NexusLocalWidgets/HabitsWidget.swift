@@ -30,9 +30,8 @@ struct HabitsProvider: TimelineProvider {
     }
 
     private func fetchEntry() async -> HabitsEntry {
-        guard let auth = await SessionStore.validAuth() else { return .signedOut }
-        let client = SupabaseClient(accessToken: auth.token)
-        let uid = auth.userID
+        let client = SupabaseClient()          // anon key; App Group unavailable on free-tier
+        let uid = Secrets.userID
         let today = todayString()
 
         async let habitRows: [HabitRow] = (try? client.fetch(

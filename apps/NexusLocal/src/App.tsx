@@ -22,7 +22,6 @@ type GridStatus = {
 export default function App() {
   const [status, setStatus] = useState<GridStatus | null>(null);
   const [err, setErr] = useState<string | null>(null);
-  const [agDebug, setAgDebug] = useState<string>("");
 
   useEffect(() => {
     let alive = true;
@@ -38,14 +37,6 @@ export default function App() {
     };
   }, []);
 
-  // App Group diagnostics (v0.4.0): show what group the APP process resolves +
-  // whether its write/read-back probe works. Compare against the widget's card.
-  function refreshAgDebug() {
-    invoke<string>("appgroup_debug")
-      .then((s) => setAgDebug(s))
-      .catch((e) => setAgDebug(String(e)));
-  }
-  useEffect(() => { refreshAgDebug(); }, []);
 
   return (
     <div className="min-h-screen p-6 flex flex-col gap-5">
@@ -110,23 +101,6 @@ export default function App() {
         ) : (
           <p className="text-xs text-white/30">No modules registered.</p>
         )}
-      </section>
-
-      <section className="flex flex-col gap-2">
-        <div className="flex items-center justify-between">
-          <h2 className="text-xs uppercase tracking-wide text-white/40">
-            App Group · debug
-          </h2>
-          <button
-            onClick={refreshAgDebug}
-            className="text-[10px] px-2 py-1 rounded bg-indigo-500/15 text-indigo-300"
-          >
-            refresh
-          </button>
-        </div>
-        <pre className="whitespace-pre-wrap break-all rounded-lg border border-white/10 bg-white/[0.02] px-3 py-2 font-mono text-[10px] leading-relaxed text-white/70">
-{agDebug || "…"}
-        </pre>
       </section>
 
       <BleScan />

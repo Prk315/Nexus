@@ -40,14 +40,13 @@ struct TasksProvider: TimelineProvider {
     }
 
     private func fetchEntry() async -> TasksEntry {
-        guard let auth = await SessionStore.validAuth() else { return .signedOut }
-        let client = SupabaseClient(accessToken: auth.token)
+        let client = SupabaseClient()          // anon key; App Group unavailable on free-tier
         let today = todayString()
 
         let rows: [TaskDetailRow] = (try? await client.fetch(
             table: "pf_tasks",
             select: "id,title,priority,due_date",
-            filters: ["user_id": "eq.\(auth.userID)", "done": "eq.false", "order": "due_date.asc.nullslast"]
+            filters: ["user_id": "eq.\(Secrets.userID)", "done": "eq.false", "order": "due_date.asc.nullslast"]
         )) ?? []
 
         var items: [TaskItem] = []

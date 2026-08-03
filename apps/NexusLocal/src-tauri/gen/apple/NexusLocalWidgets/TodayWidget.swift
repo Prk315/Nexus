@@ -52,13 +52,11 @@ struct TodayProvider: TimelineProvider {
     }
 
     private func fetchEntry() async -> TodayEntry {
-        guard let auth = await SessionStore.validAuth() else {
-            // Surface the widget process's App Group state on the lock card so the
-            // session-bridge failure can be diagnosed from a screenshot.
-            return .signedOut(debug: AppGroup.debugInfo())
-        }
-        let client = SupabaseClient(accessToken: auth.token)
-        let uid = auth.userID
+        // Free-tier SideStore can't share the App Group, so the widget reads
+        // Supabase directly with the anon key (RLS grants anon SELECT on this
+        // user's rows). No session bridge / sign-in needed.
+        let client = SupabaseClient()
+        let uid = Secrets.userID
         let today = todayString()
 
         async let primaryRows: [PrimaryGoalRow] = (try? client.fetch(

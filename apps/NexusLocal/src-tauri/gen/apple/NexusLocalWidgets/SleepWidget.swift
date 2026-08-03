@@ -44,12 +44,11 @@ struct SleepProvider: TimelineProvider {
     }
 
     private func fetchEntry() async -> SleepEntry {
-        guard let auth = await SessionStore.validAuth() else { return .signedOut }
-        let client = SupabaseClient(accessToken: auth.token)
+        let client = SupabaseClient()          // anon key; App Group unavailable on free-tier
         let rows: [SleepRow] = (try? await client.fetch(
             table: "protocol_sleep",
             select: "date,quality_score,duration_min,deep_sleep_min,rem_sleep_min,light_sleep_min",
-            filters: ["user_id": "eq.\(auth.userID)", "order": "date.desc", "limit": "1"]
+            filters: ["user_id": "eq.\(Secrets.userID)", "order": "date.desc", "limit": "1"]
         )) ?? []
         guard let s = rows.first else { return .empty }
         return SleepEntry(

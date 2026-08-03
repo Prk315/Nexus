@@ -40,10 +40,8 @@ struct TimeTrackerProvider: TimelineProvider {
     }
 
     private func fetchEntry() async -> TimeTrackerEntry {
-        guard await SessionStore.validAuth() != nil else { return .signedOut }
-        // TimeTracker rows live under user_id="default" and its RLS grants the
-        // anon role only — read with the anon key (no user JWT), or authed reads
-        // return nothing.
+        // Anon key throughout: TimeTracker rows (user_id="default") already grant
+        // the anon role, and free-tier SideStore has no App Group session anyway.
         let client = SupabaseClient()
         let today = todayString()
 
