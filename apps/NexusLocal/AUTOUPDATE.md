@@ -82,7 +82,12 @@ The source is built to grow:
 
 - Free tier allows **3 sideloaded apps** total — Nexus Local consolidates the
   native pieces precisely to stay under that cap.
-- macOS runner minutes bill at **10×**; a build is ~15 min. Tag deliberately.
+- CI is **free**: this repo is public, and GitHub-hosted *standard* runners
+  (including `macos-15`) are unlimited and unbilled on public repos. The oft-cited
+  **10×** macOS multiplier applies only to *private* repos, where it drains an
+  included-minutes allowance — there is no such allowance here. A build is ~7-8 min.
+  (This would change if the repo were made private, or if it moved to a "larger
+  runner", which is billed even on public repos.)
 - Updates are **one tap** in SideStore (iOS gives no true silent background
   install for sideloaded apps) — SideStore can notify + auto-download, but the
   install confirmation is manual.
