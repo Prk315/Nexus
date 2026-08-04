@@ -6,6 +6,14 @@ struct HabitRow: Codable {
     let id: String
     let name: String
     let archived: Bool
+    /// Monday = 0 … Sunday = 6. `nil` means every day (Protocol's convention:
+    /// selecting all seven days normalises back to null).
+    let repeat_days: [Int]?
+    let scheduled_time: String?   // "HH:MM:SS"
+    let sort_order: Int?
+
+    // Optional so callers that select a narrower column list still decode
+    // (synthesised Codable uses decodeIfPresent for Optionals).
 }
 
 struct HabitCompletionRow: Codable {
@@ -23,7 +31,10 @@ struct SleepRow: Codable {
 }
 
 struct TaskDetailRow: Codable {
-    let id: String
+    /// pf_tasks.id is a bigint. Declaring this as String made the *whole* array
+    /// decode throw, which `try?` turned into [] — the widget silently showed
+    /// "0 open" while 10 tasks were outstanding.
+    let id: Int
     let title: String
     let priority: String?
     let due_date: String?

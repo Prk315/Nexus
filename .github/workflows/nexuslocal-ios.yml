@@ -118,12 +118,21 @@ jobs:
               static let supabaseURL  = "${SUPABASE_URL:-https://efxmzsdisaymtpebaxlp.supabase.co}"
               static let supabaseAnon = "${SUPABASE_ANON_KEY}"
               static let userID       = "${SUPABASE_USER_ID}"
+              static let widgetKey    = "${WIDGET_HABIT_KEY}"
           }
           EOF
+          # Fail loudly rather than shipping a build whose habit toggle silently
+          # 401s: an empty widgetKey compiles fine but breaks every tap.
+          if [ -z "${WIDGET_HABIT_KEY}" ]; then
+            echo "::error::WIDGET_HABIT_KEY repo secret is not set — the widget's habit toggle would 401 against the habit-toggle Edge Function."
+            exit 1
+          fi
         env:
           SUPABASE_URL: ${{ vars.SUPABASE_URL }}
           SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
           SUPABASE_USER_ID: ${{ secrets.SUPABASE_USER_ID }}
+          # Must match the WIDGET_HABIT_KEY secret on the Supabase project.
+          WIDGET_HABIT_KEY: ${{ secrets.WIDGET_HABIT_KEY }}
 
       - name: Diagnostics — project tree before build
         run: |

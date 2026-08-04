@@ -10,25 +10,47 @@ struct NexusSession: Codable {
     let user_id: String
 }
 
+/// Which channel the session actually came through. Surfaced in the widget UI so
+/// the free-tier entitlement question is answered by observation, not assumption
+/// — the App Group looked fine until an on-device probe reported `ctr:NIL`.
+enum AuthSource: String {
+    case keychain = "kc"
+    case appGroup = "ag"
+    case none = "—"
+}
+
 enum SessionStore {
     // Resolved at runtime via AppGroup.identifier so it matches the App Group
     // SideStore actually assigns during re-signing (see AppGroup.swift).
     static let key = "nexusSession"
 
-    static func load() -> NexusSession? {
+    private static func decode(_ json: String?) -> NexusSession? {
         guard
-            let json = AppGroup.defaults?.string(forKey: key),
+            let json = json,
             let data = json.data(using: .utf8),
             let s = try? JSONDecoder().decode(NexusSession.self, from: data)
         else { return nil }
         return s
     }
 
+    /// Keychain first (the channel that may work on free provisioning), then the
+    /// App Group (works on Simulator / paid accounts).
+    static func loadWithSource() -> (session: NexusSession, source: AuthSource)? {
+        if let s = decode(KeychainSession.load()) { return (s, .keychain) }
+        if let s = decode(AppGroup.defaults?.string(forKey: key)) { return (s, .appGroup) }
+        return nil
+    }
+
+    static func load() -> NexusSession? { loadWithSource()?.session }
+
     static func save(_ s: NexusSession) {
         guard
             let data = try? JSONEncoder().encode(s),
             let json = String(data: data, encoding: .utf8)
         else { return }
+        // Refreshed tokens go back to both channels so the app and widget stay
+        // in sync regardless of which one is actually functioning.
+        KeychainSession.save(json)
         AppGroup.defaults?.set(json, forKey: key)
     }
 
@@ -37,19 +59,19 @@ enum SessionStore {
     /// out). The host app bridges fresh sessions on every auth change while it's
     /// running, so the widget usually only refreshes itself when the app hasn't
     /// run for over an hour.
-    static func validAuth() async -> (token: String, userID: String)? {
-        guard let s = load() else { return nil }
+    static func validAuth() async -> (token: String, userID: String, source: AuthSource)? {
+        guard let (s, source) = loadWithSource() else { return nil }
         let now = Date().timeIntervalSince1970
         if s.expires_at - 60 > now {
-            return (s.access_token, s.user_id)
+            return (s.access_token, s.user_id, source)
         }
         if let refreshed = await refresh(s.refresh_token) {
             save(refreshed)
-            return (refreshed.access_token, refreshed.user_id)
+            return (refreshed.access_token, refreshed.user_id, source)
         }
         // Refresh failed — fall back to the stored token (may still work within
         // the rotation reuse window).
-        return (s.access_token, s.user_id)
+        return (s.access_token, s.user_id, source)
     }
 
     private struct TokenResponse: Codable {

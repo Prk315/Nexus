@@ -59,4 +59,37 @@ struct SupabaseClient {
             throw SupabaseError.decodingError(error)
         }
     }
+
+    /// Invoke an Edge Function with the widget's dedicated single-purpose
+    /// credential (`Secrets.widgetKey`) — deliberately NOT the anon key.
+    ///
+    /// All widget writes go through here. There is intentionally no generic
+    /// insert/delete on this client: the anon key has no write policies on any
+    /// pf_/protocol_ table, so a direct write would fail anyway, and offering
+    /// one would just invite re-opening that hole.
+    @discardableResult
+    func callFunction(_ name: String, body: [String: Any]) async -> Bool {
+        guard let url = URL(string: "\(baseURL)/functions/v1/\(name)") else { return false }
+
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.setValue(Secrets.widgetKey, forHTTPHeaderField: "x-widget-key")
+        request.httpBody = try? JSONSerialization.data(withJSONObject: body)
+
+        return await send(request)
+    }
+
+    private func applyAuth(_ request: inout URLRequest) {
+        request.setValue(anonKey, forHTTPHeaderField: "apikey")
+        request.setValue("Bearer \(bearer)", forHTTPHeaderField: "Authorization")
+    }
+
+    private func send(_ request: URLRequest) async -> Bool {
+        guard
+            let (_, response) = try? await URLSession.shared.data(for: request),
+            let http = response as? HTTPURLResponse
+        else { return false }
+        return (200..<300).contains(http.statusCode)
+    }
 }

@@ -60,3 +60,6 @@ npm-debug.log*
 __pycache__/
 *.pyc
 .venv/
+
+# Supabase CLI scratch
+supabase/.temp/

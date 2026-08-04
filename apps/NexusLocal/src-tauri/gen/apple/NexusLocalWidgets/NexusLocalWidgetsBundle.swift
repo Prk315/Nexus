@@ -7,6 +7,9 @@ struct NexusLocalWidgetsBundle: WidgetBundle {
     var body: some Widget {
         TodayWidget()
         HabitsWidget()
+        HabitsListWidget()
+        HabitHeatmapWidget()
+        ExerciseHeatmapWidget()
         SleepWidget()
         TasksWidget()
         TimeTrackerWidget()

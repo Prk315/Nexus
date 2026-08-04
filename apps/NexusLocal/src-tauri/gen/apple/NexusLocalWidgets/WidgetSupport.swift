@@ -15,6 +15,11 @@ let wRed       = Color(red: 0.95, green: 0.35, blue: 0.38)
 let wGreen     = Color(red: 0.20, green: 0.80, blue: 0.52)
 let wAmber     = Color(red: 0.97, green: 0.72, blue: 0.15)
 
+// Protocol's categorical series colours (tokens.css, dark theme) so the
+// heatmaps read as the same system as the app. Do not reuse for status.
+let wWorkout   = Color(red: 0.10, green: 0.62, blue: 0.44)  // --series-workout #199e70
+let wRunning   = Color(red: 0.85, green: 0.35, blue: 0.15)  // --series-running #d95926
+
 // MARK: - Small reusable views
 
 struct CleanHeader: View {

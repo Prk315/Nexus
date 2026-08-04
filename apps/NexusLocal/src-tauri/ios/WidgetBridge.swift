@@ -14,18 +14,33 @@ private let kSessionKey = "nexusSession"
 public func storeSessionC(_ jsonPtr: UnsafePointer<CChar>) {
     let json = String(cString: jsonPtr) // copy immediately; pointer isn't retained
     DispatchQueue.main.async {
+        // Write to BOTH channels. The App Group works on the Simulator and on a
+        // paid account; the shared keychain is the candidate that may also work
+        // under free provisioning. The widget prefers whichever it can read.
         AppGroup.defaults?.set(json, forKey: kSessionKey)
+        KeychainSession.save(json)
         WidgetCenter.shared.reloadAllTimelines()
     }
 }
 
-/// Clear the stored session on sign-out.
+/// Clear the stored session on sign-out — from both channels, or a stale token
+/// in the one we didn't clear would keep the widget "signed in" after sign-out.
 @_silgen_name("clear_session_c")
 public func clearSessionC() {
     DispatchQueue.main.async {
         AppGroup.defaults?.removeObject(forKey: kSessionKey)
+        KeychainSession.clear()
         WidgetCenter.shared.reloadAllTimelines()
     }
+}
+
+/// Diagnostics: the APP process's view of the shared keychain, written next to
+/// the App Group probe so both sides can be compared without a cable.
+@_silgen_name("keychain_debug_c")
+public func keychainDebugC() {
+    let text = KeychainSession.debugInfo()
+    let url = FileManager.default.temporaryDirectory.appendingPathComponent("keychain_debug.txt")
+    try? text.write(to: url, atomically: true, encoding: .utf8)
 }
 
 /// Diagnostics: write the APP process's App Group state + a write/read-back probe

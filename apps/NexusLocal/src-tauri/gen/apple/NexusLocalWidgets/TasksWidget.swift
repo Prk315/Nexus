@@ -52,7 +52,7 @@ struct TasksProvider: TimelineProvider {
         var items: [TaskItem] = []
         for r in rows.prefix(6) {
             let isOverdue: Bool = (r.due_date.map { $0 < today }) ?? false
-            items.append(TaskItem(id: r.id, title: r.title, priority: r.priority,
+            items.append(TaskItem(id: String(r.id), title: r.title, priority: r.priority,
                                   dueDate: r.due_date, overdue: isOverdue))
         }
         return TasksEntry(date: Date(), items: items, openCount: rows.count)

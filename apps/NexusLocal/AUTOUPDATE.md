@@ -39,6 +39,11 @@ Workflow: `.github/workflows/nexuslocal-ios.yml`. Helpers live in
 - **Repo secrets** (Settings → Secrets and variables → Actions):
   - `SUPABASE_ANON_KEY` — the Supabase anon/publishable key (frontend + widget).
   - `SUPABASE_USER_ID` — your Supabase auth uid (widget data scope).
+  - `WIDGET_HABIT_KEY` — the widget's dedicated habit-toggle credential. Must
+    match the Supabase function secret of the same name
+    (`supabase secrets set WIDGET_HABIT_KEY=… --project-ref efxmzsdisaymtpebaxlp`).
+    The build fails fast if it's missing, since an empty value compiles cleanly
+    but makes every habit tap 401.
   - Optional var `SUPABASE_URL` (defaults to the NEXUS project URL if unset).
 - **GitHub Pages**: Settings → Pages → Source = *GitHub Actions*.
 - **SideStore** (on the phone): Sources → **+** →

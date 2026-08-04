@@ -69,13 +69,20 @@ targets:
           - UIInterfaceOrientationPortraitUpsideDown
           - UIInterfaceOrientationLandscapeLeft
           - UIInterfaceOrientationLandscapeRight
-        CFBundleShortVersionString: 0.9.0
-        CFBundleVersion: "0.9.0"
+        CFBundleShortVersionString: 0.10.0
+        CFBundleVersion: "0.10.0"
     entitlements:
       path: nexus-local_iOS/nexus-local_iOS.entitlements
       properties:
         com.apple.security.application-groups:
           - group.com.bastianthomsen.nexuslocal
+        # Keychain sharing: unlike App Groups (which need portal registration a
+        # free account can't do), this group is just <AppIdentifierPrefix>.<bundle-id>
+        # and is derived from the signing team — so it may survive free-tier
+        # provisioning where the App Group did not. $(AppIdentifierPrefix) expands
+        # to the team prefix at build time, so SideStore re-signing stays consistent.
+        keychain-access-groups:
+          - $(AppIdentifierPrefix)com.bastianthomsen.nexuslocal
     scheme:
       environmentVariables:
         RUST_BACKTRACE: full
@@ -129,15 +136,21 @@ targets:
           - "*.entitlements"         # wired via the entitlements block, not a source
       - path: ../../ios/TimerAttributes.swift  # shared ActivityAttributes (also compiled into the app)
       - path: ../../ios/AppGroup.swift         # shared App Group resolver (also compiled into the app)
+      - path: ../../ios/KeychainSession.swift  # shared-keychain session channel (also compiled into the app)
     entitlements:
       path: NexusLocalWidgets/NexusLocalWidgets.entitlements
       properties:
         com.apple.security.application-groups:
           - group.com.bastianthomsen.nexuslocal
+        # Must match the app target exactly — a shared keychain group is the
+        # whole point, and a mismatched prefix silently yields separate stores.
+        keychain-access-groups:
+          - $(AppIdentifierPrefix)com.bastianthomsen.nexuslocal
     dependencies:
       - sdk: WidgetKit.framework
       - sdk: SwiftUI.framework
       - sdk: ActivityKit.framework
+      - sdk: AppIntents.framework   # interactive widgets (Button(intent:)) — iOS 17+
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.bastianthomsen.nexuslocal.widgets
@@ -146,7 +159,10 @@ targets:
         ARCHS: [arm64]
         VALID_ARCHS: arm64
         EXCLUDED_ARCHS[sdk=iphoneos*]: x86_64
-        IPHONEOS_DEPLOYMENT_TARGET: "16.2"
+        # 17.0 (was 16.2) so Button(intent:) tap-to-toggle compiles without
+        # per-view availability gating. The Live Activity's @available(iOS 16.2)
+        # annotations are then trivially satisfied.
+        IPHONEOS_DEPLOYMENT_TARGET: "17.0"
         ENABLE_USER_SCRIPT_SANDBOXING: NO
         ENABLE_BITCODE: false
         INFOPLIST_FILE: $(SRCROOT)/NexusLocalWidgets/Info.plist
