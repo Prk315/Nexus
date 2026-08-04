@@ -10,6 +10,7 @@ extern "C" {
     fn store_session_c(json: *const std::os::raw::c_char);
     fn clear_session_c();
     fn appgroup_debug_c();
+    fn keychain_debug_c();
 }
 
 /// Persist the Supabase session JSON ({access_token, refresh_token, expires_at,
@@ -55,5 +56,26 @@ pub fn appgroup_debug() -> String {
     #[cfg(not(target_os = "ios"))]
     {
         "App Group debug is iOS-only".to_string()
+    }
+}
+
+/// Diagnostics: the APP process's shared-keychain resolution + whether the
+/// session is readable from it. Compare against the widget's own badge/readout:
+/// if the app reports `sess:yes` but the widget still falls back to anon, the
+/// keychain access group did not survive re-signing. If the app itself reports
+/// `sess:no`, nothing was ever written (not signed in, or the write was denied)
+/// and the sharing question is still unanswered.
+#[tauri::command]
+pub fn keychain_debug() -> String {
+    #[cfg(target_os = "ios")]
+    {
+        // SAFETY: no args; Swift writes the diagnostic file synchronously.
+        unsafe { keychain_debug_c() };
+        let path = std::env::temp_dir().join("keychain_debug.txt");
+        std::fs::read_to_string(path).unwrap_or_else(|_| "no debug file written".to_string())
+    }
+    #[cfg(not(target_os = "ios"))]
+    {
+        "Keychain debug is iOS-only".to_string()
     }
 }

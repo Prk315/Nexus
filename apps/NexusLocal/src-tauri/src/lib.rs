@@ -100,6 +100,7 @@ pub fn run() {
             ios_bridge::store_session,
             ios_bridge::clear_session,
             ios_bridge::appgroup_debug,
+            ios_bridge::keychain_debug,
             content_blocker::apply_content_blocker,
             live_activities::start_live_activity,
             live_activities::end_live_activity,

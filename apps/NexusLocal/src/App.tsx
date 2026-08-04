@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { BleScan } from "./lib/BleScan";
+import { KeychainDebug } from "./lib/KeychainDebug";
 
 type ModuleManifest = {
   id: string;
@@ -102,6 +103,8 @@ export default function App() {
           <p className="text-xs text-white/30">No modules registered.</p>
         )}
       </section>
+
+      <KeychainDebug />
 
       <BleScan />
     </div>

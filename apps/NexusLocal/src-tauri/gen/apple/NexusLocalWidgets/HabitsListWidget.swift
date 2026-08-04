@@ -23,6 +23,10 @@ struct HabitsListEntry: TimelineEntry {
     /// anon key. Rendered in the header so the free-tier keychain question is
     /// answered by looking at the widget rather than trusting the build log.
     var authSource: AuthSource = .none
+    /// Widget-process keychain diagnostics, shown only while falling back to
+    /// anon. Compare against the app's KeychainDebug panel: differing groups
+    /// means the shared access group didn't survive re-signing.
+    var debug: String = ""
 
     static let placeholder = HabitsListEntry(
         date: Date(), today: "2026-08-04",
@@ -132,7 +136,8 @@ struct HabitsListProvider: TimelineProvider {
             doneCount: items.filter { $0.done }.count,
             totalCount: items.count,
             page: page, pageCount: pageCount,
-            authSource: authSource
+            authSource: authSource,
+            debug: auth == nil ? KeychainSession.debugInfo() : ""
         )
     }
 }
@@ -209,6 +214,16 @@ struct HabitsListView: View {
                     }
                 }
                 Spacer(minLength: 0)
+                if !entry.debug.isEmpty {
+                    // Temporary keychain diagnostics (v0.11.0) — disappears as
+                    // soon as a session is found through either channel.
+                    Text(entry.debug)
+                        .font(.system(size: 7, weight: .regular, design: .monospaced))
+                        .foregroundColor(wTertiary)
+                        .lineLimit(2)
+                        .minimumScaleFactor(0.7)
+                        .padding(.top, 4)
+                }
                 if family == .systemLarge { progressBar.padding(.top, 8) }
             }
         }
