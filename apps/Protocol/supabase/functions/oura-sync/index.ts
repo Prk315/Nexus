@@ -312,8 +312,13 @@ async function syncUser(
       // Fields Garmin can also produce — only written when Oura is the
       // selected body-vitals source, so a "garmin" selection isn't clobbered
       // with Oura nulls/values on every sync.
+      //
+      // NOTE: weight_kg is intentionally NOT written here. Oura has no body
+      // weight, and blindly writing weight_kg:null onto the (user_id,date) row
+      // wiped the Vellafit scale's real weight every morning (the scale's
+      // body-composition row shares this row). Leaving the key out means the
+      // update never touches weight_kg, so the scale value survives.
       const overlappingFields = settings.body_vitals_source === "oura" ? {
-        weight_kg: null,
         hrv_ms: period?.average_hrv ?? null,
         resting_hr_bpm: period?.lowest_heart_rate ?? null,
         spo2_pct: spo2?.spo2_percentage?.average ?? null,
