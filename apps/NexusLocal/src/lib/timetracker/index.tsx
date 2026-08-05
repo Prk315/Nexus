@@ -24,6 +24,7 @@
  */
 
 import type { ReactElement } from "react";
+import { BlockingPanel } from "./BlockingPanel";
 
 // --- Visible panels -------------------------------------------------------
 // Work units append their panel component here.
@@ -32,7 +33,11 @@ import type { ReactElement } from "react";
 //   unit 5  BlockingPanel
 //   unit 6  SchedulePanel
 //   unit 7  RewardsPanel
-const PANELS: Array<() => ReactElement | null> = [];
+// One entry per line: a dozen units append here in parallel, and a same-line
+// edit to `= []` conflicts every single time.
+const PANELS: Array<() => ReactElement | null> = [
+  BlockingPanel,
+];
 
 export function TimeTrackerPanels() {
   if (PANELS.length === 0) return null;
