@@ -33,7 +33,9 @@ import { SchedulePanel } from "./SchedulePanel";
 //   unit 5  BlockingPanel
 //   unit 6  SchedulePanel
 //   unit 7  RewardsPanel
-const PANELS: Array<() => ReactElement | null> = [SchedulePanel];
+const PANELS: Array<() => ReactElement | null> = [
+  SchedulePanel,
+];
 
 export function TimeTrackerPanels() {
   if (PANELS.length === 0) return null;
