@@ -68,6 +68,7 @@ private enum BlockingFetch {
 
 enum FocusBlockerState {
     case active       // fresh verdict applied this wake
+    case applyFailed  // verdict fetched, but compiling/clearing it did not land
     case noVerdict    // server has not produced a row yet
     case unreachable  // fetch failed; previously compiled rules still in force
 }
@@ -148,17 +149,17 @@ func generateBlockerRulesJSON(_ inputs: [String]) -> String {
 /// awaits *all* its children before returning, so a callback that never fires
 /// would hang the provider forever even after the timeout "won".
 /// `@unchecked Sendable`: every field is guarded by `lock`.
-private final class FirstResult: @unchecked Sendable {
+private final class FirstResult<Value>: @unchecked Sendable {
     private let lock = NSLock()
-    private var continuation: CheckedContinuation<String, Never>?
+    private var continuation: CheckedContinuation<Value, Never>?
     private var settled = false
 
-    func attach(_ continuation: CheckedContinuation<String, Never>) {
+    func attach(_ continuation: CheckedContinuation<Value, Never>) {
         lock.lock(); defer { lock.unlock() }
         self.continuation = continuation
     }
 
-    func settle(_ value: String) {
+    func settle(_ value: Value) {
         lock.lock()
         let pending = settled ? nil : continuation
         settled = true
@@ -172,21 +173,35 @@ private final class FirstResult: @unchecked Sendable {
 /// short budget and suspends the process the moment the timeline completes; a
 /// completion handler that never fires would otherwise stall us until iOS kills
 /// the process — with the rules half-applied and no timeline returned.
-private func withDeadline(
+private func withDeadline<Value>(
     _ seconds: Double,
-    _ start: @escaping (@escaping (String) -> Void) -> Void
-) async -> String {
-    let result = FirstResult()
-    return await withCheckedContinuation { (cont: CheckedContinuation<String, Never>) in
+    timedOut: Value,
+    _ start: @escaping (@escaping (Value) -> Void) -> Void
+) async -> Value {
+    let result = FirstResult<Value>()
+    return await withCheckedContinuation { (cont: CheckedContinuation<Value, Never>) in
         result.attach(cont)
-        DispatchQueue.global().asyncAfter(deadline: .now() + seconds) { result.settle("timeout") }
+        DispatchQueue.global().asyncAfter(deadline: .now() + seconds) { result.settle(timedOut) }
         start { result.settle($0) }
+    }
+}
+
+/// Same deadline guard for an `async` operation. The losing task is simply left
+/// to finish into a continuation that has already been settled — deliberately
+/// not a task group, which would await it and reintroduce the hang.
+private func withDeadline<Value>(
+    _ seconds: Double,
+    timedOut: Value,
+    operation: @escaping () async -> Value
+) async -> Value {
+    await withDeadline(seconds, timedOut: timedOut) { finish in
+        Task { finish(await operation()) }
     }
 }
 
 private func compileRules(into store: WKContentRuleListStore?, json: String) async -> String {
     guard let store = store else { return "no-store" }
-    return await withDeadline(10) { finish in
+    return await withDeadline(6, timedOut: "timeout") { finish in
         // `compileContentRuleList` is @MainActor in the SDK; the timeline
         // provider's Task runs off the main actor, so hop explicitly.
         DispatchQueue.main.async {
@@ -200,8 +215,27 @@ private func compileRules(into store: WKContentRuleListStore?, json: String) asy
     }
 }
 
+/// An authoritative "block nothing" verdict must actually clear the rules.
+/// Compiling `"[]"` does not do that: WebKit rejects a rule list with no rules,
+/// so the *previously* compiled bytecode survives and the empty verdict becomes
+/// a silent no-op — blocking that can never be turned off. Removing the list is
+/// the operation that expresses "nothing is blocked".
+private func removeRules(from store: WKContentRuleListStore?) async -> String {
+    guard let store = store else { return "no-store" }
+    return await withDeadline(6, timedOut: "timeout") { finish in
+        DispatchQueue.main.async {
+            MainActor.assumeIsolated {
+                store.removeContentRuleList(forIdentifier: kFocusBlockerID) { err in
+                    // "not found" is success here — there was nothing to clear.
+                    finish(err == nil ? "ok" : "removed/absent(\(err!.localizedDescription))")
+                }
+            }
+        }
+    }
+}
+
 private func reloadSafariBlocker() async -> String {
-    await withDeadline(10) { finish in
+    await withDeadline(6, timedOut: "timeout") { finish in
         SFContentBlockerManager.reloadContentBlocker(withIdentifier: kFocusBlockerID) { err in
             finish(err == nil ? "ok" : "err(\(err!.localizedDescription))")
         }
@@ -212,10 +246,26 @@ private func reloadSafariBlocker() async -> String {
 /// Safari to reload. Awaited to completion *before* the timeline is returned —
 /// fire-and-forget here means the process is suspended mid-compile and no rules
 /// ever land.
+/// Outcome of a rule refresh. `applied` drives what the widget renders — without
+/// it a failed compile would still render "live", which is the same class of lie
+/// as an empty rule set reading as "nothing blocked".
+private struct ApplyResult {
+    let applied: Bool
+    let log: String
+}
+
 @MainActor
-private func applyBlockRules(domains: [String]) async -> String {
+private func applyBlockRules(domains: [String]) async -> ApplyResult {
+    let accepted = domains.filter { isBlockableHostname(blockerHostname(from: $0)) }
+    let dropped = domains.filter { !isBlockableHostname(blockerHostname(from: $0)) }
     let json = generateBlockerRulesJSON(domains)
-    var log = "domains:\(domains.count) rules:\(json.count)B\n"
+    var log = "domains:\(domains.count) accepted:\(accepted.count) rules:\(json.count)B\n"
+    if !dropped.isEmpty {
+        // Silently dropping these would mean a domain the user added is simply
+        // never blocked, with nothing anywhere saying why. Non-ASCII/IDN hosts
+        // land here (no punycode conversion) — name them.
+        log += "DROPPED \(dropped.count) unblockable: \(dropped.joined(separator: ", "))\n"
+    }
 
     // Always resolve through AppGroup — SideStore rewrites the group ID during
     // re-signing, so a hardcoded string silently yields a non-shared container.
@@ -246,17 +296,35 @@ private func applyBlockRules(domains: [String]) async -> String {
 
     let defaultStore: WKContentRuleListStore? = WKContentRuleListStore.default()
 
-    log += "compile(group): \(await compileRules(into: groupStore, json: json))\n"
-    log += "compile(default): \(await compileRules(into: defaultStore, json: json))\n"
-    // The Safari blocker extension target is currently absent from project.yml
-    // (free-tier App ID budget; unit 9 restores it) — this call is expected to
-    // error until then. Logged, non-fatal: the compiled rule list is what
-    // matters and it is already in the shared store.
+    // An empty verdict clears the list; a non-empty one compiles it. See
+    // `removeRules` for why compiling "[]" would not clear anything.
+    let groupResult: String
+    let defaultResult: String
+    if accepted.isEmpty {
+        log += "empty verdict — removing rule list rather than compiling []\n"
+        groupResult = await removeRules(from: groupStore)
+        defaultResult = await removeRules(from: defaultStore)
+    } else {
+        groupResult = await compileRules(into: groupStore, json: json)
+        defaultResult = await compileRules(into: defaultStore, json: json)
+    }
+    log += "group: \(groupResult)\ndefault: \(defaultResult)\n"
+
+    // Until unit 9's nexus-local_SafariBlocker target is in the bundle there is
+    // no installed content blocker for this identifier, so this errors AND the
+    // compiled list has no consumer — the chain is inert end-to-end, not merely
+    // "pending a reload". Logged rather than swallowed.
     log += "reload: \(await reloadSafariBlocker())\n"
 
-    AppGroup.defaults?.set(domains.count, forKey: kLastAppliedCountKey)
-    AppGroup.defaults?.set(Date().timeIntervalSince1970, forKey: kLastAppliedAtKey)
-    return log
+    // Only record a count we actually managed to apply. Writing it
+    // unconditionally would let the offline render show an authoritative-looking
+    // "N sites" for a compile that never landed.
+    let applied = groupResult == "ok" || defaultResult == "ok"
+    if applied {
+        AppGroup.defaults?.set(accepted.count, forKey: kLastAppliedCountKey)
+        AppGroup.defaults?.set(Date().timeIntervalSince1970, forKey: kLastAppliedAtKey)
+    }
+    return ApplyResult(applied: applied, log: log)
 }
 
 /// The bridge's own `writeDebugLog` is private and writes to `.documentDirectory`
@@ -267,7 +335,15 @@ private func writeWidgetBlockerDebug(_ content: String) {
         forSecurityApplicationGroupIdentifier: AppGroup.identifier
     ) else { return }
     let url = container.appendingPathComponent("widget_blocker_debug.txt")
-    try? Data(content.utf8).write(to: url, options: .atomic)
+    // Newest first, and keep a few wakes of history rather than overwriting:
+    // the interesting question on device is usually "when did this stop
+    // working", which a single-wake snapshot can never answer.
+    var combined = content
+    if let existing = try? String(contentsOf: url, encoding: .utf8) {
+        combined += "\n" + existing
+    }
+    if combined.count > 8_000 { combined = String(combined.prefix(8_000)) }
+    try? Data(combined.utf8).write(to: url, options: .atomic)
 }
 
 // MARK: - Timestamp parsing
@@ -326,32 +402,47 @@ struct FocusBlockerProvider: TimelineProvider {
         let client = SupabaseClient()   // anon key; blocking_state is anon-readable
         let filters = ["user_id": "eq.\(kBlockingStateUserID)", "limit": "1"]
 
-        // `today_minutes` exists in the schema (unit 1's migration declares it
-        // `integer NOT NULL DEFAULT 0`), so the first select is the real one.
-        // The fallback guards apply-order, not schema drift: migrations in this
-        // repo never self-apply (see supabase/migrations/README.md), so the live
-        // project can be running an older `blocking_state` while this build
-        // already expects the column — and PostgREST answers an unknown column
-        // in `select=` with a 400. A missing *display* field must never take the
-        // rule refresh down with it.
+        // `today_minutes` is declared `integer NOT NULL DEFAULT 0` in unit 1's
+        // `20260805120000_blocking_state.sql` (PR #7 — on its branch, not yet on
+        // main), so the first select is the real one. The fallback guards
+        // apply-order, not schema drift: migrations in this repo never
+        // self-apply (see supabase/migrations/README.md), so the live project
+        // can still be running without that column while this build already
+        // expects it — and PostgREST answers an unknown column in `select=` with
+        // a 400. A missing *display* field must never take the rule refresh down
+        // with it.
         let selects = [
             "effective_domains,effective_processes,today_minutes,computed_at",
             "effective_domains,effective_processes,computed_at",
         ]
 
-        var lastError = "unknown"
-        for select in selects {
-            do {
-                let rows: [BlockingStateRow] = try await client.fetch(
-                    table: "blocking_state", select: select, filters: filters
-                )
-                guard let row = rows.first else { return .noVerdict }
-                return .verdict(row)
-            } catch {
-                lastError = "\(error)"
+        // Whole-fetch deadline. SupabaseClient does not set
+        // `timeoutIntervalForRequest`, so it inherits URLSession's 60s default —
+        // two sequential 60s hangs would blow the provider's budget entirely and
+        // iOS would kill the process before any rules were applied. Cap it well
+        // inside that budget instead.
+        return await withDeadline(8, timedOut: .unreachable("fetch timeout")) {
+            var lastError = "unknown"
+            for select in selects {
+                do {
+                    let rows: [BlockingStateRow] = try await client.fetch(
+                        table: "blocking_state", select: select, filters: filters
+                    )
+                    guard let row = rows.first else { return .noVerdict }
+                    return .verdict(row)
+                } catch {
+                    lastError = "\(error)"
+                    // Only a 400 means "that column list was wrong" — retry with
+                    // the narrower select. Any other failure (network down, 404,
+                    // 5xx) would fail identically the second time, and retrying
+                    // just doubles the time spent before we give up.
+                    guard case SupabaseError.httpError(400) = error else {
+                        return .unreachable(lastError)
+                    }
+                }
             }
+            return .unreachable(lastError)
         }
-        return .unreachable(lastError)
     }
 
     private func buildEntry(applyRules: Bool) async -> FocusBlockerEntry {
@@ -361,9 +452,13 @@ struct FocusBlockerProvider: TimelineProvider {
         switch result {
         case .verdict(let row):
             let domains = row.effective_domains ?? []
+            var state = FocusBlockerState.active
             if applyRules {
-                let log = await applyBlockRules(domains: domains)
-                writeWidgetBlockerDebug("[\(now)] verdict\n" + log)
+                let result = await applyBlockRules(domains: domains)
+                writeWidgetBlockerDebug("[\(now)] verdict\n" + result.log)
+                // Rendering "live" after a failed compile would claim the phone
+                // is enforcing a verdict it isn't.
+                if !result.applied { state = .applyFailed }
             }
             return FocusBlockerEntry(
                 date: now,
@@ -371,7 +466,7 @@ struct FocusBlockerProvider: TimelineProvider {
                 processCount: (row.effective_processes ?? []).count,
                 todayMinutes: row.today_minutes,
                 computedAt: parseBlockingTimestamp(row.computed_at),
-                state: .active
+                state: state
             )
 
         case .noVerdict:
@@ -422,15 +517,19 @@ func blockerFreshness(_ computedAt: Date?, now: Date = Date()) -> String {
     return "\(secs / 86_400)d ago"
 }
 
-/// Anything older than three server cycles means the producer stopped.
+/// Deliberately more than the 15-minute refresh interval. At exactly 15 the
+/// widget would flag itself stale partway through every otherwise-healthy
+/// window, and iOS routinely stretches widget refreshes well past the requested
+/// cadence — so a 15-minute threshold would read amber on a working system.
 func blockerIsStale(_ computedAt: Date?, now: Date = Date()) -> Bool {
     guard let computedAt = computedAt else { return true }
-    return now.timeIntervalSince(computedAt) > 15 * 60
+    return now.timeIntervalSince(computedAt) > 40 * 60
 }
 
 private func stateColor(_ entry: FocusBlockerEntry) -> Color {
     switch entry.state {
     case .unreachable: return wAmber
+    case .applyFailed: return wRed
     case .noVerdict:   return wTertiary
     case .active:      return blockerIsStale(entry.computedAt) ? wAmber : wGreen
     }
@@ -439,6 +538,7 @@ private func stateColor(_ entry: FocusBlockerEntry) -> Color {
 private func stateLabel(_ entry: FocusBlockerEntry) -> String {
     switch entry.state {
     case .unreachable: return "offline"
+    case .applyFailed: return "not applied"
     case .noVerdict:   return "no verdict"
     case .active:      return blockerIsStale(entry.computedAt) ? "stale" : "live"
     }
@@ -448,6 +548,7 @@ private func stateLabel(_ entry: FocusBlockerEntry) -> String {
 private func blockerCaption(_ entry: FocusBlockerEntry) -> String {
     switch entry.state {
     case .active:      return "blocked in Safari"
+    case .applyFailed: return "rules failed to apply"
     case .unreachable: return "last applied · offline"
     case .noVerdict:   return "not computed yet"
     }
