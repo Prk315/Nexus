@@ -17,6 +17,7 @@ import {
   type BlockedAppRow,
   type BlockedSiteRow,
   blockActive,
+  entryLocalDate,
   evaluate,
   type EvaluateInput,
   type FocusBlockRow,
@@ -153,6 +154,68 @@ Deno.test("unlock fires at exactly the threshold and not one minute under", () =
 
 Deno.test("a disabled unlock rule never grants", () => {
   assertFalse(unlockGranted({ enabled: false, required_minutes: 0 }, 9999));
+});
+
+Deno.test("a null required_minutes never grants", () => {
+  // `0 >= null` is TRUE in JS, so without an explicit guard a null threshold
+  // would unlock at zero tracked minutes and override ALL blocking.
+  const bad = { enabled: true, required_minutes: null as unknown as number };
+  assertFalse(unlockGranted(bad, 0));
+  assertFalse(unlockGranted(bad, 9999));
+  const undef = { enabled: true, required_minutes: undefined as unknown as number };
+  assertFalse(unlockGranted(undef, 9999));
+});
+
+Deno.test("parseHHMM tolerates a Postgres time rendering", () => {
+  // If focus_blocks.start_time ever became a `time` column, rejecting these
+  // would silently make EVERY schedule window inactive.
+  assertEquals(parseHHMM("09:00:00"), HM(9));
+  assertEquals(parseHHMM("09:00:00.5"), HM(9));
+});
+
+Deno.test("the nearest unmet unlock threshold is the one reported", () => {
+  const out = evaluate(
+    input({
+      todayMinutes: 38,
+      sites: [site("reddit.com")],
+      // Deliberately ordered so last-wins would report 600.
+      rules: [rule({ domain: "reddit.com" }, 60), rule({ domain: "reddit.com" }, 600)],
+    }),
+  );
+  assertEquals(out.effective_domains, ["reddit.com"]);
+  assertEquals(out.reasons["reddit.com"], {
+    blocked: true,
+    source: "permanent",
+    unlock_required_minutes: 60,
+    today_minutes: 38,
+  });
+});
+
+Deno.test("any granted rule unlocks even when another rule is unmet", () => {
+  const out = evaluate(
+    input({
+      todayMinutes: 100,
+      sites: [site("reddit.com")],
+      rules: [rule({ domain: "reddit.com" }, 60), rule({ domain: "reddit.com" }, 600)],
+    }),
+  );
+  assertEquals(out.effective_domains, []);
+});
+
+Deno.test("a process name colliding with a blocked domain cannot steal its reason", () => {
+  // `reasons` is one flat map keyed by bare target name, so a disabled app row
+  // whose process_name equals a blocked domain must not overwrite it.
+  const out = evaluate(
+    input({
+      sites: [site("youtube.com")],
+      apps: [app("youtube.com", "always", false)],
+    }),
+  );
+  assertEquals(out.effective_domains, ["youtube.com"]);
+  assertEquals(out.reasons["youtube.com"], {
+    blocked: true,
+    source: "permanent",
+  });
 });
 
 // ── focus_only ───────────────────────────────────────────────────────────────
@@ -401,6 +464,32 @@ Deno.test("a disabled permanent site is still blocked when a schedule claims it"
   });
 });
 
+Deno.test("a duplicate disabled row cannot contradict an enabled one", () => {
+  // Any enabled row blocks the target (matching the Rust, which inserts on the
+  // first enabled hit). The disabled duplicate must not then claim the
+  // explanation and report it as free.
+  const out = evaluate(
+    input({ sites: [site("youtube.com", true), site("youtube.com", false)] }),
+  );
+  assertEquals(out.effective_domains, ["youtube.com"]);
+  assertEquals(out.reasons["youtube.com"], {
+    blocked: true,
+    source: "permanent",
+  });
+});
+
+Deno.test("a duplicate disabled app row cannot contradict an enabled one", () => {
+  const out = evaluate(
+    input({ apps: [app("Slack", "always", true), app("Slack", "always", false)] }),
+  );
+  assertEquals(out.effective_processes, ["Slack"]);
+  assertEquals(out.reasons["Slack"], {
+    blocked: true,
+    source: "permanent",
+    display_name: "Slack",
+  });
+});
+
 Deno.test("output arrays are sorted so back-to-back runs are byte-identical", () => {
   const out = evaluate(
     input({ sites: [site("zzz.com"), site("aaa.com"), site("mmm.com")] }),
@@ -451,6 +540,41 @@ Deno.test("localNow renders local midnight as 0 minutes, not 1440", () => {
   // read as already-ended for the first hour of the day.
   const { minutes } = localNow(new Date("2026-08-05T22:00:00Z")); // 00:00 CEST
   assertEquals(minutes, 0);
+});
+
+// ── time_entries timestamp formats ───────────────────────────────────────────
+// Two formats coexist in this TEXT column. Attributing an offset-bearing row to
+// the wrong local day makes today_minutes read low and unlocks never fire.
+
+Deno.test("entryLocalDate: naive local strings are taken by prefix", () => {
+  // TimeTracker's SQLite era. 23:30 local on the 5th belongs to the 5th.
+  assertEquals(entryLocalDate("2026-08-05T23:30:00.059"), "2026-08-05");
+  assertEquals(entryLocalDate("2026-08-05T00:30:00"), "2026-08-05");
+});
+
+Deno.test("entryLocalDate: legacy space-separated strings still work", () => {
+  assertEquals(entryLocalDate("2026-08-05 18:44:30"), "2026-08-05");
+});
+
+Deno.test("entryLocalDate: RFC3339 UTC is projected into local time", () => {
+  // 22:30Z in CEST is 00:30 local on the NEXT day. Treating this as naive
+  // would attribute it to the 5th and lose the minutes from today's total.
+  assertEquals(entryLocalDate("2026-08-05T22:30:00+00:00"), "2026-08-06");
+  assertEquals(entryLocalDate("2026-08-05T22:30:00Z"), "2026-08-06");
+  // 21:30Z is 23:30 local on the same day.
+  assertEquals(entryLocalDate("2026-08-05T21:30:00Z"), "2026-08-05");
+  // Winter (CET, UTC+1).
+  assertEquals(entryLocalDate("2026-01-15T23:30:00Z"), "2026-01-16");
+});
+
+Deno.test("entryLocalDate: an explicit non-UTC offset is honoured", () => {
+  // 00:30+02:00 is 22:30Z on the 4th, which is 00:30 local on the 5th.
+  assertEquals(entryLocalDate("2026-08-05T00:30:00+02:00"), "2026-08-05");
+});
+
+Deno.test("entryLocalDate: a bare date is not mistaken for an offset", () => {
+  // The trailing "-05" must not read as a numeric offset.
+  assertEquals(entryLocalDate("2026-08-05"), "2026-08-05");
 });
 
 Deno.test("the local date drives the weekday used for schedule matching", () => {

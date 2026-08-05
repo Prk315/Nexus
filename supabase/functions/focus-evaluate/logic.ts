@@ -127,6 +127,38 @@ export function localNow(
   return { date, minutes };
 }
 
+/** Matches a trailing UTC designator or numeric offset: Z, +02:00, -0500. */
+const HAS_OFFSET = /([Zz]|[+-]\d{2}:?\d{2})$/;
+
+/**
+ * The local calendar day a `time_entries` row belongs to.
+ *
+ * `time_entries.start_time` is TEXT and TWO formats coexist:
+ *
+ *  - **Naive local, no offset** — `2026-07-02T18:44:30.059`. TimeTracker's
+ *    SQLite era, and all 260 rows live today. Some legacy rows use a space
+ *    separator instead of `T`, so the date is taken by prefix rather than by
+ *    parsing.
+ *  - **RFC3339 UTC with an offset** — `2026-08-05T22:30:00+00:00`. What
+ *    `now_rfc3339()` in NexusLocal's timetracker/mod.rs produces, which is what
+ *    new writes use.
+ *
+ * Treating the second kind as naive is a real off-by-hours bug: a 00:30-local
+ * session stores as `…T22:30:00+00:00` and would be attributed to the previous
+ * local day, so `today_minutes` reads low and unlocks never fire.
+ *
+ * So: offset-bearing strings are parsed as instants and projected into `tz`;
+ * everything else is already local and its date prefix is taken verbatim.
+ */
+export function entryLocalDate(startTime: string, tz: string = TIMEZONE): string {
+  const value = (startTime ?? "").trim();
+  if (HAS_OFFSET.test(value)) {
+    const instant = new Date(value);
+    if (!Number.isNaN(instant.getTime())) return localNow(instant, tz).date;
+  }
+  return value.slice(0, 10);
+}
+
 /**
  * ISO weekday (1=Mon … 7=Sun) for a "YYYY-MM-DD" local date string.
  *
@@ -145,7 +177,13 @@ export function isoWeekday(ymd: string): number {
  * which `continue`s on a NaiveTime parse failure.
  */
 export function parseHHMM(value: string): number | null {
-  const m = /^(\d{1,2}):(\d{2})(?::\d{2})?$/.exec((value ?? "").trim());
+  // `focus_blocks.start_time` is TEXT ("09:00") on this project. Seconds and
+  // fractional seconds are tolerated anyway: if the column ever became a
+  // Postgres `time`, PostgREST would render "09:00:00" or "09:00:00.5", and a
+  // stricter regex would silently make EVERY schedule window inactive — a
+  // failure that un-blocks rather than blocks, in a function whose whole posture
+  // is to fail loudly.
+  const m = /^(\d{1,2}):(\d{2})(?::\d{2}(?:\.\d+)?)?$/.exec((value ?? "").trim());
   if (!m) return null;
   const h = Number(m[1]);
   const min = Number(m[2]);
@@ -227,6 +265,18 @@ export function unlockGranted(
   todayMinutes: number,
 ): boolean {
   if (!rule.enabled) return false;
+  // TS types are erased at runtime and PostgREST hands back whatever the column
+  // holds. The failure modes are asymmetric: a null `enabled` is falsy and skips
+  // the rule (safe), but `0 >= null` is TRUE in JS, so a null `required_minutes`
+  // would grant the unlock at zero tracked minutes — overriding permanent AND
+  // schedule blocking. The column is NOT NULL DEFAULT 60 today; this guard keeps
+  // that from being load-bearing.
+  if (
+    typeof rule.required_minutes !== "number" ||
+    !Number.isFinite(rule.required_minutes)
+  ) {
+    return false;
+  }
   return todayMinutes >= rule.required_minutes;
 }
 
@@ -290,16 +340,29 @@ export function evaluate(input: EvaluateInput): EvaluateOutput {
   const pendingDomains = new Map<string, UnlockRuleRow>();
   const pendingProcesses = new Map<string, UnlockRuleRow>();
 
+  // For pending rules, keep the NEAREST unmet threshold rather than whichever
+  // row PostgREST happened to return last — otherwise the UI can show
+  // "38 / 600 min" while a 60-minute rule is 22 minutes away.
+  const keepNearest = (
+    map: Map<string, UnlockRuleRow>,
+    key: string,
+    rule: UnlockRuleRow,
+  ) => {
+    const existing = map.get(key);
+    if (!existing || rule.required_minutes < existing.required_minutes) {
+      map.set(key, rule);
+    }
+  };
+
   for (const rule of rules) {
     const granted = unlockGranted(rule, todayMinutes);
     if (rule.domain) {
-      (granted ? unlockedDomains : pendingDomains).set(rule.domain, rule);
+      if (granted) unlockedDomains.set(rule.domain, rule);
+      else keepNearest(pendingDomains, rule.domain, rule);
     }
     if (rule.process_name) {
-      (granted ? unlockedProcesses : pendingProcesses).set(
-        rule.process_name,
-        rule,
-      );
+      if (granted) unlockedProcesses.set(rule.process_name, rule);
+      else keepNearest(pendingProcesses, rule.process_name, rule);
     }
   }
 
@@ -336,8 +399,11 @@ export function evaluate(input: EvaluateInput): EvaluateOutput {
       continue;
     }
     if (!site.enabled) {
-      // Not blocked, but a schedule window below may still claim it.
-      if (!schedDomains.has(site.domain)) {
+      // Not blocked by THIS row, but a schedule window below may still claim
+      // it, and a duplicate enabled row may already have blocked it. Only
+      // claim the explanation when nothing else has — otherwise `reasons`
+      // would contradict the effective set.
+      if (!schedDomains.has(site.domain) && !domains.has(site.domain)) {
         reasons[site.domain] = { blocked: false, source: "disabled" };
       }
       continue;
@@ -370,7 +436,16 @@ export function evaluate(input: EvaluateInput): EvaluateOutput {
       continue;
     }
     if (!permanentAppInForce(app, timerActive)) {
-      if (!schedProcesses.has(app.process_name)) {
+      // Same guard as the sites loop: never explain a target as free when a
+      // schedule window or a duplicate row has already blocked it. `domains` is
+      // checked too because `reasons` is a single flat map shared by domains and
+      // process names (the shape the schema documents), so a process name that
+      // collides with a blocked domain must not overwrite its explanation.
+      if (
+        !schedProcesses.has(app.process_name) &&
+        !processes.has(app.process_name) &&
+        !domains.has(app.process_name)
+      ) {
         reasons[app.process_name] = app.enabled
           ? {
             blocked: false,

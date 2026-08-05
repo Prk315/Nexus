@@ -110,19 +110,53 @@ Two details that are easy to get wrong and are covered by tests:
 - `hourCycle: "h23"`, not `hour12: false` — the latter renders midnight as `"24"`
   under some ICU builds, which puts the minute-of-day at 1440 and makes every
   normal window read as already-ended for the first hour of the day.
-- `time_entries` are matched with `like '<date>%'`, not a `gte`/`lt` range. Some
-  legacy rows use a space separator instead of `T`, and space (0x20) sorts below
-  `T` (0x54) — a lexical range would silently drop them, `today_minutes` would
-  read low, and unlocks would never fire.
+- **`time_entries.start_time` holds two formats**, and `entryLocalDate` handles
+  both:
+  - *naive local, no offset* — `2026-07-02T18:44:30.059`. TimeTracker's SQLite
+    era; all 260 rows live today. Some legacy rows use a space separator
+    instead of `T`.
+  - *RFC3339 UTC with an offset* — `2026-08-05T22:30:00+00:00`. What
+    `now_rfc3339()` in NexusLocal's `timetracker/mod.rs` produces, which is what
+    new writes use.
+
+  Treating the second kind as naive is a real off-by-hours bug: a 00:30-local
+  session stores as `…T22:30:00+00:00` and would land on the previous local day,
+  so `today_minutes` reads low and unlocks never fire. Offset-bearing strings are
+  parsed as instants and projected into the zone; everything else is already
+  local and its date prefix is taken verbatim.
+
+### Why the query is a range, not a `LIKE`
+
+The `(user_id, start_time)` btree from work unit 1 only helps range comparisons
+over ISO-8601 text ordering — `LIKE '2026-08-05%'` cannot use it. So the query
+uses `>= '<yesterday>' AND < '<tomorrow+1>'` with **whole-date bounds**, which is
+also separator-agnostic (a legacy `2026-08-05 18:44` row sorts inside day-granular
+bounds whether the separator is a space, 0x20, or `T`, 0x54).
+
+Because two timestamp formats coexist, no single SQL predicate can select exactly
+one local day. The widened ±1-day range is a cheap superset; `entryLocalDate`
+then decides membership exactly, in TypeScript.
+
+Rows with a NULL `user_id` are included for the default user — the 252 legacy
+TimeTracker rows carry NULL and belong to `'default'`, and `user_id = 'default'`
+alone would not match them.
 
 ## Guarantees
 
 - **Idempotent** — upserts on `user_id`. Two back-to-back runs produce identical
   *policy* columns (`effective_domains`, `effective_processes`, `reasons`,
   `today_minutes`); `computed_at` necessarily moves.
-- **Clobber-safe** — the only table written is `blocking_state`, which nothing
-  else writes, and it touches no column it does not own. Same posture as
-  `bodyscan-sync`.
+- **Clobber-safe** — the only table written is `blocking_state`, and it touches
+  no column it does not own. Same posture as `bodyscan-sync`.
+
+  "Sole writer" is a **convention, not an enforced constraint**: `blocking_state`
+  carries the project-wide permissive anon RLS policy (`USING (true) WITH CHECK
+  (true)`), so any client holding the anon key *can* write it. Nothing detects a
+  client that does, and such a client would be a second source of truth that
+  disagrees the moment the device sleeps. Tightening this to
+  `for select to anon` + `for all to service_role` is the right move whenever the
+  productivity stack's RLS posture is revisited — it is deliberately left
+  matching its siblings for now rather than diverging one table.
 - **Fails loudly** — every query error aborts with a 500 **before any write**.
   An empty `effective_domains` because a query errored is indistinguishable from
   "nothing is blocked", and the failure mode is that blocking silently switches
@@ -157,19 +191,28 @@ you do.
 
 ## Schedule
 
-`supabase/migrations/20260805160000_focus_evaluate.sql` creates
-`blocking_state`, adds `unlock_rules.enabled`, and registers the pg_cron job
-`nexus-focus-evaluate` at `*/5 * * * *`. Apply it per
-`supabase/migrations/README.md`:
+`supabase/migrations/20260805160000_focus_evaluate.sql` registers the pg_cron
+job `nexus-focus-evaluate` at `*/5 * * * *`. **That is all it does** — the
+tables and columns belong to work unit 1 and must be applied first:
+
+| File | Provides |
+|---|---|
+| `20260805120000_blocking_state.sql` | the table this writes |
+| `20260805120200_schedule_block_targets.sql` | `schedule_block_apps` / `schedule_block_sites` |
+| `20260805120300_unlock_rules_enabled_and_evaluator_indexes.sql` | `unlock_rules.enabled` + the evaluator indexes |
+
+The migration asserts both preconditions (`blocking_state` exists,
+`unlock_rules.enabled` exists) and raises a named exception rather than
+registering a job that would fail silently every 5 minutes.
+
+Apply per `supabase/migrations/README.md`:
 
 ```bash
 supabase link --project-ref efxmzsdisaymtpebaxlp
 supabase db push
 ```
 
-It also needs `schedule_block_apps` / `schedule_block_sites` (work unit 1).
-Applying it before those land is safe — the job simply errors each tick rather
-than writing an empty state.
+Rollback: `select cron.unschedule('nexus-focus-evaluate');`
 
 Check the job and its history:
 
@@ -236,5 +279,10 @@ weekday quirk; and the DST-sensitive timezone resolution.
 
 `apps/NexusLocal/src-tauri/src/timetracker/blocking_state.rs` — the `tt_blocking_state`
 Tauri command. It is read-only, and it returns an **error** rather than an empty
-state when no row exists, so enforcement cannot read "never computed" as
-"unblock everything".
+state when no row exists, so a caller cannot read "never computed" as
+"nothing blocked".
+
+`blocking_state` is deliberately not seeded, so this error is expected on a fresh
+install until the first cron tick (≤5 minutes). It means *no verdict yet*; per
+the schema's guidance, clients should block nothing until a verdict exists, and
+UI should render "not computed yet" rather than "nothing blocked".

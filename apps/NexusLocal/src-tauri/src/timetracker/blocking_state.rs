@@ -23,11 +23,16 @@
 //! # Why a missing row is an error
 //!
 //! [`tt_blocking_state`] returns `Err` when no row exists rather than an empty
-//! [`BlockingState`]. An empty verdict and a never-computed verdict are
-//! indistinguishable to a caller that only looks at `effective_domains`, and the
-//! failure mode is that enforcement silently switches off. Callers that want to
-//! render "not computed yet" should match on the error; callers that enforce
-//! should keep their previous state. Stale blocking beats absent blocking.
+//! [`BlockingState`]. `blocking_state` is deliberately not seeded (see
+//! `20260805120000_blocking_state.sql`), so "no row" means **no verdict has ever
+//! been computed** — which is genuinely different from "computed, nothing is
+//! blocked". An empty struct would collapse the two for any caller that only
+//! looks at `effective_domains`.
+//!
+//! So the error means exactly one thing: *no verdict yet*. What to do about it
+//! is the caller's decision, not this module's — the schema's guidance to
+//! clients is to block nothing until a verdict exists. Callers rendering UI
+//! should show "not computed yet" rather than "nothing blocked".
 //!
 //! Pure HTTP — no iOS FFI, so no `#[cfg(not(target_os = "ios"))]` arm is needed;
 //! this compiles unchanged for desktop and `aarch64-apple-ios`.
@@ -37,14 +42,27 @@ use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct BlockingState {
-    #[serde(default)]
+    #[serde(default, deserialize_with = "null_as_default")]
     pub effective_domains: Vec<String>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "null_as_default")]
     pub effective_processes: Vec<String>,
     /// Why each target is blocked or unlocked — for the UI, not for logic.
     #[serde(default)]
     pub reasons: serde_json::Value,
     pub computed_at: Option<String>,
+}
+
+/// `#[serde(default)]` only covers a *missing* field, not one that is present
+/// and JSON `null`. The migration declares these columns NOT NULL, but if
+/// `blocking_state` were ever created without that constraint a null would
+/// otherwise fail the whole read — and a failed read is indistinguishable from
+/// "never computed" to the caller. Treat null as empty instead.
+fn null_as_default<'de, D, T>(deserializer: D) -> Result<T, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: Deserialize<'de> + Default,
+{
+    Ok(Option::<T>::deserialize(deserializer)?.unwrap_or_default())
 }
 
 /// Columns to fetch. Named explicitly rather than `*` so an added column can
@@ -160,10 +178,27 @@ mod tests {
     }
 
     #[test]
-    fn null_jsonb_columns_fall_back_to_defaults() {
+    fn missing_columns_fall_back_to_defaults() {
         let rows = json!([{ "computed_at": null }]);
         let state = parse_row(&rows, "default").expect("row should parse");
         assert!(state.effective_domains.is_empty());
         assert!(state.computed_at.is_none());
+    }
+
+    #[test]
+    fn explicitly_null_jsonb_columns_are_treated_as_empty() {
+        // serde(default) alone does NOT cover present-but-null; a null here
+        // would otherwise fail the read, which the caller cannot distinguish
+        // from "never computed".
+        let rows = json!([{
+            "effective_domains": null,
+            "effective_processes": null,
+            "reasons": null,
+            "computed_at": "2026-08-05T12:00:00+00:00",
+        }]);
+        let state = parse_row(&rows, "default").expect("row should parse");
+        assert!(state.effective_domains.is_empty());
+        assert!(state.effective_processes.is_empty());
+        assert!(state.computed_at.is_some());
     }
 }

@@ -40,11 +40,12 @@
 // columns; only computed_at moves.
 
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
-import { createClient, SupabaseClient } from "jsr:@supabase/supabase-js@2";
+import { createClient, type SupabaseClient } from "jsr:@supabase/supabase-js@2";
 
 import {
   type BlockedAppRow,
   type BlockedSiteRow,
+  entryLocalDate,
   evaluate,
   type EvaluateOutput,
   type FocusBlockRow,
@@ -64,9 +65,17 @@ const json = (body: unknown, status = 200) =>
 
 /** Any query failure becomes this, and this aborts the run. */
 class QueryFailure extends Error {
-  constructor(readonly table: string, readonly detail: string) {
+  // Written as plain fields rather than TypeScript parameter properties so the
+  // file can also be parsed by type-stripping runtimes (Node's --strip-types),
+  // which is how it gets syntax-checked when Deno is not installed.
+  readonly table: string;
+  readonly detail: string;
+
+  constructor(table: string, detail: string) {
     super(`${table}: ${detail}`);
     this.name = "QueryFailure";
+    this.table = table;
+    this.detail = detail;
   }
 }
 
@@ -82,25 +91,39 @@ function unwrap<T>(
   return res.data ?? [];
 }
 
+/** `YYYY-MM-DD` shifted by whole days. Used only to build query bounds. */
+function shiftDate(ymd: string, days: number): string {
+  const [y, m, d] = ymd.split("-").map(Number);
+  const shifted = new Date(Date.UTC(y, m - 1, d + days));
+  return shifted.toISOString().slice(0, 10);
+}
+
 /**
  * Completed tracked minutes for `userId` on the local calendar day `localDate`.
  *
  * Only completed entries count — an in-flight session contributes nothing until
  * it is stopped, matching `tracked_minutes_today` in TimeTracker's schedule.rs.
  *
- * Two deliberate choices:
+ * Three deliberate choices:
  *
- *  - `like '<date>%'` rather than a lexical range. time_entries.start_time is a
- *    naive local string and the SQLite era wrote some with a space separator
- *    instead of 'T' (see the note in NexusLocal's timetracker/mod.rs). Space
- *    (0x20) sorts below 'T' (0x54), so a `gte`/`lt` range would silently drop
- *    those rows, today_minutes would read low, and unlocks would never fire.
- *    A date-prefix match is separator-agnostic.
+ *  - **A range predicate over a ±1 day window, not `LIKE`.** The
+ *    `(user_id, start_time)` btree added by work unit 1 only helps range
+ *    comparisons over ISO-8601 text ordering; `LIKE '2026-08-05%'` cannot use
+ *    it. The bounds are whole dates (`'2026-08-04'`, `'2026-08-07'`), which is
+ *    also separator-agnostic — a legacy `2026-08-05 18:44` row sorts inside
+ *    day-granular bounds regardless of whether the separator is a space (0x20)
+ *    or 'T' (0x54).
  *
- *  - For the default user, rows with a NULL user_id are included. This is a
- *    single-user system and the 252 legacy TimeTracker rows carry NULL;
- *    TimeTrackerApp is still in tree and can write more. They belong to
- *    'default'.
+ *  - **The window is widened by a day on each side, then filtered exactly in
+ *    TS** via `entryLocalDate`. Two timestamp formats coexist in this column
+ *    (naive local, and RFC3339 UTC with an offset), so no single SQL predicate
+ *    can select exactly one local day. The widened range is a cheap superset;
+ *    `entryLocalDate` decides membership. See its doc comment.
+ *
+ *  - **For the default user, rows with a NULL user_id are included.** This is a
+ *    single-user system and the 252 legacy TimeTracker rows carry NULL — they
+ *    belong to 'default', and TimeTrackerApp is still in tree and can write
+ *    more. `user_id = 'default'` alone would not match them.
  *
  * Integer division to match the Rust/SQLite `SUM(duration_seconds) / 60`.
  */
@@ -111,19 +134,23 @@ async function trackedMinutesToday(
 ): Promise<number> {
   let query = supabase
     .from("time_entries")
-    .select("duration_seconds")
-    .like("start_time", `${localDate}%`)
+    .select("start_time, duration_seconds")
+    .gte("start_time", shiftDate(localDate, -1))
+    .lt("start_time", shiftDate(localDate, 2))
     .not("end_time", "is", null);
 
   query = userId === DEFAULT_USER
     ? query.or(`user_id.eq.${DEFAULT_USER},user_id.is.null`)
     : query.eq("user_id", userId);
 
-  const rows = unwrap<{ duration_seconds: number | null }>(
+  const rows = unwrap<{ start_time: string; duration_seconds: number | null }>(
     "time_entries",
     await query,
   );
-  const seconds = rows.reduce((sum, r) => sum + (r.duration_seconds ?? 0), 0);
+
+  const seconds = rows
+    .filter((r) => entryLocalDate(r.start_time, TIMEZONE) === localDate)
+    .reduce((sum, r) => sum + (r.duration_seconds ?? 0), 0);
   return Math.floor(seconds / 60);
 }
 
@@ -174,13 +201,17 @@ async function computeAll(
       .from("blocked_apps")
       .select("user_id, display_name, process_name, block_mode, enabled"),
   );
+  // Ordered on purpose. When two active blocks claim the same target, the
+  // `block_name` recorded in `reasons` is first-writer-wins — without a stable
+  // order that flips between runs, breaking the idempotency claim above.
   const blocks = unwrap<FocusBlockRow>(
     "focus_blocks",
     await supabase
       .from("focus_blocks")
       .select(
         "id, user_id, name, start_time, end_time, days_of_week, color, enabled",
-      ),
+      )
+      .order("id", { ascending: true }),
   );
   // `enabled` is selected explicitly on purpose. If the column is missing this
   // 400s and the whole run aborts — far better than `select("*")` plus a

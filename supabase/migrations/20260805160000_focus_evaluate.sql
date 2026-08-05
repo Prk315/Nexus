@@ -1,84 +1,75 @@
--- focus-evaluate: the materialized blocking verdict + its pg_cron schedule.
+-- 20260805160000_focus_evaluate.sql
 --
--- WHAT THIS ADDS
---   1. `blocking_state` — one row per user holding the computed verdict.
---   2. `unlock_rules.enabled` — see the note below; unit 8 owns this column.
---   3. cron job `nexus-focus-evaluate`, every 5 minutes.
+-- WHAT
+--   Schedules the `focus-evaluate` edge function on pg_cron, every 5 minutes,
+--   as job `nexus-focus-evaluate`.
 --
--- ORDER OF OPERATIONS
---   The cron job at the bottom POSTs to the `focus-evaluate` edge function.
---   Deploy the function FIRST, otherwise every tick 404s until you do:
+-- WHY
+--   `focus-evaluate` collapses focus_blocks + schedule_block_apps +
+--   schedule_block_sites + unlock_rules + blocked_sites + blocked_apps +
+--   today's time_entries into the single `blocking_state` row. Nexus Local is a
+--   sideloaded free-tier iOS app — no BGTaskScheduler, no silent push — so a
+--   schedule window opening at 09:00 or a reward unlocking at 60 tracked
+--   minutes has to be decided somewhere that is awake. pg_cron is that
+--   somewhere.
 --
---     supabase functions deploy focus-evaluate --project-ref efxmzsdisaymtpebaxlp
+-- ORDER — THIS FILE RUNS LAST
+--   1. Apply the work-unit-1 schema first. This file depends on all of it:
+--        20260805120000_blocking_state.sql                        (the table written)
+--        20260805120200_schedule_block_targets.sql                (the tables read)
+--        20260805120300_unlock_rules_enabled_and_evaluator_indexes.sql
+--                                                                 (unlock_rules.enabled)
+--      This file creates NONE of those — unit 1 owns them. It only schedules.
+--   2. Deploy the function BEFORE applying this file, or every tick 404s until
+--      you do:
+--        supabase functions deploy focus-evaluate --project-ref efxmzsdisaymtpebaxlp
 --
---   It also needs `schedule_block_apps` / `schedule_block_sites` (work unit 1).
---   Without them the function fails loudly rather than writing a partial state,
---   so applying this early is safe — it just means the job errors until unit 1
---   lands.
+--   Applying this early is safe but noisy: the function fails loudly rather than
+--   writing a partial state, so the job simply errors each tick until its
+--   dependencies exist. It never writes an empty verdict, which would read as
+--   "nothing is blocked" and silently switch blocking off.
 --
--- UPSERT CONSTRAINT
---   `focus-evaluate` upserts with `on_conflict=user_id`. `user_id` is the
---   PRIMARY KEY here, so PostgREST's default would work, but the function names
---   it explicitly — per supabase/migrations/README.md, a mismatch here surfaces
---   as an opaque HTTP 409 rather than a useful error.
---
--- WHY THIS MIGRATION TOUCHES `unlock_rules`
---   The live table has no `enabled` column, but the blocker logic being ported
---   (apps/TimeTrackerApp/src-tauri/src/blocker/mod.rs::tick) checks
---   `rule.enabled` before granting an unlock. The edge function selects the
---   column explicitly so its absence is a loud 400 rather than a silent
---   "every rule is active". Work unit 1's scope is the two schedule join
---   tables, so unit 8 adds this.
+-- ROLLBACK
+--   select cron.unschedule('nexus-focus-evaluate');
 
--- ── blocking_state ───────────────────────────────────────────────────────────
--- Written only by the `focus-evaluate` edge function; read by every client
--- (iPhone widget, Mac grid node, app UI). Clients never re-derive it.
-create table if not exists public.blocking_state (
-  user_id text primary key default 'default'
-);
-
--- Added column-by-column so this converges no matter which migration created
--- the table first.
-alter table public.blocking_state
-  add column if not exists effective_domains   jsonb       not null default '[]'::jsonb,
-  add column if not exists effective_processes jsonb       not null default '[]'::jsonb,
-  add column if not exists reasons             jsonb       not null default '{}'::jsonb,
-  add column if not exists today_minutes       integer     not null default 0,
-  add column if not exists computed_at         timestamptz not null default now();
-
-comment on table public.blocking_state is
-  'Materialized blocking verdict, computed every 5 minutes by the focus-evaluate edge function. One row per user. Do not write from clients.';
-comment on column public.blocking_state.reasons is
-  'Per-target explanation for the UI. Display only — never load-bearing.';
-
-alter table public.blocking_state enable row level security;
-
--- Matches the existing productivity tables (blocked_sites, focus_blocks, …).
--- Tighten to auth.uid() when ecosystem auth reaches these tables, not before.
+-- ── Preconditions ────────────────────────────────────────────────────────────
+-- pg_cron and pg_net are already installed on this project (jobs 1 and 2,
+-- `protocol-oura-daily-sync` and `protocol-bodyscan-sync`, use `cron.job` and
+-- `net.http_post`). Deliberately NOT `create extension if not exists` here: if
+-- either were somehow absent, that would install it into the default schema and
+-- `net.http_post` would then resolve to nothing while the migration reported
+-- success. Assert instead, so a missing extension is a loud failure rather than
+-- a silently dead cron job.
 do $$
 begin
-  if not exists (
-    select 1 from pg_policies
-    where schemaname = 'public'
-      and tablename  = 'blocking_state'
-      and policyname = 'anon full access'
-  ) then
-    create policy "anon full access" on public.blocking_state
-      for all using (true) with check (true);
+  if not exists (select 1 from pg_extension where extname = 'pg_cron') then
+    raise exception 'pg_cron is not installed — enable it in Dashboard > Database > Extensions before applying this migration';
+  end if;
+  if not exists (select 1 from pg_extension where extname = 'pg_net') then
+    raise exception 'pg_net is not installed — enable it in Dashboard > Database > Extensions before applying this migration';
   end if;
 end $$;
 
--- ── unlock_rules.enabled ─────────────────────────────────────────────────────
--- Default true so existing rows keep behaving exactly as they do today (the
--- pre-column code path treated every rule as active).
-alter table public.unlock_rules
-  add column if not exists enabled boolean not null default true;
+-- Fail early and legibly if unit 1's schema has not been applied yet, rather
+-- than letting the job 404 every 5 minutes with nobody watching.
+do $$
+begin
+  if not exists (
+    select 1 from information_schema.tables
+    where table_schema = 'public' and table_name = 'blocking_state'
+  ) then
+    raise exception 'blocking_state does not exist — apply 20260805120000_blocking_state.sql first';
+  end if;
+  if not exists (
+    select 1 from information_schema.columns
+    where table_schema = 'public' and table_name = 'unlock_rules' and column_name = 'enabled'
+  ) then
+    raise exception 'unlock_rules.enabled does not exist — apply 20260805120300_unlock_rules_enabled_and_evaluator_indexes.sql first';
+  end if;
+end $$;
 
--- ── pg_cron schedule ─────────────────────────────────────────────────────────
-create extension if not exists pg_cron;
-create extension if not exists pg_net;
-
--- Idempotent: drop the job before recreating so re-running this file doesn't
+-- ── Schedule ─────────────────────────────────────────────────────────────────
+-- Idempotent: drop the job before recreating so re-running this file cannot
 -- leave two schedules racing each other.
 do $$
 begin
