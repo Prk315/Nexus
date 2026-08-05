@@ -11,15 +11,42 @@ export interface StravaImportResult {
 const RUN_TYPES = new Set([
   "Run", "Trail Run", "VirtualRun", "Treadmill", "Indoor Run",
   "TrailRun", "VirtualRide" /* some users log virtual runs as rides */,
+  "Løb", // Danish
 ]);
 
-const WORKOUT_TYPES = new Set([
-  "WeightTraining", "Workout", "CrossFit", "Elliptical",
-  "StairStepper", "Yoga", "Pilates", "Rowing", "Swim", "Swimming",
-  "Hike", "Walk", "Velomobile", "Badminton", "Tennis", "Squash",
-  "Handball", "Racquetball", "Skateboard", "Surfing", "Snowboard",
-  "AlpineSki", "NordicSki", "Snowshoe",
-]);
+// Column-name aliases. Strava localises the CSV headers to the account's
+// language, so we match English AND the Danish variants (her export). Column
+// names also repeat (display vs raw value) — parseCSV keeps the last, which is
+// the raw numeric one, which is what we want.
+const COLS = {
+  type:      ["Activity Type", "type", "Aktivitetstype"],
+  name:      ["Activity Name", "Name", "name", "Aktivitetsnavn"],
+  date:      ["Activity Date", "Date", "date", "Aktivitetsdato"],
+  distance:  ["Distance", "distance"],
+  movingTime:["Moving Time", "moving_time", "Tid i bevægelse"],
+  avgSpeed:  ["Average Speed", "average_speed", "Gennemsnitlig hastighed"],
+  avgHr:     ["Average Heart Rate", "average_heart_rate", "Gennemsnitlig puls"],
+  maxHr:     ["Max Heart Rate", "max_heart_rate", "Maks. puls"],
+  elevGain:  ["Elevation Gain", "elevation_gain", "Samlet stigning"],
+  cadence:   ["Average Cadence", "average_cadence", "Gennemsnitlig kadence"],
+  calories:  ["Calories", "calories", "Kalorier"],
+};
+
+/** First non-empty value among the given header aliases. */
+function pick(row: Record<string, string>, keys: string[]): string {
+  for (const k of keys) {
+    const v = row[k];
+    if (v != null && v !== "") return v;
+  }
+  return "";
+}
+
+/** parseFloat that also accepts a European decimal comma ("2,84" → 2.84). */
+function num(v: string): number {
+  if (!v) return NaN;
+  const s = /^-?\d+,\d+$/.test(v.trim()) ? v.trim().replace(",", ".") : v.trim();
+  return parseFloat(s);
+}
 
 export function parseStravaActivities(text: string): StravaImportResult {
   const rows = parseCSV(text);
@@ -28,24 +55,24 @@ export function parseStravaActivities(text: string): StravaImportResult {
   };
 
   for (const row of rows) {
-    const activityType = row["Activity Type"] ?? row["type"] ?? "";
-    const name         = row["Activity Name"] ?? row["Name"] ?? row["name"] ?? "Activity";
-    const dateRaw      = row["Activity Date"] ?? row["Date"] ?? row["date"] ?? "";
-    const date         = parseStravaDate(dateRaw);
+    const activityType = pick(row, COLS.type);
+    const name         = pick(row, COLS.name) || "Activity";
+    const date         = parseStravaDate(pick(row, COLS.date));
 
     if (!date) { result.skipped++; continue; }
 
-    const distanceRaw  = parseFloat(row["Distance"]           ?? row["distance"]            ?? "0");
-    const movingTimeS  = parseFloat(row["Moving Time"]         ?? row["moving_time"]         ?? "0");
-    const avgSpeedRaw  = parseFloat(row["Average Speed"]       ?? row["average_speed"]       ?? "0");
-    const avgHrRaw     = parseFloat(row["Average Heart Rate"]  ?? row["average_heart_rate"]  ?? "");
-    const maxHrRaw     = parseFloat(row["Max Heart Rate"]      ?? row["max_heart_rate"]      ?? "");
-    const elevGain     = parseFloat(row["Elevation Gain"]      ?? row["elevation_gain"]      ?? "");
-    const cadenceRaw   = parseFloat(row["Average Cadence"]     ?? row["average_cadence"]     ?? "");
-    const caloriesRaw  = parseFloat(row["Calories"]            ?? row["calories"]            ?? "");
+    const distanceRaw  = num(pick(row, COLS.distance));
+    const movingTimeS  = num(pick(row, COLS.movingTime));
+    const avgSpeedRaw  = num(pick(row, COLS.avgSpeed));
+    const avgHrRaw     = num(pick(row, COLS.avgHr));
+    const maxHrRaw     = num(pick(row, COLS.maxHr));
+    const elevGain     = num(pick(row, COLS.elevGain));
+    const cadenceRaw   = num(pick(row, COLS.cadence));
+    const caloriesRaw  = num(pick(row, COLS.calories));
 
     // Strava bulk export distances are in metres; individual values can be km
-    const distanceKm = distanceRaw > 200 ? distanceRaw / 1000 : distanceRaw;
+    const distance = isNaN(distanceRaw) ? 0 : distanceRaw;
+    const distanceKm = distance > 200 ? distance / 1000 : distance;
 
     // Pace: prefer time/distance, fall back to speed
     let paceSPerKm: number | null = null;
@@ -64,10 +91,7 @@ export function parseStravaActivities(text: string): StravaImportResult {
     const durationMin  = movingTimeS > 0   ? Math.round(movingTimeS / 60) : null;
     const notes = `Strava: ${name}${elevGainM && elevGainM > 0 ? ` (+${elevGainM}m)` : ""}`;
 
-    const isRun =
-      RUN_TYPES.has(activityType) ||
-      activityType.toLowerCase().includes("run") ||
-      activityType.toLowerCase().includes("jog");
+    const isRun = RUN_TYPES.has(activityType) || /løb|run|jog/i.test(activityType);
 
     if (isRun) {
       result.runningSessions.push({
@@ -87,7 +111,7 @@ export function parseStravaActivities(text: string): StravaImportResult {
       continue;
     }
 
-    if (WORKOUT_TYPES.has(activityType) || activityType !== "") {
+    if (activityType !== "") {
       result.workoutSessions.push({
         id: crypto.randomUUID(),
         name,
@@ -107,10 +131,24 @@ export function parseStravaActivities(text: string): StravaImportResult {
   return result;
 }
 
+// Danish month abbreviations (first 3 letters are unique per month).
+const DA_MONTHS: Record<string, number> = {
+  jan: 1, feb: 2, mar: 3, apr: 4, maj: 5, jun: 6,
+  jul: 7, aug: 8, sep: 9, okt: 10, nov: 11, dec: 12,
+};
+
 function parseStravaDate(raw: string): string | null {
   if (!raw) return null;
+  // ISO / English-first: "2026-08-04…"
   const iso = raw.match(/^(\d{4}-\d{2}-\d{2})/);
   if (iso) return iso[1];
+  // Danish: "1. aug. 2026, 18.30.48" or "29. maj 2025, …"
+  const da = raw.match(/^(\d{1,2})\.\s*([A-Za-zæøåÆØÅ]+)\.?\s+(\d{4})/);
+  if (da) {
+    const mon = DA_MONTHS[da[2].toLowerCase().slice(0, 3)];
+    if (mon) return `${da[3]}-${String(mon).padStart(2, "0")}-${da[1].padStart(2, "0")}`;
+  }
+  // Fallback: let JS try (English month names like "Aug 4, 2026").
   try {
     const d = new Date(raw);
     if (!isNaN(d.getTime())) return d.toISOString().slice(0, 10);
