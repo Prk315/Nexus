@@ -187,7 +187,7 @@ async function syncOuraWorkouts(
   workouts: Record<string, unknown>[],
   startDate: string,
   endDate: string,
-): Promise<number> {
+): Promise<{ count: number; error?: string }> {
   await supabase
     .from("protocol_workout_sessions")
     .delete()
@@ -196,34 +196,44 @@ async function syncOuraWorkouts(
     .gte("scheduled_date", startDate)
     .lte("scheduled_date", endDate);
 
-  if (workouts.length === 0) return 0;
+  const rows = workouts
+    // scheduled_date is NOT NULL — an Oura workout with no `day` can't be stored.
+    .filter((w) => typeof w.day === "string" && w.day)
+    .map((w) => {
+      const start = w.start_datetime as string | undefined;
+      const end = w.end_datetime as string | undefined;
+      const durationMin = start && end
+        ? Math.round((new Date(end).getTime() - new Date(start).getTime()) / 60000)
+        : null;
+      // calories_burned is an INTEGER column, but Oura returns calories as a
+      // float (e.g. 300.5). PostgREST rejects a fractional value for an int
+      // column ("invalid input syntax for type integer"), which failed the
+      // entire batch insert and silently dropped every Oura workout. Round it.
+      const cal = w.calories != null ? Math.round(Number(w.calories)) : null;
+      return {
+        id: crypto.randomUUID(),
+        user_id: userId,
+        plan_id: null,
+        name: (w.label as string | null) ?? (w.activity as string | null) ?? "Workout",
+        scheduled_date: w.day as string,
+        completed: true,
+        duration_min: durationMin,
+        calories_burned: cal != null && Number.isFinite(cal) ? cal : null,
+        avg_heart_rate: null,
+        notes: "Synced from Oura",
+      };
+    });
 
-  const rows = workouts.map((w) => {
-    const start = w.start_datetime as string | undefined;
-    const end = w.end_datetime as string | undefined;
-    const durationMin = start && end
-      ? Math.round((new Date(end).getTime() - new Date(start).getTime()) / 60000)
-      : null;
-    return {
-      id: crypto.randomUUID(),
-      user_id: userId,
-      plan_id: null,
-      name: (w.label as string | null) ?? (w.activity as string | null) ?? "Workout",
-      scheduled_date: w.day as string,
-      completed: true,
-      duration_min: durationMin,
-      calories_burned: (w.calories as number | null) ?? null,
-      avg_heart_rate: null,
-      notes: "Synced from Oura",
-    };
-  });
+  if (rows.length === 0) return { count: 0 };
 
   const { error } = await supabase.from("protocol_workout_sessions").insert(rows);
   if (error) {
+    // Surface it in the response too — this used to only console.error, which
+    // is why the failure was invisible from the sync result.
     console.error(`Oura workout insert failed for ${userId}`, error.message);
-    return 0;
+    return { count: 0, error: error.message };
   }
-  return rows.length;
+  return { count: rows.length };
 }
 
 async function syncUser(
@@ -231,7 +241,7 @@ async function syncUser(
   userId: string,
   clientId: string,
   clientSecret: string,
-): Promise<{ user_id: string; status: string; sleepDays?: number; bodyDays?: number; workoutCount?: number }> {
+): Promise<{ user_id: string; status: string; sleepDays?: number; bodyDays?: number; workoutCount?: number; workoutError?: string }> {
   const accessToken = await ensureFreshToken(supabase, userId, clientId, clientSecret);
   if (!accessToken) return { user_id: userId, status: "no_token_or_refresh_failed" };
 
@@ -352,11 +362,18 @@ async function syncUser(
     }
   }
 
-  const workoutCount = settings.workouts_source === "oura"
+  const workoutResult = settings.workouts_source === "oura"
     ? await syncOuraWorkouts(supabase, userId, workouts, params.start_date, params.end_date)
-    : 0;
+    : { count: 0 };
 
-  return { user_id: userId, status: "ok", sleepDays, bodyDays, workoutCount };
+  return {
+    user_id: userId,
+    status: "ok",
+    sleepDays,
+    bodyDays,
+    workoutCount: workoutResult.count,
+    workoutError: workoutResult.error,
+  };
 }
 
 // Browser calls (Connect/Sync UI) trigger a CORS preflight; pg_cron's net.http_post
