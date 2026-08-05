@@ -96,10 +96,23 @@ export function BlockingPanel() {
   const [msg, setMsg] = useState("");
   const [busy, setBusy] = useState(false);
 
+  // Monotonic fetch id. `alive` says mounted-or-not; this says freshest-or-not.
+  // Adding a row while the first load is still in flight starts a second fetch,
+  // and if the older one lands last it repaints the list from a snapshot taken
+  // before the row existed — the new entry vanishes until something else
+  // refetches.
+  const fetchSeq = useRef(0);
+
+  // True while a mutation is in flight. The verdict poll is skipped for the
+  // duration: a read issued before a write can land after it and repaint stale
+  // state (unit 3 hit exactly this shape).
+  const writing = useRef(false);
+
   // Lists and verdict load independently. `tt_blocking_state` is a stub until
   // work unit 8 lands, so its failure is the normal path — it must not blank
   // the lists.
   const loadLists = useCallback(async (alive: () => boolean) => {
+    const seq = ++fetchSeq.current;
     const [s, a] = await Promise.all([
       supabasePublic
         .from("blocked_sites")
@@ -112,7 +125,7 @@ export function BlockingPanel() {
         .eq("user_id", USER_ID)
         .order("display_name"),
     ]);
-    if (!alive()) return;
+    if (!alive() || seq !== fetchSeq.current) return;
     const err = s.error ?? a.error;
     setListErr(err ? err.message : null);
     if (s.data) setSites(s.data as Site[]);
@@ -145,7 +158,9 @@ export function BlockingPanel() {
       }
     });
     loadVerdict(alive);
-    const t = setInterval(() => loadVerdict(alive), 60000);
+    const t = setInterval(() => {
+      if (!writing.current) loadVerdict(alive);
+    }, 60000);
     return () => {
       mounted.current = false;
       clearInterval(t);
@@ -160,22 +175,33 @@ export function BlockingPanel() {
   // Write, then refetch. Supabase returns no rows without `.select()`, and
   // reconciling optimistic state for a handful of rows in a 400px column buys
   // nothing.
-  async function run(label: string, fn: () => Promise<{ error: { message: string } | null }>) {
+  // Returns whether the write landed, so the add forms only clear on success —
+  // wiping what the user typed under a "failed" message means retyping it.
+  async function run(
+    label: string,
+    fn: () => Promise<{ error: { message: string } | null }>,
+  ): Promise<boolean> {
+    writing.current = true;
     setBusy(true);
     setMsg("");
+    let ok = false;
     try {
       const { error } = await fn();
-      if (!alive()) return;
+      if (!alive()) return false;
       if (error) {
         setMsg(`${label} failed: ${error.message}`);
       } else {
+        ok = true;
         setMsg(`${label} ✓`);
         await loadLists(alive);
       }
     } catch (e) {
       if (alive()) setMsg(`${label} failed: ${String(e)}`);
+    } finally {
+      writing.current = false;
     }
     if (alive()) setBusy(false);
+    return ok;
   }
 
   async function addSite() {
@@ -189,7 +215,7 @@ export function BlockingPanel() {
     // primary key. `id` and `created_at` are omitted on purpose:
     // merge-duplicates compiles to ON CONFLICT DO UPDATE SET <columns sent>, so
     // sending an id would overwrite the existing row's primary key.
-    await run("add", async () =>
+    const ok = await run("add", async () =>
       supabasePublic
         .from("blocked_sites")
         .upsert(
@@ -197,7 +223,7 @@ export function BlockingPanel() {
           { onConflict: "user_id,domain" },
         ),
     );
-    setNewSite("");
+    if (ok) setNewSite("");
   }
 
   async function addApp() {
@@ -207,7 +233,7 @@ export function BlockingPanel() {
       setMsg("name and process are both required");
       return;
     }
-    await run("add", async () =>
+    const ok = await run("add", async () =>
       supabasePublic.from("blocked_apps").upsert(
         {
           user_id: USER_ID,
@@ -220,8 +246,10 @@ export function BlockingPanel() {
         { onConflict: "user_id,process_name" },
       ),
     );
-    setNewAppName("");
-    setNewAppProc("");
+    if (ok) {
+      setNewAppName("");
+      setNewAppProc("");
+    }
   }
 
   const toggleSite = (s: Site) =>
@@ -257,10 +285,17 @@ export function BlockingPanel() {
   const delApp = (a: App) =>
     run("delete", async () => supabasePublic.from("blocked_apps").delete().eq("id", a.id));
 
+  // A verdict without a `computed_at` is a missing `blocking_state` row, not an
+  // empty one. Unit 1 deliberately seeds no row: "not computed yet" and
+  // "computed, nothing blocked" are different answers, and rendering the first
+  // as the second would tell the user everything is open when nothing has run.
+  // Unknown ⇒ no badges at all.
+  const decided = !!verdict && !!verdict.computed_at;
+
   // Exact string membership. Suffix/subdomain matching would be re-deriving
   // policy on the client, which is the one thing this panel must not do.
-  const blockedDomains = new Set(verdict?.effective_domains ?? []);
-  const blockedProcesses = new Set(verdict?.effective_processes ?? []);
+  const blockedDomains = new Set(decided ? verdict!.effective_domains : []);
+  const blockedProcesses = new Set(decided ? verdict!.effective_processes : []);
 
   return (
     <section className="flex flex-col gap-2">
@@ -268,20 +303,19 @@ export function BlockingPanel() {
 
       {/* The verdict, computed server-side by focus-evaluate. Never recomputed here. */}
       <div className="rounded-xl border border-white/10 bg-white/[0.03] p-3 text-[10px]">
-        {verdict ? (
+        {decided ? (
           <span className="text-white/45">
-            verdict · {verdict.effective_domains.length} domain
-            {verdict.effective_domains.length === 1 ? "" : "s"} ·{" "}
-            {verdict.effective_processes.length} process
-            {verdict.effective_processes.length === 1 ? "" : "es"} blocked right now
-            {verdict.computed_at
-              ? ` · computed ${new Date(verdict.computed_at).toLocaleTimeString()}`
-              : ""}
+            verdict · {verdict!.effective_domains.length} domain
+            {verdict!.effective_domains.length === 1 ? "" : "s"} ·{" "}
+            {verdict!.effective_processes.length} process
+            {verdict!.effective_processes.length === 1 ? "" : "es"} blocked right now · computed{" "}
+            {new Date(verdict!.computed_at!).toLocaleTimeString()}
           </span>
         ) : (
           <span className="text-amber-300/70">
-            Live verdict unavailable — it is computed server-side by focus-evaluate. The lists below
-            are still editable; they are the inputs it reads.
+            No verdict computed yet — focus-evaluate resolves it server-side. Status unknown, which
+            is not the same as nothing being blocked. The lists below are still editable; they are
+            the inputs it reads.
           </span>
         )}
       </div>
@@ -331,7 +365,7 @@ export function BlockingPanel() {
             <div key={s.id} className="rounded-xl border border-white/10 bg-white/[0.03] p-3">
               <div className="flex items-center gap-2">
                 <span className="min-w-0 flex-1 truncate text-xs text-white/85">{s.domain}</span>
-                {verdict && (
+                {decided && (
                   <span
                     className={`shrink-0 rounded px-1.5 py-0.5 text-[9px] ${
                       live ? "bg-red-500/15 text-red-300" : "bg-emerald-500/15 text-emerald-300"
@@ -415,7 +449,7 @@ export function BlockingPanel() {
                 <span className="min-w-0 flex-1 truncate text-xs text-white/85">
                   {a.display_name}
                 </span>
-                {verdict && (
+                {decided && (
                   <span
                     className={`shrink-0 rounded px-1.5 py-0.5 text-[9px] ${
                       live ? "bg-red-500/15 text-red-300" : "bg-emerald-500/15 text-emerald-300"
