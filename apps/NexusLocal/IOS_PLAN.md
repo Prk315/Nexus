@@ -24,7 +24,7 @@ container app can embed many app-extensions (each its own app-ID). So:
 | Approach | Installed apps (limit 3) | App-IDs (limit 10 / 7d) |
 |---|---|---|
 | Today: TimeTracker + PathFinder apps | 2 | ~5 (2 apps + 3 extensions) |
-| **Nexus Local container** carrying *all* extensions | **1** | main + widgets + SafariBlocker ≈ 3 |
+| **Nexus Local container** carrying *all* extensions | **1** | main + widgets + SafariBlocker = **3** (current, all in the build) |
 
 **End state:** Nexus Local is the *only* native app on the phone. It carries every
 widget, the Safari content blocker, and Live Activities. Protocol / PathFinder /
@@ -45,7 +45,7 @@ Nexus Local.app (iOS container, 1 install slot)
 │     PathFinder Today / Habits / Systems / Goals / Tasks
 │     TimeTracker timer glance
 │     Protocol (sleep/readiness) — future
-├── Safari content blocker ext   ← needs App Group (later phase)
+├── Safari content blocker ext   ← in the build; reads rules from the App Group
 └── Live Activities (in widget ext target) ← ActivityKit (later phase)
 ```
 
@@ -63,11 +63,21 @@ Bundle-ID convention (matches the repo): `com.bastianthomsen.nexuslocal`.
 |---|---|---|---|---|
 | `nexus-local_iOS` | application | `com.bastianthomsen.nexuslocal` | 14.0 | thin host |
 | `nexus-local_Widgets` | app-extension | `…nexuslocal.widgets` | 16.0 | WidgetKit; all widgets + (later) Live Activity |
-| `nexus-local_SafariBlocker` | app-extension | `…nexuslocal.SafariBlocker` | 14.0 | **later phase** |
+| `nexus-local_SafariBlocker` | app-extension | `…nexuslocal.SafariBlocker` | 14.0 | **in the build** (embed: true) |
 
-App Group (only when the Safari blocker / Live Activities land):
-`group.com.bastianthomsen.nexuslocal`. Widgets don't need it.
+App Group: `group.com.bastianthomsen.nexuslocal` — declared on all three targets
+(app, widgets, blocker), together with the shared keychain group
+`$(AppIdentifierPrefix)com.bastianthomsen.nexuslocal`. The blocker extension
+*needs* it: it reads the rules the app compiled into the shared container.
 Development team everywhere: `G9D6JYJSLT`.
+
+**App-ID cost, stated plainly:** each extension is its own App ID on a free
+Apple ID, and SideStore's budget is 10 registrations per rolling 7 days. With
+the Safari blocker restored the container spends **3 of 10** (app + widgets +
+blocker). This is a deliberate trade, made because the blocker extension is the
+only thing Safari can actually load — without it in the IPA,
+`SFContentBlockerManager.reloadContentBlocker` fails silently and the whole
+`focus-evaluate → widget refresh → Safari` chain is inert.
 
 ## Phased build
 
@@ -90,9 +100,32 @@ PathFinder's `SupabaseClient.swift` + `WidgetModels/Theme/NotConnectedView` +
 **Phase C — Port the rest of the widgets.** Bring over PathFinder's remaining
 widgets + a TimeTracker timer glance into the one extension. Pure REST, additive.
 
-**Phase D — Safari content blocker.** Add the `SafariBlocker` extension + the App
-Group + entitlements; port TimeTracker's `ContentBlockerBridge` / handler; feed
-rules from `blocked_sites`. This is the iOS half of the blocking module.
+**Phase D — Safari content blocker. *Done (target restored).*** The
+`nexus-local_SafariBlocker` extension target is in `project.yml` and embedded in
+the app (`embed: true`), with the App Group + keychain group matching the app and
+widget targets. `ContentBlockerBridge.swift` (app target) compiles the rules into
+the shared `WKContentRuleListStore` and calls
+`SFContentBlockerManager.reloadContentBlocker(withIdentifier:
+"com.bastianthomsen.nexuslocal.SafariBlocker")`;
+`SafariBlockerExtension/SafariContentBlockerHandler.swift` serves
+`blockerRules.json` from the App Group container, falling back to the bundled
+one-rule `blockerList.json` placeholder. Real domains come from Supabase at
+runtime and are never baked into the bundle.
+
+Two properties of the handler are load-bearing and must not be "modernised":
+it conforms to **`NSExtensionRequestHandling`**, not `SFContentBlockerRequestHandler`
+(iOS 26 removed the latter from the runtime; declaring a local copy makes iOS
+silently refuse to load the extension), and it carries **no `@objc(...)` class
+annotation** — the principal class is resolved via
+`$(PRODUCT_MODULE_NAME).SafariContentBlockerHandler` in the extension's Info.plist.
+
+*Open on-device question:* the extension resolves its App Group at runtime via
+`AppGroup.identifier` (`ios/AppGroup.swift`), because SideStore rewrites App
+Group IDs during re-signing. Commit `bbf60f1` recorded `ctr:NIL` on-device,
+meaning the App Group entitlement did not survive free-tier provisioning. Verify
+with the `appgroup_debug` output in the app's KeychainDebug panel after the next
+install; if `ctr` is still `NIL` the extension falls back to the bundled
+placeholder list and nothing is blocked.
 
 **Phase E — Live Activities.** ActivityKit timer Live Activity in the widget
 target (iOS 16.2+), driven by `active_sessions`.
