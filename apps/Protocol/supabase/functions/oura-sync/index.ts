@@ -241,6 +241,7 @@ async function syncUser(
   userId: string,
   clientId: string,
   clientSecret: string,
+  windowDays: number,
 ): Promise<{ user_id: string; status: string; sleepDays?: number; bodyDays?: number; workoutCount?: number; workoutError?: string }> {
   const accessToken = await ensureFreshToken(supabase, userId, clientId, clientSecret);
   if (!accessToken) return { user_id: userId, status: "no_token_or_refresh_failed" };
@@ -249,10 +250,10 @@ async function syncUser(
 
   const end = new Date();
   const start = new Date();
-  start.setDate(end.getDate() - SYNC_WINDOW_DAYS);
+  start.setDate(end.getDate() - windowDays);
   const params = { start_date: isoDate(start), end_date: isoDate(end) };
 
-  const [dailySleep, sleepPeriods, dailyReadiness, dailySpo2, dailyStress, heartRateSamples, dailyResilience, dailyCardioAge, workouts] = await Promise.all([
+  const [dailySleep, sleepPeriods, dailyReadiness, dailySpo2, dailyStress, heartRateSamples, dailyResilience, dailyCardioAge, dailyActivity, workouts] = await Promise.all([
     ouraGet(accessToken, "daily_sleep", params),
     ouraGet(accessToken, "sleep", params),
     ouraGet(accessToken, "daily_readiness", params),
@@ -261,6 +262,7 @@ async function syncUser(
     ouraGetHeartRate(accessToken, params.start_date, params.end_date),
     ouraGet(accessToken, "daily_resilience", params),
     ouraGet(accessToken, "daily_cardiovascular_age", params),
+    ouraGet(accessToken, "daily_activity", params),
     ouraGet(accessToken, "workout", params),
   ]);
 
@@ -274,10 +276,12 @@ async function syncUser(
   const heartRateByDay = aggregateHeartRateByDay(heartRateSamples);
   const resilienceByDay = new Map(dailyResilience.map((d) => [d.day as string, d]));
   const cardioAgeByDay = new Map(dailyCardioAge.map((d) => [d.day as string, d]));
+  const activityByDay = new Map(dailyActivity.map((d) => [d.day as string, d]));
 
   const days = new Set([
     ...sleepByDay.keys(), ...periodByDay.keys(), ...readinessByDay.keys(), ...spo2ByDay.keys(),
     ...stressByDay.keys(), ...heartRateByDay.keys(), ...resilienceByDay.keys(), ...cardioAgeByDay.keys(),
+    ...activityByDay.keys(),
   ]);
 
   let sleepDays = 0;
@@ -292,6 +296,7 @@ async function syncUser(
     const heartRate = heartRateByDay.get(day);
     const resilience = resilienceByDay.get(day) as Record<string, any> | undefined;
     const cardioAge = cardioAgeByDay.get(day) as Record<string, any> | undefined;
+    const activity = activityByDay.get(day) as Record<string, any> | undefined;
 
     if ((ds || period) && settings.sleep_source === "oura") {
       const durationMin = period?.total_sleep_duration != null
@@ -318,7 +323,7 @@ async function syncUser(
       }
     }
 
-    if (readiness || period || spo2 || stress || heartRate || resilience || cardioAge) {
+    if (readiness || period || spo2 || stress || heartRate || resilience || cardioAge || activity) {
       // Fields Garmin can also produce — only written when Oura is the
       // selected body-vitals source, so a "garmin" selection isn't clobbered
       // with Oura nulls/values on every sync.
@@ -353,9 +358,24 @@ async function syncUser(
         cardio_age: cardioAge?.vascular_age ?? null,
         pulse_wave_velocity: cardioAge?.pulse_wave_velocity ?? null,
       };
+      // Oura daily activity — steps/calories/MET. Not gated by a source toggle
+      // (there's no activity_source, and nothing else writes these columns), so
+      // written whenever Oura returns an activity day.
+      const activityFields = activity ? {
+        activity_score: activity.score ?? null,
+        steps: activity.steps ?? null,
+        active_calories: activity.active_calories ?? null,
+        total_calories: activity.total_calories ?? null,
+        target_calories: activity.target_calories ?? null,
+        high_activity_min: activity.high_activity_time != null ? Math.round(activity.high_activity_time / 60) : null,
+        medium_activity_min: activity.medium_activity_time != null ? Math.round(activity.medium_activity_time / 60) : null,
+        low_activity_min: activity.low_activity_time != null ? Math.round(activity.low_activity_time / 60) : null,
+        average_met: activity.average_met_minutes ?? null,
+      } : {};
       await upsertByDate(supabase, "protocol_body_metrics", userId, day, {
         ...overlappingFields,
         ...exclusiveFields,
+        ...activityFields,
         notes: "Synced from Oura",
       });
       bodyDays++;
@@ -431,10 +451,18 @@ Deno.serve(async (req: Request) => {
     return jsonResponse({ error: "unauthorized" }, 401);
   }
 
+  // Optional { "days": N } body widens the sync window for one-off backfills;
+  // the daily cron sends {} and uses the default. Clamped to 90.
+  let windowDays = SYNC_WINDOW_DAYS;
+  try {
+    const body = await req.json();
+    if (typeof body?.days === "number" && body.days > 0) windowDays = Math.min(Math.floor(body.days), 90);
+  } catch { /* no/invalid body — use default */ }
+
   const results = [];
   for (const userId of userIds) {
-    results.push(await syncUser(supabase, userId, clientId, clientSecret));
+    results.push(await syncUser(supabase, userId, clientId, clientSecret, windowDays));
   }
 
-  return jsonResponse({ synced: results });
+  return jsonResponse({ synced: results, windowDays });
 });
