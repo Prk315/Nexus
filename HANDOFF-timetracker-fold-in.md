@@ -39,6 +39,48 @@ bridge (`bodyscan-sync`): device does the cheap thing, server thinks on a schedu
   mutation: `active_sessions` is keyed by `user_id` alone, so between read and write another
   device can stop that session and start a different one under the same key.
 
+## All 12 units filed — PRs #7–#18, ALL OPEN, none merged
+
+| PR | unit | |
+|---|---|---|
+| #7 | 1 | schema migrations (SQL only, not applied) |
+| #8 | 9 | Safari blocker extension target restored (App IDs 2→3 of 10) |
+| #9 | 5 | blocking management UI |
+| #10 | 3 | timer panel |
+| #11 | 8 | `focus-evaluate` evaluator + pg_cron |
+| #12 | 2 | session recording (CAS on row `id`) |
+| #13 | 12 | Mac enforcement reads the server verdict |
+| #14 | 11 | session widget + AppIntent + `session-toggle` |
+| #15 | 10 | FocusBlockerWidget — the autonomy mechanism |
+| #16 | 6 | focus schedules + cloud-backed payloads |
+| #17 | 4 | pomodoro |
+| #18 | 7 | rewards |
+
+Also fixed directly on main: `content_blocker.rs` emitted `{"url-filter": ".*"}` for a
+blank `blocked_sites` row, which blocks **every URL** in Safari. Blank inputs are now
+skipped.
+
+### Review items to resolve before/while merging
+
+- **`SESSION_LOCAL_TZ` must be set to `Europe/Copenhagen`** (unit 11, PR #14). Defaults to
+  UTC. TimeTrackerApp's desktop timer writes offset-less local wall clocks *today* (not
+  legacy — `db/timer.rs:107` on every `start_timer`); read as UTC they land in the future
+  and the clamp recorded **0-second entries** before deleting the session.
+- **`WIDGET_SESSION_KEY`** repo secret + the workflow's fail-closed guard (unit 11 edited
+  `.github/workflows/nexuslocal-ios.yml`; without it CI could not compile at all).
+- **Unit 8's `BlockingState` struct omits `today_minutes`** though the migration adds the
+  column. Unit 7's panel backfills that one field from the same row — **delete the backfill
+  once unit 8's struct grows the field**, or it will quietly drift.
+- **`ContentBlockerBridge.swift` still hardcodes the App Group** while unit 9's handler and
+  unit 10's widget resolve it at runtime. After a SideStore re-sign they write to different
+  containers.
+- **`Secrets.userID` vs `user_id = 'default'`** — several unit specs said `Secrets.userID`,
+  but these tables are keyed `'default'` and reading with a JWT returns an **empty set, not
+  an error**. Unit 10 caught it; check the other Swift PRs.
+- Two cross-writer risks documented but unfixed (unit 11): normalisation divergence vs the
+  NexusLocal Rust path (duplicate entries), and TimeTrackerApp's local-SQLite fallback
+  overwriting an entry via `merge-duplicates` on the shared natural key.
+
 ## Not done
 
 - **units 4, 6, 7, 10, 11, 12** — paused mid-work, stopped to save resources.
