@@ -192,18 +192,121 @@ Deno.test("computeStop clamps to zero and never emits NaN", () => {
   );
 });
 
-Deno.test("computeStop parses TimeTracker's legacy offset-less timestamps", () => {
-  // Rows written before the RFC3339 rule look like "2026-07-02T14:47" or
-  // "2026-07-02 14:47:00". Both must yield a real number, not NaN.
-  for (const startTime of ["2026-08-05T09:00", "2026-08-05 09:00:00", "2026-08-05T09:00:00"]) {
-    const r = computeStop({
-      startTime,
+Deno.test("computeStop reads the desktop timer's offset-less wall clock", () => {
+  // THE format that nearly every real row has: TimeTrackerApp writes
+  // Local::now().format("%Y-%m-%dT%H:%M:%S%.3f") on every start_timer and syncs
+  // it verbatim. Exact durations, not just "is a number" — asserting finiteness
+  // alone is satisfied by the wrong answer (0), which is exactly what this
+  // branch used to produce.
+  const now = new Date("2026-08-05T10:00:00Z");
+
+  // Default UTC: the wall clock is taken at face value. 3599, not 3600 — the
+  // ".123" is really carried, so the floor lands a second short. Asserting 3600
+  // here would mean the fractional part was being dropped.
+  assertEquals(
+    computeStop({ startTime: "2026-08-05T09:00:00.123", pausedAt: null, now })
+      .durationSeconds,
+    3599,
+  );
+
+  // With the desktop's real zone (+02:00 in August), 11:00 local == 09:00Z.
+  assertEquals(
+    computeStop({
+      startTime: "2026-08-05T11:00:00.123",
       pausedAt: null,
-      now: new Date("2026-08-05T23:00:00Z"),
-    });
-    assertEquals(Number.isFinite(r.durationSeconds), true);
-    assertEquals(r.durationSeconds >= 0, true);
+      now,
+      zone: "Europe/Copenhagen",
+    }).durationSeconds,
+    3599,
+  );
+
+  // The regression this guards: without the zone, that same row parses two
+  // hours into the future and the clamp silently records a 0-second entry.
+  assertEquals(
+    computeStop({ startTime: "2026-08-05T11:00:00.123", pausedAt: null, now })
+      .durationSeconds,
+    0,
+  );
+
+  // Every other stored spelling resolves to the same exact duration.
+  for (
+    const startTime of [
+      "2026-08-05T09:00:00",
+      "2026-08-05 09:00:00",
+      "2026-08-05T09:00:00Z",
+      "2026-08-05T09:00:00.000Z",
+      "2026-08-05T09:00:00+00:00",
+      "2026-08-05T09:00",
+    ]
+  ) {
+    assertEquals(
+      computeStop({ startTime, pausedAt: null, now }).durationSeconds,
+      3600,
+      startTime,
+    );
   }
+  // Space-separated with fractional seconds, the other SQLite-era spelling.
+  assertEquals(
+    computeStop({ startTime: "2026-08-05 09:00:00.123", pausedAt: null, now })
+      .durationSeconds,
+    3599,
+  );
+});
+
+Deno.test("computeStop echoes a stored paused_at back verbatim", () => {
+  // Normalising it would leave the entry mixing conventions — offset-less
+  // start_time beside a UTC end_time — so anything computing end - start
+  // (timer.rs::parse_dt included) would get duration + offset.
+  const now = new Date("2026-08-05T18:00:00Z");
+  assertEquals(
+    computeStop({
+      startTime: "2026-08-05T11:00:00.123",
+      pausedAt: "2026-08-05T11:30:00.123",
+      now,
+      zone: "Europe/Copenhagen",
+    }),
+    { durationSeconds: 1800, endTime: "2026-08-05T11:30:00.123" },
+  );
+  // Offsets cancel when both come from the same writer, so the duration is
+  // right even at the UTC default — only end_time fidelity needed the fix.
+  assertEquals(
+    computeStop({
+      startTime: "2026-08-05T11:00:00.123",
+      pausedAt: "2026-08-05T11:30:00.123",
+      now,
+    }),
+    { durationSeconds: 1800, endTime: "2026-08-05T11:30:00.123" },
+  );
+  // Only a `now`-derived end is normalised.
+  assertEquals(
+    computeStop({ startTime: "2026-08-05T17:00:00Z", pausedAt: null, now }).endTime,
+    "2026-08-05T18:00:00Z",
+  );
+});
+
+Deno.test("parseTimestamp resolves offset-less input in the given zone", () => {
+  // Offset-bearing strings already name an instant; zone must not move them.
+  for (const zone of ["UTC", "Europe/Copenhagen", "America/New_York"]) {
+    assertEquals(
+      parseTimestamp("2026-08-05T09:00:00Z", zone)?.toISOString(),
+      "2026-08-05T09:00:00.000Z",
+    );
+  }
+  // Summer (+02:00) and winter (+01:00) — the offset is looked up per instant,
+  // so DST is handled rather than assumed.
+  assertEquals(
+    parseTimestamp("2026-08-05T11:00:00.123", "Europe/Copenhagen")?.toISOString(),
+    "2026-08-05T09:00:00.123Z",
+  );
+  assertEquals(
+    parseTimestamp("2026-01-05T11:00:00.123", "Europe/Copenhagen")?.toISOString(),
+    "2026-01-05T10:00:00.123Z",
+  );
+  // A negative-offset zone shifts the other way.
+  assertEquals(
+    parseTimestamp("2026-08-05T09:00:00", "America/New_York")?.toISOString(),
+    "2026-08-05T13:00:00.000Z",
+  );
 });
 
 Deno.test("computeStop is stable for a paused row, so a stop retry writes the same entry", () => {
@@ -275,8 +378,10 @@ Deno.test("stateFromRow mirrors the widget's running predicate", () => {
   assertEquals(paused.running, false);
   assertEquals(paused.elapsedSeconds, 1800);
 
-  // An empty-string paused_at is not "paused" — TimeTrackerProvider only checks
-  // for nil, so treating "" as paused here would desync the two.
+  // An empty-string paused_at is not "paused": it names no instant, so
+  // computeStop could not derive an end from it either. TimeTrackerProvider's
+  // check is `!(paused_at ?? "").isEmpty` to match — a plain `!= nil` there
+  // would have called this row paused while the server called it running.
   assertEquals(
     stateFromRow({
       task_name: "t",
@@ -286,5 +391,15 @@ Deno.test("stateFromRow mirrors the widget's running predicate", () => {
       elapsed_seconds: 0,
     }).running,
     true,
+  );
+  // ...and the duration side agrees: "" falls through to `now`, not to a
+  // paused end.
+  assertEquals(
+    computeStop({
+      startTime: "2026-08-05T09:00:00Z",
+      pausedAt: "",
+      now: new Date("2026-08-05T10:00:00Z"),
+    }),
+    { durationSeconds: 3600, endTime: "2026-08-05T10:00:00Z" },
   );
 });

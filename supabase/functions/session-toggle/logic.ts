@@ -90,26 +90,93 @@ export function rfc3339Utc(date: Date): string {
 
 // MARK: - Duration
 
+/** Ends with `Z` or a `±HH:MM` / `±HHMM` offset, i.e. names a real instant. */
+const HAS_OFFSET = /(?:Z|[+-]\d{2}:?\d{2})$/i;
+
 /**
- * Parse a timestamp out of these TEXT columns. RFC3339 is what everything
- * writes now; the offset-less fallbacks read rows the SQLite-era desktop app
- * left behind, in both the `T` and space-separated spellings.
+ * The UTC offset, in ms, that `timeZone` was at `instant`.
  *
- * Mirrors `session.rs::parse_ts`, with one difference worth knowing: an
- * offset-less string is resolved in the *reading* process's zone, and this
- * process is an edge function running in UTC, whereas the Rust client runs in
- * the user's zone. So the two can derive elapsed values that differ by the
- * user's UTC offset — but only for legacy rows, and only until the first stop
- * rewrites them. Nothing written from here is ever offset-free.
+ * Derived from `Intl` rather than hardcoded so DST is handled: formatting the
+ * instant into the zone and reading the wall clock back as if it were UTC gives
+ * exactly the offset that applied then.
  */
-export function parseTimestamp(value: string | null | undefined): Date | null {
+function zoneOffsetMs(instant: Date, timeZone: string): number {
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone,
+    hour12: false,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+  }).formatToParts(instant);
+
+  const p: Record<string, string> = {};
+  for (const part of parts) if (part.type !== "literal") p[part.type] = part.value;
+
+  const wall = Date.UTC(
+    Number(p.year),
+    Number(p.month) - 1,
+    Number(p.day),
+    Number(p.hour) % 24,
+    Number(p.minute),
+    Number(p.second),
+  );
+  // `formatToParts` is second-resolution, so compare against a second-truncated
+  // instant or the sub-second remainder shows up as a bogus offset.
+  return wall - Math.floor(instant.getTime() / 1000) * 1000;
+}
+
+/**
+ * Parse a timestamp out of these TEXT columns, in every spelling they contain.
+ *
+ * **The offset-less case is not legacy.** `TimeTrackerApp`'s desktop timer
+ * writes `Local::now().format("%Y-%m-%dT%H:%M:%S%.3f")` — a local wall clock
+ * with no offset — on every `start_timer` today (`db/timer.rs:107`), and
+ * `sync/active_session.rs` pushes it verbatim into `active_sessions.start_time`.
+ * Unit 2's normalisation covers only the NexusLocal writer; the desktop app is
+ * the other writer and is unchanged. Nothing rewrites those rows either: `stop`
+ * copies `start_time` through verbatim and then deletes the session.
+ *
+ * So `zone` matters. This function runs in an edge runtime pinned to UTC, and
+ * reading `"2026-08-05T11:15:30.123"` as UTC when the writer meant 11:15 in
+ * `Europe/Copenhagen` puts the start two hours in the *future*: a running
+ * session stopped from the widget then clamps to a 0-second entry, and the
+ * session row is deleted, so it is unrecoverable. Set `SESSION_LOCAL_TZ` to the
+ * desktop's zone and the two writers agree; the `UTC` default preserves the
+ * previous behaviour for anyone who hasn't.
+ *
+ * Strings that *do* carry an offset are unaffected by `zone` — they already name
+ * an instant.
+ */
+export function parseTimestamp(
+  value: string | null | undefined,
+  zone = "UTC",
+): Date | null {
   if (typeof value !== "string") return null;
   const s = value.trim();
   if (s.length === 0) return null;
-  const ms = Date.parse(s);
-  if (Number.isFinite(ms)) return new Date(ms);
-  const retry = Date.parse(s.replace(" ", "T"));
-  return Number.isFinite(retry) ? new Date(retry) : null;
+
+  // The SQLite era also wrote a space separator instead of `T`.
+  const normalized = s.includes("T") ? s : s.replace(" ", "T");
+
+  if (HAS_OFFSET.test(normalized)) {
+    const ms = Date.parse(normalized);
+    return Number.isFinite(ms) ? new Date(ms) : null;
+  }
+
+  // Read the wall clock as UTC first — explicit, rather than letting Date.parse
+  // apply the *runtime's* zone — then shift by the offset `zone` was at.
+  const asUTC = Date.parse(`${normalized}Z`);
+  if (!Number.isFinite(asUTC)) return null;
+  if (zone === "UTC") return new Date(asUTC);
+
+  // Two passes so a wall clock near a DST boundary resolves with the offset that
+  // actually applied at the resulting instant, not the one at the naive guess.
+  let t = asUTC - zoneOffsetMs(new Date(asUTC), zone);
+  t = asUTC - zoneOffsetMs(new Date(t), zone);
+  return new Date(t);
 }
 
 export interface StopInput {
@@ -118,6 +185,8 @@ export interface StopInput {
   /** `active_sessions.paused_at` — non-null means the timer is frozen. */
   pausedAt: string | null;
   now: Date;
+  /** IANA zone that offset-less stored timestamps were written in. */
+  zone?: string;
 }
 
 export interface StopResult {
@@ -146,15 +215,25 @@ export interface StopResult {
  * entry out of every total.
  */
 export function computeStop(input: StopInput): StopResult {
-  const { startTime, pausedAt, now } = input;
+  const { startTime, pausedAt, now, zone = "UTC" } = input;
 
-  const end = parseTimestamp(pausedAt) ?? now;
-  const start = parseTimestamp(startTime);
+  const pausedInstant = parseTimestamp(pausedAt, zone);
+  const end = pausedInstant ?? now;
+  const start = parseTimestamp(startTime, zone);
   const durationSeconds = start === null
     ? 0
     : Math.max(0, Math.floor((end.getTime() - start.getTime()) / 1000));
 
-  return { durationSeconds, endTime: rfc3339Utc(end) };
+  // When the end came from the row, echo the stored spelling back verbatim
+  // rather than normalising it. Normalising a wall-clock `paused_at` into a
+  // `...Z` instant would leave the entry mixing conventions — offset-less
+  // `start_time` beside UTC `end_time` — and any consumer computing
+  // `end - start` (including `timer.rs::parse_dt`) would get duration + offset.
+  const endTime = pausedInstant !== null && typeof pausedAt === "string"
+    ? pausedAt.trim()
+    : rfc3339Utc(now);
+
+  return { durationSeconds, endTime };
 }
 
 // MARK: - Response shape

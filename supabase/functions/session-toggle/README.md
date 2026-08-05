@@ -114,30 +114,66 @@ timer as paused.
 > could not parse either. `TimeTrackerWidget.swift` now falls back to a
 > fractional-seconds formatter so both are readable.
 
-### Known cross-writer risk (not settled by this unit)
+### Known cross-writer risks (not settled by this unit)
 
+Two distinct ones, with different mechanisms.
+
+**1. Normalisation divergence vs. the NexusLocal Rust path → duplicate rows.**
 `session.rs::tt_session_stop` **normalises** the session's `start_time` through
 `chrono`'s `to_rfc3339()` before writing it onto the `time_entries` row; this
 function passes it through **verbatim**. For a session the widget started, that
 is `...:30Z` here and `...:30+00:00` there — different strings, therefore
-different `(device_id, start_time, task_name)` conflict keys.
-
-Consequence: if the widget and the desktop app stop the *same* session
-concurrently, two `time_entries` rows are written and the time is double-counted.
-The compare-and-swap protects the `active_sessions` row, not the entry.
+different `(device_id, start_time, task_name)` conflict keys, therefore two rows
+and double-counted time if both stop the same session. The compare-and-swap
+protects the `active_sessions` row, not the entry.
 
 Passing through verbatim is what keeps *this* function's own retries idempotent
 (the value is identical on every retry because it comes from the session row), so
 it is the right local choice. Agreeing one canonical normalisation across both
-writers is a cross-unit decision and is left to the coordinator.
+writers is a cross-unit decision.
+
+**2. Stopping from the widget does not stop a *desktop* timer → silent
+overwrite.** This function deletes the cloud `active_sessions` row, which
+TimeTrackerApp maps to `RemoteGone`; it then falls back to its **local SQLite**,
+where the session is still running. When the user later stops it there, the entry
+it writes shares the same natural key and `sync/supabase.rs` pushes it with
+`on_conflict=device_id,start_time,task_name` and `merge-duplicates` — so it
+**overwrites** this function's row with the full, over-long duration. Note this
+is a merge on the *same* key, not the duplicate-row mechanism above.
+
+Properly fixing this needs a change inside TimeTrackerApp, which this unit is
+scoped not to modify.
 
 ## Required secrets
 
 | Secret | Where | Notes |
 |---|---|---|
 | `WIDGET_SESSION_KEY` | Supabase project | ≥32 chars. Must match `Secrets.widgetSessionKey` in the widget build. |
+| `SESSION_LOCAL_TZ` | Supabase project | **Should be set.** IANA zone, default `UTC`. See below. |
 | `SUPABASE_URL` | injected by the platform | |
 | `SUPABASE_SERVICE_ROLE_KEY` | injected by the platform | |
+
+### `SESSION_LOCAL_TZ` — set this, or desktop-started sessions record 0 seconds
+
+TimeTrackerApp's desktop timer writes
+`Local::now().format("%Y-%m-%dT%H:%M:%S%.3f")` — **a local wall clock with no
+offset** — on every `start_timer` (`db/timer.rs:107`) and syncs it verbatim into
+`active_sessions.start_time`. That is the format nearly every existing row has;
+it is not a legacy concern, and nothing rewrites it (this function copies
+`start_time` through verbatim and then deletes the session row).
+
+This function runs in an edge runtime pinned to UTC. A session started at 11:15
+in Copenhagen therefore parses as `11:15Z` — two hours in the *future* — so
+`now - start` goes negative, the `>= 0` clamp records a **0-second entry**, and
+the session row is then deleted, making the loss unrecoverable.
+
+```bash
+supabase secrets set SESSION_LOCAL_TZ=Europe/Copenhagen --project-ref efxmzsdisaymtpebaxlp
+```
+
+The offset is resolved per instant via `Intl`, so DST is handled rather than
+assumed. Timestamps that already carry `Z` or an offset are unaffected. The `UTC`
+default preserves the previous behaviour for anyone who has not set it.
 
 ```bash
 # Generate and set (32 bytes → 43 base64url chars)

@@ -4,18 +4,29 @@ import AppIntents
 
 // MARK: - Timestamp parsing
 
-/// TimeTracker's `start_time` / `paused_at` are TEXT columns that have collected
-/// three shapes over the app's life, and a plain `ISO8601DateFormatter()` reads
-/// only the first:
+/// TimeTracker's `start_time` / `paused_at` are TEXT columns carrying four
+/// different spellings, and a plain `ISO8601DateFormatter()` reads only the
+/// first:
 ///
-///   1. `2026-08-05T09:15:30Z`      — what `session-toggle` writes.
-///   2. `2026-08-05T09:15:30.123Z`  — what `chrono`'s `to_rfc3339()` writes
+///   1. `2026-08-05T09:15:30Z`       — what `session-toggle` writes.
+///   2. `2026-08-05T09:15:30.123Z`   — what `chrono`'s `to_rfc3339()` writes
 ///      (`timetracker/mod.rs::now_rfc3339`). The default formatter's
 ///      `.withInternetDateTime` *rejects* fractional seconds.
-///   3. `2026-07-02T14:47`          — offset-less rows from the SQLite era.
+///   3. `2026-08-05T11:15:30.123`    — **what nearly every existing row has.**
+///      TimeTrackerApp's desktop timer writes
+///      `Local::now().format("%Y-%m-%dT%H:%M:%S%.3f")` (`db/timer.rs:107`) on
+///      every start and syncs it verbatim: a local wall clock, no offset,
+///      fractional seconds. Neither ISO8601 attempt accepts an offset-less
+///      string, and `"yyyy-MM-dd'T'HH:mm:ss"` rejects the trailing `.123`
+///      outright — `DateFormatter` requires the whole string to match.
+///   4. `2026-07-02T14:47` / `2026-07-02 14:47:00` — older SQLite-era rows.
 ///
-/// Returning nil for 2 or 3 is not a visible error: `fetchEntry` falls through to
-/// the paused branch and a running timer renders as a frozen "0m · paused".
+/// Returning nil is not a visible error, which is what made this easy to miss:
+/// `fetchEntry` leaves `startDate` nil while `running` stays true, so a live
+/// desktop timer renders as a frozen "0m · paused" next to a green "live" dot.
+///
+/// Offset-less spellings are resolved in the device's own zone — the writer's
+/// intent, and correct whenever the phone is where the desktop is.
 func parseTimeTrackerDate(_ value: String) -> Date? {
     let plain = ISO8601DateFormatter()
     if let d = plain.date(from: value) { return d }
@@ -27,7 +38,16 @@ func parseTimeTrackerDate(_ value: String) -> Date? {
     let legacy = DateFormatter()
     legacy.locale = Locale(identifier: "en_US_POSIX")
     legacy.timeZone = TimeZone.current  // offset-less rows were written in local time
-    for format in ["yyyy-MM-dd'T'HH:mm:ss", "yyyy-MM-dd'T'HH:mm"] {
+    // Fractional-second variants first: they are the common case, and a shorter
+    // pattern would not match them anyway.
+    for format in [
+        "yyyy-MM-dd'T'HH:mm:ss.SSS",
+        "yyyy-MM-dd HH:mm:ss.SSS",
+        "yyyy-MM-dd'T'HH:mm:ss",
+        "yyyy-MM-dd HH:mm:ss",
+        "yyyy-MM-dd'T'HH:mm",
+        "yyyy-MM-dd HH:mm",
+    ] {
         legacy.dateFormat = format
         if let d = legacy.date(from: value) { return d }
     }
@@ -103,11 +123,15 @@ struct TimeTrackerProvider: TimelineProvider {
         // The name a "start" tap will use. Separate from the today query because
         // the last thing worked on is usually more recent than midnight — on a
         // fresh morning the today query is empty and would yield no name at all.
+        //
+        // Matches a NULL user_id as well as "default": every `time_entries` row
+        // written before this table gained a user_id has NULL, so filtering on
+        // "default" alone matched nothing and the button always offered "Focus".
         async let recentRows: [TimeEntryRow] = (try? client.fetch(
             table: "time_entries",
             select: "task_name",
             filters: [
-                "user_id": "eq.\(kTimeTrackerUserID)",
+                "or": "(user_id.eq.\(kTimeTrackerUserID),user_id.is.null)",
                 "order": "start_time.desc",
                 "limit": "1",
             ]
@@ -126,7 +150,10 @@ struct TimeTrackerProvider: TimelineProvider {
         var elapsed = 0
 
         if let s = sessions.first {
-            let paused = s.paused_at != nil
+            // Empty string is not a pause instant. `session-toggle` agrees — it
+            // cannot derive an end from "" — and a plain `!= nil` here would make
+            // the widget render "paused" for a session the server calls running.
+            let paused = !(s.paused_at ?? "").isEmpty
             activeTask = s.task_name ?? "Timer"
             running = !paused
             startDate = paused ? nil : s.start_time.flatMap(parseTimeTrackerDate)
@@ -152,7 +179,7 @@ struct TimeTrackerProvider: TimelineProvider {
                 // time to today's total now, otherwise the total appears to drop
                 // the moment the timer stops and climbs back a few minutes later.
                 if let s = sessions.first {
-                    todaySecs += s.paused_at != nil
+                    todaySecs += !(s.paused_at ?? "").isEmpty
                         ? (s.elapsed_seconds ?? 0)
                         : Int(max(0, Date().timeIntervalSince(
                             s.start_time.flatMap(parseTimeTrackerDate) ?? Date())))

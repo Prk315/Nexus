@@ -56,6 +56,21 @@ const OWNER_USER_ID = "default";
  */
 const WIDGET_DEVICE_ID = "ios-widget";
 
+/**
+ * IANA zone that offset-less stored timestamps were written in.
+ *
+ * TimeTrackerApp's desktop timer writes a *local wall clock with no offset*
+ * (`db/timer.rs:107`) and syncs it verbatim into `active_sessions.start_time`.
+ * This runtime is UTC, so without the real zone a session started at 11:15 in
+ * Copenhagen parses as 11:15Z — two hours in the future — and stopping it from
+ * the widget clamps the duration to a 0-second entry before deleting the
+ * session row, which makes the loss unrecoverable.
+ *
+ * Defaults to UTC so behaviour is unchanged for anyone who has not set it:
+ *     supabase secrets set SESSION_LOCAL_TZ=Europe/Copenhagen --project-ref efxmzsdisaymtpebaxlp
+ */
+const SESSION_LOCAL_TZ = Deno.env.get("SESSION_LOCAL_TZ") ?? "UTC";
+
 const json = (body: unknown, status = 200) =>
   new Response(JSON.stringify(body), {
     status,
@@ -166,6 +181,10 @@ Deno.serve(async (req: Request) => {
     startTime: typeof existing.start_time === "string" ? existing.start_time : null,
     pausedAt: typeof existing.paused_at === "string" ? existing.paused_at : null,
     now: new Date(),
+    // The desktop timer still writes offset-less local wall clocks, and this
+    // runtime is UTC. Without the real zone, a desktop-started session stopped
+    // from the widget clamps to a 0-second entry. See logic.ts::parseTimestamp.
+    zone: SESSION_LOCAL_TZ,
   });
 
   // Write the entry before clearing the session: if this fails the session
