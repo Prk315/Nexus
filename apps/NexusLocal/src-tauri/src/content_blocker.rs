@@ -40,15 +40,25 @@ fn escape_for_url_filter(hostname: &str) -> String {
 /// WebKit's regex engine is limited: no negated classes `[^x]`, no end-anchor
 /// `$`, no lookaheads. `.*hostname` is the safe form (matches any URL containing
 /// the host, incl. subdomains + paths). Returns "[]" for an empty list.
+///
+/// Inputs that yield no hostname are **skipped, not emitted**. An empty hostname
+/// produces the filter `.*`, which matches every URL — so a single blank or
+/// whitespace-only row in `blocked_sites` would block the entire web in Safari.
+/// Dropping the row degrades to "this one entry does nothing", which is the
+/// direction that fails safely.
 pub fn generate_rules_json(inputs: &[String]) -> String {
     let rules: Vec<serde_json::Value> = inputs
         .iter()
-        .map(|input| {
-            let escaped = escape_for_url_filter(&extract_hostname(input));
-            json!({
+        .filter_map(|input| {
+            let hostname = extract_hostname(input);
+            if hostname.is_empty() {
+                return None;
+            }
+            let escaped = escape_for_url_filter(&hostname);
+            Some(json!({
                 "trigger": { "url-filter": format!(".*{escaped}") },
                 "action":  { "type": "block" }
-            })
+            }))
         })
         .collect();
     serde_json::to_string(&rules).unwrap_or_else(|_| "[]".to_string())
@@ -97,5 +107,25 @@ mod tests {
     #[test]
     fn empty_is_empty_array() {
         assert_eq!(generate_rules_json(&[]), "[]");
+    }
+
+    /// A blank row must never become `.*`, which matches every URL and would
+    /// block the whole web in Safari.
+    #[test]
+    fn blank_inputs_emit_no_rule() {
+        for blank in ["", "   ", "https://", "http://", "/", "?", "#"] {
+            let json = generate_rules_json(&[blank.to_string()]);
+            assert_eq!(json, "[]", "blank input {blank:?} produced a rule: {json}");
+        }
+    }
+
+    #[test]
+    fn blank_input_does_not_poison_a_valid_list() {
+        let json = generate_rules_json(&["".into(), "youtube.com".into(), "  ".into()]);
+        assert!(json.contains(r".*youtube\\.com"));
+        assert!(
+            !json.contains(r#""url-filter":".*""#),
+            "a bare .* catch-all leaked into the list: {json}"
+        );
     }
 }
