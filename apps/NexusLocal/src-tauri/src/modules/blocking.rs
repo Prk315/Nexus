@@ -534,6 +534,25 @@ mod tests {
         v.iter().map(|s| s.to_string()).collect()
     }
 
+    // ── manifest ────────────────────────────────────────────────────────────
+
+    #[test]
+    fn manifest_advertises_the_routed_actions() {
+        let m = BlockingModule::new(false).manifest();
+        // The id routes queued commands (gridClient's runViaGrid) — changing it
+        // orphans every command already in the queue.
+        assert_eq!(m.id, "blocking");
+        assert_eq!(m.actions, s(&["status", "apply", "clear"]));
+    }
+
+    #[test]
+    fn disabled_node_never_ticks() {
+        // No tick interval => the runtime starts no loop => no /etc/hosts write
+        // and no admin prompt on a node that did not opt in.
+        assert_eq!(BlockingModule::new(false).manifest().tick_interval_secs, None);
+        assert_eq!(BlockingModule::new(true).manifest().tick_interval_secs, Some(30));
+    }
+
     // ── build_block ─────────────────────────────────────────────────────────
 
     #[test]
