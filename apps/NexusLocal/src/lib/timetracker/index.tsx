@@ -25,6 +25,11 @@
 
 import type { ReactElement } from "react";
 
+// `PomodoroPanel.tsx`, not `Pomodoro.tsx`: the pure phase machine is
+// `pomodoro.ts`, and macOS's case-insensitive filesystem makes TypeScript treat
+// the two spellings as the same file (TS1261).
+import { Pomodoro } from "./PomodoroPanel";
+
 // --- Visible panels -------------------------------------------------------
 // Work units append their panel component here.
 //   unit 3  TimerPanel
@@ -32,7 +37,9 @@ import type { ReactElement } from "react";
 //   unit 5  BlockingPanel
 //   unit 6  SchedulePanel
 //   unit 7  RewardsPanel
-const PANELS: Array<() => ReactElement | null> = [];
+const PANELS: Array<() => ReactElement | null> = [
+  Pomodoro,
+];
 
 export function TimeTrackerPanels() {
   if (PANELS.length === 0) return null;
