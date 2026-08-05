@@ -24,6 +24,7 @@
  */
 
 import type { ReactElement } from "react";
+import { SchedulePanel } from "./SchedulePanel";
 
 // --- Visible panels -------------------------------------------------------
 // Work units append their panel component here.
@@ -32,7 +33,7 @@ import type { ReactElement } from "react";
 //   unit 5  BlockingPanel
 //   unit 6  SchedulePanel
 //   unit 7  RewardsPanel
-const PANELS: Array<() => ReactElement | null> = [];
+const PANELS: Array<() => ReactElement | null> = [SchedulePanel];
 
 export function TimeTrackerPanels() {
   if (PANELS.length === 0) return null;
