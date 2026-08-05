@@ -19,6 +19,7 @@ const RUN_TYPES = new Set([
 // names also repeat (display vs raw value) — parseCSV keeps the last, which is
 // the raw numeric one, which is what we want.
 const COLS = {
+  id:        ["Activity ID", "id", "Aktivitets-id"],
   type:      ["Activity Type", "type", "Aktivitetstype"],
   name:      ["Activity Name", "Name", "name", "Aktivitetsnavn"],
   date:      ["Activity Date", "Date", "date", "Aktivitetsdato"],
@@ -46,6 +47,33 @@ function num(v: string): number {
   if (!v) return NaN;
   const s = /^-?\d+,\d+$/.test(v.trim()) ? v.trim().replace(",", ".") : v.trim();
   return parseFloat(s);
+}
+
+/** Deterministic UUID from a seed (cyrb128 hash → uuid shape). Used to give a
+ * Strava activity a STABLE id derived from its unique Activity ID, so that
+ * re-importing the same export upserts the existing row instead of creating a
+ * duplicate. Falls back to a random id when the Activity ID is missing. */
+function stableUuid(seed: string): string {
+  let h1 = 1779033703, h2 = 3144134277, h3 = 1013904242, h4 = 2773480762;
+  for (let i = 0; i < seed.length; i++) {
+    const k = seed.charCodeAt(i);
+    h1 = h2 ^ Math.imul(h1 ^ k, 597399067);
+    h2 = h3 ^ Math.imul(h2 ^ k, 2869860233);
+    h3 = h4 ^ Math.imul(h3 ^ k, 951274213);
+    h4 = h1 ^ Math.imul(h4 ^ k, 2716044179);
+  }
+  h1 = Math.imul(h3 ^ (h1 >>> 18), 597399067);
+  h2 = Math.imul(h4 ^ (h2 >>> 22), 2869860233);
+  h3 = Math.imul(h1 ^ (h3 >>> 17), 951274213);
+  h4 = Math.imul(h2 ^ (h4 >>> 19), 2716044179);
+  const hx = (n: number) => (n >>> 0).toString(16).padStart(8, "0");
+  const h = hx(h1) + hx(h2) + hx(h3) + hx(h4);
+  return `${h.slice(0, 8)}-${h.slice(8, 12)}-${h.slice(12, 16)}-${h.slice(16, 20)}-${h.slice(20, 32)}`;
+}
+
+function sessionId(row: Record<string, string>): string {
+  const sid = pick(row, COLS.id);
+  return sid ? stableUuid(`strava:${sid}`) : crypto.randomUUID();
 }
 
 export function parseStravaActivities(text: string): StravaImportResult {
@@ -95,7 +123,7 @@ export function parseStravaActivities(text: string): StravaImportResult {
 
     if (isRun) {
       result.runningSessions.push({
-        id: crypto.randomUUID(),
+        id: sessionId(row),
         date,
         actual_km:         distanceKm > 0 ? Math.round(distanceKm * 100) / 100 : null,
         planned_km:        null,
@@ -113,7 +141,7 @@ export function parseStravaActivities(text: string): StravaImportResult {
 
     if (activityType !== "") {
       result.workoutSessions.push({
-        id: crypto.randomUUID(),
+        id: sessionId(row),
         name,
         scheduled_date: date,
         plan_id: null,
