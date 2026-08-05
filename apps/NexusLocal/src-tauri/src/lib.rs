@@ -6,6 +6,7 @@ mod grid;
 mod ios_bridge;
 mod live_activities;
 mod modules;
+mod timetracker;
 #[cfg(not(mobile))]
 mod tray;
 
@@ -107,7 +108,24 @@ pub fn run() {
             ble_scan::ble_scan_start,
             ble_scan::ble_write,
             ble_scan::ble_scan_stop,
-            ble_scan::ble_scan_results
+            ble_scan::ble_scan_results,
+            // Productivity stack (see src/timetracker/mod.rs). Registered here
+            // once so each work unit fills in its own file without touching this
+            // list — the ordering is not significant.
+            timetracker::session::tt_session_status,
+            timetracker::session::tt_session_start,
+            timetracker::session::tt_session_stop,
+            timetracker::session::tt_session_pause,
+            timetracker::session::tt_session_resume,
+            timetracker::pomodoro::tt_pomodoro_get,
+            timetracker::pomodoro::tt_pomodoro_set,
+            timetracker::focus::tt_focus_blocks,
+            timetracker::focus::tt_focus_block_save,
+            timetracker::focus::tt_focus_block_delete,
+            timetracker::rewards::tt_unlock_rules,
+            timetracker::rewards::tt_unlock_rule_save,
+            timetracker::rewards::tt_unlock_rule_delete,
+            timetracker::blocking_state::tt_blocking_state
         ])
         .run(tauri::generate_context!())
         .expect("error while running Nexus Local");

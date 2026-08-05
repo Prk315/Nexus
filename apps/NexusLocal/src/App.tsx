@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { BleScan } from "./lib/BleScan";
 import { KeychainDebug } from "./lib/KeychainDebug";
+import { TimeTrackerPanels } from "./lib/timetracker";
 
 type ModuleManifest = {
   id: string;
@@ -103,6 +104,8 @@ export default function App() {
           <p className="text-xs text-white/30">No modules registered.</p>
         )}
       </section>
+
+      <TimeTrackerPanels />
 
       <KeychainDebug />
 

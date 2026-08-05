@@ -151,6 +151,13 @@ targets:
       - sdk: SwiftUI.framework
       - sdk: ActivityKit.framework
       - sdk: AppIntents.framework   # interactive widgets (Button(intent:)) — iOS 17+
+      # The widget process is the only thing on the phone that runs with the app
+      # closed, so it is what refreshes the Safari block rules: WebKit compiles
+      # them into the shared WKContentRuleListStore, SafariServices signals
+      # Safari to reload. Without these two the blocking is only as current as
+      # the last time the app was opened.
+      - sdk: WebKit.framework
+      - sdk: SafariServices.framework
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.bastianthomsen.nexuslocal.widgets
