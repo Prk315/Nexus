@@ -42,6 +42,28 @@ pub struct UnlockRule {
     pub enabled: bool,
 }
 
+/// What a caller may *send* to [`tt_unlock_rule_save`].
+///
+/// Deliberately not [`UnlockRule`]. That type's `enabled` defaults to `true`,
+/// which is right when decoding a pre-migration row (a row that exists is live)
+/// and wrong as an input default: a caller that simply forgets the field would
+/// get `true` — and because the value is already `true` by the time the
+/// fail-closed retry guard sees it, the guard could not catch it. Omitting a
+/// field must never be how a rule turns itself on.
+///
+/// So `enabled` is `Option<bool>` here and *absent means "leave it alone"*: on
+/// insert the column default applies, on update the column is not written. Only
+/// an explicit value ever changes it.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UnlockRuleInput {
+    pub id: Option<String>,
+    pub process_name: Option<String>,
+    pub domain: Option<String>,
+    pub required_minutes: i64,
+    #[serde(default)]
+    pub enabled: Option<bool>,
+}
+
 const NOT_CONFIGURED: &str = "supabase is not configured (~/.nexuslocalrc)";
 
 /// Refusing beats writing a rule that grants an unlock the caller wanted off.
@@ -67,9 +89,10 @@ fn normalize(value: Option<&str>) -> Option<String> {
         .map(str::to_string)
 }
 
-/// The two invariants the table cannot express: exactly one target, and a
-/// positive threshold. Returns the normalized `(process_name, domain)` pair.
-fn validate(rule: &UnlockRule) -> Result<(Option<String>, Option<String>), String> {
+/// The invariants the table cannot express (or expresses only as a raw error):
+/// exactly one target, and a threshold that is positive and fits the column.
+/// Returns the normalized `(process_name, domain)` pair.
+fn validate(rule: &UnlockRuleInput) -> Result<(Option<String>, Option<String>), String> {
     let process_name = normalize(rule.process_name.as_deref());
     let domain = normalize(rule.domain.as_deref());
 
@@ -83,8 +106,14 @@ fn validate(rule: &UnlockRule) -> Result<(Option<String>, Option<String>), Strin
         _ => {}
     }
 
-    if rule.required_minutes < 1 {
-        return Err("required_minutes must be at least 1".to_string());
+    // The column is `integer` (int4), not bigint. Without this, anything past
+    // i32::MAX 400s with a raw Postgres "integer out of range" the UI can't
+    // translate.
+    if rule.required_minutes < 1 || rule.required_minutes > i32::MAX as i64 {
+        return Err(format!(
+            "required_minutes must be between 1 and {}",
+            i32::MAX
+        ));
     }
 
     Ok((process_name, domain))
@@ -97,13 +126,17 @@ fn is_missing_enabled_column(err: &str) -> bool {
 
 /// May a failed insert be retried with the `enabled` key stripped out?
 ///
-/// Only when the caller wanted the rule *enabled*. The column defaults to
+/// Never when the caller explicitly asked for `false`. The column defaults to
 /// `true`, so stripping it from a `false` insert would resurrect the rule as
 /// live — and a live unlock rule *removes* its target from the effective block
 /// sets. That is the unsafe direction: the phone would unblock something the
 /// caller asked to keep locked.
-fn may_retry_without_enabled(err: &str, enabled: bool) -> bool {
-    is_missing_enabled_column(err) && enabled
+///
+/// `None` cannot reach here in practice (an absent field is never sent, so
+/// PostgREST has nothing to complain about) but is treated as retryable for the
+/// same reason it is omitted: the caller expressed no opinion.
+fn may_retry_without_enabled(err: &str, enabled: Option<bool>) -> bool {
+    is_missing_enabled_column(err) && enabled != Some(false)
 }
 
 fn first_row(value: Value) -> Result<UnlockRule, String> {
@@ -133,7 +166,7 @@ pub async fn tt_unlock_rules() -> Result<Vec<UnlockRule>, String> {
 }
 
 #[tauri::command]
-pub async fn tt_unlock_rule_save(rule: UnlockRule) -> Result<UnlockRule, String> {
+pub async fn tt_unlock_rule_save(rule: UnlockRuleInput) -> Result<UnlockRule, String> {
     let rest = Rest::load();
     ensure_configured(&rest)?;
     let (process_name, domain) = validate(&rule)?;
@@ -142,9 +175,14 @@ pub async fn tt_unlock_rule_save(rule: UnlockRule) -> Result<UnlockRule, String>
         "process_name": process_name,
         "domain": domain,
         "required_minutes": rule.required_minutes,
-        "enabled": rule.enabled,
         "updated_at": now_rfc3339(),
     });
+    // Written only when the caller expressed an opinion. Absent means "leave it
+    // alone", which on insert is the column default and on update is no write —
+    // never a coerced `true`.
+    if let Some(enabled) = rule.enabled {
+        body["enabled"] = json!(enabled);
+    }
 
     let response = match &rule.id {
         None => {
@@ -191,13 +229,13 @@ pub async fn tt_unlock_rule_delete(id: String) -> Result<(), String> {
 mod tests {
     use super::*;
 
-    fn rule(process_name: Option<&str>, domain: Option<&str>, minutes: i64) -> UnlockRule {
-        UnlockRule {
+    fn rule(process_name: Option<&str>, domain: Option<&str>, minutes: i64) -> UnlockRuleInput {
+        UnlockRuleInput {
             id: None,
             process_name: process_name.map(str::to_string),
             domain: domain.map(str::to_string),
             required_minutes: minutes,
-            enabled: true,
+            enabled: Some(true),
         }
     }
 
@@ -235,10 +273,14 @@ mod tests {
     }
 
     #[test]
-    fn rejects_non_positive_minutes() {
+    fn rejects_minutes_outside_the_int4_column() {
         assert!(validate(&rule(Some("Safari"), None, 0)).is_err());
         assert!(validate(&rule(Some("Safari"), None, -5)).is_err());
         assert!(validate(&rule(Some("Safari"), None, 1)).is_ok());
+        // `required_minutes` is int4 in Postgres but i64 here — reject before
+        // the server does, so the message is readable.
+        assert!(validate(&rule(Some("Safari"), None, i32::MAX as i64)).is_ok());
+        assert!(validate(&rule(Some("Safari"), None, i32::MAX as i64 + 1)).is_err());
     }
 
     #[test]
@@ -267,11 +309,36 @@ mod tests {
         let missing = "supabase 400: {\"code\":\"PGRST204\",\"message\":\"Could not find the 'enabled' column of 'unlock_rules' in the schema cache\"}";
         // Enabled rule: dropping the key lands on the column default (true),
         // which is what was asked for.
-        assert!(may_retry_without_enabled(missing, true));
+        assert!(may_retry_without_enabled(missing, Some(true)));
         // Disabled rule: dropping the key would create a live rule. Refuse.
-        assert!(!may_retry_without_enabled(missing, false));
+        assert!(!may_retry_without_enabled(missing, Some(false)));
         // Unrelated failures are never retried either way.
-        assert!(!may_retry_without_enabled("supabase 500: internal error", true));
+        assert!(!may_retry_without_enabled(
+            "supabase 500: internal error",
+            Some(true)
+        ));
+    }
+
+    /// The front-door version of the same flip: a caller that simply omits
+    /// `enabled` must not be handed `true`. If the input type defaulted like
+    /// the read type does, the retry guard would never see the omission.
+    #[test]
+    fn omitting_enabled_on_input_is_absent_not_true() {
+        let input: UnlockRuleInput = serde_json::from_value(serde_json::json!({
+            "process_name": "Safari",
+            "required_minutes": 60
+        }))
+        .unwrap();
+        assert_eq!(input.enabled, None);
+
+        // ...whereas a *row* read back without the column is a live rule.
+        let row: UnlockRule = serde_json::from_value(serde_json::json!({
+            "id": "0d2f6f1e-0000-4000-8000-000000000000",
+            "process_name": "Safari",
+            "required_minutes": 60
+        }))
+        .unwrap();
+        assert!(row.enabled);
     }
 
     #[test]

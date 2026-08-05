@@ -91,14 +91,21 @@ function formatMinutes(total: number): string {
  */
 async function fetchTodayMinutes(): Promise<{ today_minutes?: number }> {
   try {
+    // Deliberately *not* filtered to user_id="default". The verdict this number
+    // is displayed beside comes from Rust, scoped by `Rest::user_id()` — which
+    // `~/.nexuslocalrc` can change. Hardcoding "default" here would pair one
+    // user's minutes with another user's verdict. `blocking_state` is keyed
+    // PRIMARY KEY (user_id), so a single row is unambiguously the right one;
+    // more than one means we cannot tell which, and showing "—" beats showing
+    // someone else's number.
     const { data, error } = await supabasePublic
       .from("blocking_state")
       .select("today_minutes")
-      .eq("user_id", "default")
-      .limit(1);
-    const value = data?.[0]?.today_minutes;
-    if (error || typeof value !== "number") return {};
-    return { today_minutes: value };
+      .order("computed_at", { ascending: false })
+      .limit(2);
+    if (error || !data || data.length !== 1) return {};
+    const value = data[0]?.today_minutes;
+    return typeof value === "number" ? { today_minutes: value } : {};
   } catch {
     return {};
   }
@@ -249,9 +256,14 @@ export function RewardsPanel() {
   const todayMinutes =
     hasVerdict(state) && typeof state.today_minutes === "number" ? state.today_minutes : null;
 
-  const taken = new Set(rules.map((r) => ruleTarget(r).toLowerCase()));
-  const appOptions = apps.filter((a) => !taken.has(a.process_name.toLowerCase()));
-  const siteOptions = sites.filter((s) => !taken.has(s.domain.toLowerCase()));
+  // Namespaced by kind: apps and domains are separate spaces, so a rule on the
+  // domain "reddit.com" must not hide a *process* that happens to share the
+  // name from the app picker.
+  const taken = new Set(
+    rules.map((r) => `${r.domain ? "site" : "app"}:${ruleTarget(r).toLowerCase()}`)
+  );
+  const appOptions = apps.filter((a) => !taken.has(`app:${a.process_name.toLowerCase()}`));
+  const siteOptions = sites.filter((s) => !taken.has(`site:${s.domain.toLowerCase()}`));
   const options =
     addType === "app"
       ? appOptions.map((a) => ({ value: a.process_name, label: a.display_name || a.process_name }))
@@ -259,7 +271,12 @@ export function RewardsPanel() {
 
   function labelFor(rule: UnlockRule): string {
     if (rule.process_name) {
-      return apps.find((a) => a.process_name === rule.process_name)?.display_name ?? rule.process_name;
+      // Case-insensitive, matching `verdictFor` and the picker dedupe — a
+      // casing difference should not silently downgrade the display name.
+      const target = rule.process_name.toLowerCase();
+      return (
+        apps.find((a) => a.process_name.toLowerCase() === target)?.display_name ?? rule.process_name
+      );
     }
     return rule.domain ?? "?";
   }
@@ -318,8 +335,15 @@ export function RewardsPanel() {
                     Unlocked
                   </span>
                 )}
+                {verdict === "locked" && (
+                  <span className="rounded bg-white/[0.06] px-1.5 py-0.5 text-[9px] text-white/45">
+                    Locked
+                  </span>
+                )}
+                {/* Distinct from "Locked": the server has not answered, so a
+                    full progress bar still means nothing yet. */}
                 {verdict === "unknown" && (
-                  <span className="rounded bg-white/[0.06] px-1.5 py-0.5 text-[9px] text-white/35">
+                  <span className="rounded bg-amber-500/15 px-1.5 py-0.5 text-[9px] text-amber-300/80">
                     Unknown
                   </span>
                 )}
