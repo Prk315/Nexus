@@ -26,6 +26,7 @@
 import type { ReactElement } from "react";
 import { TimerPanel } from "./TimerPanel";
 import { BlockingPanel } from "./BlockingPanel";
+import { SchedulePanel } from "./SchedulePanel";
 
 // --- Visible panels -------------------------------------------------------
 // Work units append their panel component here.
@@ -40,6 +41,7 @@ import { BlockingPanel } from "./BlockingPanel";
 // clock around it, then what's blocked and why.
 const PANELS: Array<() => ReactElement | null> = [
   TimerPanel,
+  SchedulePanel,
   BlockingPanel,
 ];
 
