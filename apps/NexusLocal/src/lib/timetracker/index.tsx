@@ -24,6 +24,7 @@
  */
 
 import type { ReactElement } from "react";
+import { TimerPanel } from "./TimerPanel";
 import { BlockingPanel } from "./BlockingPanel";
 
 // --- Visible panels -------------------------------------------------------
@@ -35,7 +36,10 @@ import { BlockingPanel } from "./BlockingPanel";
 //   unit 7  RewardsPanel
 // One entry per line: a dozen units append here in parallel, and a same-line
 // edit to `= []` conflicts every single time.
+// Render order is the reading order of the app: what you're doing now, then the
+// clock around it, then what's blocked and why.
 const PANELS: Array<() => ReactElement | null> = [
+  TimerPanel,
   BlockingPanel,
 ];
 
