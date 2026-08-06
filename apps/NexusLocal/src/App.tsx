@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { LoginScreen, useNexusAuth } from "@nexus/core";
 import { BleScan } from "./lib/BleScan";
 import { KeychainDebug } from "./lib/KeychainDebug";
 import { TimeTrackerPanels } from "./lib/timetracker";
@@ -24,6 +25,13 @@ type GridStatus = {
 export default function App() {
   const [status, setStatus] = useState<GridStatus | null>(null);
   const [err, setErr] = useState<string | null>(null);
+  // Sign-in is reachable, not mandatory. Everything below reads tables that are
+  // anon-keyed (`user_id = "default"`), so gating the whole app behind a session
+  // hid the timer, pomodoro, schedules, blocking and rewards from a signed-out
+  // launch — with no hint that anything existed. A session only buys the widgets
+  // a JWT via SessionBridge, so it is worth prompting for, not worth blocking on.
+  const { session, loading } = useNexusAuth();
+  const [showLogin, setShowLogin] = useState(false);
 
   useEffect(() => {
     let alive = true;
@@ -39,6 +47,8 @@ export default function App() {
     };
   }, []);
 
+
+  if (showLogin && !session) return <LoginScreen appName="Nexus Local" />;
 
   return (
     <div className="min-h-screen p-6 flex flex-col gap-5">
@@ -63,6 +73,20 @@ export default function App() {
 
       {err && (
         <div className="text-xs text-red-300 bg-red-500/10 rounded-lg p-3">{err}</div>
+      )}
+
+      {!loading && !session && (
+        <div className="flex items-center gap-3 text-xs rounded-xl border border-amber-500/20 bg-amber-500/[0.07] p-3">
+          <span className="text-amber-200/80">
+            Signed out — home-screen widgets can’t get a session token.
+          </span>
+          <button
+            onClick={() => setShowLogin(true)}
+            className="ml-auto shrink-0 px-2.5 py-1 rounded-lg bg-amber-500/15 text-amber-200 hover:bg-amber-500/25"
+          >
+            Sign in
+          </button>
+        </div>
       )}
 
       {status && (

@@ -1,6 +1,6 @@
 import React from "react";
 import ReactDOM from "react-dom/client";
-import { NexusAuthProvider, AuthGate } from "@nexus/core";
+import { NexusAuthProvider } from "@nexus/core";
 import App from "./App";
 import { supabase } from "./lib/supabase";
 import { SessionBridge } from "./lib/SessionBridge";
@@ -17,9 +17,10 @@ ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(
       <ContentBlockerSync />
       <LiveActivitySync />
       <TimeTrackerSync />
-      <AuthGate appName="Nexus Local">
-        <App />
-      </AuthGate>
+      {/* Not behind <AuthGate>: every table this app reads is anon-keyed
+          (`user_id = "default"`), so gating hid the whole productivity surface
+          from a signed-out launch. App offers sign-in inline instead. */}
+      <App />
     </NexusAuthProvider>
   </React.StrictMode>
 );

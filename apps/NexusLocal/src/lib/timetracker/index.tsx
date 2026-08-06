@@ -50,8 +50,8 @@ const PANELS: Array<() => ReactElement | null> = [
   Pomodoro,
   SchedulePanel,
   BlockingPanel,
+  RewardsPanel,
 ];
-const PANELS: Array<() => ReactElement | null> = [RewardsPanel];
 
 export function TimeTrackerPanels() {
   if (PANELS.length === 0) return null;
