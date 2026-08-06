@@ -8,10 +8,11 @@ import Foundation
 final class SafariContentBlockerHandler: NSObject, NSExtensionRequestHandling {
 
     func beginRequest(with context: NSExtensionContext) {
-        let kAppGroup = "group.com.bastianthomsen.nexuslocal"
-
+        // Resolved at runtime (not hardcoded) so it matches the group SideStore
+        // actually assigns during re-signing — same resolver the app and widget
+        // targets use. See ios/AppGroup.swift.
         if let g = FileManager.default.containerURL(
-            forSecurityApplicationGroupIdentifier: kAppGroup
+            forSecurityApplicationGroupIdentifier: AppGroup.identifier
         ) {
             try? "beginRequest called".data(using: .utf8)?
                 .write(to: g.appendingPathComponent("ext_debug.txt"), options: .atomic)

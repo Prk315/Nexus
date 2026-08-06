@@ -82,6 +82,13 @@ The source is built to grow:
 
 - Free tier allows **3 sideloaded apps** total — Nexus Local consolidates the
   native pieces precisely to stay under that cap.
+- Separately from the 3-app cap, a free Apple ID may register **10 App IDs per
+  rolling 7 days**, and *every embedded extension is its own App ID*. Nexus Local
+  currently ships three: the app, `NexusLocalWidgets`, and
+  `nexus-local_SafariBlocker` (the Safari content blocker — restored to the build
+  deliberately, since without it in the IPA `reloadContentBlocker` fails silently
+  and nothing is ever blocked). That is **3 of 10** per re-sign; adding further
+  extensions eats the same budget, and a burst of re-signs in one week can hit it.
 - CI is **free**: this repo is public, and GitHub-hosted *standard* runners
   (including `macos-15`) are unlimited and unbilled on public repos. The oft-cited
   **10×** macOS multiplier applies only to *private* repos, where it drains an
