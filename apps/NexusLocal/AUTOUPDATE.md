@@ -17,7 +17,7 @@ Because SideStore re-signs on-device with your own Apple ID, CI ships an
 ## Pipeline
 
 ```
-bump version in tauri.conf.json
+bump version in ALL THREE (see below)
         │
         ▼
 git tag nexuslocal-v<version>  ──push──►  GitHub Actions (macos-15)
@@ -53,7 +53,17 @@ Workflow: `.github/workflows/nexuslocal-ios.yml`. Helpers live in
 
 ```bash
 # 1. bump the version
-#    apps/NexusLocal/src-tauri/tauri.conf.json  →  "version": "0.2.0"
+#    apps/NexusLocal/src-tauri/tauri.conf.json       →  "version": "0.2.0"
+#    apps/NexusLocal/src-tauri/Cargo.toml            →  version = "0.2.0"
+#    apps/NexusLocal/src-tauri/gen/apple/project.yml →  CFBundleShortVersionString: 0.2.0
+#                                                       CFBundleVersion: "0.2.0"
+#
+#    ALL THREE, in lockstep. tauri.conf.json is what CI reads to build apps.json,
+#    but project.yml is what xcodegen writes into the shipped Info.plist — and CI
+#    restores the committed project.yml after `tauri ios init`. Bump only the first
+#    and SideStore advertises a version the installed binary does not report, so it
+#    re-offers the same update forever. (An untracked Info.plist sat at 0.10.0 while
+#    both tracked files said 0.11.0 — the drift is not hypothetical.)
 # 2. tag + push
 git tag nexuslocal-v0.2.0
 git push origin nexuslocal-v0.2.0

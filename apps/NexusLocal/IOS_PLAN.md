@@ -71,6 +71,38 @@ App Group: `group.com.bastianthomsen.nexuslocal` — declared on all three targe
 *needs* it: it reads the rules the app compiled into the shared container.
 Development team everywhere: `G9D6JYJSLT`.
 
+> ### ⚠️ Verified on device 2026-08-06: the App Group does NOT survive SideStore
+>
+> `appgroup_debug` reports **`ctr:NIL`** and **`alt:0 []`** — SideStore injected zero
+> `ALTAppGroups` entries, so `AppGroup.swift`'s runtime resolver has nothing to find
+> and the container never resolves. The widget and the blocker extension therefore
+> sit in **separate containers**, and no compiled rule list crosses between them.
+> `example.com` (the placeholder rule bundled in `blockerList.json`) does not block
+> on device, confirming the extension is serving nothing useful.
+>
+> **So on the SideStore path, on-phone Safari blocking does not work.** Enforcement
+> falls to the Mac grid node (`modules/blocking.rs`), which reads the same
+> `blocking_state` row and does `/etc/hosts` + process kill.
+>
+> **This is not a free-tier limit — it is a consequence of on-device re-signing.**
+> TimeTracker's iOS site blocking works today because `ios-build.sh` installs it via
+> `xcrun devicectl device install` after Xcode signs it locally, and nothing re-signs
+> it afterwards, so its App Group entitlement survives intact.
+>
+> Two ways to get the full chain:
+> 1. **Install Nexus Local the Xcode-direct way** — add a `nexuslocal` case to
+>    `resolve_app()` in `ios-build.sh` (it still only knows `PHONE_APPS=(timetracker)`).
+>    Trades the one-tap SideStore update for a ~7-day cable refresh.
+> 2. **Paid developer account** ($99/yr) — a registered App Group survives re-signing,
+>    and the 7-day certificate becomes a 1-year profile.
+>
+> Also seen in that panel: `grp:… ctr:NIL sess:yes` is a **false positive** —
+> without the entitlement `UserDefaults(suiteName:)` silently falls back to the app's
+> own defaults. And `kc grp:… sess:no` with `probe:OK` is a **real bug**, not a
+> provisioning limit: the keychain group resolves and round-trips, but `SessionBridge`
+> is not landing the session there. Fixing it is what would give widgets a JWT
+> instead of the anon-key fallback.
+
 **App-ID cost, stated plainly:** each extension is its own App ID on a free
 Apple ID, and SideStore's budget is 10 registrations per rolling 7 days. With
 the Safari blocker restored the container spends **3 of 10** (app + widgets +

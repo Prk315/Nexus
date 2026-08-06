@@ -47,8 +47,10 @@ cd apps/PathFinder && npx tauri dev
 Nexus/
 ├── apps/
 │   ├── nexus/           # Hub & launcher (IPC server, 3D graph view)
+│   ├── NexusLocal/      # Grid node (macOS) + the ONE native iOS app — see below
 │   ├── PathFinder/      # Life planning — goals, projects, tasks
-│   ├── TimeTrackerApp/  # Time tracking & focus sessions
+│   ├── Protocol/        # Health — Oura, Garmin, Vellafit body composition
+│   ├── TimeTrackerApp/  # Time tracking & focus sessions (macOS + its own iOS build)
 │   ├── Stonks/          # Financial tracking & portfolio
 │   └── Vault/
 │       └── Vault/       # ← NESTED: the real app source is one level deeper
@@ -101,7 +103,14 @@ The Rust mirror at `packages/nexus-core/crate/` re-exports the same types for us
 | Vault          | 1422      |
 | TimeTrackerApp | 1423      |
 | Stonks         | 1424      |
+| NexusLocal     | 1426      |
 | Nexus IPC      | 1430      |
+
+⚠️ **`npm run dev:nexuslocal` is bare `vite`** — it starts the dev server and opens
+**no Tauri window**. It proves nothing about the app booting. Use
+`cd apps/NexusLocal && npx tauri dev`. And note even a clean boot only proves the
+Rust side came up: a React render throw lives in the WebView and leaves the Rust
+process healthy, so "the panel renders" is not something a terminal can tell you.
 
 ## Critical: Tailwind CSS v4 + nexus-core
 
@@ -156,6 +165,98 @@ PathFinder migrated from local SQLite (via `tauri-plugin-sql`) to **Supabase** a
 - Migrate RLS policies from `anon_all` to `USING (user_id = auth.uid())`.
 - TimeTrackerApp's commit `c29f73c` (multi-device active timer sync) is the closest in-tree precedent — start there.
 
+## Nexus Local: the grid node and the one native iOS app
+
+`apps/NexusLocal` is two things wearing one binary: a **macOS background grid node**
+that executes queued work, and the **only native app on the iPhone** — the container
+that carries every widget and app-extension so the free-tier 3-sideloaded-app cap is
+never hit (`IOS_PLAN.md`). Other apps reach the phone as Vercel PWAs, which cost 0 slots.
+
+### Two module patterns, and only one runs on the phone
+
+`src-tauri/src/modules/mod.rs`'s `registry()` returns `Vec::new()` on iOS. This is
+deliberate and catches people out:
+
+| | **Pattern A — grid module** | **Pattern B — iOS native bridge** |
+|---|---|---|
+| Where | `src-tauri/src/modules/<name>.rs` + `registry()` | `src-tauri/src/<name>.rs` → `src-tauri/ios/<Name>Bridge.swift` |
+| Runs on | macOS only | the iPhone |
+| Triggered by | a Supabase queue row (`nexus_local_commands`) | React `invoke()` |
+| Examples | `garmin`, `blocking` | `apply_content_blocker`, `ble_scan_*`, `start_live_activity` |
+
+The iPhone still heartbeats into `nexus_local_nodes`, so it appears online with
+`modules: []` — a presence node, not an execution node. **Pattern C** is a widget:
+a `TimelineProvider` in `gen/apple/NexusLocalWidgets/` that queries Supabase directly.
+
+Adding a Tauri command touches exactly one place: the `generate_handler!` list in
+`lib.rs`. The `capabilities` block in `tauri.conf.json` is plugin ACL — app-defined
+commands need no entry there.
+
+### The productivity stack: policy is computed server-side
+
+`src-tauri/src/timetracker/` + `src/lib/timetracker/` carry session recording,
+pomodoro, focus schedules, blocking management and time-unlock rewards.
+
+**No client derives blocking policy.** A sideloaded free-tier iOS app gets no
+`BGTaskScheduler` and no silent push (grep the repo — zero hits), so a `setInterval`
+in the WebView dies the moment the app backgrounds. Instead the `focus-evaluate`
+edge function runs on pg_cron every 5 minutes and collapses `focus_blocks` +
+`schedule_block_{apps,sites}` + `unlock_rules` + `blocked_{sites,apps}` + today's
+`time_entries` into **one** row:
+
+```
+blocking_state(user_id, effective_domains, effective_processes, reasons, today_minutes, computed_at)
+```
+
+Every client — iPhone widget, Mac grid node, app UI — reads that row and acts. This
+is the same split as the Vellafit bridge (`bodyscan-sync`): the device does the cheap
+thing, the server does the thinking on a schedule. It is what lets a schedule window
+open and a reward unlock while every device is asleep.
+
+**The invariant that matters most: an empty or missing verdict is never "nothing is
+blocked."** `blocking_state` is deliberately *not seeded* — a missing row means "no
+verdict has ever been computed", which is different from "computed, nothing blocked".
+Seeding zeros would collapse the two and hand clients a fresh-looking `computed_at`.
+Every consumer treats missing/failed as *unknown* and keeps enforcing the last known
+state. The Mac module skips the tick rather than writing an empty hosts block; the
+widget keeps its previously compiled rules. Every accidental path must fail toward
+"still blocked", because the alternative is blocking that silently switches itself off.
+
+Related trap, already fixed: `content_blocker.rs` emitted `{"url-filter": ".*"}` for a
+blank domain — which matches **every URL**. Inputs yielding no hostname are skipped.
+
+### Conventions that fail silently
+
+- **`supabasePublic`, not `supabase`**, for `time_entries` / `active_sessions` /
+  `blocked_sites` / `blocked_apps` / `focus_blocks` / `unlock_rules` /
+  `blocking_state` / `pomodoro_config`. These are keyed `user_id = "default"` under
+  anon-role RLS; reading them with the authenticated JWT returns an **empty set, not
+  an error** — indistinguishable from "no data". Both clients are exported from
+  `src/lib/supabase.ts`.
+- **Timestamps: two formats are live in the same columns.** `TimeTrackerApp` writes
+  `Local::now()` with **no offset** on every `start_timer` (`db/timer.rs`), while
+  NexusLocal writes RFC3339 UTC. `start_time` is a `text` column and nothing
+  normalises it. JS parses an offset-less string as *local*, so mixing them shifts
+  durations by the whole UTC offset — and a clamp at zero turns that into a
+  **0-second entry**. Anything parsing those columns must handle both.
+- **camelCase IPC keys**: `invoke("tt_session_start", { taskName })`. snake_case
+  works on macOS and hard-fails on iOS with `invalid args`. Rust stays snake_case.
+- Panels register in `src/lib/timetracker/index.tsx`, never in `App.tsx` — one entry
+  per line, so parallel work doesn't conflict on the same line.
+- Everything renders **outside** `AuthGate`. It is a full-screen replacement, so
+  gating hid the entire productivity surface from a signed-out launch; these tables
+  need no session anyway. A session only buys widgets a JWT.
+
+### Widget writes go through one hole only
+
+`SupabaseClient.swift` deliberately exposes no generic write. Every widget mutation
+goes through a dedicated edge function with its own scoped secret — `habit-toggle`
+(`WIDGET_HABIT_KEY`), `session-toggle` (`WIDGET_SESSION_KEY`) — POST-only,
+constant-time compare, fail-closed under 32 chars, service-role client with a
+server-side owner check. The secret ships in a distributed binary and is extractable;
+what the design buys is a blast radius of "this user's sessions" rather than
+"everything the anon role can reach". Don't widen it.
+
 ## iOS Deployment Notes
 
 TimeTrackerApp is the first app in the ecosystem to ship to a physical iPhone
@@ -205,15 +306,83 @@ layer, and wrap migrations in a loop that swallows errors per statement.
 (with the phone plugged in) refreshes the install. There's no App Store or
 TestFlight path on the free tier.
 
+### Two delivery paths, and the choice decides whether App Groups work
+
+This is the single most consequential thing to understand about this repo's iOS
+story, and it is *not* a free-tier limitation — it is a consequence of **how the
+app reaches the phone**.
+
+| | **Xcode-direct** (TimeTracker) | **SideStore** (Nexus Local) |
+|---|---|---|
+| How | `./ios-build.sh` → `npx tauri ios build` → `xcrun devicectl device install` | CI builds an **unsigned** IPA → SideStore re-signs **on-device** |
+| Signed by | Xcode on this Mac, with your Apple ID | SideStore, with your Apple ID, after download |
+| App Group | **Survives** — the entitlement it was signed with is what ships | **Dies** — re-signing drops it |
+| Updating | plug the phone in, re-run the script | one tap in SideStore |
+| Apple creds in CI | n/a | **none** — that's the whole point |
+
+Verified on-device 2026-08-06 via `appgroup_debug` in the KeychainDebug panel:
+Nexus Local reports `ctr:NIL` and `alt:0 []` — SideStore injected **zero**
+`ALTAppGroups` entries, so `AppGroup.swift`'s runtime resolver (written expecting
+SideStore to rewrite the group ID and record the real one there) has nothing to find.
+
+**What that costs.** The Safari content blocker needs a shared container: the widget
+compiles a `WKContentRuleList`, the extension reads it. Without an App Group they are
+separate containers and no rules cross. So on the SideStore path, on-phone Safari
+blocking does not work — enforcement falls to the Mac grid node (`modules/blocking.rs`,
+`/etc/hosts` + process kill), which reads the same `blocking_state` row.
+
+**TimeTracker's iOS site blocking works** precisely because `ios-build.sh` installs it
+directly and nothing re-signs it afterwards. If Nexus Local needs the full autonomous
+chain, add a `nexuslocal` case to `resolve_app()` in `ios-build.sh` (it still only
+knows `PHONE_APPS=(timetracker)`) and install it the same way — trading the one-tap
+SideStore update for a ~7-day cable refresh. A paid developer account ($99/yr) is the
+other route: a registered App Group survives re-signing.
+
+**Two more reads from that same panel worth knowing how to interpret:**
+- `grp:… ctr:NIL sess:yes` is a **false positive**. With no App Group entitlement,
+  `UserDefaults(suiteName:)` silently falls back to the app's own defaults — so the
+  session was written where only the app can see it. The widget never reads it.
+- `kc grp:… sess:no` with `probe:OK` is a **real bug, not a provisioning limit**: the
+  keychain access group resolves and round-trips, but no session is stored there.
+  `SessionBridge` is meant to write both channels. Fixing it is what would give
+  widgets a JWT instead of falling back to the anon key.
+
+### Releasing Nexus Local — bump all three, in lockstep
+
+`tauri.conf.json` decides what `apps.json` advertises; `gen/apple/project.yml` decides
+what the installed binary reports; `Cargo.toml` feeds `GridStatus.version`. CI restores
+the committed `project.yml` after `tauri ios init`, so bumping only `tauri.conf.json`
+makes SideStore advertise a version the binary doesn't report and re-offer the same
+update forever. `AUTOUPDATE.md` names only the first — it is wrong.
+
+```bash
+# edit all three to the same value, then:
+git tag nexuslocal-v0.12.0 && git push origin nexuslocal-v0.12.0
+```
+
+**Never run `tauri ios init`** — it overwrites `project.yml` with a stock single-target
+spec. CI has to `git checkout --` it for exactly this reason. Edit `project.yml`
+directly. `gen/` is gitignored *except* `project.yml` and `NexusLocalWidgets/*`, so
+committing `project.yml` needs `git add -f`. `NexusLocalWidgets/Secrets.swift` is
+gitignored and generated in CI — a fresh worktree cannot link the app until you copy
+it in from the main checkout.
+
 ## Supabase: Shared Cloud Backend
 
 All apps that need cloud persistence use the single **NEXUS** Supabase project
 (`efxmzsdisaymtpebaxlp`, region `eu-north-1`). Tables are namespaced by app
 prefix to avoid collisions.
 
+Migrations live at `supabase/migrations/` (`YYYYMMDDHHMMSS_slug.sql`, forward-only,
+`IF NOT EXISTS`-guarded). Edge functions at `supabase/functions/`; Protocol keeps its
+own under `apps/Protocol/supabase/functions/`. Deploying a function and applying a
+migration are separate steps.
+
 | App prefix | Tables |
 |------------|--------|
 | *(none)*   | `time_entries`, `active_sessions`, `blocked_sites`, `blocked_apps`, `focus_blocks`, `unlock_rules` (TimeTracker) |
+| *(none)*   | `blocking_state`, `pomodoro_config`, `schedule_block_apps`, `schedule_block_sites` (Nexus Local productivity stack) |
+| *(none)*   | `nexus_local_nodes`, `nexus_local_commands` (grid queue), `nexus_ble_captures` |
 | `pf_`      | 45 tables — goals, plans, tasks, systems, calendar, pipelines, habits, games, … (PathFinder) |
 | `vault_`   | `vault_nodes`, `vault_edges`, `vault_tag_colors`, `vault_content`, `vault_journals` + Storage bucket `vault-assets` (Vault) |
 
@@ -285,6 +454,47 @@ These are non-obvious requirements that broke the 3D graph and PDF viewer once a
 4. Set `useSystemFonts: false` in the `getDocument` options — the Tauri WebView2 has no path to the OS font directory and pdfjs falls back to the standard fonts cleanly.
 
 **PDF page wrappers must use block layout, not inline-block in a flex column.** `.pdf-scroll-area` cannot be `display: flex; flex-direction: column; align-items: center` if its children are inline-block: WebView2 (Chromium) collapses them to height 0 inside the `overflow: auto` container, and pages render correctly into invisible boxes. Use plain block layout on the scroll area and `display: block; width: max-content; margin: 0 auto` on the wrapper.
+
+## Scheduled server-side work (pg_cron)
+
+Three jobs run in the database, and this is the pattern for anything that must happen
+while every device is asleep:
+
+| Job | Every | Function |
+|---|---|---|
+| `protocol-oura-daily-sync` | daily | `oura-sync` |
+| `protocol-bodyscan-sync` | 10 min | `bodyscan-sync` — decodes raw BLE scale captures |
+| `nexus-focus-evaluate` | 5 min | `focus-evaluate` — writes `blocking_state` |
+
+They `net.http_post` the function with the service-role key read from
+**Vault** (`vault.decrypted_secrets`), not inlined — rotating the key needs no job edit.
+Copy that shape. Function secrets (`SESSION_LOCAL_TZ`, `WIDGET_HABIT_KEY`,
+`WIDGET_SESSION_KEY`) are set with `npx supabase secrets set`, separately from repo
+secrets used by CI.
+
+`bodyscan-sync` duplicates the BIA calibration constants from
+`apps/NexusLocal/src/lib/bodyScan.ts` with only a comment enforcing the match — keep
+the `CAL` blocks in sync after any re-calibration.
+
+## Environment gotchas on this machine
+
+Cost real time; check here first.
+
+- **`ls`, `cat` and friends are aliased** to `eza` / `bat`, which are not installed.
+  A bare `cat` in a script fails with `command not found: bat` and silently yields an
+  empty variable. Use `/bin/ls`, `/bin/cat`.
+- **`gh`, `xcodegen` and `supabase` are not on `PATH`** — `/opt/homebrew/bin/` and
+  `npx supabase`. The bundled CLI is old: `supabase functions logs --project-ref`
+  doesn't exist; use the Supabase MCP `get_logs` instead.
+- **xcodebuild configs here are lowercase** — `-configuration debug`, not `Debug`
+  (`project.yml` declares `configs: {debug, release}`).
+- **Parallel builds will fill the disk and stall the machine.** Each git worktree gets
+  its own ~2 GB `target/`, and cargo defaults to one job per core *per invocation* —
+  a dozen concurrent worktrees drove this 8-core machine to load 163 with swap
+  thrashing. `~/.cargo/config.toml` now pins `jobs = 2`. For big fan-outs also set a
+  shared `CARGO_TARGET_DIR`: cargo's lock then serialises builds instead of letting
+  them stampede, and the per-worktree disk cost disappears. `cargo clean` at the repo
+  root frees ~20 GB.
 
 ## Adding a New App to the Ecosystem
 
