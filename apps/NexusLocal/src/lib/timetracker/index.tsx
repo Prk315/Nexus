@@ -28,6 +28,11 @@ import { TimerPanel } from "./TimerPanel";
 import { BlockingPanel } from "./BlockingPanel";
 import { SchedulePanel } from "./SchedulePanel";
 
+// `PomodoroPanel.tsx`, not `Pomodoro.tsx`: the pure phase machine is
+// `pomodoro.ts`, and macOS's case-insensitive filesystem makes TypeScript treat
+// the two spellings as the same file (TS1261).
+import { Pomodoro } from "./PomodoroPanel";
+
 // --- Visible panels -------------------------------------------------------
 // Work units append their panel component here.
 //   unit 3  TimerPanel
@@ -41,6 +46,7 @@ import { SchedulePanel } from "./SchedulePanel";
 // clock around it, then what's blocked and why.
 const PANELS: Array<() => ReactElement | null> = [
   TimerPanel,
+  Pomodoro,
   SchedulePanel,
   BlockingPanel,
 ];
