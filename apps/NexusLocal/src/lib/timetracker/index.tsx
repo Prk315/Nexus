@@ -32,6 +32,7 @@ import { SchedulePanel } from "./SchedulePanel";
 // `pomodoro.ts`, and macOS's case-insensitive filesystem makes TypeScript treat
 // the two spellings as the same file (TS1261).
 import { Pomodoro } from "./PomodoroPanel";
+import { RewardsPanel } from "./RewardsPanel";
 
 // --- Visible panels -------------------------------------------------------
 // Work units append their panel component here.
@@ -50,6 +51,7 @@ const PANELS: Array<() => ReactElement | null> = [
   SchedulePanel,
   BlockingPanel,
 ];
+const PANELS: Array<() => ReactElement | null> = [RewardsPanel];
 
 export function TimeTrackerPanels() {
   if (PANELS.length === 0) return null;
