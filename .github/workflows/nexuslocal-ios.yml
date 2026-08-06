@@ -115,10 +115,11 @@ jobs:
           cat > apps/NexusLocal/src-tauri/gen/apple/NexusLocalWidgets/Secrets.swift <<EOF
           // Generated in CI from repository secrets — do not commit.
           enum Secrets {
-              static let supabaseURL  = "${SUPABASE_URL:-https://efxmzsdisaymtpebaxlp.supabase.co}"
-              static let supabaseAnon = "${SUPABASE_ANON_KEY}"
-              static let userID       = "${SUPABASE_USER_ID}"
-              static let widgetKey    = "${WIDGET_HABIT_KEY}"
+              static let supabaseURL      = "${SUPABASE_URL:-https://efxmzsdisaymtpebaxlp.supabase.co}"
+              static let supabaseAnon     = "${SUPABASE_ANON_KEY}"
+              static let userID           = "${SUPABASE_USER_ID}"
+              static let widgetKey        = "${WIDGET_HABIT_KEY}"
+              static let widgetSessionKey = "${WIDGET_SESSION_KEY}"
           }
           EOF
           # Fail loudly rather than shipping a build whose habit toggle silently
@@ -127,12 +128,24 @@ jobs:
             echo "::error::WIDGET_HABIT_KEY repo secret is not set — the widget's habit toggle would 401 against the habit-toggle Edge Function."
             exit 1
           fi
+          # Same guard for the session key. Note the member itself is mandatory:
+          # SessionIntents.swift references Secrets.widgetSessionKey, so omitting
+          # it from this heredoc is a compile error, not a runtime 401.
+          if [ -z "${WIDGET_SESSION_KEY}" ]; then
+            echo "::error::WIDGET_SESSION_KEY repo secret is not set — the widget's timer start/stop would 401 against the session-toggle Edge Function."
+            exit 1
+          fi
         env:
           SUPABASE_URL: ${{ vars.SUPABASE_URL }}
           SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
           SUPABASE_USER_ID: ${{ secrets.SUPABASE_USER_ID }}
           # Must match the WIDGET_HABIT_KEY secret on the Supabase project.
           WIDGET_HABIT_KEY: ${{ secrets.WIDGET_HABIT_KEY }}
+          # Must match the WIDGET_SESSION_KEY secret on the Supabase project.
+          # Deliberately a different value from WIDGET_HABIT_KEY — each function
+          # accepts exactly one key, so one leaking cannot be used against the
+          # other, and either can be rotated alone.
+          WIDGET_SESSION_KEY: ${{ secrets.WIDGET_SESSION_KEY }}
 
       - name: Diagnostics — project tree before build
         run: |

@@ -51,6 +51,11 @@ struct ActiveSessionRow: Codable {
 struct TimeEntryRow: Codable {
     let duration_seconds: Int?
     let start_time: String?
+    /// Only selected by the "what should a start tap be called" query. Optional
+    /// like the rest, so the narrower today-totals select still decodes
+    /// (synthesised Codable uses decodeIfPresent for Optionals) — declaring it
+    /// non-optional would make that whole array throw and silently become [].
+    let task_name: String?
 }
 
 // MARK: - TimeTracker uses a fixed user_id (not the auth uid)

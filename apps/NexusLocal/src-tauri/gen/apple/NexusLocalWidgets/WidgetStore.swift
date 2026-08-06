@@ -61,4 +61,47 @@ enum WidgetStore {
         guard let data = try? JSONEncoder().encode(map) else { return }
         store.set(data, forKey: overridesKey)
     }
+
+    // MARK: - Optimistic timer-session override
+
+    /// Kept separate from the habit overrides rather than folded into `Override`:
+    /// a session carries a task name and a start instant, not just a flag, and
+    /// there is only ever one of them (`active_sessions` has UNIQUE(user_id)).
+    private static let sessionOverrideKey = "sessionOverride"
+
+    struct SessionOverride: Codable {
+        let running: Bool
+        let taskName: String?
+        /// When the session started, unix seconds — so the widget can keep
+        /// counting during the window before Supabase agrees.
+        let startedAt: Double?
+        let at: Double  // when the override was written, unix seconds
+    }
+
+    /// The session override, if one is still within the TTL. Past it we always
+    /// believe the server, so a failed or lost write can never leave the widget
+    /// permanently claiming a timer is running when it isn't.
+    static func loadSessionOverride() -> SessionOverride? {
+        guard
+            let data = store.data(forKey: sessionOverrideKey),
+            let o = try? JSONDecoder().decode(SessionOverride.self, from: data),
+            o.at >= Date().timeIntervalSince1970 - overrideTTL
+        else { return nil }
+        return o
+    }
+
+    static func setSessionOverride(running: Bool, taskName: String?, startedAt: Double?) {
+        let o = SessionOverride(
+            running: running, taskName: taskName, startedAt: startedAt,
+            at: Date().timeIntervalSince1970
+        )
+        guard let data = try? JSONEncoder().encode(o) else { return }
+        store.set(data, forKey: sessionOverrideKey)
+    }
+
+    /// Drop the override — on write failure, so the next fetch shows the truth
+    /// rather than the intent, and once the server has caught up with it.
+    static func clearSessionOverride() {
+        store.removeObject(forKey: sessionOverrideKey)
+    }
 }

@@ -60,21 +60,33 @@ struct SupabaseClient {
         }
     }
 
-    /// Invoke an Edge Function with the widget's dedicated single-purpose
-    /// credential (`Secrets.widgetKey`) — deliberately NOT the anon key.
+    /// Invoke an Edge Function with a dedicated single-purpose credential —
+    /// deliberately NOT the anon key.
+    ///
+    /// `key` defaults to `Secrets.widgetKey` (habit-toggle). Pass a different
+    /// one to reach a different scoped function — `Secrets.widgetSessionKey` for
+    /// `session-toggle`. Each function accepts exactly one key, so the pairing is
+    /// the scope: leaking one credential cannot be used against the other's
+    /// function, and either can be rotated alone.
     ///
     /// All widget writes go through here. There is intentionally no generic
     /// insert/delete on this client: the anon key has no write policies on any
     /// pf_/protocol_ table, so a direct write would fail anyway, and offering
-    /// one would just invite re-opening that hole.
+    /// one would just invite re-opening that hole. Adding a *scoped* function to
+    /// this surface is the sanctioned way to add a write; adding a table verb is
+    /// not.
     @discardableResult
-    func callFunction(_ name: String, body: [String: Any]) async -> Bool {
+    func callFunction(
+        _ name: String,
+        body: [String: Any],
+        key: String = Secrets.widgetKey
+    ) async -> Bool {
         guard let url = URL(string: "\(baseURL)/functions/v1/\(name)") else { return false }
 
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        request.setValue(Secrets.widgetKey, forHTTPHeaderField: "x-widget-key")
+        request.setValue(key, forHTTPHeaderField: "x-widget-key")
         request.httpBody = try? JSONSerialization.data(withJSONObject: body)
 
         return await send(request)
