@@ -1,3 +1,5 @@
+import type { NutrientValues } from "../lib/nutrients";
+
 export type Theme = "light" | "dark" | "system";
 
 export interface SleepEntry {
@@ -298,8 +300,10 @@ export interface HabitCompletion {
 
 export type FoodSource = "usda" | "openfoodfacts" | "frida" | "manual";
 
-/** Nutrient values are always per 100g/100ml — servings apply a multiplier. */
-export interface Food {
+/** Nutrient values are always per 100g/100ml — servings apply a multiplier.
+ *  The full nutrient set (macros + sub-categories + minerals + vitamins) comes
+ *  from NutrientValues; see lib/nutrients.ts. */
+export interface Food extends NutrientValues {
   id: string;
   /** Contributor. The catalog is a SHARED library — everyone reads every row,
    *  but only the contributor may edit or delete their own. */
@@ -310,22 +314,33 @@ export interface Food {
   brand: string | null;
   serving_qty: number;
   serving_unit: string;
-  calories: number | null;
-  protein_g: number | null;
-  carbs_g: number | null;
-  fat_g: number | null;
-  fiber_g: number | null;
-  sugar_g: number | null;
-  sodium_mg: number | null;
-  potassium_mg: number | null;
-  calcium_mg: number | null;
-  iron_mg: number | null;
-  vitamin_c_mg: number | null;
-  vitamin_d_mcg: number | null;
   created_at: string;
 }
 
 export type CreateFood = Omit<Food, "id" | "user_id" | "created_at">;
+
+/** A supplement in the daily stack. Nutrient values are ABSOLUTE per dose (a
+ *  serving already), not per 100g — so they add directly when taken. */
+export interface Supplement extends NutrientValues {
+  id: string;
+  user_id: string | null;
+  name: string;
+  brand: string | null;
+  dose: string | null;
+  sort_order: number;
+  archived: boolean;
+  created_at: string;
+}
+
+export type CreateSupplement = Omit<Supplement, "id" | "user_id" | "archived" | "created_at">;
+export type UpdateSupplement = CreateSupplement & { id: string };
+
+/** One "taken it today" record — presence means taken, like a habit completion. */
+export interface SupplementLog {
+  id: string;
+  supplement_id: string;
+  date: string;
+}
 
 export interface Meal {
   id: string;

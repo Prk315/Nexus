@@ -2,6 +2,8 @@ import { useState } from "react";
 import { Search, Plus, ArrowLeft, Loader2 } from "lucide-react";
 import { searchFoods, type FoodSearchResult } from "../../lib/nutritionApi";
 import { CARD_STYLE, INPUT_STYLE, LABEL_STYLE, FIELD_GROUP } from "../../lib/uiHelpers";
+import { EMPTY_NUTRIENTS } from "../../lib/nutrients";
+import NutrientFields from "./NutrientFields";
 import type { CreateFood, Food } from "../../store/types";
 
 const SOURCE_LABEL: Record<FoodSearchResult["source"], string> = {
@@ -11,15 +13,14 @@ const SOURCE_LABEL: Record<FoodSearchResult["source"], string> = {
 };
 
 const emptyManualFood: CreateFood = {
+  ...EMPTY_NUTRIENTS,
   source: "manual", external_id: null, name: "", brand: null,
   serving_qty: 100, serving_unit: "g",
-  calories: null, protein_g: null, carbs_g: null, fat_g: null,
-  fiber_g: null, sugar_g: null, sodium_mg: null, potassium_mg: null,
-  calcium_mg: null, iron_mg: null, vitamin_c_mg: null, vitamin_d_mcg: null,
 };
 
 function toCreateFood(r: FoodSearchResult): CreateFood {
   return {
+    ...EMPTY_NUTRIENTS,
     source: r.source, external_id: r.external_id, name: r.name, brand: r.brand,
     serving_qty: 100, serving_unit: "g",
     calories: r.calories, protein_g: r.protein_g, carbs_g: r.carbs_g, fat_g: r.fat_g,
@@ -223,25 +224,11 @@ export default function FoodPicker({
               <label style={LABEL_STYLE}>Name</label>
               <input type="text" value={manualFood.name} onChange={(e) => setManual("name", e.target.value)} placeholder="e.g. Mom's lasagna" style={INPUT_STYLE} required />
             </div>
-            <div style={{ fontSize: 11, color: "var(--text-muted)" }}>Values per 100g:</div>
-            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr 1fr", gap: 8 }}>
-              <div style={FIELD_GROUP}>
-                <label style={LABEL_STYLE}>Cal</label>
-                <input type="number" value={manualFood.calories ?? ""} onChange={(e) => setManual("calories", e.target.value ? Number(e.target.value) : null)} style={INPUT_STYLE} />
-              </div>
-              <div style={FIELD_GROUP}>
-                <label style={LABEL_STYLE}>Protein</label>
-                <input type="number" value={manualFood.protein_g ?? ""} onChange={(e) => setManual("protein_g", e.target.value ? Number(e.target.value) : null)} style={INPUT_STYLE} />
-              </div>
-              <div style={FIELD_GROUP}>
-                <label style={LABEL_STYLE}>Carbs</label>
-                <input type="number" value={manualFood.carbs_g ?? ""} onChange={(e) => setManual("carbs_g", e.target.value ? Number(e.target.value) : null)} style={INPUT_STYLE} />
-              </div>
-              <div style={FIELD_GROUP}>
-                <label style={LABEL_STYLE}>Fat</label>
-                <input type="number" value={manualFood.fat_g ?? ""} onChange={(e) => setManual("fat_g", e.target.value ? Number(e.target.value) : null)} style={INPUT_STYLE} />
-              </div>
-            </div>
+            <NutrientFields
+              values={manualFood}
+              onChange={(k, v) => setManual(k, v)}
+              unitNote="Values per 100g / 100ml — fill in only what you know."
+            />
             <button type="submit" style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 6, padding: "8px 16px", background: "var(--accent)", color: "var(--accent-fg)", border: "none", borderRadius: "var(--radius-sm)", fontWeight: 600, fontSize: 13, cursor: "pointer" }}>
               <Plus size={14} /> Next — set portion
             </button>
