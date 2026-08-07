@@ -1,6 +1,6 @@
 import { useMemo, useState } from "react";
 import {
-  ComposedChart, Area, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
+  ComposedChart, Area, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, ReferenceLine,
 } from "recharts";
 import { Moon } from "lucide-react";
 import { CARD_STYLE, isoDate } from "../../lib/uiHelpers";
@@ -35,12 +35,17 @@ interface Series {
   source: "sleep" | "body";
   field: keyof SleepEntry | keyof BodyMetric;
   fmt: (v: number) => string;
+  /** Minutes that read as 100% — a fixed, science-based ideal (8 h total sleep,
+   *  2 h deep, 2 h REM). When absent the series normalises to its own window max. */
+  target?: number;
 }
 
+// Line weight tracks physiological importance: total sleep is the hero, the
+// restorative stages (deep, REM) come next, light is lighter, vitals thinnest.
 const SERIES: Series[] = [
-  { key: "total", label: "Total sleep", color: "#38bdf8", width: 4, hero: true, source: "sleep", field: "duration_min", fmt: minToH },
-  { key: "rem", label: "REM", color: "#22c55e", width: 2.5, source: "sleep", field: "rem_sleep_min", fmt: minToH },
-  { key: "deep", label: "Deep", color: "#8b5cf6", width: 2.5, source: "sleep", field: "deep_sleep_min", fmt: minToH },
+  { key: "total", label: "Total sleep", color: "#38bdf8", width: 5.5, hero: true, source: "sleep", field: "duration_min", fmt: minToH, target: 480 },
+  { key: "deep", label: "Deep", color: "#8b5cf6", width: 3.25, source: "sleep", field: "deep_sleep_min", fmt: minToH, target: 120 },
+  { key: "rem", label: "REM", color: "#22c55e", width: 3.25, source: "sleep", field: "rem_sleep_min", fmt: minToH, target: 120 },
   { key: "light", label: "Light", color: "#6366f1", width: 1.75, source: "sleep", field: "light_sleep_min", fmt: minToH },
   { key: "hrv", label: "HRV", color: "#f59e0b", width: 1.25, source: "body", field: "hrv_ms", fmt: (v) => `${Math.round(v)} ms` },
   { key: "hr", label: "Resting HR", color: "#ef4444", width: 1.25, source: "body", field: "resting_hr_bpm", fmt: (v) => `${Math.round(v)} bpm` },
@@ -97,17 +102,19 @@ export default function SleepChart({
     // Which series actually have data in this window.
     const activeSeries = SERIES.filter((s) => buckets.some((r) => r[s.key] != null));
 
-    // Normalise each series to its own max → percentage. Keep raw for the tooltip.
-    const maxes: Record<string, number> = {};
+    // Normalise to percentage. Series with a fixed target (total 8 h, deep/REM
+    // 2 h) read as "% of the science-based ideal" and can exceed 100%; the rest
+    // fall back to their own window max. Keep raw values for the tooltip.
+    const denom: Record<string, number> = {};
     for (const s of SERIES) {
-      maxes[s.key] = Math.max(1, ...buckets.map((r) => (r[s.key] as number | null) ?? 0));
+      denom[s.key] = s.target ?? Math.max(1, ...buckets.map((r) => (r[s.key] as number | null) ?? 0));
     }
 
     const data: Datum[] = buckets.map((r) => {
       const d: Datum = { date: r.date as string, full: fullLabel(r.date as string), label: shortLabel(r.date as string, range) };
       for (const s of SERIES) {
         const raw = r[s.key] as number | null;
-        d[`${s.key}_pct`] = raw == null ? null : Math.round((raw / maxes[s.key]) * 1000) / 10;
+        d[`${s.key}_pct`] = raw == null ? null : Math.round((raw / denom[s.key]) * 1000) / 10;
         d[`${s.key}_raw`] = raw;
       }
       return d;
@@ -124,13 +131,13 @@ export default function SleepChart({
         <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
           <Moon size={15} color="var(--accent)" />
           <span style={{ fontWeight: 600, color: "var(--text)", fontSize: 14 }}>Sleep</span>
-          <span style={{ fontSize: 12, color: "var(--text-muted)" }}>· normalised — hover for real values</span>
+          <span style={{ fontSize: 12, color: "var(--text-muted)" }}>· % of ideal (8 h sleep · 2 h deep/REM) — hover for real values</span>
         </div>
         {/* Legend */}
         <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
           {activeSeries.map((s) => (
             <span key={s.key} style={{ display: "inline-flex", alignItems: "center", gap: 5, fontSize: 11, color: "var(--text-muted)" }}>
-              <span style={{ width: 14, height: s.hero ? 4 : 2, borderRadius: 2, background: s.color, boxShadow: s.hero ? `0 0 6px ${s.color}` : "none" }} />
+              <span style={{ width: 14, height: s.hero ? 5 : Math.max(2, Math.round(s.width)), borderRadius: 2, background: s.color, boxShadow: s.hero ? `0 0 6px ${s.color}` : "none" }} />
               {s.label}
             </span>
           ))}
@@ -164,7 +171,7 @@ export default function SleepChart({
               minTickGap={16}
             />
             <YAxis
-              domain={[0, 105]}
+              domain={[0, 125]}
               ticks={[0, 50, 100]}
               tickFormatter={(v) => `${v}%`}
               tick={{ fontSize: 11, fill: "var(--text-muted)" }}
@@ -172,6 +179,8 @@ export default function SleepChart({
               tickLine={false}
               width={44}
             />
+            {/* The science-based ideal — series can rise above it. */}
+            <ReferenceLine y={100} stroke="var(--text-muted)" strokeDasharray="4 4" strokeOpacity={0.5} />
             <Tooltip content={<SleepTooltip />} />
 
             {/* Hero: total sleep as a glowing light-blue area. */}
@@ -179,7 +188,7 @@ export default function SleepChart({
               type="monotone"
               dataKey="total_pct"
               stroke="#38bdf8"
-              strokeWidth={4}
+              strokeWidth={5.5}
               fill="url(#sleepTotalFill)"
               filter="url(#sleepGlow)"
               connectNulls
@@ -283,7 +292,9 @@ function SleepTooltip({ active, payload }: { active?: boolean; payload?: Array<{
               </span>
               <span style={{ fontWeight: 600 }}>
                 {s.fmt(raw)}
-                {typeof pct === "number" && <span style={{ color: "var(--text-muted)", fontWeight: 400 }}> · {pct}%</span>}
+                {typeof pct === "number" && (
+                  <span style={{ color: "var(--text-muted)", fontWeight: 400 }}> · {pct}%{s.target ? " of ideal" : ""}</span>
+                )}
               </span>
             </div>
           );
