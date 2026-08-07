@@ -1,24 +1,52 @@
 import { useState } from "react";
-import { X, Plus, Trash2, ChefHat } from "lucide-react";
+import { X, Plus, Trash2, ChefHat, Pencil } from "lucide-react";
 import { useAppDispatch, useAppSelector } from "../../store/hooks";
-import { addFood, addMeal, addMealItem } from "../../store/slices/mealPlannerSlice";
+import {
+  addFood, addMeal, updateMeal, addMealItem, removeMealItem,
+} from "../../store/slices/mealPlannerSlice";
 import { CARD_STYLE, INPUT_STYLE, LABEL_STYLE, FIELD_GROUP } from "../../lib/uiHelpers";
 import FoodPicker from "./FoodPicker";
-import type { CreateFood } from "../../store/types";
+import type { CreateFood, Food, Meal, MealItem } from "../../store/types";
 
 interface DraftItem {
   key: string;
+  /** Present when this row is an already-persisted meal item (edit mode). */
+  itemId?: string;
   food: CreateFood;
   quantity: number;
 }
 
-export default function MealBuilder({ onClose }: { onClose: () => void }) {
+function foodToCreate(f: Food): CreateFood {
+  const { id: _id, user_id: _u, created_at: _c, ...rest } = f;
+  return rest;
+}
+
+/**
+ * Create OR edit a saved meal. Pass `meal` + `existingItems` to edit; omit them
+ * to build a new one. On save (edit) it diffs the ingredient list — only the
+ * added/removed items hit the network, so re-saving an untouched meal is cheap.
+ */
+export default function MealBuilder({
+  meal, existingItems, foodsById, onClose,
+}: {
+  meal?: Meal;
+  existingItems?: MealItem[];
+  foodsById?: Map<string, Food>;
+  onClose: () => void;
+}) {
   const dispatch = useAppDispatch();
   const existingFoods = useAppSelector((s) => s.mealPlanner.foods);
+  const editing = !!meal;
 
-  const [name, setName] = useState("");
-  const [description, setDescription] = useState("");
-  const [items, setItems] = useState<DraftItem[]>([]);
+  const [name, setName] = useState(meal?.name ?? "");
+  const [description, setDescription] = useState(meal?.description ?? "");
+  const [items, setItems] = useState<DraftItem[]>(() =>
+    (existingItems ?? []).flatMap((it) => {
+      const food = foodsById?.get(it.food_id);
+      if (!food) return [];
+      return [{ key: crypto.randomUUID(), itemId: it.id, food: foodToCreate(food), quantity: it.quantity }];
+    }),
+  );
   const [picking, setPicking] = useState(false);
   const [saving, setSaving] = useState(false);
 
@@ -36,18 +64,47 @@ export default function MealBuilder({ onClose }: { onClose: () => void }) {
     return sum + cal * (i.quantity / 100);
   }, 0);
 
+  /** Resolve a draft food to a food_id, reusing an existing catalog row when the
+   *  same (source, external_id) is already present so we never duplicate. */
+  async function resolveFoodId(food: CreateFood): Promise<string> {
+    const existing = existingFoods.find(
+      (f) => f.source === food.source && f.external_id === food.external_id && food.external_id != null,
+    );
+    return existing ? existing.id : (await dispatch(addFood(food)).unwrap()).id;
+  }
+
   async function save() {
     if (!name.trim() || items.length === 0) return;
     setSaving(true);
     try {
-      const meal = await dispatch(addMeal({ name: name.trim(), description: description.trim() || null })).unwrap();
-      for (let i = 0; i < items.length; i++) {
-        const { food, quantity } = items[i];
-        const existing = existingFoods.find(
-          (f) => f.source === food.source && f.external_id === food.external_id && food.external_id != null,
-        );
-        const foodId = existing ? existing.id : (await dispatch(addFood(food)).unwrap()).id;
-        await dispatch(addMealItem({ meal_id: meal.id, food_id: foodId, quantity, sort_order: i })).unwrap();
+      if (editing && meal) {
+        // 1. Name / description.
+        await dispatch(updateMeal({
+          id: meal.id, name: name.trim(), description: description.trim() || null,
+          created_at: meal.created_at,
+        })).unwrap();
+        // 2. Removed items.
+        const keptIds = new Set(items.filter((i) => i.itemId).map((i) => i.itemId!));
+        for (const it of existingItems ?? []) {
+          if (!keptIds.has(it.id)) {
+            await dispatch(removeMealItem({ id: it.id, mealId: meal.id })).unwrap();
+          }
+        }
+        // 3. Newly added items.
+        const added = items.filter((i) => !i.itemId);
+        for (let i = 0; i < added.length; i++) {
+          const foodId = await resolveFoodId(added[i].food);
+          await dispatch(addMealItem({
+            meal_id: meal.id, food_id: foodId, quantity: added[i].quantity,
+            sort_order: (existingItems?.length ?? 0) + i,
+          })).unwrap();
+        }
+      } else {
+        const created = await dispatch(addMeal({ name: name.trim(), description: description.trim() || null })).unwrap();
+        for (let i = 0; i < items.length; i++) {
+          const foodId = await resolveFoodId(items[i].food);
+          await dispatch(addMealItem({ meal_id: created.id, food_id: foodId, quantity: items[i].quantity, sort_order: i })).unwrap();
+        }
       }
       onClose();
     } finally {
@@ -70,7 +127,8 @@ export default function MealBuilder({ onClose }: { onClose: () => void }) {
       >
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
           <span style={{ display: "flex", alignItems: "center", gap: 8, fontWeight: 700, fontSize: 15, color: "var(--text)" }}>
-            <ChefHat size={16} color="var(--accent)" /> New meal
+            {editing ? <Pencil size={16} color="var(--accent)" /> : <ChefHat size={16} color="var(--accent)" />}
+            {editing ? "Edit meal" : "New meal"}
           </span>
           <button onClick={onClose} style={{ background: "none", border: "none", color: "var(--text-muted)", cursor: "pointer" }}>
             <X size={16} />
@@ -136,7 +194,7 @@ export default function MealBuilder({ onClose }: { onClose: () => void }) {
                 opacity: !name.trim() || items.length === 0 || saving ? 0.5 : 1,
               }}
             >
-              {saving ? "Saving…" : "Save meal"}
+              {saving ? "Saving…" : editing ? "Save changes" : "Save meal"}
             </button>
           </>
         )}

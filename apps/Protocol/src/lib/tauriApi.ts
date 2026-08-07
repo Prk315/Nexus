@@ -14,6 +14,7 @@ import type {
   Food, CreateFood, Meal, CreateMeal, MealItem, CreateMealItem,
   MealPlanEntry, CreateMealPlanEntry, NutritionGoals, UpdateNutritionGoals,
 } from "../store/types";
+import { getUserId } from "./supabase";
 import {
   fetchSleepFromCloud, pushSleepToCloud, deleteSleepFromCloud,
   fetchNutritionFromCloud, pushNutritionToCloud, deleteNutritionFromCloud,
@@ -28,7 +29,7 @@ import {
   fetchHabitsFromCloud, pushHabitToCloud, updateHabitInCloud, archiveHabitInCloud,
   fetchHabitCompletionsFromCloud, addHabitCompletionToCloud, removeHabitCompletionFromCloud,
   fetchHabitStacksFromCloud, pushHabitStackToCloud, deleteHabitStackFromCloud,
-  fetchFoodsFromCloud, pushFoodToCloud,
+  fetchFoodsFromCloud, pushFoodToCloud, updateFoodInCloud, deleteFoodFromCloud,
   fetchMealsFromCloud, pushMealToCloud, deleteMealFromCloud,
   fetchMealItemsFromCloud, pushMealItemToCloud, deleteMealItemFromCloud,
   fetchMealPlanEntriesFromCloud, pushMealPlanEntryToCloud, setMealPlanEntryLoggedInCloud, deleteMealPlanEntryFromCloud,
@@ -296,8 +297,15 @@ export const getFoods = (): Promise<Food[]> => fetchFoodsFromCloud();
 export async function createFood(food: CreateFood): Promise<Food> {
   const id = crypto.randomUUID();
   await pushFoodToCloud({ ...food, id });
-  return { id, ...food, created_at: new Date().toISOString() };
+  return { id, user_id: getUserId(), ...food, created_at: new Date().toISOString() };
 }
+
+export async function updateFood(food: CreateFood & { id: string }): Promise<Food> {
+  await updateFoodInCloud(food);
+  return { ...food, user_id: getUserId(), created_at: new Date().toISOString() };
+}
+
+export const deleteFood = (id: string): Promise<void> => deleteFoodFromCloud(id);
 
 // ── Meal planner: Meals & meal items ────────────────────────────────────────
 
@@ -307,6 +315,16 @@ export async function createMeal(meal: CreateMeal): Promise<Meal> {
   const id = crypto.randomUUID();
   await pushMealToCloud({ ...meal, id });
   return { id, name: meal.name, description: meal.description ?? null, created_at: new Date().toISOString() };
+}
+
+export async function updateMeal(meal: CreateMeal & { id: string; created_at?: string }): Promise<Meal> {
+  await pushMealToCloud(meal); // upsert by id
+  return {
+    id: meal.id,
+    name: meal.name,
+    description: meal.description ?? null,
+    created_at: meal.created_at ?? new Date().toISOString(),
+  };
 }
 
 export const deleteMeal = (id: string): Promise<void> => deleteMealFromCloud(id);
