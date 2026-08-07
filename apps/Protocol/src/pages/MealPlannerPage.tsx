@@ -175,28 +175,21 @@ export default function MealPlannerPage() {
         <GoalsWidget todayTotals={todayTotals} goals={goals} onSave={handleSaveGoals} />
       </div>
 
-      {/* One dashboard. A thin supplement stack rides the right rail on Mac and
-          drops below the grid on iPhone. The main grid is 2 columns on Mac and a
-          single stack on iPhone; Overview + Plan span full width, My Meals +
-          Foods share the last row. */}
-      <div style={{ display: "flex", flexDirection: isWide ? "row" : "column", gap: 16, alignItems: "stretch" }}>
-        <div
-          style={{
-            flex: 1, minWidth: 0,
-            display: "grid",
-            gap: 16,
-            gridTemplateColumns: isWide ? "1fr 1fr" : "1fr",
-            alignItems: "start",
-          }}
-        >
-          <DashCard title="Overview" icon={<BarChart3 size={15} />} fullWidth={isWide}>
-            <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
-              <NutrientOverview perDay={perDayCalories} todayTotals={todayTotals} goals={goals} />
-              <NutrientBreakdown totals={todayTotals} />
-            </div>
-          </DashCard>
+      {/* One dashboard, three full-width rows on Mac (each stacks on iPhone):
+          Overview · Plan + Supplement stack · My Meals + Foods. The supplement
+          stack is a thin column beside Plan and stretches to Plan's height, so
+          the pair is exactly as wide as the rows above and below. */}
+      <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+        <DashCard title="Overview" icon={<BarChart3 size={15} />}>
+          <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+            <NutrientOverview perDay={perDayCalories} todayTotals={todayTotals} goals={goals} />
+            <NutrientBreakdown totals={todayTotals} />
+          </div>
+        </DashCard>
 
-          <DashCard title="Plan" icon={<CalendarDays size={15} />} fullWidth={isWide}>
+        {/* Plan + Supplement stack share a row and align to the same height. */}
+        <div style={{ display: "flex", flexDirection: isWide ? "row" : "column", gap: 16, alignItems: "stretch" }}>
+          <DashCard title="Plan" icon={<CalendarDays size={15} />} style={{ flex: 1 }}>
             <PlanPane
               days={days}
               today={today}
@@ -214,19 +207,19 @@ export default function MealPlannerPage() {
               onRemove={(id) => dispatch(removeMealPlanEntry(id))}
             />
           </DashCard>
-
-          <DashCard>
-            <MealsPane meals={meals} mealItemsById={mealItemsById} foodsById={foodsById} />
-          </DashCard>
-
-          <DashCard>
-            <FoodsPane foods={foods} />
-          </DashCard>
+          <div style={{ width: isWide ? 300 : "auto", flexShrink: 0, display: "flex" }}>
+            <SupplementPane />
+          </div>
         </div>
 
-        {/* Thin supplement rail (Mac) / full-width stacked card (iPhone). */}
-        <div style={{ width: isWide ? 280 : "auto", flexShrink: 0 }}>
-          <SupplementPane />
+        {/* My Meals + Foods share the last row. */}
+        <div style={{ display: "flex", flexDirection: isWide ? "row" : "column", gap: 16, alignItems: "stretch" }}>
+          <DashCard style={{ flex: 1 }}>
+            <MealsPane meals={meals} mealItemsById={mealItemsById} foodsById={foodsById} />
+          </DashCard>
+          <DashCard style={{ flex: 1 }}>
+            <FoodsPane foods={foods} />
+          </DashCard>
         </div>
       </div>
 
@@ -246,18 +239,18 @@ export default function MealPlannerPage() {
 }
 
 /**
- * One dashboard tile. `fullWidth` makes it span both grid columns (used for the
- * wide Overview + Plan panes). `title` is only rendered for panes that don't
- * already carry their own header (My Meals / Foods self-title, so they omit it).
+ * One dashboard tile. `title` is only rendered for panes that don't already
+ * carry their own header (My Meals / Foods self-title, so they omit it).
  * `maxBodyHeight` caps the body with internal scroll so tiles stay balanced.
+ * `style` merges into the card (used to make a tile flex:1 inside a row).
  */
 function DashCard({
-  title, icon, fullWidth, maxBodyHeight, children,
+  title, icon, maxBodyHeight, style, children,
 }: {
   title?: string;
   icon?: ReactNode;
-  fullWidth?: boolean;
   maxBodyHeight?: number;
+  style?: React.CSSProperties;
   children: ReactNode;
 }) {
   return (
@@ -269,7 +262,7 @@ function DashCard({
         flexDirection: "column",
         gap: 12,
         minWidth: 0,
-        gridColumn: fullWidth ? "1 / -1" : "auto",
+        ...style,
       }}
     >
       {title && (
