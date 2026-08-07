@@ -2,40 +2,33 @@
  * The review section — DESIGN.md §4. Streak + due count from `lr_learn_state`
  * (the `blocking_state` doctrine: a missing row means "never computed", never
  * "nothing due" — §4.2's "Ingen dom endnu" state), plus a "Start review"
- * action.
+ * action that opens `ReviewSession` — a flat, concept-level drill sequence
+ * built by `api.fetchReviewQueue()` from `lr_learn_state.due_concepts` (see
+ * that function's doc comment for the selection rules: unit content lookup,
+ * least-seen-lens preference, least-attempted tiebreak).
  *
  * v2 (2026-08-07): soft-white "paper" theme — DESIGN.md §7. Renders on
  * `#F6F5F1` paper (painted by `LearnPage`); ink/muted tokens replace the
  * `white/NN` opacity ladder from the dark theme.
  *
- * ── Contract gap vs. LEARN_PLAN.md, resolved pragmatically ──────────────────
- * LEARN_PLAN.md describes the review session as drilling "concepts from
- * mastered units, preferring each concept's least-seen lens" — but the only
- * overlay this app has is `Player`, whose contract is `{ unitId, onClose }`.
- * There is no concept-level entry point, and `api.ts` has no function mapping
- * `lr_learn_state.due_concepts` (or any concept id) back to a unit — that
- * join lives in `lr_unit_concept`, which nothing in `api.ts` exposes. So
- * "Start review" here picks a *unit* to review rather than a concept queue:
- * it re-fetches the path, filters to units that are both `mastered` and have
- * content (today that set is **empty** — the one mastered unit, unit 1, has
- * no content row — so the button surfaces that rather than silently doing
- * nothing), and opens `Player` on a random eligible one. This is a
- * placeholder for real concept-level review, not a full implementation of
- * the lens-preference selector in LEARN_PLAN.md — that needs either a new
- * `api.ts` function (unit↔concept join) or a `Player` contract that accepts
- * a concept list, neither of which exists yet.
+ * The "Start review" button stays enabled even in the missing-verdict state
+ * (DESIGN.md §4.2) — `ReviewSession` calls `fetchReviewQueue()` itself and
+ * renders its own "Ingen dom endnu" card when the row truly doesn't exist,
+ * so this component doesn't need to special-case that here; it only decides
+ * *whether the session is open*, never what it shows once open.
  *
- * What *is* wired to `memory.ts` per the task brief: when a verdict has
- * `due_concepts`, their memory states are fetched (`api.fetchMemoryStates`)
- * and `memory.isStable` colours a small "stabile" sub-label under the due
- * count — fill/weight, not a new hue, per DESIGN.md §0 rule 3.
+ * What's wired to `memory.ts` here (outside the session itself): when a
+ * verdict has `due_concepts`, their memory states are fetched
+ * (`api.fetchMemoryStates`) and `memory.isStable` colours a small "stabile"
+ * sub-label under the due count — fill/weight, not a new hue, per DESIGN.md
+ * §0 rule 3.
  */
 
 import { useEffect, useState } from "react";
-import { fetchLearnState, fetchMemoryStates, fetchPath } from "./api";
+import { fetchLearnState, fetchMemoryStates } from "./api";
 import { isStable } from "./memory";
 import type { LrLearnState } from "./types";
-import { Player } from "./Player";
+import { ReviewSession } from "./ReviewSession";
 
 const LAST_KNOWN_KEY = "learn:review:lastKnownState";
 
@@ -79,9 +72,7 @@ export function ReviewPanel() {
   const [verdict, setVerdict] = useState<LrLearnState | null | undefined>(undefined);
   const [lastKnown, setLastKnown] = useState<LrLearnState | null>(null);
   const [stability, setStability] = useState<{ stable: number; total: number } | null>(null);
-  const [selectedUnitId, setSelectedUnitId] = useState<number | null>(null);
-  const [reviewNotice, setReviewNotice] = useState<string | null>(null);
-  const [reviewLoading, setReviewLoading] = useState(false);
+  const [sessionOpen, setSessionOpen] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -106,7 +97,7 @@ export function ReviewPanel() {
 
         if (v.due_concepts && v.due_concepts.length > 0) {
           try {
-            const states = await fetchMemoryStates(v.due_concepts);
+            const states = await fetchMemoryStates(v.due_concepts.map((d) => d.concept_id));
             if (cancelled) return;
             const entries = Object.values(states);
             setStability({ stable: entries.filter((s) => isStable(s)).length, total: entries.length });
@@ -129,25 +120,6 @@ export function ReviewPanel() {
       cancelled = true;
     };
   }, []);
-
-  async function startReview() {
-    setReviewNotice(null);
-    setReviewLoading(true);
-    try {
-      const path = await fetchPath();
-      const eligible = path.filter((p) => p.progress === "mastered" && p.hasContent);
-      if (eligible.length === 0) {
-        setReviewNotice("No mastered units with content yet — master a unit first.");
-        return;
-      }
-      const chosen = eligible[Math.floor(Math.random() * eligible.length)];
-      setSelectedUnitId(chosen.unit.unit_id);
-    } catch (e) {
-      setReviewNotice(String(e));
-    } finally {
-      setReviewLoading(false);
-    }
-  }
 
   return (
     <section className="flex flex-col gap-2">
@@ -173,13 +145,10 @@ export function ReviewPanel() {
           ) : (
             <button
               type="button"
-              onClick={startReview}
-              disabled={reviewLoading}
-              className="w-full rounded-xl bg-gradient-to-r from-indigo-500 to-fuchsia-600 px-4 py-3 text-[15px] font-semibold text-white transition-transform active:scale-[0.985] disabled:opacity-60"
+              onClick={() => setSessionOpen(true)}
+              className="w-full rounded-xl bg-gradient-to-r from-indigo-500 to-fuchsia-600 px-4 py-3 text-[15px] font-semibold text-white transition-transform active:scale-[0.985]"
             >
-              {reviewLoading
-                ? "Starting…"
-                : `Start review${verdict.due_concepts?.length ? ` · ${verdict.due_concepts.length}` : ""}`}
+              {`Start review${verdict.due_concepts?.length ? ` · ${verdict.due_concepts.length}` : ""}`}
             </button>
           )}
           <div className="text-[10px] text-[#6E6E78]/60">{minutesAgoLabel(verdict.computed_at)}</div>
@@ -214,18 +183,15 @@ export function ReviewPanel() {
 
           <button
             type="button"
-            onClick={startReview}
-            disabled={reviewLoading}
-            className="w-full rounded-xl bg-gradient-to-r from-indigo-500 to-fuchsia-600 px-4 py-3 text-[15px] font-semibold text-white transition-transform active:scale-[0.985] disabled:opacity-60"
+            onClick={() => setSessionOpen(true)}
+            className="w-full rounded-xl bg-gradient-to-r from-indigo-500 to-fuchsia-600 px-4 py-3 text-[15px] font-semibold text-white transition-transform active:scale-[0.985]"
           >
-            {reviewLoading ? "Starting…" : "Start review"}
+            Start review
           </button>
         </>
       )}
 
-      {reviewNotice && <div className="text-[11px] text-[#6E6E78]/80">{reviewNotice}</div>}
-
-      {selectedUnitId !== null && <Player unitId={selectedUnitId} onClose={() => setSelectedUnitId(null)} />}
+      {sessionOpen && <ReviewSession onClose={() => setSessionOpen(false)} />}
     </section>
   );
 }
