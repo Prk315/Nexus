@@ -6,14 +6,17 @@ import {
   fetchMealPlanEntries, addMealPlanEntry,
   toggleMealPlanEntryLogged, removeMealPlanEntry, fetchNutritionGoals, saveNutritionGoals,
 } from "../store/slices/mealPlannerSlice";
+import { fetchSupplements, fetchSupplementLogs } from "../store/slices/supplementsSlice";
 import { CARD_STYLE, isoDate } from "../lib/uiHelpers";
-import { entryNutrition, sumNutrition } from "../lib/mealNutrition";
+import { entryNutrition, sumNutrition, scaleNutrients } from "../lib/mealNutrition";
 import FoodSearchPanel from "../components/mealplanner/FoodSearchPanel";
 import NutrientOverview from "../components/mealplanner/NutrientOverview";
+import NutrientBreakdown from "../components/mealplanner/NutrientBreakdown";
 import GoalsWidget from "../components/mealplanner/GoalsWidget";
 import PlanPane from "../components/mealplanner/panes/PlanPane";
 import MealsPane from "../components/mealplanner/panes/MealsPane";
 import FoodsPane from "../components/mealplanner/panes/FoodsPane";
+import SupplementPane from "../components/mealplanner/panes/SupplementPane";
 import type { CreateFood, MealPlanEntry, MealSlot, UpdateNutritionGoals } from "../store/types";
 
 const DAY_LABELS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
@@ -57,6 +60,8 @@ export default function MealPlannerPage() {
   const mealItemsById = useAppSelector((s) => s.mealPlanner.mealItems);
   const planEntries = useAppSelector((s) => s.mealPlanner.planEntries);
   const goals = useAppSelector((s) => s.mealPlanner.goals);
+  const supplements = useAppSelector((s) => s.supplements.items);
+  const supplementLogs = useAppSelector((s) => s.supplements.logs);
 
   const isWide = useIsWide();
   const today = isoDate(new Date());
@@ -69,6 +74,7 @@ export default function MealPlannerPage() {
     dispatch(fetchFoods());
     dispatch(fetchMeals());
     dispatch(fetchNutritionGoals());
+    dispatch(fetchSupplements());
   }, [dispatch]);
 
   // Meal items are fetched lazily per meal so nutrition totals (grid, overview,
@@ -81,10 +87,12 @@ export default function MealPlannerPage() {
 
   useEffect(() => {
     dispatch(fetchMealPlanEntries({ start: days[0], end: days[6] }));
+    dispatch(fetchSupplementLogs(days[0]));
   }, [dispatch, days]);
 
   const foodsById = useMemo(() => new Map(foods.map((f) => [f.id, f])), [foods]);
   const mealsById = useMemo(() => new Map(meals.map((m) => [m.id, m])), [meals]);
+  const supplementsById = useMemo(() => new Map(supplements.map((s) => [s.id, s])), [supplements]);
 
   const entriesByDaySlot = useMemo(() => {
     const m = new Map<string, MealPlanEntry[]>();
@@ -96,18 +104,34 @@ export default function MealPlannerPage() {
     return m;
   }, [planEntries]);
 
+  // Supplements taken on a date contribute their absolute per-dose nutrients.
+  const supplementTotalsOn = useMemo(() => {
+    return (date: string) =>
+      supplementLogs
+        .filter((l) => l.date === date)
+        .map((l) => {
+          const s = supplementsById.get(l.supplement_id);
+          return s ? scaleNutrients(s, 1) : null;
+        });
+  }, [supplementLogs, supplementsById]);
+
   const todayTotals = useMemo(() => {
-    const todays = planEntries.filter((e) => e.date === today && e.logged);
-    return sumNutrition(todays.map((e) => entryNutrition(e, foodsById, mealsById, mealItemsById)));
-  }, [planEntries, foodsById, mealsById, mealItemsById, today]);
+    const meal = planEntries
+      .filter((e) => e.date === today && e.logged)
+      .map((e) => entryNutrition(e, foodsById, mealsById, mealItemsById));
+    return sumNutrition([...meal, ...supplementTotalsOn(today)]);
+  }, [planEntries, foodsById, mealsById, mealItemsById, today, supplementTotalsOn]);
 
   const perDayCalories = useMemo(() => {
     return days.map((d, i) => {
       const dayEntries = planEntries.filter((e) => e.date === d && e.logged);
-      const totals = sumNutrition(dayEntries.map((e) => entryNutrition(e, foodsById, mealsById, mealItemsById)));
+      const totals = sumNutrition([
+        ...dayEntries.map((e) => entryNutrition(e, foodsById, mealsById, mealItemsById)),
+        ...supplementTotalsOn(d),
+      ]);
       return { date: d, label: DAY_LABELS[i], calories: totals.calories };
     });
-  }, [days, planEntries, foodsById, mealsById, mealItemsById]);
+  }, [days, planEntries, foodsById, mealsById, mealItemsById, supplementTotalsOn]);
 
   async function handlePick(food: CreateFood, grams: number) {
     if (!addingSlot) return;
@@ -151,46 +175,59 @@ export default function MealPlannerPage() {
         <GoalsWidget todayTotals={todayTotals} goals={goals} onSave={handleSaveGoals} />
       </div>
 
-      {/* Everything on one dashboard: 2-col grid on Mac, single stack on iPhone.
-          Overview + Plan span the full width; My Meals + Foods share the last row. */}
-      <div
-        style={{
-          display: "grid",
-          gap: 16,
-          gridTemplateColumns: isWide ? "1fr 1fr" : "1fr",
-          alignItems: "start",
-        }}
-      >
-        <DashCard title="Overview" icon={<BarChart3 size={15} />} fullWidth={isWide}>
-          <NutrientOverview perDay={perDayCalories} todayTotals={todayTotals} goals={goals} />
-        </DashCard>
+      {/* One dashboard. A thin supplement stack rides the right rail on Mac and
+          drops below the grid on iPhone. The main grid is 2 columns on Mac and a
+          single stack on iPhone; Overview + Plan span full width, My Meals +
+          Foods share the last row. */}
+      <div style={{ display: "flex", flexDirection: isWide ? "row" : "column", gap: 16, alignItems: "stretch" }}>
+        <div
+          style={{
+            flex: 1, minWidth: 0,
+            display: "grid",
+            gap: 16,
+            gridTemplateColumns: isWide ? "1fr 1fr" : "1fr",
+            alignItems: "start",
+          }}
+        >
+          <DashCard title="Overview" icon={<BarChart3 size={15} />} fullWidth={isWide}>
+            <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+              <NutrientOverview perDay={perDayCalories} todayTotals={todayTotals} goals={goals} />
+              <NutrientBreakdown totals={todayTotals} />
+            </div>
+          </DashCard>
 
-        <DashCard title="Plan" icon={<CalendarDays size={15} />} fullWidth={isWide}>
-          <PlanPane
-            days={days}
-            today={today}
-            weekLabel={`${days[0]} — ${days[6]}`}
-            isThisWeek={weekStart === mondayOf(today)}
-            entriesByDaySlot={entriesByDaySlot}
-            foodsById={foodsById}
-            mealsById={mealsById}
-            mealItemsById={mealItemsById}
-            onPrevWeek={() => setWeekStart(addDays(weekStart, -7))}
-            onNextWeek={() => setWeekStart(addDays(weekStart, 7))}
-            onThisWeek={() => setWeekStart(mondayOf(today))}
-            onAddSlot={(date, slot) => setAddingSlot({ date, slot })}
-            onToggle={(id, logged) => dispatch(toggleMealPlanEntryLogged({ id, logged }))}
-            onRemove={(id) => dispatch(removeMealPlanEntry(id))}
-          />
-        </DashCard>
+          <DashCard title="Plan" icon={<CalendarDays size={15} />} fullWidth={isWide}>
+            <PlanPane
+              days={days}
+              today={today}
+              weekLabel={`${days[0]} — ${days[6]}`}
+              isThisWeek={weekStart === mondayOf(today)}
+              entriesByDaySlot={entriesByDaySlot}
+              foodsById={foodsById}
+              mealsById={mealsById}
+              mealItemsById={mealItemsById}
+              onPrevWeek={() => setWeekStart(addDays(weekStart, -7))}
+              onNextWeek={() => setWeekStart(addDays(weekStart, 7))}
+              onThisWeek={() => setWeekStart(mondayOf(today))}
+              onAddSlot={(date, slot) => setAddingSlot({ date, slot })}
+              onToggle={(id, logged) => dispatch(toggleMealPlanEntryLogged({ id, logged }))}
+              onRemove={(id) => dispatch(removeMealPlanEntry(id))}
+            />
+          </DashCard>
 
-        <DashCard>
-          <MealsPane meals={meals} mealItemsById={mealItemsById} foodsById={foodsById} />
-        </DashCard>
+          <DashCard>
+            <MealsPane meals={meals} mealItemsById={mealItemsById} foodsById={foodsById} />
+          </DashCard>
 
-        <DashCard>
-          <FoodsPane foods={foods} />
-        </DashCard>
+          <DashCard>
+            <FoodsPane foods={foods} />
+          </DashCard>
+        </div>
+
+        {/* Thin supplement rail (Mac) / full-width stacked card (iPhone). */}
+        <div style={{ width: isWide ? 280 : "auto", flexShrink: 0 }}>
+          <SupplementPane />
+        </div>
       </div>
 
       {addingSlot && (

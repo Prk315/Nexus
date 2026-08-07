@@ -13,6 +13,7 @@ import type {
   Habit, CreateHabit, UpdateHabit, HabitCompletion, HabitStack, CreateHabitStack,
   Food, CreateFood, Meal, CreateMeal, MealItem, CreateMealItem,
   MealPlanEntry, CreateMealPlanEntry, NutritionGoals, UpdateNutritionGoals,
+  Supplement, CreateSupplement, UpdateSupplement, SupplementLog,
 } from "../store/types";
 import { getUserId } from "./supabase";
 import {
@@ -34,6 +35,8 @@ import {
   fetchMealItemsFromCloud, pushMealItemToCloud, deleteMealItemFromCloud,
   fetchMealPlanEntriesFromCloud, pushMealPlanEntryToCloud, setMealPlanEntryLoggedInCloud, deleteMealPlanEntryFromCloud,
   fetchNutritionGoalsFromCloud, upsertNutritionGoalsInCloud,
+  fetchSupplementsFromCloud, pushSupplementToCloud, archiveSupplementInCloud,
+  fetchSupplementLogsFromCloud, addSupplementLogToCloud, removeSupplementLogFromCloud,
 } from "./api";
 
 // ── Sleep ─────────────────────────────────────────────────────────────────────
@@ -366,6 +369,34 @@ export const setMealPlanEntryLogged = (id: string, logged: boolean): Promise<voi
 export const removeMealPlanEntry = (id: string): Promise<void> => deleteMealPlanEntryFromCloud(id);
 
 // ── Meal planner: Nutrition goals ───────────────────────────────────────────
+
+// ── Supplement stack ─────────────────────────────────────────────────────────
+
+export const getSupplements = (): Promise<Supplement[]> => fetchSupplementsFromCloud();
+
+export async function createSupplement(s: CreateSupplement): Promise<Supplement> {
+  const id = crypto.randomUUID();
+  await pushSupplementToCloud({ ...s, id });
+  return { id, user_id: getUserId(), archived: false, created_at: new Date().toISOString(), ...s };
+}
+
+export async function updateSupplement(s: UpdateSupplement): Promise<Supplement> {
+  await pushSupplementToCloud(s);
+  return { user_id: getUserId(), archived: false, created_at: new Date().toISOString(), ...s };
+}
+
+export const deleteSupplement = (id: string): Promise<void> => archiveSupplementInCloud(id);
+
+export const getSupplementLogs = (since: string): Promise<SupplementLog[]> =>
+  fetchSupplementLogsFromCloud(since);
+
+export const addSupplementLog = (supplementId: string, date: string): Promise<SupplementLog> =>
+  addSupplementLogToCloud(supplementId, date);
+
+export const removeSupplementLog = (supplementId: string, date: string): Promise<void> =>
+  removeSupplementLogFromCloud(supplementId, date);
+
+// ── Meal planner: Nutrition goals ────────────────────────────────────────────
 
 export const getNutritionGoals = (): Promise<NutritionGoals | null> => fetchNutritionGoalsFromCloud();
 

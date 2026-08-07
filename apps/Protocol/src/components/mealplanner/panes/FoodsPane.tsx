@@ -5,6 +5,7 @@ import { useAppDispatch } from "../../../store/hooks";
 import { addFood, updateFood, removeFood } from "../../../store/slices/mealPlannerSlice";
 import { CARD_STYLE, INPUT_STYLE, LABEL_STYLE, FIELD_GROUP } from "../../../lib/uiHelpers";
 import FoodPicker from "../FoodPicker";
+import NutrientFields from "../NutrientFields";
 import type { CreateFood, Food } from "../../../store/types";
 
 const SOURCE_LABEL: Record<string, string> = {
@@ -165,18 +166,6 @@ function FoodEditor({ food, onSave }: { food: Food; onSave: (patch: CreateFood) 
   });
   const [saving, setSaving] = useState(false);
   const set = <K extends keyof CreateFood>(k: K, v: CreateFood[K]) => setDraft((d) => ({ ...d, [k]: v }));
-  const numField = (label: string, key: keyof CreateFood) => (
-    <div style={FIELD_GROUP}>
-      <label style={LABEL_STYLE}>{label}</label>
-      <input
-        type="number"
-        value={(draft[key] as number | null) ?? ""}
-        onChange={(e) => set(key, (e.target.value ? Number(e.target.value) : null) as CreateFood[typeof key])}
-        style={INPUT_STYLE}
-      />
-    </div>
-  );
-
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
       <div style={FIELD_GROUP}>
@@ -187,13 +176,11 @@ function FoodEditor({ food, onSave }: { food: Food; onSave: (patch: CreateFood) 
         <label style={LABEL_STYLE}>Brand (optional)</label>
         <input type="text" value={draft.brand ?? ""} onChange={(e) => set("brand", e.target.value || null)} style={INPUT_STYLE} />
       </div>
-      <div style={{ fontSize: 11, color: "var(--text-muted)" }}>Values per 100{draft.serving_unit === "ml" ? "ml" : "g"}:</div>
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr 1fr", gap: 8 }}>
-        {numField("Cal", "calories")}
-        {numField("Protein", "protein_g")}
-        {numField("Carbs", "carbs_g")}
-        {numField("Fat", "fat_g")}
-      </div>
+      <NutrientFields
+        values={draft}
+        onChange={(k, v) => set(k, v)}
+        unitNote={`Values per 100${draft.serving_unit === "ml" ? "ml" : "g"} — fill in only what you know.`}
+      />
       <button
         onClick={async () => { if (!draft.name.trim()) return; setSaving(true); try { await onSave(draft); } finally { setSaving(false); } }}
         disabled={!draft.name.trim() || saving}

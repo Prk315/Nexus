@@ -1,5 +1,7 @@
 import { getSupabaseClient, getUserId } from "./supabase";
+import { NUTRIENT_KEYS, type NutrientValues } from "./nutrients";
 import type {
+  Supplement, CreateSupplement, SupplementLog,
   BodyMetric, CreateBodyMetric,
   CreateNutritionEntry, CreateSleepEntry,
   Exercise, CreateExercise, RunningPlan, RunningSession, CreateRunningSession,
@@ -554,6 +556,20 @@ export async function removeHabitCompletionFromCloud(habitId: string, date: stri
 
 // ── Meal planner: Foods ─────────────────────────────────────────────────────
 
+/** Pull the full nutrient block off a row (foods and supplements share it). */
+function readNutrients(row: Record<string, unknown>): NutrientValues {
+  const out = {} as NutrientValues;
+  for (const k of NUTRIENT_KEYS) out[k] = (row[k] as number | null) ?? null;
+  return out;
+}
+
+/** Just the nutrient keys of an object, for writing back to the DB. */
+function nutrientCols(src: Partial<NutrientValues>): Record<string, number | null> {
+  const out: Record<string, number | null> = {};
+  for (const k of NUTRIENT_KEYS) out[k] = src[k] ?? null;
+  return out;
+}
+
 function rowToFood(row: Record<string, unknown>): Food {
   return {
     id: row.id as string,
@@ -564,19 +580,8 @@ function rowToFood(row: Record<string, unknown>): Food {
     brand: row.brand as string | null,
     serving_qty: row.serving_qty as number,
     serving_unit: row.serving_unit as string,
-    calories: row.calories as number | null,
-    protein_g: row.protein_g as number | null,
-    carbs_g: row.carbs_g as number | null,
-    fat_g: row.fat_g as number | null,
-    fiber_g: row.fiber_g as number | null,
-    sugar_g: row.sugar_g as number | null,
-    sodium_mg: row.sodium_mg as number | null,
-    potassium_mg: row.potassium_mg as number | null,
-    calcium_mg: row.calcium_mg as number | null,
-    iron_mg: row.iron_mg as number | null,
-    vitamin_c_mg: row.vitamin_c_mg as number | null,
-    vitamin_d_mcg: row.vitamin_d_mcg as number | null,
     created_at: row.created_at as string,
+    ...readNutrients(row),
   };
 }
 
@@ -746,6 +751,93 @@ export async function upsertNutritionGoalsInCloud(id: string, goals: UpdateNutri
     ...goals,
     updated_at: new Date().toISOString(),
   });
+  if (error) throw new Error(error.message);
+}
+
+// ── Supplement stack ────────────────────────────────────────────────────────
+
+function rowToSupplement(row: Record<string, unknown>): Supplement {
+  return {
+    id: row.id as string,
+    user_id: (row.user_id as string | null) ?? null,
+    name: row.name as string,
+    brand: row.brand as string | null,
+    dose: row.dose as string | null,
+    sort_order: (row.sort_order as number) ?? 0,
+    archived: (row.archived as boolean) ?? false,
+    created_at: row.created_at as string,
+    ...readNutrients(row),
+  };
+}
+
+export async function fetchSupplementsFromCloud(): Promise<Supplement[]> {
+  const sb = getSupabaseClient();
+  const { data, error } = await sb
+    .from("protocol_supplements")
+    .select("*")
+    .eq("user_id", getUserId())
+    .eq("archived", false)
+    .order("sort_order", { ascending: true })
+    .order("name", { ascending: true });
+  if (error) throw new Error(error.message);
+  return (data ?? []).map(rowToSupplement);
+}
+
+export async function pushSupplementToCloud(s: CreateSupplement & { id: string }): Promise<void> {
+  const sb = getSupabaseClient();
+  const { error } = await sb.from("protocol_supplements").upsert({
+    id: s.id,
+    user_id: getUserId(),
+    name: s.name,
+    brand: s.brand ?? null,
+    dose: s.dose ?? null,
+    sort_order: s.sort_order ?? 0,
+    ...nutrientCols(s),
+  });
+  if (error) throw new Error(error.message);
+}
+
+/** Soft-delete: archive so historical logs stay intact (cascade would wipe them). */
+export async function archiveSupplementInCloud(id: string): Promise<void> {
+  const sb = getSupabaseClient();
+  const { error } = await sb
+    .from("protocol_supplements")
+    .update({ archived: true })
+    .eq("id", id)
+    .eq("user_id", getUserId());
+  if (error) throw new Error(error.message);
+}
+
+export async function fetchSupplementLogsFromCloud(sinceDate: string): Promise<SupplementLog[]> {
+  const sb = getSupabaseClient();
+  const { data, error } = await sb
+    .from("protocol_supplement_logs")
+    .select("id, supplement_id, date")
+    .eq("user_id", getUserId())
+    .gte("date", sinceDate);
+  if (error) throw new Error(error.message);
+  return (data ?? []) as SupplementLog[];
+}
+
+export async function addSupplementLogToCloud(supplementId: string, date: string): Promise<SupplementLog> {
+  const sb = getSupabaseClient();
+  const { data, error } = await sb
+    .from("protocol_supplement_logs")
+    .insert({ supplement_id: supplementId, user_id: getUserId(), date })
+    .select("id, supplement_id, date")
+    .single();
+  if (error) throw new Error(error.message);
+  return data as SupplementLog;
+}
+
+export async function removeSupplementLogFromCloud(supplementId: string, date: string): Promise<void> {
+  const sb = getSupabaseClient();
+  const { error } = await sb
+    .from("protocol_supplement_logs")
+    .delete()
+    .eq("supplement_id", supplementId)
+    .eq("date", date)
+    .eq("user_id", getUserId());
   if (error) throw new Error(error.message);
 }
 
