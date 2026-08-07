@@ -225,6 +225,112 @@ widget keeps its previously compiled rules. Every accidental path must fail towa
 Related trap, already fixed: `content_blocker.rs` emitted `{"url-filter": ".*"}` for a
 blank domain — which matches **every URL**. Inputs yielding no hostname are skipped.
 
+### Mac enforcement: three things had to be true, and none of them were
+
+The Mac node is the *only* place blocking is actually enforced (the phone's Safari
+path is inert on the SideStore install — see below). Until 2026-08-07 it had never
+run once, for three independent reasons. If enforcement looks dead, check them in
+this order:
+
+| | Was | Now |
+|---|---|---|
+| **Reachable** | `blocking_enabled` only in `~/.nexuslocalrc`, defaulting `false` | `EnforcementPanel` toggle → `tt_enforcement_set` persists it |
+| **Live** | flag copied into the module at construction; `tick_interval_secs` returned `None` when off, so the runtime spawned **no loop at all** | shared `Arc<AtomicBool>`; the loop always runs and `tick` re-reads the flag |
+| **Alive** | menubar app, no launch-at-login — a reboot left the Mac unprotected | LaunchAgent running a headless daemon |
+
+The middle one is the subtle trap: `Grid::spawn` reads `tick_interval_secs` **once**,
+at startup. Returning `None` while disabled meant a toggle could never start
+enforcing without a full relaunch. Gate inside `tick`, never in the manifest.
+
+### One binary, two roles: `nexus-local --daemon`
+
+Enforcement must outlive the app being *quit*, not merely closed, so the LaunchAgent
+runs the same binary with `--daemon` (`main.rs` dispatches). That process creates no
+window, no tray icon and no Dock entry, and never initialises Tauri — it is just the
+grid: `run_daemon()` in `lib.rs`. Sharing the binary means the daemon already lives
+inside the installed `.app`; there is no second artefact to build, ship or keep in
+version lockstep.
+
+**On macOS the desktop app therefore spawns no grid at all.** Two grid nodes sharing
+one `device_id` is a conflict, not redundancy: both heartbeat as the same node, both
+claim from the same command queue, and both write `/etc/hosts` — and since
+`hosts_write_lock` is per-process, a changed verdict would raise **two** admin
+password dialogs. The app is a UI onto the daemon's work. Every other platform keeps
+the old in-process behaviour; iOS has no daemon and still needs to heartbeat presence.
+
+**The toggle crosses the process boundary by polling, not IPC.** The app writes
+`blocking_enabled` to `~/.nexuslocalrc`; the daemon re-reads it every 5s via
+`AppConfig::read_blocking_enabled()` (which deliberately has none of `load`'s
+persist-on-read side effect) and updates the shared flag. 5s is well inside the 30s
+enforcement tick, so a toggle lands before the pass that would act on it.
+
+Because two processes now share that file, **`save()` is write-temp-then-`rename`**.
+A plain `fs::write` truncates first, and a poll landing in that window read a
+half-written file — whereupon `load()`'s old `unwrap_or_default()` swallowed the parse
+error and *persisted* `blocking_enabled: false`, switching enforcement off with no
+trace. `load()` now leaves a file it could not parse completely untouched. Both
+behaviours have tests; they are the config-layer version of "never fail toward
+unblocked".
+
+**The LaunchAgent uses `KeepAlive: {SuccessfulExit: false}`, not `KeepAlive: true`.**
+It relaunches on a crash but respects a clean quit — a bare `true` would make the
+service impossible to stop short of deleting the plist. It also sets
+`StandardOutPath`/`StandardErrorPath` to `~/Library/Logs/nexus-local.log`: launchd
+discards both streams by default, which would leave a headless failure with no
+evidence anywhere on the machine. **That log is the first place to look** when
+blocking isn't happening. `ProgramArguments` points at `/Applications/Nexus Local.app/…`;
+pointing it at a `target/debug` binary (what `current_exe()` returns under
+`tauri dev`) registers a path every rebuild replaces, so `EnforcementPanel` warns when
+it sees one.
+
+**Writing `/etc/hosts` needs an admin password**, and the mechanism that keeps that
+bearable is `render_hosts` being a **fixed point**: an already-correct file renders to
+itself byte-for-byte, so an unchanged verdict writes nothing and the 30s tick is
+silent. Every deviation from that property — a dropped trailing newline, an unsorted
+`effective_domains` — is a password dialog every thirty seconds. There are tests
+pinning it; don't loosen them.
+
+A *refused* dialog is the other half: `osascript` exits nonzero and the tick would
+retry 30 seconds later, forever. A 10-minute backoff (`HOSTS_RETRY_BACKOFF_SECS`)
+suppresses the retry, and is cleared by any successful write or by the verdict
+becoming a no-op. User-initiated applies (`tt_enforcement_apply_now`, `clear`) ignore
+the backoff — someone pressing a button is asking for the dialog. Process killing is
+never backed off; it needs no privileges.
+
+**Block both address families or you block nothing in Chrome.** A `/etc/hosts` entry
+that only maps `127.0.0.1` overrides the **A** lookup; the **AAAA** lookup still goes
+to real DNS, and Chrome's Happy Eyeballs prefers the IPv6 answer — so it loads the
+site normally while Safari (which took the IPv4 answer) appears blocked. `build_block`
+emits both `127.0.0.1` and `::1` for every domain.
+
+This hid for weeks because the obvious check lies: `ping youtube.com` asks for IPv4
+and dutifully reports `127.0.0.1`. The honest diagnostic is
+`dscacheutil -q host -a name youtube.com`, which prints *both* answers — a real
+`ipv6_address` next to `ip_address: 127.0.0.1` is the bug. TimeTracker's blocker
+still has it. Note Chrome also caches DNS internally, so after a rule change it needs
+`chrome://net-internals/#dns` → *Clear host cache*, or a restart.
+
+**Editing the block list takes up to ~5½ minutes to bite on the Mac**, and this looks
+exactly like a bug if you don't expect it: `focus-evaluate` runs on a 5-minute cron,
+and the Mac tick is 30s behind that. Toggling a site on at 12:56 leaves it unblocked
+until the 13:00 pass. Before diagnosing a domain that "should" be blocked, compare
+`blocked_sites.updated_at` against `blocking_state.computed_at` — if the edit is
+newer, the verdict simply hasn't been recomputed yet. Nothing is wrong.
+
+**Two enforcers share `/etc/hosts`.** TimeTracker writes its own `# BEGIN
+TimeTracker-Block` region and neither app knows about the other. Ours is rewritten
+**in place** rather than stripped-and-appended precisely so the two don't shuffle each
+other's blocks and prompt for a password each round. Both regions coexist today; the
+duplication (`disney.com`, `hbo.com` in both) is harmless.
+
+**The block lists are one-way in the app.** `BlockingPanel` can add a site or app but
+has no delete, no on/off switch and no block-mode switch — removing a block means
+opening the Supabase dashboard. That friction is the product decision, not an
+oversight: a blocker you can switch off from the blocked device isn't a blocker. Note
+the three removed controls were one loophole wearing three hats (`enabled = false`,
+deleting the row, and flipping `block_mode` from `always` to `focus_only` all end with
+the thing unblocked) — restoring any one restores all three.
+
 ### Conventions that fail silently
 
 - **`supabasePublic`, not `supabase`**, for `time_entries` / `active_sessions` /

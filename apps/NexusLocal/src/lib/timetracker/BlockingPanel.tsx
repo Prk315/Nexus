@@ -13,7 +13,23 @@ import { supabasePublic } from "../supabase";
  *
  * In TimeTracker these two lists were read-only ("managed from Supabase"), so
  * the only way to add a blocked site was the Supabase dashboard. This makes the
- * phone the editor.
+ * phone the editor — but deliberately **only in the stricter direction**.
+ *
+ * ## Adding is in-app; loosening is not
+ *
+ * There is no delete, no on/off switch and no block-mode switch here. A blocker
+ * you can switch off from the blocked device is not a blocker — at the moment
+ * you most want to unblock something, a button is exactly what you don't want in
+ * reach. Removing a block means opening the Supabase dashboard on a computer,
+ * and that deliberate friction *is* the feature.
+ *
+ * Note all three of the removed controls were the same loophole wearing
+ * different hats: `enabled = false`, deleting the row, and flipping an app's
+ * `block_mode` from `always` to `focus_only` all end with the thing unblocked.
+ * If you re-add one, you have re-added all three.
+ *
+ * Adding stays here because it only ever tightens, and friction on *that* would
+ * just mean fewer things get blocked.
  */
 
 const USER_ID = "default";
@@ -252,38 +268,9 @@ export function BlockingPanel() {
     }
   }
 
-  const toggleSite = (s: Site) =>
-    run(s.enabled ? "disable" : "enable", async () =>
-      supabasePublic
-        .from("blocked_sites")
-        .update({ enabled: !s.enabled, updated_at: stamp() })
-        .eq("id", s.id),
-    );
-
-  const delSite = (s: Site) =>
-    run("delete", async () => supabasePublic.from("blocked_sites").delete().eq("id", s.id));
-
-  const toggleApp = (a: App) =>
-    run(a.enabled ? "disable" : "enable", async () =>
-      supabasePublic
-        .from("blocked_apps")
-        .update({ enabled: !a.enabled, updated_at: stamp() })
-        .eq("id", a.id),
-    );
-
-  const toggleAppMode = (a: App) =>
-    run("mode", async () =>
-      supabasePublic
-        .from("blocked_apps")
-        .update({
-          block_mode: a.block_mode === "always" ? "focus_only" : "always",
-          updated_at: stamp(),
-        })
-        .eq("id", a.id),
-    );
-
-  const delApp = (a: App) =>
-    run("delete", async () => supabasePublic.from("blocked_apps").delete().eq("id", a.id));
+  // No toggleSite / delSite / toggleApp / toggleAppMode / delApp — see the file
+  // header. Every one of them was a way to unblock yourself from the device
+  // being blocked, which is the one thing this panel must not offer.
 
   // A verdict without a `computed_at` is a missing `blocking_state` row, not an
   // empty one. Unit 1 deliberately seeds no row: "not computed yet" and
@@ -325,11 +312,16 @@ export function BlockingPanel() {
       )}
 
       {/* ── Sites ─────────────────────────────────────────────────────────── */}
+      <div className="rounded-xl border border-white/10 bg-white/[0.02] p-3 text-[10px] text-white/40">
+        Add here, remove in Supabase. There is no delete or off switch on this screen on
+        purpose — a blocker you can switch off from the blocked device isn't a blocker.
+      </div>
+
       <h3 className="mt-1 text-[10px] uppercase tracking-wide text-white/35">Sites</h3>
       <p className="text-[10px] text-white/35">
-        Sites do apply on the iPhone: they are enforced through the Safari content blocker, and on
-        your Mac through the hosts file. The on/off switch below is the input you control; the badge
-        is the server's verdict, and the two can disagree until the enforcers are wired to it.
+        Enforced on your Mac through the hosts file, on both IPv4 and IPv6. The badge on each row is
+        the server's verdict; the on/off state is what's stored, and the two can disagree for up to
+        5 minutes while the evaluator catches up.
       </p>
 
       <div className="flex gap-2">
@@ -374,22 +366,13 @@ export function BlockingPanel() {
                     {live ? "blocked now" : "open now"}
                   </span>
                 )}
-                <button
-                  onClick={() => toggleSite(s)}
-                  disabled={busy}
+                <span
                   className={`shrink-0 rounded px-2 py-1 text-[10px] font-medium ${
                     s.enabled ? "bg-indigo-500/15 text-indigo-300" : "bg-white/[0.06] text-white/40"
                   }`}
                 >
                   {s.enabled ? "on" : "off"}
-                </button>
-                <button
-                  onClick={() => delSite(s)}
-                  disabled={busy}
-                  className="shrink-0 rounded px-1.5 py-1 text-[10px] text-white/30"
-                >
-                  ✕
-                </button>
+                </span>
               </div>
               {why && <div className="mt-1 text-[10px] text-white/40">{why}</div>}
             </div>
@@ -458,34 +441,21 @@ export function BlockingPanel() {
                     {live ? "blocked now" : "open now"}
                   </span>
                 )}
-                <button
-                  onClick={() => toggleApp(a)}
-                  disabled={busy}
+                <span
                   className={`shrink-0 rounded px-2 py-1 text-[10px] font-medium ${
                     a.enabled ? "bg-indigo-500/15 text-indigo-300" : "bg-white/[0.06] text-white/40"
                   }`}
                 >
                   {a.enabled ? "on" : "off"}
-                </button>
-                <button
-                  onClick={() => delApp(a)}
-                  disabled={busy}
-                  className="shrink-0 rounded px-1.5 py-1 text-[10px] text-white/30"
-                >
-                  ✕
-                </button>
+                </span>
               </div>
               <div className="mt-1 flex items-center gap-2">
                 <span className="min-w-0 truncate font-mono text-[10px] text-white/35">
                   {a.process_name}
                 </span>
-                <button
-                  onClick={() => toggleAppMode(a)}
-                  disabled={busy}
-                  className="ml-auto shrink-0 rounded bg-white/[0.06] px-1.5 py-0.5 text-[9px] text-white/50"
-                >
+                <span className="ml-auto shrink-0 rounded bg-white/[0.06] px-1.5 py-0.5 text-[9px] text-white/50">
                   {a.block_mode === "always" ? "always" : "during focus"}
-                </button>
+                </span>
               </div>
               {why && <div className="mt-1 text-[10px] text-white/40">{why}</div>}
             </div>

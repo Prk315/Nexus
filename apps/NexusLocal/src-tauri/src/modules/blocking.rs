@@ -32,12 +32,20 @@
 //! Autonomous enforcement (the tick) is gated behind `blocking_enabled` in the
 //! node config, off by default, because writing `/etc/hosts` requires an admin
 //! prompt. Explicit `apply`/`clear` commands work regardless (user-initiated).
+//!
+//! The gate is an [`AtomicBool`] shared with the `enforcement` commands rather
+//! than a value baked in at construction, so the toggle takes effect on the next
+//! tick instead of at the next launch. The tick loop therefore always runs and
+//! checks the flag first — the loop itself costs nothing when off (the early
+//! return precedes every network call and every filesystem read).
 
 use crate::grid::{ModuleContext, ModuleManifest, NexusModule};
 use crate::timetracker::T_BLOCKING_STATE;
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use serde_json::{json, Value};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 
 const MARKER_BEGIN: &str = "# BEGIN NexusLocal-Block";
 const MARKER_END: &str = "# END NexusLocal-Block";
@@ -47,13 +55,18 @@ const MARKER_END: &str = "# END NexusLocal-Block";
 const STALE_AFTER_SECS: i64 = 30 * 60;
 
 pub struct BlockingModule {
-    /// Whether the tick autonomously enforces the server's verdict.
-    enabled: bool,
+    /// Whether the tick autonomously enforces the server's verdict. Shared with
+    /// the `enforcement` Tauri commands, which flip it at runtime.
+    enabled: Arc<AtomicBool>,
 }
 
 impl BlockingModule {
-    pub fn new(enabled: bool) -> Self {
+    pub fn new(enabled: Arc<AtomicBool>) -> Self {
         Self { enabled }
+    }
+
+    fn is_enforcing(&self) -> bool {
+        self.enabled.load(Ordering::Relaxed)
     }
 }
 
@@ -66,14 +79,18 @@ impl NexusModule for BlockingModule {
             version: "0.2.0".to_string(),
             actions: vec!["status".to_string(), "apply".to_string(), "clear".to_string()],
             // Re-enforce every 30s so a schedule window opening (or a reward
-            // unlocking) takes effect without a manual command — but only when
-            // enforcement is switched on.
-            tick_interval_secs: if self.enabled { Some(30) } else { None },
+            // unlocking) takes effect without a manual command.
+            //
+            // Always `Some`, even when enforcement is currently off: the runtime
+            // reads this once at startup to decide whether to spawn a loop at
+            // all, so returning `None` here would mean the toggle could never
+            // start enforcing without a restart. `tick` re-checks the flag.
+            tick_interval_secs: Some(30),
         }
     }
 
     async fn tick(&self, ctx: &ModuleContext) -> Result<(), String> {
-        if !self.enabled {
+        if !self.is_enforcing() {
             return Ok(());
         }
 
@@ -103,7 +120,7 @@ impl NexusModule for BlockingModule {
             );
         }
 
-        enforce(verdict).await.map(|_| ())
+        enforce(verdict, true).await.map(|_| ())
     }
 
     async fn handle(
@@ -115,7 +132,7 @@ impl NexusModule for BlockingModule {
         match action {
             "status" => {
                 let now = Utc::now();
-                let mut out = json!({ "enforcing": self.enabled });
+                let mut out = json!({ "enforcing": self.is_enforcing() });
                 let obj = out.as_object_mut().expect("status is an object");
 
                 match fetch_verdict(ctx).await {
@@ -159,26 +176,7 @@ impl NexusModule for BlockingModule {
 
                 Ok(out)
             }
-            "apply" => {
-                // Explicit, user-initiated: surface the failure rather than
-                // silently skipping the way the tick does.
-                let verdict = fetch_verdict(ctx).await?.ok_or_else(|| {
-                    format!("no blocking_state row for user '{}'", ctx.user_id)
-                })?;
-                let stale = verdict.is_stale(Utc::now());
-                let domains = verdict.domains.len();
-                let processes = verdict.processes.len();
-                let kills_started = enforce(verdict).await?;
-                Ok(json!({
-                    "domains": domains,
-                    "processes": processes,
-                    // Processes found running and sent a quit — the force-kill
-                    // lands 2s later on its own thread, so this is a count of
-                    // kills started, not of confirmed exits.
-                    "kills_started": kills_started,
-                    "stale": stale,
-                }))
-            }
+            "apply" => enforce_now(ctx).await,
             "clear" => {
                 tokio::task::spawn_blocking(clear)
                     .await
@@ -188,6 +186,34 @@ impl NexusModule for BlockingModule {
             other => Err(format!("unsupported blocking action: {other}")),
         }
     }
+}
+
+/// Fetch the current verdict and apply it to this machine, right now.
+///
+/// The explicit, user-initiated path — behind the queued `apply` command *and*
+/// the `tt_enforcement_apply_now` Tauri command, so switching enforcement on in
+/// the UI takes effect immediately instead of at the next 30s tick.
+///
+/// Unlike the tick, this surfaces failures instead of silently leaving things
+/// alone: someone is watching a button, and "nothing happened" is a worse answer
+/// than "no verdict has been computed yet".
+pub async fn enforce_now(ctx: &ModuleContext) -> Result<Value, String> {
+    let verdict = fetch_verdict(ctx)
+        .await?
+        .ok_or_else(|| format!("no blocking_state row for user '{}'", ctx.user_id))?;
+    let stale = verdict.is_stale(Utc::now());
+    let domains = verdict.domains.len();
+    let processes = verdict.processes.len();
+    let kills_started = enforce(verdict, false).await?;
+    Ok(json!({
+        "domains": domains,
+        "processes": processes,
+        // Processes found running and sent a quit — the force-kill lands 2s
+        // later on its own thread, so this is a count of kills started, not of
+        // confirmed exits.
+        "kills_started": kills_started,
+        "stale": stale,
+    }))
 }
 
 // ── the server's verdict ────────────────────────────────────────────────────
@@ -288,14 +314,19 @@ fn string_list(value: Option<&Value>) -> Vec<String> {
 /// the admin password dialog (a cancelled dialog makes `osascript` exit
 /// nonzero), and app blocking must not be hostage to that. The hosts error is
 /// still returned so the caller logs it. Same ordering as TimeTracker's tick.
-async fn enforce(verdict: Verdict) -> Result<usize, String> {
+///
+/// `honor_backoff` distinguishes the autonomous tick (true) from a user pressing
+/// a button (false) — see [`apply`]. Note process killing is never backed off:
+/// it needs no privileges and no dialog, so a refused hosts write must not also
+/// stop blocked apps from being quit.
+async fn enforce(verdict: Verdict, honor_backoff: bool) -> Result<usize, String> {
     let processes = verdict.processes;
     let killed = tokio::task::spawn_blocking(move || enforce_processes(&processes))
         .await
         .map_err(|e| e.to_string())?;
 
     let domains = verdict.domains;
-    tokio::task::spawn_blocking(move || apply(&domains))
+    tokio::task::spawn_blocking(move || apply(&domains, honor_backoff))
         .await
         .map_err(|e| e.to_string())??;
 
@@ -368,6 +399,55 @@ fn hosts_write_lock() -> &'static std::sync::Mutex<()> {
     LOCK.get_or_init(|| std::sync::Mutex::new(()))
 }
 
+/// How long the tick waits before re-prompting after a failed privileged write.
+///
+/// Cancelling the admin dialog makes `osascript` exit nonzero. Without a backoff
+/// the 30s tick simply tries again — so one cancelled dialog becomes a dialog
+/// every thirty seconds, forever, and the only way out is switching enforcement
+/// off entirely. Ten minutes is long enough to be ignorable and short enough
+/// that a schedule window opening still gets enforced the same hour.
+#[cfg(target_os = "macos")]
+const HOSTS_RETRY_BACKOFF_SECS: u64 = 10 * 60;
+
+/// When the tick may next attempt a privileged write. `None` = no backoff.
+#[cfg(target_os = "macos")]
+fn hosts_backoff() -> &'static std::sync::Mutex<Option<std::time::Instant>> {
+    static UNTIL: std::sync::OnceLock<std::sync::Mutex<Option<std::time::Instant>>> =
+        std::sync::OnceLock::new();
+    UNTIL.get_or_init(|| std::sync::Mutex::new(None))
+}
+
+#[cfg(target_os = "macos")]
+fn backoff_active() -> bool {
+    hosts_backoff()
+        .lock()
+        .map(|g| g.map(|until| std::time::Instant::now() < until).unwrap_or(false))
+        .unwrap_or(false)
+}
+
+#[cfg(target_os = "macos")]
+fn set_backoff(active: bool) {
+    if let Ok(mut g) = hosts_backoff().lock() {
+        *g = active.then(|| {
+            std::time::Instant::now() + std::time::Duration::from_secs(HOSTS_RETRY_BACKOFF_SECS)
+        });
+    }
+}
+
+/// Both address families, deliberately.
+///
+/// An IPv4-only entry does **not** block on a dual-stack machine: `/etc/hosts`
+/// overrides the A lookup, the AAAA lookup still goes to real DNS, and Chrome's
+/// Happy Eyeballs prefers the IPv6 answer — so it connects straight past the
+/// block. This is invisible to `ping youtube.com`, which reports 127.0.0.1
+/// because it asked for IPv4. `dscacheutil -q host -a name <domain>` shows both
+/// answers and is the diagnostic to reach for.
+///
+/// Safari happened to honour the IPv4 entry, which is exactly what made this
+/// look like "blocking works" for weeks. TimeTracker's blocker has the same bug.
+#[cfg(any(target_os = "macos", test))]
+const BLOCK_ADDRS: [&str; 2] = ["127.0.0.1", "::1"];
+
 #[cfg(any(target_os = "macos", test))]
 fn build_block(domains: &[String]) -> String {
     if domains.is_empty() {
@@ -379,9 +459,13 @@ fn build_block(domains: &[String]) -> String {
         if domain.is_empty() {
             continue;
         }
-        lines.push(format!("127.0.0.1 {domain}"));
+        for addr in BLOCK_ADDRS {
+            lines.push(format!("{addr} {domain}"));
+        }
         if !domain.starts_with("www.") {
-            lines.push(format!("127.0.0.1 www.{domain}"));
+            for addr in BLOCK_ADDRS {
+                lines.push(format!("{addr} www.{domain}"));
+            }
         }
     }
     lines.push(MARKER_END.to_owned());
@@ -454,7 +538,7 @@ fn applescript_literal(raw: &str) -> String {
 }
 
 /// Domains currently blocked in our marker region of /etc/hosts (bare, no www).
-fn current_blocked() -> Result<Vec<String>, String> {
+pub fn current_blocked() -> Result<Vec<String>, String> {
     let content = std::fs::read_to_string("/etc/hosts")
         .map_err(|e| format!("Cannot read /etc/hosts: {e}"))?;
     let mut domains = Vec::new();
@@ -477,8 +561,13 @@ fn current_blocked() -> Result<Vec<String>, String> {
     Ok(domains)
 }
 
+/// Write the verdict into /etc/hosts.
+///
+/// `honor_backoff` is true for the autonomous tick and false for user-initiated
+/// applies: someone who just pressed a button is asking for the dialog, and
+/// should not be told to wait out a cooldown they can't see.
 #[cfg(target_os = "macos")]
-fn apply(domains: &[String]) -> Result<(), String> {
+fn apply(domains: &[String], honor_backoff: bool) -> Result<(), String> {
     let _guard = hosts_write_lock().lock().unwrap_or_else(|e| e.into_inner());
 
     let current = std::fs::read_to_string("/etc/hosts")
@@ -487,7 +576,16 @@ fn apply(domains: &[String]) -> Result<(), String> {
 
     // Skip the privileged write (and its password dialog) if nothing changed.
     // Load-bearing: without it a 30s tick loop spams admin prompts forever.
+    // Also the steady state, so it clears any backoff from an earlier refusal.
     if new_content == current {
+        set_backoff(false);
+        return Ok(());
+    }
+
+    // A recently-refused dialog: stay quiet rather than re-prompting on every
+    // tick. Checked after the no-op case so a verdict that resolves itself still
+    // clears the cooldown.
+    if honor_backoff && backoff_active() {
         return Ok(());
     }
 
@@ -507,22 +605,28 @@ fn apply(domains: &[String]) -> Result<(), String> {
         .output()
         .map_err(|e| format!("osascript failed to launch: {e}"))?;
     if output.status.success() {
+        set_backoff(false);
         Ok(())
     } else {
+        // Cancelled dialog, wrong password, or a genuinely broken write — all
+        // indistinguishable here, and all equally bad to retry in 30 seconds.
+        set_backoff(true);
         Err(format!(
-            "hosts update failed: {}",
-            String::from_utf8_lossy(&output.stderr)
+            "hosts update failed (backing off {}m): {}",
+            HOSTS_RETRY_BACKOFF_SECS / 60,
+            String::from_utf8_lossy(&output.stderr).trim()
         ))
     }
 }
 
 #[cfg(not(target_os = "macos"))]
-fn apply(_domains: &[String]) -> Result<(), String> {
+fn apply(_domains: &[String], _honor_backoff: bool) -> Result<(), String> {
     Err("site blocking is only implemented on macOS".to_string())
 }
 
 fn clear() -> Result<(), String> {
-    apply(&[])
+    // User-initiated: prompt even if the tick is mid-backoff.
+    apply(&[], false)
 }
 
 #[cfg(test)]
@@ -536,9 +640,13 @@ mod tests {
 
     // ── manifest ────────────────────────────────────────────────────────────
 
+    fn module(enabled: bool) -> BlockingModule {
+        BlockingModule::new(Arc::new(AtomicBool::new(enabled)))
+    }
+
     #[test]
     fn manifest_advertises_the_routed_actions() {
-        let m = BlockingModule::new(false).manifest();
+        let m = module(false).manifest();
         // The id routes queued commands (gridClient's runViaGrid) — changing it
         // orphans every command already in the queue.
         assert_eq!(m.id, "blocking");
@@ -546,11 +654,49 @@ mod tests {
     }
 
     #[test]
-    fn disabled_node_never_ticks() {
-        // No tick interval => the runtime starts no loop => no /etc/hosts write
-        // and no admin prompt on a node that did not opt in.
-        assert_eq!(BlockingModule::new(false).manifest().tick_interval_secs, None);
-        assert_eq!(BlockingModule::new(true).manifest().tick_interval_secs, Some(30));
+    fn tick_loop_is_started_regardless_of_the_switch() {
+        // The runtime reads `tick_interval_secs` once, at startup, to decide
+        // whether to spawn a loop at all. If this went `None` while enforcement
+        // was off, switching it on would do nothing until the next launch —
+        // which is the whole bug this shape exists to prevent. `tick` is what
+        // enforces the switch, not the manifest.
+        assert_eq!(module(false).manifest().tick_interval_secs, Some(30));
+        assert_eq!(module(true).manifest().tick_interval_secs, Some(30));
+    }
+
+    #[test]
+    fn the_switch_is_read_live_not_captured_at_construction() {
+        // The `enforcement` commands hold the other end of this Arc; a toggle
+        // has to be visible to a tick that is already looping.
+        let flag = Arc::new(AtomicBool::new(false));
+        let m = BlockingModule::new(Arc::clone(&flag));
+        assert!(!m.is_enforcing(), "starts off");
+        flag.store(true, Ordering::Relaxed);
+        assert!(m.is_enforcing(), "toggle must be visible without a restart");
+        flag.store(false, Ordering::Relaxed);
+        assert!(!m.is_enforcing());
+    }
+
+    // ── privileged-write backoff ────────────────────────────────────────────
+
+    /// The only test that touches the process-global backoff cell. Kept as one
+    /// test on purpose — split in two they could interleave under the default
+    /// parallel test runner and flake.
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn a_refused_dialog_silences_the_tick_until_the_cooldown_expires() {
+        set_backoff(false);
+        assert!(!backoff_active(), "no backoff by default");
+
+        // A cancelled admin dialog. Without this the 30s tick re-prompts
+        // immediately and keeps doing so until enforcement is switched off.
+        set_backoff(true);
+        assert!(backoff_active(), "a refused write must suppress the next tick");
+
+        // A later success (or a verdict that needs no write) reopens it — the
+        // cooldown must not outlive the condition that caused it.
+        set_backoff(false);
+        assert!(!backoff_active());
     }
 
     // ── build_block ─────────────────────────────────────────────────────────
@@ -565,6 +711,35 @@ mod tests {
         let block = build_block(&s(&["youtube.com"]));
         assert!(block.contains("127.0.0.1 youtube.com"), "bare domain missing");
         assert!(block.contains("127.0.0.1 www.youtube.com"), "www variant missing");
+    }
+
+    #[test]
+    fn every_domain_is_blocked_on_both_address_families() {
+        // The bug this pins: an IPv4-only entry overrides the A lookup while the
+        // AAAA lookup still reaches real DNS, so Chrome (which prefers IPv6)
+        // loads the site normally. `ping` asks for IPv4 and reports 127.0.0.1,
+        // which is why it looked like it was working.
+        let block = build_block(&s(&["youtube.com"]));
+        for line in [
+            "127.0.0.1 youtube.com",
+            "::1 youtube.com",
+            "127.0.0.1 www.youtube.com",
+            "::1 www.youtube.com",
+        ] {
+            assert!(block.contains(line), "missing `{line}` in:\n{block}");
+        }
+    }
+
+    #[test]
+    fn current_blocked_does_not_double_count_the_two_families() {
+        // `current_blocked` reads back only the IPv4 lines. If it ever learns to
+        // parse `::1` too it must dedupe, or the status UI reports twice the
+        // domains that are actually blocked.
+        let block = build_block(&s(&["a.com", "b.com"]));
+        let v4 = block.lines().filter(|l| l.starts_with("127.0.0.1 ")).count();
+        let v6 = block.lines().filter(|l| l.starts_with("::1 ")).count();
+        assert_eq!(v4, v6, "the two families must stay in lockstep");
+        assert_eq!(v4, 4, "2 domains × (bare + www)");
     }
 
     #[test]

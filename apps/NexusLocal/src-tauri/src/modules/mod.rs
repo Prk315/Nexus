@@ -10,25 +10,64 @@ pub mod blocking;
 #[cfg(not(target_os = "ios"))]
 pub mod garmin;
 
-use crate::config::AppConfig;
 use crate::grid::NexusModule;
+use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 
-/// Every module this node ships with. Modules receive the node config at
-/// registration so they can pick up their own settings (e.g. blocking's
-/// enforcement switch). On iOS this is empty: the phone is a presence node that
-/// still heartbeats (so the dashboard shows it online) but executes nothing.
-pub fn registry(config: &AppConfig) -> Vec<Arc<dyn NexusModule>> {
+/// Every module this node ships with.
+///
+/// `blocking_enabled` is passed as a **shared flag**, not a bool: the other end
+/// is held by the `enforcement` Tauri commands, so toggling enforcement in the
+/// UI is picked up by the already-running tick loop rather than needing a
+/// restart. On iOS this is empty — the phone is a presence node that still
+/// heartbeats (so the dashboard shows it online) but executes nothing.
+pub fn registry(blocking_enabled: Arc<AtomicBool>) -> Vec<Arc<dyn NexusModule>> {
     #[cfg(target_os = "ios")]
     {
-        let _ = config;
+        let _ = blocking_enabled;
         Vec::new()
     }
     #[cfg(not(target_os = "ios"))]
     {
         vec![
             Arc::new(garmin::GarminModule),
-            Arc::new(blocking::BlockingModule::new(config.blocking_enabled)),
+            Arc::new(blocking::BlockingModule::new(blocking_enabled)),
         ]
+    }
+}
+
+// ── shims for the enforcement commands ──────────────────────────────────────
+//
+// `enforcement.rs` registers the same Tauri commands on every platform (the
+// `generate_handler!` list in `lib.rs` is not cfg'd, and cfg-ing it is how you
+// get a command that exists on one target and 404s on another). The `blocking`
+// module only compiles off-iOS, so these two shims give it a definition
+// everywhere and let the iOS build report "unsupported" instead of failing to
+// link.
+
+/// Domains in this machine's `/etc/hosts` marker block.
+pub fn blocking_hosts_domains() -> Result<Vec<String>, String> {
+    #[cfg(target_os = "ios")]
+    {
+        Err("hosts-file blocking is not available on iOS".to_string())
+    }
+    #[cfg(not(target_os = "ios"))]
+    {
+        blocking::current_blocked()
+    }
+}
+
+/// Fetch and apply the server's verdict right now.
+pub async fn blocking_enforce_now(
+    ctx: &crate::grid::ModuleContext,
+) -> Result<serde_json::Value, String> {
+    #[cfg(target_os = "ios")]
+    {
+        let _ = ctx;
+        Err("enforcement runs on the Mac node, not on iOS".to_string())
+    }
+    #[cfg(not(target_os = "ios"))]
+    {
+        blocking::enforce_now(ctx).await
     }
 }
