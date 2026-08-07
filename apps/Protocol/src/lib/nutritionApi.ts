@@ -19,7 +19,7 @@
  */
 
 import { getSupabaseClient } from "./supabase";
-import type { NutrientKey, NutrientValues } from "./nutrients";
+import { NUTRIENT_KEYS, type NutrientKey, type NutrientValues } from "./nutrients";
 
 export interface FoodSearchResult {
   source: "usda" | "openfoodfacts" | "frida";
@@ -217,27 +217,26 @@ async function searchFridaDK(query: string): Promise<FoodSearchResult[]> {
     .limit(10);
   if (error || !data) return [];
 
-  return data.map((row): FoodSearchResult => ({
-    source: "frida",
-    external_id: String(row.id),
-    name: row.name_da,
-    brand: row.name_en,
-    country: "Denmark",
-    nutrients: {
-      calories: row.calories,
-      protein_g: row.protein_g,
-      carbs_g: row.carbs_g,
-      fat_g: row.fat_g,
-      fiber_g: row.fiber_g,
-      sugar_g: row.sugar_g,
-      sodium_mg: row.sodium_mg,
-      potassium_mg: row.potassium_mg,
-      calcium_mg: row.calcium_mg,
-      iron_mg: row.iron_mg,
-      vitamin_c_mg: row.vitamin_c_mg,
-      vitamin_d_mcg: row.vitamin_d_mcg,
-    },
-  }));
+  return data.map((row): FoodSearchResult => {
+    // protocol_foods_dk now carries the full Frida/FCDB nutrient set — read every
+    // NUTRIENT_KEY column that's present (numeric, or a numeric string from
+    // PostgREST), so deep micros/amino-acids/fatty-acids flow through.
+    const r = row as Record<string, unknown>;
+    const nutrients: Partial<NutrientValues> = {};
+    for (const k of NUTRIENT_KEYS) {
+      const v = r[k];
+      const num = typeof v === "number" ? v : typeof v === "string" && v !== "" ? Number(v) : null;
+      if (num != null && !Number.isNaN(num)) nutrients[k] = num;
+    }
+    return {
+      source: "frida",
+      external_id: String(row.id),
+      name: row.name_da,
+      brand: row.name_en,
+      country: "Denmark",
+      nutrients,
+    };
+  });
 }
 
 /** Searches all sources in parallel; a failure in one doesn't block the others. */
