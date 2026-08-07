@@ -1,12 +1,12 @@
-import { useEffect, useMemo, useState } from "react";
-import { CalendarDays, ChefHat, Apple, BarChart3 } from "lucide-react";
+import { useEffect, useMemo, useState, type ReactNode } from "react";
+import { CalendarDays, BarChart3 } from "lucide-react";
 import { useAppDispatch, useAppSelector } from "../store/hooks";
 import {
   fetchFoods, addFood, fetchMeals, fetchMealItems,
   fetchMealPlanEntries, addMealPlanEntry,
   toggleMealPlanEntryLogged, removeMealPlanEntry, fetchNutritionGoals, saveNutritionGoals,
 } from "../store/slices/mealPlannerSlice";
-import { isoDate } from "../lib/uiHelpers";
+import { CARD_STYLE, isoDate } from "../lib/uiHelpers";
 import { entryNutrition, sumNutrition } from "../lib/mealNutrition";
 import FoodSearchPanel from "../components/mealplanner/FoodSearchPanel";
 import NutrientOverview from "../components/mealplanner/NutrientOverview";
@@ -18,13 +18,20 @@ import type { CreateFood, MealPlanEntry, MealSlot, UpdateNutritionGoals } from "
 
 const DAY_LABELS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
 
-type PaneId = "plan" | "meals" | "foods" | "overview";
-const PANES: { id: PaneId; label: string; icon: typeof CalendarDays }[] = [
-  { id: "plan", label: "Plan", icon: CalendarDays },
-  { id: "meals", label: "My Meals", icon: ChefHat },
-  { id: "foods", label: "Foods", icon: Apple },
-  { id: "overview", label: "Overview", icon: BarChart3 },
-];
+/** True on Mac-width viewports; false on phone-width. Drives grid vs. stack. */
+function useIsWide(breakpoint = 900): boolean {
+  const [wide, setWide] = useState(
+    () => (typeof window !== "undefined" ? window.innerWidth >= breakpoint : true),
+  );
+  useEffect(() => {
+    const mq = window.matchMedia(`(min-width: ${breakpoint}px)`);
+    const on = () => setWide(mq.matches);
+    on();
+    mq.addEventListener("change", on);
+    return () => mq.removeEventListener("change", on);
+  }, [breakpoint]);
+  return wide;
+}
 
 function mondayOf(dateISO: string): string {
   const d = new Date(dateISO + "T00:00:00");
@@ -51,8 +58,8 @@ export default function MealPlannerPage() {
   const planEntries = useAppSelector((s) => s.mealPlanner.planEntries);
   const goals = useAppSelector((s) => s.mealPlanner.goals);
 
+  const isWide = useIsWide();
   const today = isoDate(new Date());
-  const [pane, setPane] = useState<PaneId>("plan");
   const [weekStart, setWeekStart] = useState(mondayOf(today));
   const [addingSlot, setAddingSlot] = useState<{ date: string; slot: MealSlot } | null>(null);
 
@@ -144,54 +151,47 @@ export default function MealPlannerPage() {
         <GoalsWidget todayTotals={todayTotals} goals={goals} onSave={handleSaveGoals} />
       </div>
 
-      {/* Pane tabs */}
-      <div style={{ display: "flex", gap: 4, borderBottom: "1px solid var(--border)", flexWrap: "wrap" }}>
-        {PANES.map(({ id, label, icon: Icon }) => (
-          <button
-            key={id}
-            onClick={() => setPane(id)}
-            style={{
-              display: "flex", alignItems: "center", gap: 6,
-              background: "none", border: "none", cursor: "pointer",
-              padding: "8px 12px", marginRight: 4,
-              fontSize: 13, fontWeight: 600,
-              color: pane === id ? "var(--accent)" : "var(--text-muted)",
-              borderBottom: `2px solid ${pane === id ? "var(--accent)" : "transparent"}`,
-            }}
-          >
-            <Icon size={15} /> {label}
-          </button>
-        ))}
+      {/* Everything on one dashboard: 2-col grid on Mac, single stack on iPhone.
+          Overview + Plan span the full width; My Meals + Foods share the last row. */}
+      <div
+        style={{
+          display: "grid",
+          gap: 16,
+          gridTemplateColumns: isWide ? "1fr 1fr" : "1fr",
+          alignItems: "start",
+        }}
+      >
+        <DashCard title="Overview" icon={<BarChart3 size={15} />} fullWidth={isWide}>
+          <NutrientOverview perDay={perDayCalories} todayTotals={todayTotals} goals={goals} />
+        </DashCard>
+
+        <DashCard title="Plan" icon={<CalendarDays size={15} />} fullWidth={isWide}>
+          <PlanPane
+            days={days}
+            today={today}
+            weekLabel={`${days[0]} — ${days[6]}`}
+            isThisWeek={weekStart === mondayOf(today)}
+            entriesByDaySlot={entriesByDaySlot}
+            foodsById={foodsById}
+            mealsById={mealsById}
+            mealItemsById={mealItemsById}
+            onPrevWeek={() => setWeekStart(addDays(weekStart, -7))}
+            onNextWeek={() => setWeekStart(addDays(weekStart, 7))}
+            onThisWeek={() => setWeekStart(mondayOf(today))}
+            onAddSlot={(date, slot) => setAddingSlot({ date, slot })}
+            onToggle={(id, logged) => dispatch(toggleMealPlanEntryLogged({ id, logged }))}
+            onRemove={(id) => dispatch(removeMealPlanEntry(id))}
+          />
+        </DashCard>
+
+        <DashCard>
+          <MealsPane meals={meals} mealItemsById={mealItemsById} foodsById={foodsById} />
+        </DashCard>
+
+        <DashCard>
+          <FoodsPane foods={foods} />
+        </DashCard>
       </div>
-
-      {pane === "plan" && (
-        <PlanPane
-          days={days}
-          today={today}
-          weekLabel={`${days[0]} — ${days[6]}`}
-          isThisWeek={weekStart === mondayOf(today)}
-          entriesByDaySlot={entriesByDaySlot}
-          foodsById={foodsById}
-          mealsById={mealsById}
-          mealItemsById={mealItemsById}
-          onPrevWeek={() => setWeekStart(addDays(weekStart, -7))}
-          onNextWeek={() => setWeekStart(addDays(weekStart, 7))}
-          onThisWeek={() => setWeekStart(mondayOf(today))}
-          onAddSlot={(date, slot) => setAddingSlot({ date, slot })}
-          onToggle={(id, logged) => dispatch(toggleMealPlanEntryLogged({ id, logged }))}
-          onRemove={(id) => dispatch(removeMealPlanEntry(id))}
-        />
-      )}
-
-      {pane === "meals" && (
-        <MealsPane meals={meals} mealItemsById={mealItemsById} foodsById={foodsById} />
-      )}
-
-      {pane === "foods" && <FoodsPane foods={foods} />}
-
-      {pane === "overview" && (
-        <NutrientOverview perDay={perDayCalories} todayTotals={todayTotals} goals={goals} />
-      )}
 
       {addingSlot && (
         <FoodSearchPanel
@@ -205,5 +205,45 @@ export default function MealPlannerPage() {
         />
       )}
     </div>
+  );
+}
+
+/**
+ * One dashboard tile. `fullWidth` makes it span both grid columns (used for the
+ * wide Overview + Plan panes). `title` is only rendered for panes that don't
+ * already carry their own header (My Meals / Foods self-title, so they omit it).
+ * `maxBodyHeight` caps the body with internal scroll so tiles stay balanced.
+ */
+function DashCard({
+  title, icon, fullWidth, maxBodyHeight, children,
+}: {
+  title?: string;
+  icon?: ReactNode;
+  fullWidth?: boolean;
+  maxBodyHeight?: number;
+  children: ReactNode;
+}) {
+  return (
+    <section
+      style={{
+        ...CARD_STYLE,
+        padding: 16,
+        display: "flex",
+        flexDirection: "column",
+        gap: 12,
+        minWidth: 0,
+        gridColumn: fullWidth ? "1 / -1" : "auto",
+      }}
+    >
+      {title && (
+        <div style={{ display: "flex", alignItems: "center", gap: 7, color: "var(--text)", fontSize: 15, fontWeight: 700 }}>
+          <span style={{ color: "var(--accent)", display: "flex" }}>{icon}</span>
+          {title}
+        </div>
+      )}
+      <div style={{ minWidth: 0, maxHeight: maxBodyHeight, overflowY: maxBodyHeight ? "auto" : undefined }}>
+        {children}
+      </div>
+    </section>
   );
 }

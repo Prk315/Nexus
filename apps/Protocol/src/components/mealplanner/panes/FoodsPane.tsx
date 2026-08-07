@@ -76,7 +76,7 @@ export default function FoodsPane({ foods }: { foods: Food[] }) {
           {foods.length === 0 ? "No foods in the library yet." : "No foods match your filter."}
         </div>
       ) : (
-        <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+        <div style={{ display: "flex", flexDirection: "column", gap: 6, maxHeight: 380, overflowY: "auto" }}>
           {filtered.map((f) => {
             const mine = myId != null && f.user_id === myId;
             return (
