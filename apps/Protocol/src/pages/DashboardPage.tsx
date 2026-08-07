@@ -23,6 +23,7 @@ import { StatTile } from "../components/shared/StatTile";
 import MuscleMap from "../components/workouts/MuscleMap";
 import RingGauge from "../components/mealplanner/RingGauge";
 import ProtocolChargeChart from "../components/dashboard/ProtocolChargeChart";
+import SleepChart from "../components/dashboard/SleepChart";
 import TodayHabitsCard from "../components/dashboard/TodayHabitsCard";
 import { ConsistencyHeatmap, buildHeatmapGrid, computeFractionByDate } from "../components/habits/HabitCharts";
 import { useExerciseSets } from "../lib/useExerciseSets";
@@ -236,6 +237,8 @@ export default function DashboardPage() {
           </>
         )}
       </div>
+
+      <SleepChart sleep={sleep} bodyMetrics={bodyMetrics} />
 
       <div style={{ ...CARD_STYLE, padding: "20px 24px" }}>
         <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 16 }}>
