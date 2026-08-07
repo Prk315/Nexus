@@ -33,6 +33,7 @@ import { SchedulePanel } from "./SchedulePanel";
 // the two spellings as the same file (TS1261).
 import { Pomodoro } from "./PomodoroPanel";
 import { RewardsPanel } from "./RewardsPanel";
+import { EnforcementPanel } from "./EnforcementPanel";
 
 // --- Visible panels -------------------------------------------------------
 // Work units append their panel component here.
@@ -50,6 +51,9 @@ const PANELS: Array<() => ReactElement | null> = [
   Pomodoro,
   SchedulePanel,
   BlockingPanel,
+  // Directly after BlockingPanel: that panel shows what *should* be blocked,
+  // this one whether this machine is actually doing it. Renders null off macOS.
+  EnforcementPanel,
   RewardsPanel,
 ];
 

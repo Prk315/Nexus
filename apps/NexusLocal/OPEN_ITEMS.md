@@ -9,6 +9,11 @@ recording, pomodoro, focus schedules, blocking management, time-unlock rewards) 
 merged and released. `focus-evaluate` is deployed and scheduled on pg_cron every 5
 minutes; `blocking_state` carries a live verdict; the Mac grid node enforces it.
 
+**Mac enforcement went continual on 2026-08-07** — see "Mac enforcement" in the root
+`CLAUDE.md`. Until then it had never actually run: `blocking_enabled` shipped `false`,
+was reachable only by hand-editing `~/.nexuslocalrc`, was frozen at startup, and
+nothing kept the app alive across a reboot.
+
 ---
 
 ## 1. On-phone Safari blocking is inert on the SideStore path
@@ -46,6 +51,13 @@ Both apps write the same Supabase tables and neither knows about the other.
   reads the deleted cloud row as `RemoteGone`, re-reads local SQLite where the session
   still runs, and on stop pushes an entry sharing the natural key
   (`device_id,start_time,task_name`) with `merge-duplicates` — silently overwriting.
+- **TimeTracker's hosts block is IPv4-only, so it does not block Chrome.** It writes
+  `127.0.0.1 <domain>` and no `::1`, which overrides the A lookup while AAAA still
+  resolves to the real site — and Chrome prefers IPv6. NexusLocal's `build_block`
+  writes both families (fixed 2026-08-07); TimeTracker's
+  `src-tauri/src/blocker/hosts.rs:25` has not been touched. Its markers coexist with ours in `/etc/hosts`, so the domains it
+  duplicates (`disney.com`, `hbo.com`) are covered by our block anyway — but anything
+  only in TimeTracker's list is effectively unblocked in Chrome.
 - **TimeTracker's blocking sync has three structural defects**: nothing resets
   `synced = 0` on a local edit, so a row pushes exactly once ever; deletes have no
   tombstones, so the next pull resurrects them; and the last-write-wins guard compares
