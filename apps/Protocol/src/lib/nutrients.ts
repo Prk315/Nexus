@@ -29,6 +29,11 @@ export const NUTRIENT_META = [
   { key: "monounsaturated_fat_g", label: "Monounsat.", unit: "g", group: "Macros", sub: true },
   { key: "polyunsaturated_fat_g", label: "Polyunsat.", unit: "g", group: "Macros", sub: true },
   { key: "trans_fat_g", label: "Trans", unit: "g", group: "Macros", sub: true },
+  { key: "omega3_mg", label: "Omega-3", unit: "mg", group: "Macros", sub: true },
+  { key: "epa_mg", label: "EPA (omega-3)", unit: "mg", group: "Macros", sub: true },
+  { key: "dha_mg", label: "DHA (omega-3)", unit: "mg", group: "Macros", sub: true },
+  { key: "ala_mg", label: "ALA (omega-3)", unit: "mg", group: "Macros", sub: true },
+  { key: "omega6_mg", label: "Omega-6", unit: "mg", group: "Macros", sub: true },
   // Minerals
   { key: "sodium_mg", label: "Sodium", unit: "mg", group: "Minerals" },
   { key: "potassium_mg", label: "Potassium", unit: "mg", group: "Minerals" },
@@ -70,6 +75,8 @@ export const NUTRIENT_META = [
   { key: "apigenin_mg", label: "Apigenin", unit: "mg", group: "Supplements" },
   { key: "rhodiola_rosea_mg", label: "Rhodiola Rosea", unit: "mg", group: "Supplements" },
   { key: "ashwagandha_mg", label: "Ashwagandha", unit: "mg", group: "Supplements" },
+  { key: "l_theanine_mg", label: "L-Theanine", unit: "mg", group: "Supplements" },
+  { key: "creatine_g", label: "Creatine", unit: "g", group: "Supplements" },
   // Medication
   { key: "methylphenidate_mg", label: "Methylphenidate", unit: "mg", group: "Medication" },
 ] as const satisfies readonly NutrientMeta[];
