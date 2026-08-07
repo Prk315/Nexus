@@ -50,7 +50,7 @@ export default function MealsPane({
           </div>
         </div>
       ) : (
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(280px, 1fr))", gap: 12 }}>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(240px, 1fr))", gap: 12, maxHeight: 420, overflowY: "auto" }}>
           {meals.map((meal) => {
             const items = mealItemsById[meal.id] ?? [];
             const n = mealNutrition(meal.id, foodsById, mealItemsById);
