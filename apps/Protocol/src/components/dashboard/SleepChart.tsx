@@ -7,14 +7,15 @@ import { CARD_STYLE, isoDate } from "../../lib/uiHelpers";
 import type { SleepEntry, BodyMetric } from "../../store/types";
 
 /**
- * Sleep trend chart — one line per metric (total, REM, deep, light, HRV, resting
- * HR), each NORMALISED to its own max over the visible window so their shapes sit
- * on one 0-100% axis and can be compared at a glance. The tooltip shows the real
- * numbers. Range switches between a week (default), 3 months and a year.
+ * Sleep trend chart. Every metric is scored 0–100% by EXPONENTIAL DECAY from its
+ * own ideal: 100% at target, halving each time you stray a fixed step further
+ * (for total sleep, 8 h = 100% and every 2 h away halves it, so 6 h = 50%). That
+ * makes the percentages a real quality read, not a ratio.
  *
- * Total is the hero: a thick light-blue line with a downward blue glow. The sleep
- * stages are mid-weight and colour-coded (REM green, deep purple, light indigo);
- * the vitals are thin and run warm (HRV orange → resting HR red).
+ * The hero is a separate aggregate — "Sleep score" — a weighted blend of the
+ * component scores (duration heaviest, then deep & REM, then light + vitals): the
+ * one-glance "how good was this sleep". Total sleep stays as its own light-blue
+ * component line. Range switches between a week (default), 3 months and a year.
  */
 
 type Range = "week" | "3m" | "year";
@@ -26,30 +27,52 @@ const RANGES: { id: Range; label: string; days: number; bucketDays: number }[] =
 
 const minToH = (m: number) => `${(m / 60).toFixed(1)} h`;
 
-interface Series {
+/** Which side of the target is penalised: below only, above only, or both. */
+type Dir = "both" | "under" | "over";
+
+interface Metric {
   key: string;
   label: string;
   color: string;
   width: number;
-  hero?: boolean;
   source: "sleep" | "body";
   field: keyof SleepEntry | keyof BodyMetric;
   fmt: (v: number) => string;
-  /** Minutes that read as 100% — a fixed, science-based ideal (8 h total sleep,
-   *  2 h deep, 2 h REM). When absent the series normalises to its own window max. */
-  target?: number;
+  /** Value (same unit as the metric) that scores 100%. */
+  target: number;
+  /** Distance from target that halves the score — the exponential's half-life. */
+  halfLife: number;
+  dir: Dir;
+  /** Contribution to the aggregate "Sleep score" (weights renormalise over the
+   *  metrics present each day). */
+  weight: number;
 }
 
-// Line weight tracks physiological importance: total sleep is the hero, the
-// restorative stages (deep, REM) come next, light is lighter, vitals thinnest.
-const SERIES: Series[] = [
-  { key: "total", label: "Total sleep", color: "#38bdf8", width: 5.5, hero: true, source: "sleep", field: "duration_min", fmt: minToH, target: 480 },
-  { key: "deep", label: "Deep", color: "#8b5cf6", width: 3.25, source: "sleep", field: "deep_sleep_min", fmt: minToH, target: 120 },
-  { key: "rem", label: "REM", color: "#22c55e", width: 3.25, source: "sleep", field: "rem_sleep_min", fmt: minToH, target: 120 },
-  { key: "light", label: "Light", color: "#6366f1", width: 1.75, source: "sleep", field: "light_sleep_min", fmt: minToH },
-  { key: "hrv", label: "HRV", color: "#f59e0b", width: 1.25, source: "body", field: "hrv_ms", fmt: (v) => `${Math.round(v)} ms` },
-  { key: "hr", label: "Resting HR", color: "#ef4444", width: 1.25, source: "body", field: "resting_hr_bpm", fmt: (v) => `${Math.round(v)} bpm` },
+// Component metrics. Scores exp-decay from each ideal; weights feed the aggregate.
+// Duration is symmetric (over- and under-sleeping both cost); the stages only
+// penalise a deficit (more deep/REM is not worse); HRV higher-is-better, resting
+// HR lower-is-better.
+const METRICS: Metric[] = [
+  { key: "total", label: "Total sleep", color: "#38bdf8", width: 3,    source: "sleep", field: "duration_min",    fmt: minToH,                         target: 480, halfLife: 120, dir: "both",  weight: 0.35 },
+  { key: "deep",  label: "Deep",        color: "#8b5cf6", width: 2.75, source: "sleep", field: "deep_sleep_min",  fmt: minToH,                         target: 120, halfLife: 40,  dir: "under", weight: 0.20 },
+  { key: "rem",   label: "REM",         color: "#22c55e", width: 2.75, source: "sleep", field: "rem_sleep_min",   fmt: minToH,                         target: 120, halfLife: 40,  dir: "under", weight: 0.20 },
+  { key: "light", label: "Light",       color: "#6366f1", width: 1.75, source: "sleep", field: "light_sleep_min", fmt: minToH,                         target: 240, halfLife: 120, dir: "under", weight: 0.10 },
+  { key: "hrv",   label: "HRV",         color: "#f59e0b", width: 1.25, source: "body",  field: "hrv_ms",          fmt: (v) => `${Math.round(v)} ms`,   target: 55,  halfLife: 20,  dir: "under", weight: 0.10 },
+  { key: "hr",    label: "Resting HR",  color: "#ef4444", width: 1.25, source: "body",  field: "resting_hr_bpm",  fmt: (v) => `${Math.round(v)} bpm`,  target: 55,  halfLife: 12,  dir: "over",  weight: 0.05 },
 ];
+
+// The aggregate hero — a distinct fuchsia so it reads apart from every component.
+const SCORE = { key: "score", label: "Sleep score", color: "#d946ef", width: 6 };
+
+/** Exponential-decay score: 100% at target, halving every `halfLife` further away
+ *  on the penalised side(s). Always in [0, 100]. */
+function scoreOf(value: number, m: Metric): number {
+  let dev: number;
+  if (m.dir === "under") dev = Math.max(0, m.target - value);
+  else if (m.dir === "over") dev = Math.max(0, value - m.target);
+  else dev = Math.abs(value - m.target);
+  return Math.round(100 * Math.pow(2, -dev / m.halfLife) * 10) / 10;
+}
 
 function subDaysISO(n: number): string {
   const d = new Date();
@@ -69,7 +92,7 @@ export default function SleepChart({
   const [range, setRange] = useState<Range>("week");
   const cfg = RANGES.find((r) => r.id === range)!;
 
-  const { data, activeSeries } = useMemo(() => {
+  const { data, activeMetrics, hasScore } = useMemo(() => {
     const cutoff = subDaysISO(cfg.days - 1);
 
     // Merge sleep + body metrics by date.
@@ -84,14 +107,13 @@ export default function SleepChart({
     }
 
     const dates = [...byDate.keys()].sort();
-    // Raw value per series per date.
     const rawRows: RawRow[] = dates.map((date) => {
       const rec = byDate.get(date)!;
       const row: RawRow = { date };
-      for (const s of SERIES) {
-        const src = s.source === "sleep" ? rec.sleep : rec.body;
-        const v = src ? (src as unknown as Record<string, unknown>)[s.field as string] : null;
-        row[s.key] = typeof v === "number" ? v : null;
+      for (const m of METRICS) {
+        const src = m.source === "sleep" ? rec.sleep : rec.body;
+        const v = src ? (src as unknown as Record<string, unknown>)[m.field as string] : null;
+        row[m.key] = typeof v === "number" ? v : null;
       }
       return row;
     });
@@ -99,28 +121,28 @@ export default function SleepChart({
     // Bucket (year → weekly averages) to keep long ranges legible.
     const buckets = cfg.bucketDays > 1 ? bucketRows(rawRows, cfg.bucketDays) : rawRows;
 
-    // Which series actually have data in this window.
-    const activeSeries = SERIES.filter((s) => buckets.some((r) => r[s.key] != null));
+    const activeMetrics = METRICS.filter((m) => buckets.some((r) => r[m.key] != null));
 
-    // Normalise to percentage. Series with a fixed target (total 8 h, deep/REM
-    // 2 h) read as "% of the science-based ideal" and can exceed 100%; the rest
-    // fall back to their own window max. Keep raw values for the tooltip.
-    const denom: Record<string, number> = {};
-    for (const s of SERIES) {
-      denom[s.key] = s.target ?? Math.max(1, ...buckets.map((r) => (r[s.key] as number | null) ?? 0));
-    }
-
+    let hasScore = false;
     const data: Datum[] = buckets.map((r) => {
       const d: Datum = { date: r.date as string, full: fullLabel(r.date as string), label: shortLabel(r.date as string, range) };
-      for (const s of SERIES) {
-        const raw = r[s.key] as number | null;
-        d[`${s.key}_pct`] = raw == null ? null : Math.round((raw / denom[s.key]) * 1000) / 10;
-        d[`${s.key}_raw`] = raw;
+      let wSum = 0, sSum = 0;
+      for (const m of METRICS) {
+        const raw = r[m.key] as number | null;
+        if (raw == null) { d[`${m.key}_pct`] = null; d[`${m.key}_raw`] = null; continue; }
+        const sc = scoreOf(raw, m);
+        d[`${m.key}_pct`] = sc;
+        d[`${m.key}_raw`] = raw;
+        wSum += m.weight;
+        sSum += m.weight * sc;
       }
+      // Aggregate: weighted mean of the component scores present that day.
+      d.score_pct = wSum > 0 ? Math.round((sSum / wSum) * 10) / 10 : null;
+      if (d.score_pct != null) hasScore = true;
       return d;
     });
 
-    return { data, activeSeries };
+    return { data, activeMetrics, hasScore };
   }, [sleep, bodyMetrics, cfg, range]);
 
   const tickInterval = range === "week" ? 0 : range === "3m" ? Math.max(0, Math.floor(data.length / 8)) : Math.max(0, Math.floor(data.length / 10));
@@ -131,16 +153,19 @@ export default function SleepChart({
         <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
           <Moon size={15} color="var(--accent)" />
           <span style={{ fontWeight: 600, color: "var(--text)", fontSize: 14 }}>Sleep</span>
-          <span style={{ fontSize: 12, color: "var(--text-muted)" }}>· % of ideal (8 h sleep · 2 h deep/REM) — hover for real values</span>
+          <span style={{ fontSize: 12, color: "var(--text-muted)" }}>· quality score vs ideal (8 h = 100%, 6 h = 50%) — hover for values</span>
         </div>
-        {/* Legend */}
+        {/* Legend — aggregate first, then components. */}
         <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
-          {activeSeries.map((s) => (
-            <span key={s.key} style={{ display: "inline-flex", alignItems: "center", gap: 5, fontSize: 11, color: "var(--text-muted)" }}>
-              <span style={{ width: 14, height: s.hero ? 5 : Math.max(2, Math.round(s.width)), borderRadius: 2, background: s.color, boxShadow: s.hero ? `0 0 6px ${s.color}` : "none" }} />
-              {s.label}
-            </span>
-          ))}
+          {[...(hasScore ? [SCORE] : []), ...activeMetrics].map((s) => {
+            const hero = s.key === "score";
+            return (
+              <span key={s.key} style={{ display: "inline-flex", alignItems: "center", gap: 5, fontSize: 11, color: hero ? "var(--text)" : "var(--text-muted)", fontWeight: hero ? 600 : 400 }}>
+                <span style={{ width: 14, height: hero ? 5 : Math.max(2, Math.round(s.width)), borderRadius: 2, background: s.color, boxShadow: hero ? `0 0 6px ${s.color}` : "none" }} />
+                {s.label}
+              </span>
+            );
+          })}
         </div>
       </div>
 
@@ -152,12 +177,12 @@ export default function SleepChart({
         <ResponsiveContainer width="100%" height={300}>
           <ComposedChart data={data} margin={{ top: 12, right: 10, bottom: 0, left: -18 }}>
             <defs>
-              <linearGradient id="sleepTotalFill" x1="0" y1="0" x2="0" y2="1">
-                <stop offset="0%" stopColor="#38bdf8" stopOpacity={0.35} />
-                <stop offset="100%" stopColor="#38bdf8" stopOpacity={0} />
+              <linearGradient id="sleepScoreFill" x1="0" y1="0" x2="0" y2="1">
+                <stop offset="0%" stopColor={SCORE.color} stopOpacity={0.3} />
+                <stop offset="100%" stopColor={SCORE.color} stopOpacity={0} />
               </linearGradient>
               <filter id="sleepGlow" x="-20%" y="-30%" width="140%" height="160%">
-                <feDropShadow dx="0" dy="5" stdDeviation="6" floodColor="#38bdf8" floodOpacity="0.55" />
+                <feDropShadow dx="0" dy="5" stdDeviation="6" floodColor={SCORE.color} floodOpacity="0.55" />
               </filter>
             </defs>
 
@@ -171,7 +196,7 @@ export default function SleepChart({
               minTickGap={16}
             />
             <YAxis
-              domain={[0, 125]}
+              domain={[0, 105]}
               ticks={[0, 50, 100]}
               tickFormatter={(v) => `${v}%`}
               tick={{ fontSize: 11, fill: "var(--text-muted)" }}
@@ -179,37 +204,38 @@ export default function SleepChart({
               tickLine={false}
               width={44}
             />
-            {/* The science-based ideal — series can rise above it. */}
+            {/* 100% = a perfect score against every ideal. */}
             <ReferenceLine y={100} stroke="var(--text-muted)" strokeDasharray="4 4" strokeOpacity={0.5} />
             <Tooltip content={<SleepTooltip />} />
 
-            {/* Hero: total sleep as a glowing light-blue area. */}
-            <Area
-              type="monotone"
-              dataKey="total_pct"
-              stroke="#38bdf8"
-              strokeWidth={5.5}
-              fill="url(#sleepTotalFill)"
-              filter="url(#sleepGlow)"
-              connectNulls
-              dot={false}
-              activeDot={{ r: 4, fill: "#38bdf8" }}
-              isAnimationActive={false}
-            />
-
-            {SERIES.filter((s) => !s.hero).map((s) => (
+            {/* Component lines (including total sleep). */}
+            {METRICS.map((m) => (
               <Line
-                key={s.key}
+                key={m.key}
                 type="monotone"
-                dataKey={`${s.key}_pct`}
-                stroke={s.color}
-                strokeWidth={s.width}
+                dataKey={`${m.key}_pct`}
+                stroke={m.color}
+                strokeWidth={m.width}
                 dot={false}
-                activeDot={{ r: 3, fill: s.color }}
+                activeDot={{ r: 3, fill: m.color }}
                 connectNulls
                 isAnimationActive={false}
               />
             ))}
+
+            {/* Hero: the aggregate sleep score, a glowing fuchsia area on top. */}
+            <Area
+              type="monotone"
+              dataKey="score_pct"
+              stroke={SCORE.color}
+              strokeWidth={SCORE.width}
+              fill="url(#sleepScoreFill)"
+              filter="url(#sleepGlow)"
+              connectNulls
+              dot={false}
+              activeDot={{ r: 4, fill: SCORE.color }}
+              isAnimationActive={false}
+            />
           </ComposedChart>
         </ResponsiveContainer>
       )}
@@ -254,9 +280,9 @@ function bucketRows(rows: RawRow[], bucketDays: number): RawRow[] {
   for (let i = 0; i < rows.length; i += bucketDays) {
     const slice = rows.slice(i, i + bucketDays);
     const agg: RawRow = { date: slice[slice.length - 1].date };
-    for (const s of SERIES) {
-      const vals = slice.map((r) => r[s.key]).filter((v): v is number => typeof v === "number");
-      agg[s.key] = vals.length ? vals.reduce((a, b) => a + b, 0) / vals.length : null;
+    for (const m of METRICS) {
+      const vals = slice.map((r) => r[m.key]).filter((v): v is number => typeof v === "number");
+      agg[m.key] = vals.length ? vals.reduce((a, b) => a + b, 0) / vals.length : null;
     }
     out.push(agg);
   }
@@ -276,24 +302,34 @@ function fullLabel(dateISO: string): string {
 function SleepTooltip({ active, payload }: { active?: boolean; payload?: Array<{ payload: Datum }> }) {
   if (!active || !payload || payload.length === 0) return null;
   const d = payload[0].payload;
+  const score = d.score_pct;
   return (
     <div style={{ background: "var(--surface)", border: "1px solid var(--border)", borderRadius: "var(--radius-sm)", padding: "8px 10px", fontSize: 12, color: "var(--text)" }}>
       <div style={{ fontWeight: 600, marginBottom: 6 }}>{d.full}</div>
       <div style={{ display: "flex", flexDirection: "column", gap: 3 }}>
-        {SERIES.map((s) => {
-          const raw = d[`${s.key}_raw`];
+        {typeof score === "number" && (
+          <div style={{ display: "flex", alignItems: "center", gap: 8, justifyContent: "space-between", marginBottom: 3, paddingBottom: 5, borderBottom: "1px solid var(--border)" }}>
+            <span style={{ display: "inline-flex", alignItems: "center", gap: 6, fontWeight: 700 }}>
+              <span style={{ width: 9, height: 9, borderRadius: 2, background: SCORE.color, boxShadow: `0 0 5px ${SCORE.color}` }} />
+              {SCORE.label}
+            </span>
+            <span style={{ fontWeight: 700 }}>{score}%</span>
+          </div>
+        )}
+        {METRICS.map((m) => {
+          const raw = d[`${m.key}_raw`];
           if (raw == null || typeof raw !== "number") return null;
-          const pct = d[`${s.key}_pct`];
+          const pct = d[`${m.key}_pct`];
           return (
-            <div key={s.key} style={{ display: "flex", alignItems: "center", gap: 8, justifyContent: "space-between" }}>
+            <div key={m.key} style={{ display: "flex", alignItems: "center", gap: 8, justifyContent: "space-between" }}>
               <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
-                <span style={{ width: 9, height: 9, borderRadius: 2, background: s.color }} />
-                {s.label}
+                <span style={{ width: 9, height: 9, borderRadius: 2, background: m.color }} />
+                {m.label}
               </span>
               <span style={{ fontWeight: 600 }}>
-                {s.fmt(raw)}
+                {m.fmt(raw)}
                 {typeof pct === "number" && (
-                  <span style={{ color: "var(--text-muted)", fontWeight: 400 }}> · {pct}%{s.target ? " of ideal" : ""}</span>
+                  <span style={{ color: "var(--text-muted)", fontWeight: 400 }}> · {pct}%</span>
                 )}
               </span>
             </div>
