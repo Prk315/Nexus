@@ -21,11 +21,9 @@ const emptyManualFood: CreateFood = {
 function toCreateFood(r: FoodSearchResult): CreateFood {
   return {
     ...EMPTY_NUTRIENTS,
+    ...r.nutrients, // full nutrient profile the source provided (USDA is deepest)
     source: r.source, external_id: r.external_id, name: r.name, brand: r.brand,
     serving_qty: 100, serving_unit: "g",
-    calories: r.calories, protein_g: r.protein_g, carbs_g: r.carbs_g, fat_g: r.fat_g,
-    fiber_g: r.fiber_g, sugar_g: r.sugar_g, sodium_mg: r.sodium_mg, potassium_mg: r.potassium_mg,
-    calcium_mg: r.calcium_mg, iron_mg: r.iron_mg, vitamin_c_mg: r.vitamin_c_mg, vitamin_d_mcg: r.vitamin_d_mcg,
   };
 }
 
@@ -198,7 +196,7 @@ export default function FoodPicker({
                   key={`${r.source}-${r.external_id}-${i}`}
                   name={r.name}
                   brand={r.brand}
-                  calories={r.calories}
+                  calories={r.nutrients.calories ?? null}
                   sourceLabel={SOURCE_LABEL[r.source]}
                   country={r.country}
                   onAdd={() => selectResult(r)}
