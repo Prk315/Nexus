@@ -4,7 +4,7 @@
 // Everything downstream (totals, editors, breakdown) derives from NUTRIENT_META
 // so adding a nutrient is a one-line change here.
 
-export type NutrientGroup = "Macros" | "Minerals" | "Vitamins" | "Other" | "Supplements" | "Medication";
+export type NutrientGroup = "Macros" | "Amino Acids" | "Minerals" | "Vitamins" | "Other" | "Supplements" | "Medication";
 
 export interface NutrientMeta {
   key: string;
@@ -24,6 +24,7 @@ export const NUTRIENT_META = [
   { key: "fiber_g", label: "Fibre", unit: "g", group: "Macros", sub: true },
   { key: "sugar_g", label: "Sugar", unit: "g", group: "Macros", sub: true },
   { key: "added_sugar_g", label: "Added sugar", unit: "g", group: "Macros", sub: true },
+  { key: "sugar_alcohol_g", label: "Sugar alcohol", unit: "g", group: "Macros", sub: true },
   { key: "fat_g", label: "Fat", unit: "g", group: "Macros" },
   { key: "saturated_fat_g", label: "Saturated", unit: "g", group: "Macros", sub: true },
   { key: "monounsaturated_fat_g", label: "Monounsat.", unit: "g", group: "Macros", sub: true },
@@ -34,6 +35,25 @@ export const NUTRIENT_META = [
   { key: "dha_mg", label: "DHA (omega-3)", unit: "mg", group: "Macros", sub: true },
   { key: "ala_mg", label: "ALA (omega-3)", unit: "mg", group: "Macros", sub: true },
   { key: "omega6_mg", label: "Omega-6", unit: "mg", group: "Macros", sub: true },
+  // Amino acids (essential first, then conditional / common supplemental)
+  { key: "histidine_g", label: "Histidine", unit: "g", group: "Amino Acids" },
+  { key: "isoleucine_g", label: "Isoleucine", unit: "g", group: "Amino Acids" },
+  { key: "leucine_g", label: "Leucine", unit: "g", group: "Amino Acids" },
+  { key: "lysine_g", label: "Lysine", unit: "g", group: "Amino Acids" },
+  { key: "methionine_g", label: "Methionine", unit: "g", group: "Amino Acids" },
+  { key: "phenylalanine_g", label: "Phenylalanine", unit: "g", group: "Amino Acids" },
+  { key: "threonine_g", label: "Threonine", unit: "g", group: "Amino Acids" },
+  { key: "tryptophan_g", label: "Tryptophan", unit: "g", group: "Amino Acids" },
+  { key: "valine_g", label: "Valine", unit: "g", group: "Amino Acids" },
+  { key: "cystine_g", label: "Cystine", unit: "g", group: "Amino Acids" },
+  { key: "tyrosine_g", label: "Tyrosine", unit: "g", group: "Amino Acids" },
+  { key: "arginine_g", label: "Arginine", unit: "g", group: "Amino Acids" },
+  { key: "glutamine_g", label: "Glutamine", unit: "g", group: "Amino Acids" },
+  { key: "glycine_g", label: "Glycine", unit: "g", group: "Amino Acids" },
+  { key: "citrulline_g", label: "Citrulline", unit: "g", group: "Amino Acids" },
+  { key: "taurine_g", label: "Taurine", unit: "g", group: "Amino Acids" },
+  { key: "beta_alanine_g", label: "Beta-Alanine", unit: "g", group: "Amino Acids" },
+  { key: "l_carnitine_g", label: "L-Carnitine", unit: "g", group: "Amino Acids" },
   // Minerals
   { key: "sodium_mg", label: "Sodium", unit: "mg", group: "Minerals" },
   { key: "potassium_mg", label: "Potassium", unit: "mg", group: "Minerals" },
@@ -52,6 +72,8 @@ export const NUTRIENT_META = [
   { key: "chloride_mg", label: "Chloride", unit: "mg", group: "Minerals" },
   { key: "chromium_mcg", label: "Chromium", unit: "mcg", group: "Minerals" },
   { key: "molybdenum_mcg", label: "Molybdenum", unit: "mcg", group: "Minerals" },
+  { key: "boron_mg", label: "Boron", unit: "mg", group: "Minerals" },
+  { key: "fluoride_mcg", label: "Fluoride", unit: "mcg", group: "Minerals" },
   // Vitamins
   { key: "vitamin_a_mcg", label: "Vitamin A", unit: "mcg", group: "Vitamins" },
   { key: "thiamin_mg", label: "Thiamin (B1)", unit: "mg", group: "Vitamins" },
@@ -66,6 +88,7 @@ export const NUTRIENT_META = [
   { key: "vitamin_d_mcg", label: "Vitamin D", unit: "mcg", group: "Vitamins" },
   { key: "vitamin_e_mg", label: "Vitamin E", unit: "mg", group: "Vitamins" },
   { key: "vitamin_k_mcg", label: "Vitamin K", unit: "mcg", group: "Vitamins" },
+  { key: "choline_mg", label: "Choline", unit: "mg", group: "Vitamins" },
   // Other
   { key: "cholesterol_mg", label: "Cholesterol", unit: "mg", group: "Other" },
   { key: "water_ml", label: "Water", unit: "ml", group: "Other" },
@@ -77,15 +100,37 @@ export const NUTRIENT_META = [
   { key: "ashwagandha_mg", label: "Ashwagandha", unit: "mg", group: "Supplements" },
   { key: "l_theanine_mg", label: "L-Theanine", unit: "mg", group: "Supplements" },
   { key: "creatine_g", label: "Creatine", unit: "g", group: "Supplements" },
+  { key: "melatonin_mg", label: "Melatonin", unit: "mg", group: "Supplements" },
+  { key: "coq10_mg", label: "CoQ10", unit: "mg", group: "Supplements" },
+  { key: "curcumin_mg", label: "Curcumin", unit: "mg", group: "Supplements" },
+  { key: "resveratrol_mg", label: "Resveratrol", unit: "mg", group: "Supplements" },
+  { key: "quercetin_mg", label: "Quercetin", unit: "mg", group: "Supplements" },
+  { key: "alpha_gpc_mg", label: "Alpha-GPC", unit: "mg", group: "Supplements" },
+  { key: "lions_mane_mg", label: "Lion's Mane", unit: "mg", group: "Supplements" },
+  { key: "bacopa_mg", label: "Bacopa", unit: "mg", group: "Supplements" },
+  { key: "ginkgo_mg", label: "Ginkgo", unit: "mg", group: "Supplements" },
+  { key: "ginseng_mg", label: "Ginseng", unit: "mg", group: "Supplements" },
+  { key: "five_htp_mg", label: "5-HTP", unit: "mg", group: "Supplements" },
+  { key: "gaba_mg", label: "GABA", unit: "mg", group: "Supplements" },
+  { key: "betaine_mg", label: "Betaine (TMG)", unit: "mg", group: "Supplements" },
+  { key: "nac_mg", label: "NAC", unit: "mg", group: "Supplements" },
+  { key: "glucosamine_mg", label: "Glucosamine", unit: "mg", group: "Supplements" },
+  { key: "chondroitin_mg", label: "Chondroitin", unit: "mg", group: "Supplements" },
+  { key: "msm_mg", label: "MSM", unit: "mg", group: "Supplements" },
+  { key: "collagen_g", label: "Collagen", unit: "g", group: "Supplements" },
+  { key: "spirulina_g", label: "Spirulina", unit: "g", group: "Supplements" },
   // Medication
   { key: "methylphenidate_mg", label: "Methylphenidate", unit: "mg", group: "Medication" },
+  { key: "ibuprofen_mg", label: "Ibuprofen", unit: "mg", group: "Medication" },
+  { key: "acetaminophen_mg", label: "Paracetamol", unit: "mg", group: "Medication" },
+  { key: "aspirin_mg", label: "Aspirin", unit: "mg", group: "Medication" },
 ] as const satisfies readonly NutrientMeta[];
 
 export type NutrientKey = (typeof NUTRIENT_META)[number]["key"];
 
 export const NUTRIENT_KEYS = NUTRIENT_META.map((m) => m.key) as NutrientKey[];
 
-export const NUTRIENT_GROUPS: NutrientGroup[] = ["Macros", "Minerals", "Vitamins", "Other", "Supplements", "Medication"];
+export const NUTRIENT_GROUPS: NutrientGroup[] = ["Macros", "Amino Acids", "Minerals", "Vitamins", "Other", "Supplements", "Medication"];
 
 /** Every nutrient value, nullable. Foods and supplements both carry this shape. */
 export type NutrientValues = Record<NutrientKey, number | null>;
