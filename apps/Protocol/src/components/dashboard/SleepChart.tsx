@@ -52,16 +52,16 @@ interface Metric {
 const clamp = (v: number) => Math.max(0, Math.min(100, v));
 
 const METRICS: Metric[] = [
-  { key: "total", label: "Total sleep", color: "#38bdf8", width: 3,    source: "sleep", field: "duration_min",    fmt: minToH,                        scored: true,  target: 480, halfLife: 120, dir: "both",  weight: 0.40 },
-  { key: "deep",  label: "Deep",        color: "#8b5cf6", width: 2.75, source: "sleep", field: "deep_sleep_min",  fmt: minToH,                        scored: true,  target: 120, halfLife: 40,  dir: "under", weight: 0.22 },
-  { key: "rem",   label: "REM",         color: "#22c55e", width: 2.75, source: "sleep", field: "rem_sleep_min",   fmt: minToH,                        scored: true,  target: 120, halfLife: 40,  dir: "under", weight: 0.22 },
+  { key: "total", label: "Total sleep", color: "#38bdf8", width: 2.25, source: "sleep", field: "duration_min",    fmt: minToH,                        scored: true,  target: 480, halfLife: 120, dir: "both",  weight: 0.40 },
+  { key: "deep",  label: "Deep",        color: "#8b5cf6", width: 2,    source: "sleep", field: "deep_sleep_min",  fmt: minToH,                        scored: true,  target: 120, halfLife: 40,  dir: "under", weight: 0.22 },
+  { key: "rem",   label: "REM",         color: "#22c55e", width: 2,    source: "sleep", field: "rem_sleep_min",   fmt: minToH,                        scored: true,  target: 120, halfLife: 40,  dir: "under", weight: 0.22 },
   { key: "light", label: "Light",       color: "#6366f1", width: 1.75, source: "sleep", field: "light_sleep_min", fmt: minToH,                        scored: true,  target: 240, halfLife: 120, dir: "under", weight: 0.16 },
   { key: "hrv",   label: "HRV",         color: "#f59e0b", width: 1.25, source: "body",  field: "hrv_ms",          fmt: (v) => `${Math.round(v)} ms`,  scored: false, plot: (v) => clamp((v / 250) * 100) },
   { key: "hr",    label: "Resting HR",  color: "#ef4444", width: 1.25, source: "body",  field: "resting_hr_bpm",  fmt: (v) => `${Math.round(v)} bpm`, scored: false, plot: (v) => clamp(v) },
 ];
 const METRIC = Object.fromEntries(METRICS.map((m) => [m.key, m])) as Record<string, Metric>;
 
-const SCORE = { key: "score", label: "Sleep score", color: "#d946ef", width: 6 };
+const SCORE = { key: "score", label: "Sleep score", color: "#d946ef", width: 5 };
 
 /** Exponential-decay score for a scored metric: 100% at target, halving every
  *  `halfLife` further on the penalised side(s). Always in [0, 100]. */
@@ -213,23 +213,24 @@ export default function SleepChart({
     </div>
   ) : (
     <ResponsiveContainer width="100%" height={compact ? 300 : 360}>
-      <ComposedChart data={data} margin={{ top: 12, right: 10, bottom: 0, left: -18 }}>
+      <ComposedChart data={data} margin={{ top: 18, right: 18, bottom: 0, left: 6 }}>
         <defs>
           <linearGradient id="sleepScoreFill" x1="0" y1="0" x2="0" y2="1">
-            <stop offset="0%" stopColor={SCORE.color} stopOpacity={0.3} />
+            <stop offset="0%" stopColor={SCORE.color} stopOpacity={0.24} />
+            <stop offset="55%" stopColor={SCORE.color} stopOpacity={0.05} />
             <stop offset="100%" stopColor={SCORE.color} stopOpacity={0} />
           </linearGradient>
           <filter id="sleepGlow" x="-20%" y="-30%" width="140%" height="160%">
-            <feDropShadow dx="0" dy="5" stdDeviation="6" floodColor={SCORE.color} floodOpacity="0.55" />
+            <feDropShadow dx="0" dy="4" stdDeviation="5" floodColor={SCORE.color} floodOpacity="0.5" />
           </filter>
         </defs>
-        <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" vertical={false} />
-        <XAxis dataKey="label" tick={{ fontSize: 11, fill: "var(--text-muted)" }} axisLine={false} tickLine={false} interval={tickInterval} minTickGap={16} />
-        <YAxis domain={[0, 105]} ticks={[0, 50, 100]} tickFormatter={(v) => `${v}%`} tick={{ fontSize: 11, fill: "var(--text-muted)" }} axisLine={false} tickLine={false} width={44} />
-        <ReferenceLine y={100} stroke="var(--text-muted)" strokeDasharray="4 4" strokeOpacity={0.5} />
+        <CartesianGrid strokeDasharray="2 7" stroke="var(--border)" strokeOpacity={0.5} vertical={false} />
+        <XAxis dataKey="label" tick={{ fontSize: 11, fill: "var(--text-muted)" }} axisLine={false} tickLine={false} interval={tickInterval} minTickGap={16} padding={{ left: 6, right: 6 }} />
+        <YAxis domain={[0, 105]} ticks={[0, 50, 100]} tick={false} axisLine={false} tickLine={false} width={0} />
+        <ReferenceLine y={100} stroke="var(--text-muted)" strokeDasharray="4 4" strokeOpacity={0.55} label={{ value: "ideal", position: "insideTopRight", fill: "var(--text-muted)", fontSize: 10 }} />
         <Tooltip content={<SleepTooltip />} />
         {METRICS.map((m) => (
-          <Line key={m.key} type="monotone" dataKey={`${m.key}_pos`} stroke={m.color} strokeWidth={m.width} dot={false} activeDot={{ r: 3, fill: m.color }} connectNulls isAnimationActive={false} />
+          <Line key={m.key} type="monotone" dataKey={`${m.key}_pos`} stroke={m.color} strokeWidth={m.width} strokeOpacity={0.85} dot={false} activeDot={{ r: 3, fill: m.color }} connectNulls isAnimationActive={false} />
         ))}
         <Area type="monotone" dataKey="score_pct" stroke={SCORE.color} strokeWidth={SCORE.width} fill="url(#sleepScoreFill)" filter="url(#sleepGlow)" connectNulls dot={false} activeDot={{ r: 4, fill: SCORE.color }} isAnimationActive={false} />
       </ComposedChart>
@@ -237,7 +238,7 @@ export default function SleepChart({
   );
 
   return (
-    <div ref={cardRef} style={{ ...CARD_STYLE, padding: "20px 20px 14px" }}>
+    <div ref={cardRef} style={{ ...CARD_STYLE, padding: "22px 24px 16px" }}>
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, flexWrap: "wrap", marginBottom: 6 }}>
         <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
           <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
@@ -278,12 +279,12 @@ export default function SleepChart({
           )}
         </>
       ) : (
-        <div style={{ display: "flex", gap: 20, alignItems: "stretch" }}>
+        <div style={{ display: "flex", gap: 24, alignItems: "stretch" }}>
           <div style={{ flex: 1, minWidth: 0 }}>{chart}</div>
-          <div style={{ width: 188, flexShrink: 0, display: "flex", flexDirection: "column", gap: 12, maxHeight: 360, overflowY: "auto", paddingRight: 2 }}>
+          <div style={{ width: 196, flexShrink: 0, display: "flex", flexDirection: "column", justifyContent: "center", gap: 18, borderLeft: "1px solid var(--border)", paddingLeft: 22 }}>
             {columnRings}
             {extras.length > 0 && (
-              <div style={{ fontSize: 11, color: "var(--text-muted)", lineHeight: 1.5, marginTop: 2 }}>{extras.join(" · ")}</div>
+              <div style={{ fontSize: 11, color: "var(--text-muted)", lineHeight: 1.6, marginTop: 4 }}>{extras.join(" · ")}</div>
             )}
           </div>
         </div>
@@ -315,7 +316,7 @@ function Ring({ pct, color, size, stroke = 5 }: { pct: number | null; color: str
     <svg width={size} height={size} style={{ flexShrink: 0 }}>
       <circle cx={size / 2} cy={size / 2} r={r} fill="none" stroke="var(--border)" strokeWidth={stroke} />
       <circle cx={size / 2} cy={size / 2} r={r} fill="none" stroke={color} strokeWidth={stroke} strokeDasharray={c} strokeDashoffset={off} strokeLinecap="round" transform={`rotate(-90 ${size / 2} ${size / 2})`} />
-      <text x="50%" y="50%" textAnchor="middle" dominantBaseline="central" fontSize={size * 0.3} fontWeight={700} fill="var(--text)">
+      <text x="50%" y="50%" textAnchor="middle" dominantBaseline="central" fontSize={size * 0.34} fontWeight={700} fill="var(--text)">
         {pct != null ? `${Math.round(pct)}` : "—"}
       </text>
     </svg>
