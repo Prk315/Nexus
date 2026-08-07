@@ -30,7 +30,7 @@ export default function SupplementPane() {
   }
 
   return (
-    <div style={{ ...CARD_STYLE, padding: 16, display: "flex", flexDirection: "column", gap: 12 }}>
+    <div style={{ ...CARD_STYLE, padding: 16, display: "flex", flexDirection: "column", gap: 12, width: "100%", height: "100%", minHeight: 0 }}>
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
         <div style={{ display: "flex", alignItems: "center", gap: 7, minWidth: 0 }}>
           <Pill size={15} color="var(--accent)" />
@@ -56,7 +56,7 @@ export default function SupplementPane() {
           </div>
         </div>
       ) : (
-        <div style={{ display: "flex", flexDirection: "column", gap: 6, maxHeight: 520, overflowY: "auto" }}>
+        <div style={{ display: "flex", flexDirection: "column", gap: 6, flex: 1, minHeight: 0, maxHeight: 520, overflowY: "auto" }}>
           {supplements.map((s) => {
             const taken = takenToday.has(s.id);
             return (
