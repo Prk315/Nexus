@@ -9,6 +9,10 @@
 pub mod blocking;
 #[cfg(not(target_os = "ios"))]
 pub mod garmin;
+// Foreground-app time tracking reads LaunchServices (`lsappinfo`) and the HID
+// idle counter (`ioreg`), neither of which exists off macOS.
+#[cfg(target_os = "macos")]
+pub mod usage_tracker;
 
 use crate::grid::NexusModule;
 use std::sync::atomic::AtomicBool;
@@ -29,10 +33,16 @@ pub fn registry(blocking_enabled: Arc<AtomicBool>) -> Vec<Arc<dyn NexusModule>> 
     }
     #[cfg(not(target_os = "ios"))]
     {
-        vec![
+        #[allow(unused_mut)]
+        let mut modules: Vec<Arc<dyn NexusModule>> = vec![
             Arc::new(garmin::GarminModule),
             Arc::new(blocking::BlockingModule::new(blocking_enabled)),
-        ]
+        ];
+        // macOS-only, and pushed rather than listed inline so the two entries
+        // above stay on their own lines for parallel work.
+        #[cfg(target_os = "macos")]
+        modules.push(Arc::new(usage_tracker::UsageTrackerModule::new()));
+        modules
     }
 }
 

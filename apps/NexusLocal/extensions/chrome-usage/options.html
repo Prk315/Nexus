@@ -1,0 +1,96 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Nexus Web Usage — Settings</title>
+    <link rel="stylesheet" href="options.css" />
+  </head>
+  <body>
+    <main class="wrap">
+      <header>
+        <h1>Nexus Web Usage</h1>
+        <p class="sub">
+          Reports per-site active time to the Nexus Local daemon on
+          <code>127.0.0.1:1431</code>. Nothing is sent anywhere else.
+        </p>
+      </header>
+
+      <section class="card">
+        <h2>1. Pairing token</h2>
+        <p class="hint">
+          Open the Nexus Local app and copy the token from the Usage panel, then
+          paste it here.
+        </p>
+        <div class="row">
+          <input
+            id="token"
+            type="password"
+            spellcheck="false"
+            autocomplete="off"
+            placeholder="48-character token"
+            aria-label="Pairing token"
+          />
+          <button id="reveal" type="button" class="ghost" aria-label="Show or hide token">
+            Show
+          </button>
+        </div>
+        <div class="row">
+          <button id="save" type="button" class="primary">Save token</button>
+          <span id="tokenStatus" class="status" role="status"></span>
+        </div>
+      </section>
+
+      <section class="card">
+        <h2>2. Tracking</h2>
+        <div class="row switch-row">
+          <label class="switch">
+            <input id="enabled" type="checkbox" />
+            <span class="slider" aria-hidden="true"></span>
+          </label>
+          <div>
+            <div id="enabledLabel" class="switch-label">Tracking is off</div>
+            <div class="hint" id="enabledHint">Save a token first to enable tracking.</div>
+          </div>
+        </div>
+      </section>
+
+      <section class="card">
+        <h2>3. Connection</h2>
+        <div class="row">
+          <button id="test" type="button">Test connection</button>
+          <span id="healthStatus" class="status" role="status">Not tested yet.</span>
+        </div>
+        <p class="hint">
+          The health check does not verify the token — if the token is wrong,
+          uploads will fail and the reason appears below.
+        </p>
+      </section>
+
+      <section class="card">
+        <h2>Queue</h2>
+        <div class="row">
+          <div class="metric">
+            <div id="queueCount" class="metric-value">0</div>
+            <div class="metric-label">records waiting to upload</div>
+          </div>
+          <button id="flush" type="button">Upload now</button>
+        </div>
+        <p id="lastFlush" class="hint">No upload attempted yet.</p>
+        <p class="hint">
+          Records are kept if the daemon is down and retried automatically every
+          minute. The queue holds up to 5000 records; beyond that the oldest are
+          dropped.
+        </p>
+      </section>
+
+      <footer>
+        <p class="hint">
+          Visited URLs and page titles are sent only to <code>127.0.0.1</code> on
+          this Mac. There is no cloud sync and no third-party endpoint.
+        </p>
+      </footer>
+    </main>
+    <script src="options.js"></script>
+  </body>
+</html>

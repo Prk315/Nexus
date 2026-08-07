@@ -26,11 +26,21 @@ tokio = { version = "1", features = ["full"] }
 async-trait = "0.1"
 uuid = { version = "1", features = ["v4"] }
 chrono = { version = "0.4", features = ["serde"] }
+# The usage store buckets intervals by *local* day (Europe/Copenhagen), and
+# chrono alone has no tz database — `Local` would follow whatever the machine
+# is set to, so a laptop taken abroad would silently start filing days against
+# a different midnight than the `SESSION_LOCAL_TZ` the server uses. Pure Rust,
+# so the iOS target is unaffected.
+chrono-tz = "0.10"
 dirs = "5"
 
 # tray-icon is not supported on iOS — only enable it for non-iOS targets
 [target.'cfg(not(target_os = "ios"))'.dependencies]
 tauri = { version = "2", features = ["tray-icon"] }
+# The browser extension's ingest endpoint (`usage_ingest.rs`), bound to
+# 127.0.0.1 by the daemon. Same major as the Nexus IPC hub in `apps/nexus`, so
+# the workspace resolves one axum. iOS has no daemon and no listener.
+axum = "0.8"
 
 # iOS reads the device name via libc gethostname (subprocess spawn is sandboxed)
 [target.'cfg(target_os = "ios")'.dependencies]

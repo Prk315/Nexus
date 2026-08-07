@@ -10,6 +10,16 @@ mod modules;
 mod timetracker;
 #[cfg(not(mobile))]
 mod tray;
+mod usage;
+mod usage_cmd;
+// The browser extension's ingest listener. Daemon-only, and there is no daemon
+// on the phone.
+#[cfg(not(any(target_os = "ios", target_os = "android")))]
+mod usage_ingest;
+// Uploads intervals to the `usage-ingest` edge function. Daemon-only, same as
+// the listener above — the phone records no usage and syncs none.
+#[cfg(not(any(target_os = "ios", target_os = "android")))]
+mod usage_sync;
 
 use config::AppConfig;
 use grid::runtime::Grid;
@@ -82,9 +92,36 @@ pub fn run_daemon() {
         device_id,
     };
 
+    // `ctx` takes ownership of `device_id`, and the sync task needs it to stamp
+    // which machine reported an interval — so clone before the move.
+    let sync_device_id = ctx.device_id.clone();
+
+    // Generated before the listener exists, so the token file is on disk by the
+    // time the extension is set up — and so a failure to create it is one line
+    // in the daemon log rather than a silent 401 on every request.
+    match usage::ensure_browser_token() {
+        Ok(t) => eprintln!("[daemon] browser token ready ({} chars)", t.len()),
+        Err(e) => eprintln!("[daemon] cannot create the browser token ({e}) — web usage will 401"),
+    }
+
     let runtime = tokio::runtime::Runtime::new().expect("cannot start the daemon tokio runtime");
     runtime.block_on(async move {
         grid.spawn(ctx, config.poll_secs);
+
+        // The browser extension's way in. Loopback only, token-authenticated,
+        // and it never takes the daemon down with it — see `usage_ingest.rs`.
+        usage_ingest::spawn();
+
+        // Upload usage so PathFinder/Protocol can read it. Goes through the
+        // `usage-ingest` edge function rather than PostgREST, because
+        // `usage_intervals` has no anon policy and this process has no session.
+        // No-op unless `usage_ingest_key` is set in ~/.nexuslocalrc.
+        usage_sync::spawn(
+            config.supabase.url.clone(),
+            config.supabase.key.clone(),
+            config.usage_ingest_key.clone(),
+            sync_device_id,
+        );
 
         // Park here forever, re-reading the switch. 5s is well inside the 30s
         // enforcement tick, so a toggle in the app is picked up before the next
@@ -227,7 +264,12 @@ pub fn run() {
             enforcement::tt_enforcement_get,
             enforcement::tt_enforcement_set,
             enforcement::tt_enforcement_apply_now,
-            enforcement::tt_enforcement_autostart_set
+            enforcement::tt_enforcement_autostart_set,
+            // Foreground-app / web time tracking (see usage.rs). These read the
+            // daemon's JSONL day files from disk — on macOS the tracker runs in
+            // the daemon, not here.
+            usage_cmd::tt_usage_today,
+            usage_cmd::tt_usage_token
         ])
         .run(tauri::generate_context!())
         .expect("error while running Nexus Local");

@@ -34,6 +34,7 @@ import { SchedulePanel } from "./SchedulePanel";
 import { Pomodoro } from "./PomodoroPanel";
 import { RewardsPanel } from "./RewardsPanel";
 import { EnforcementPanel } from "./EnforcementPanel";
+import { UsagePanel } from "./UsagePanel";
 
 // --- Visible panels -------------------------------------------------------
 // Work units append their panel component here.
@@ -54,6 +55,11 @@ const PANELS: Array<() => ReactElement | null> = [
   // Directly after BlockingPanel: that panel shows what *should* be blocked,
   // this one whether this machine is actually doing it. Renders null off macOS.
   EnforcementPanel,
+  // Where the day actually went, as measured rather than as intended. Sits
+  // after enforcement so the reading order stays "what I'm doing / the clock /
+  // what's blocked / what really happened". Renders null with no daemon and no
+  // data, which is every launch on iOS.
+  UsagePanel,
   RewardsPanel,
 ];
 
