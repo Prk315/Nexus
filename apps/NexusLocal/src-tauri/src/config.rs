@@ -30,6 +30,29 @@ pub struct AppConfig {
     /// apply/clear commands still work regardless.
     #[serde(default)]
     pub blocking_enabled: bool,
+    /// Scoped secret for the `usage-ingest` edge function. Empty = usage stays
+    /// on this Mac and nothing is uploaded.
+    ///
+    /// Lives here rather than in the source because **the repo is public**: a
+    /// key compiled into the binary would be published on the next push, which
+    /// is exactly what the scoped-function design exists to prevent. This file
+    /// is in `$HOME` and never leaves the machine.
+    #[serde(default)]
+    pub usage_ingest_key: String,
+    /// Every key this binary does not recognise, preserved verbatim.
+    ///
+    /// `load()` persists on read, so without this a binary that predates a field
+    /// **silently deletes it**: it deserializes the file, the unknown key has
+    /// nowhere to go, and `save()` writes back the reduced struct. That is not
+    /// hypothetical — adding `usage_ingest_key` and leaving an older daemon
+    /// running during the rebuild wiped the key within seconds, and the only
+    /// symptom was a log line saying sync was disabled.
+    ///
+    /// Two processes share this file (the app and the daemon) and they are not
+    /// always the same build, so round-tripping unknown keys is the only way a
+    /// hand-edited or newer setting survives an older writer.
+    #[serde(flatten)]
+    pub extra: serde_json::Map<String, serde_json::Value>,
 }
 
 fn default_user_id() -> String {
@@ -55,6 +78,8 @@ impl Default for AppConfig {
             },
             poll_secs: default_poll_secs(),
             blocking_enabled: false,
+            usage_ingest_key: String::new(),
+            extra: serde_json::Map::new(),
         }
     }
 }
@@ -212,6 +237,37 @@ mod tests {
         // The contract `load()` now upholds: on a parse failure, do not save.
         assert_eq!(fs::read_to_string(&path).expect("still there"), torn);
         let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn an_older_binary_does_not_delete_a_field_it_does_not_know() {
+        // The real incident: `usage_ingest_key` was hand-written into the config,
+        // an older daemon was still running, its `load()` round-tripped the file
+        // through a struct without that field, and `save()` wrote it back gone.
+        // The only symptom was "[usage-sync] disabled" in a log nobody was
+        // watching. `#[serde(flatten)] extra` is what makes this survive.
+        let raw = r#"{
+            "user_id": "default",
+            "poll_secs": 10,
+            "blocking_enabled": true,
+            "a_field_from_a_newer_build": "must survive",
+            "nested_future_setting": {"enabled": true, "n": 3}
+        }"#;
+        let parsed: AppConfig = serde_json::from_str(raw).expect("parses");
+        assert!(parsed.blocking_enabled, "known fields still bind");
+        assert_eq!(
+            parsed.extra.get("a_field_from_a_newer_build").and_then(|v| v.as_str()),
+            Some("must survive"),
+        );
+
+        let round_tripped = serde_json::to_string(&parsed).expect("serializes");
+        assert!(round_tripped.contains("a_field_from_a_newer_build"));
+        assert!(round_tripped.contains("nested_future_setting"));
+        // And the unknown keys must sit at the top level, not nested under
+        // "extra" — otherwise the newer build stops finding them.
+        let back: serde_json::Value = serde_json::from_str(&round_tripped).unwrap();
+        assert!(back.get("extra").is_none(), "flatten must not emit an `extra` key");
+        assert_eq!(back["nested_future_setting"]["n"], 3);
     }
 
     #[test]

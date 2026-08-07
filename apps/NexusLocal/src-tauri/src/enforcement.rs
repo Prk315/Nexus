@@ -186,8 +186,13 @@ fn autostart_installed() -> bool {
 /// Asked of the OS rather than of launchd, deliberately: `launchctl list` reports
 /// the *job*, which stays listed through a crash loop and while throttled. What
 /// the panel needs to say is whether anything is enforcing this second.
+///
+/// `pub(crate)` because the daemon is also the only process that records usage,
+/// so `usage_cmd::tt_usage_today` asks the identical question. Shared rather than
+/// copied: two answers that could drift would have the usage panel and the
+/// enforcement panel disagreeing about whether the same process is alive.
 #[cfg(target_os = "macos")]
-fn daemon_running() -> bool {
+pub(crate) fn daemon_running() -> bool {
     std::process::Command::new("pgrep")
         .args(["-f", "nexus-local --daemon"])
         .output()
@@ -196,7 +201,7 @@ fn daemon_running() -> bool {
 }
 
 #[cfg(not(target_os = "macos"))]
-fn daemon_running() -> bool {
+pub(crate) fn daemon_running() -> bool {
     false
 }
 

@@ -331,6 +331,37 @@ the three removed controls were one loophole wearing three hats (`enabled = fals
 deleting the row, and flipping `block_mode` from `always` to `focus_only` all end with
 the thing unblocked) — restoring any one restores all three.
 
+### Usage tracking, and the one table with different RLS
+
+The daemon measures foreground time: `modules/usage_tracker.rs` samples the frontmost
+app via `lsappinfo` every 5s (no TCC prompt) with idle from `ioreg -c IOHIDSystem`
+(idle >120s closes the interval at `now - idle`, or you log lunch as work). Websites
+come from a Chrome MV3 extension in `apps/NexusLocal/extensions/chrome-usage/`, which
+POSTs to `usage_ingest.rs` on **127.0.0.1:1431** authenticated by a token in
+`state_dir()/browser_token`. Everything lands as JSONL in `~/.nexuslocal/usage/`.
+
+**`usage_intervals` is the only table in this project with sane RLS, and that is
+deliberate.** It holds full URLs and page titles; the anon key is committed in
+`config.rs` and the repo is public, so a permissive policy would publish every page
+you visit. It has **no anon policy at all** — reads require `auth.uid()`, which the
+web apps already have via `useNexusAuth`. Do not "fix" the inconsistency by adding
+one. Read `usage_daily_totals` (a `security_invoker = on` view — without that flag a
+view silently bypasses the base table's RLS) rather than raw intervals.
+
+The daemon has no session, so it cannot satisfy `auth.uid()`. Writes go through the
+`usage-ingest` edge function with a scoped secret, exactly like `session-toggle`. That
+secret lives in `~/.nexuslocalrc` as `usage_ingest_key`, **never in the source** — the
+repo is public. No key means sync is simply off. `usage_sync.rs` uploads every 5 min,
+tracking a byte offset per day file; the offset is an optimisation, not a correctness
+mechanism, because the server dedupes on `(user_id, device_id, dedupe_key)` and a
+rewound cursor therefore re-sends rather than loses.
+
+⚠️ **`AppConfig::load()` persists on read, so a binary that predates a config field
+deletes it.** Adding `usage_ingest_key` while an older daemon was still running wiped
+it within seconds, and the only symptom was one line in a log. `#[serde(flatten)]
+extra` now round-trips unknown keys — two processes share that file and are not always
+the same build. Keep it when adding fields.
+
 ### Conventions that fail silently
 
 - **`supabasePublic`, not `supabase`**, for `time_entries` / `active_sessions` /

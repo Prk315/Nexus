@@ -1,0 +1,31 @@
+{
+  "manifest_version": 3,
+  "name": "Nexus Web Usage",
+  "version": "0.1.0",
+  "description": "Measures active time per website and reports it to the Nexus Local daemon on 127.0.0.1. Nothing leaves your machine.",
+  "minimum_chrome_version": "102",
+
+  "permissions": [
+    "tabs",
+    "idle",
+    "storage",
+    "alarms"
+  ],
+
+  "host_permissions": [
+    "http://127.0.0.1:1431/*"
+  ],
+
+  "background": {
+    "service_worker": "background.js"
+  },
+
+  "options_ui": {
+    "page": "options.html",
+    "open_in_tab": true
+  },
+
+  "action": {
+    "default_title": "Nexus Web Usage — click to open settings"
+  }
+}
