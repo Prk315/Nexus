@@ -291,6 +291,16 @@ export async function createHabitStack(stack: CreateHabitStack): Promise<HabitSt
   };
 }
 
+export async function updateHabitStack(stack: { id: string; name: string; sort_order: number; created_at?: string }): Promise<HabitStack> {
+  await pushHabitStackToCloud(stack); // upsert by id
+  return {
+    id: stack.id,
+    name: stack.name,
+    sort_order: stack.sort_order,
+    created_at: stack.created_at ?? new Date().toISOString(),
+  };
+}
+
 export const deleteHabitStack = (id: string): Promise<void> => deleteHabitStackFromCloud(id);
 
 // ── Meal planner: Foods ──────────────────────────────────────────────────────

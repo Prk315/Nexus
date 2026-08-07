@@ -1,15 +1,15 @@
 import { useEffect, useMemo, useState } from "react";
-import { Check, Flame, Plus, Trash2, Pencil, Clock, ArrowUp, ArrowDown, Layers, X } from "lucide-react";
+import { Check, Flame, Plus, Trash2, Pencil, Clock, ArrowUp, ArrowDown, Layers, X, GripVertical } from "lucide-react";
 import { useAppDispatch, useAppSelector } from "../store/hooks";
 import {
   fetchHabits, fetchHabitCompletions, fetchHabitStacks, addHabit, editHabit, removeHabit,
-  removeHabitStack, checkHabit, uncheckHabit,
+  addHabitStack, editHabitStack, removeHabitStack, checkHabit, uncheckHabit,
 } from "../store/slices/habitsSlice";
-import { CARD_STYLE, INPUT_STYLE, todayISO, isoDate } from "../lib/uiHelpers";
+import { CARD_STYLE, INPUT_STYLE, INPUT_SM, todayISO, isoDate } from "../lib/uiHelpers";
 import { StatTile } from "../components/shared/StatTile";
 import { habitIcon, buildHeatmapGrid, ConsistencyHeatmap } from "../components/habits/HabitCharts";
 import HabitEditForm from "../components/habits/HabitEditForm";
-import type { Habit, UpdateHabit } from "../store/types";
+import type { Habit, HabitStack, UpdateHabit } from "../store/types";
 
 const HISTORY_DAYS = 90;
 const STRIP_DAYS = 7;
@@ -202,6 +202,11 @@ export default function HabitsPage() {
   const [name, setName] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
+  const [newStackName, setNewStackName] = useState("");
+  const [renamingStackId, setRenamingStackId] = useState<string | null>(null);
+  const [renameValue, setRenameValue] = useState("");
+  const [dragStackId, setDragStackId] = useState<string | null>(null);
+  const [dragOverStackId, setDragOverStackId] = useState<string | null>(null);
 
   const today = todayISO();
 
@@ -273,6 +278,13 @@ export default function HabitsPage() {
     () => habits.filter((h) => !h.stack_id).sort((a, b) => a.sort_order - b.sort_order),
     [habits],
   );
+  // Stacks render in their own sort_order (drag-reorderable). Any group whose
+  // stack record is missing (orphaned stack_id) is shown last so no habit hides.
+  const orderedStacks = useMemo(() => [...stacks].sort((a, b) => a.sort_order - b.sort_order), [stacks]);
+  const orphanGroups = useMemo(() => {
+    const known = new Set(stacks.map((s) => s.id));
+    return [...stackedGroups.entries()].filter(([id]) => !known.has(id));
+  }, [stacks, stackedGroups]);
 
   async function handleAdd(e: React.FormEvent) {
     e.preventDefault();
@@ -299,6 +311,39 @@ export default function HabitsPage() {
       dispatch(editHabit({ id: a.id, sort_order: b.sort_order })).unwrap(),
       dispatch(editHabit({ id: b.id, sort_order: a.sort_order })).unwrap(),
     ]);
+  }
+
+  async function handleAddStack(e: React.FormEvent) {
+    e.preventDefault();
+    const v = newStackName.trim();
+    if (!v) return;
+    await dispatch(addHabitStack({ name: v, sort_order: stacks.length })).unwrap();
+    setNewStackName("");
+  }
+
+  async function commitRename(stack: HabitStack) {
+    const v = renameValue.trim();
+    if (v && v !== stack.name) {
+      await dispatch(editHabitStack({ id: stack.id, name: v, sort_order: stack.sort_order })).unwrap();
+    }
+    setRenamingStackId(null);
+  }
+
+  // Move a whole stack (and, since its habits render inside it, all of them) to
+  // a new position, then renumber every stack's sort_order and persist changes.
+  async function reorderStacks(draggedId: string, targetId: string) {
+    if (draggedId === targetId) return;
+    const ordered = [...stacks].sort((a, b) => a.sort_order - b.sort_order);
+    const from = ordered.findIndex((s) => s.id === draggedId);
+    const to = ordered.findIndex((s) => s.id === targetId);
+    if (from < 0 || to < 0) return;
+    const [moved] = ordered.splice(from, 1);
+    ordered.splice(to, 0, moved);
+    await Promise.all(
+      ordered
+        .map((s, i) => (s.sort_order === i ? null : dispatch(editHabitStack({ id: s.id, name: s.name, sort_order: i })).unwrap()))
+        .filter(Boolean) as Promise<unknown>[],
+    );
   }
 
   function renderRow(habit: Habit, reorder?: { onUp?: () => void; onDown?: () => void }) {
@@ -375,32 +420,109 @@ export default function HabitsPage() {
         </p>
       ) : (
         <>
-          {[...stackedGroups.entries()].map(([stackId, stackHabits]) => {
-            const stack = stacks.find((s) => s.id === stackId);
+          <form onSubmit={handleAddStack} style={{ display: "flex", gap: 8, alignItems: "center" }}>
+            <Layers size={14} color="var(--text-muted)" style={{ flexShrink: 0 }} />
+            <input
+              type="text"
+              value={newStackName}
+              onChange={(e) => setNewStackName(e.target.value)}
+              placeholder="New stack — e.g. Morning routine"
+              style={{ ...INPUT_SM, flex: 1, maxWidth: 320 }}
+            />
+            <button
+              type="submit"
+              disabled={!newStackName.trim()}
+              style={{ display: "flex", alignItems: "center", gap: 5, padding: "6px 12px", background: "none", border: "1px solid var(--border)", borderRadius: "var(--radius-sm)", fontSize: 12, fontWeight: 600, color: "var(--text-secondary)", cursor: "pointer", opacity: newStackName.trim() ? 1 : 0.5, flexShrink: 0 }}
+            >
+              <Plus size={13} /> Add stack
+            </button>
+          </form>
+
+          {orderedStacks.map((stack) => {
+            const stackHabits = stackedGroups.get(stack.id) ?? [];
+            const isRenaming = renamingStackId === stack.id;
+            const isDragOver = dragOverStackId === stack.id && !!dragStackId && dragStackId !== stack.id;
             return (
-              <div key={stackId} style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-                <div style={{ display: "flex", alignItems: "center", gap: 6, justifyContent: "space-between" }}>
-                  <div style={{ display: "flex", alignItems: "center", gap: 6, color: "var(--text-secondary)", fontSize: 12, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.04em" }}>
-                    <Layers size={13} />
-                    {stack?.name ?? "Stack"}
+              <div
+                key={stack.id}
+                onDragOver={(e) => { if (dragStackId) { e.preventDefault(); setDragOverStackId(stack.id); } }}
+                onDrop={(e) => { e.preventDefault(); if (dragStackId) reorderStacks(dragStackId, stack.id); setDragStackId(null); setDragOverStackId(null); }}
+                style={{
+                  display: "flex", flexDirection: "column", gap: 8,
+                  borderTop: `2px solid ${isDragOver ? "var(--accent)" : "transparent"}`,
+                  paddingTop: 4,
+                  opacity: dragStackId === stack.id ? 0.5 : 1,
+                }}
+              >
+                <div
+                  draggable={!isRenaming}
+                  onDragStart={(e) => { setDragStackId(stack.id); e.dataTransfer.effectAllowed = "move"; }}
+                  onDragEnd={() => { setDragStackId(null); setDragOverStackId(null); }}
+                  style={{ display: "flex", alignItems: "center", gap: 6, justifyContent: "space-between", cursor: isRenaming ? "default" : "grab" }}
+                >
+                  <div style={{ display: "flex", alignItems: "center", gap: 6, minWidth: 0, flex: 1 }}>
+                    <GripVertical size={14} color="var(--text-muted)" style={{ flexShrink: 0 }} />
+                    <Layers size={13} color="var(--text-secondary)" style={{ flexShrink: 0 }} />
+                    {isRenaming ? (
+                      <input
+                        autoFocus
+                        value={renameValue}
+                        onChange={(e) => setRenameValue(e.target.value)}
+                        onBlur={() => commitRename(stack)}
+                        onKeyDown={(e) => { if (e.key === "Enter") commitRename(stack); if (e.key === "Escape") setRenamingStackId(null); }}
+                        style={{ ...INPUT_SM, maxWidth: 240 }}
+                      />
+                    ) : (
+                      <button
+                        onClick={() => { setRenamingStackId(stack.id); setRenameValue(stack.name); }}
+                        title="Rename stack"
+                        style={{ display: "flex", alignItems: "center", gap: 6, background: "none", border: "none", cursor: "pointer", color: "var(--text-secondary)", fontSize: 12, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.04em", padding: 0, minWidth: 0 }}
+                      >
+                        <span style={{ whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{stack.name}</span>
+                        <Pencil size={11} color="var(--text-muted)" style={{ flexShrink: 0 }} />
+                      </button>
+                    )}
+                    <span style={{ fontSize: 11, color: "var(--text-muted)", fontWeight: 500, flexShrink: 0 }}>
+                      {stackHabits.length} habit{stackHabits.length === 1 ? "" : "s"}
+                    </span>
                   </div>
                   <button
-                    onClick={() => dispatch(removeHabitStack(stackId))}
+                    onClick={() => dispatch(removeHabitStack(stack.id))}
                     title="Delete stack (habits stay, just ungrouped)"
-                    style={{ background: "none", border: "none", color: "var(--text-muted)", cursor: "pointer", padding: 2 }}
+                    style={{ background: "none", border: "none", color: "var(--text-muted)", cursor: "pointer", padding: 2, flexShrink: 0 }}
                   >
                     <X size={12} />
                   </button>
                 </div>
-                {stackHabits.map((habit, i) =>
-                  renderRow(habit, {
-                    onUp: i > 0 ? () => swapOrder(habit, stackHabits[i - 1]) : undefined,
-                    onDown: i < stackHabits.length - 1 ? () => swapOrder(habit, stackHabits[i + 1]) : undefined,
-                  }),
+                {stackHabits.length === 0 ? (
+                  <div style={{ fontSize: 12, color: "var(--text-muted)", padding: "2px 0 2px 20px" }}>
+                    Empty — assign habits to this stack from a habit's edit form.
+                  </div>
+                ) : (
+                  stackHabits.map((habit, i) =>
+                    renderRow(habit, {
+                      onUp: i > 0 ? () => swapOrder(habit, stackHabits[i - 1]) : undefined,
+                      onDown: i < stackHabits.length - 1 ? () => swapOrder(habit, stackHabits[i + 1]) : undefined,
+                    }),
+                  )
                 )}
               </div>
             );
           })}
+
+          {orphanGroups.map(([stackId, stackHabits]) => (
+            <div key={stackId} style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 6, color: "var(--text-secondary)", fontSize: 12, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.04em" }}>
+                <Layers size={13} /> Stack
+              </div>
+              {stackHabits.map((habit, i) =>
+                renderRow(habit, {
+                  onUp: i > 0 ? () => swapOrder(habit, stackHabits[i - 1]) : undefined,
+                  onDown: i < stackHabits.length - 1 ? () => swapOrder(habit, stackHabits[i + 1]) : undefined,
+                }),
+              )}
+            </div>
+          ))}
 
           {unstacked.length > 0 && (
             <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
