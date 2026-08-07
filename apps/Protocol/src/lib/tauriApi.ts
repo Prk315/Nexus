@@ -52,6 +52,7 @@ export async function createSleepEntry(entry: CreateSleepEntry): Promise<SleepEn
     rem_sleep_min: entry.rem_sleep_min ?? null,
     light_sleep_min: entry.light_sleep_min ?? null,
     awake_time_min: entry.awake_time_min ?? null,
+    sleep_latency_min: entry.sleep_latency_min ?? null,
     respiratory_rate: entry.respiratory_rate ?? null,
     temperature_deviation: entry.temperature_deviation ?? null,
     bedtime_start: entry.bedtime_start ?? null,

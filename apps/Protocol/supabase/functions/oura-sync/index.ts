@@ -313,6 +313,7 @@ async function syncUser(
           rem_sleep_min: period?.rem_sleep_duration != null ? Math.round(period.rem_sleep_duration / 60) : null,
           light_sleep_min: period?.light_sleep_duration != null ? Math.round(period.light_sleep_duration / 60) : null,
           awake_time_min: period?.awake_time != null ? Math.round(period.awake_time / 60) : null,
+          sleep_latency_min: period?.latency != null ? Math.round(period.latency / 60) : null,
           respiratory_rate: period?.average_breath ?? null,
           temperature_deviation: readiness?.temperature_deviation ?? null,
           bedtime_start: period?.bedtime_start ?? null,

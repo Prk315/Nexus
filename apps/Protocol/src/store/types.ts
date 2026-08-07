@@ -12,6 +12,8 @@ export interface SleepEntry {
   rem_sleep_min: number | null;
   light_sleep_min: number | null;
   awake_time_min: number | null;
+  /** Minutes to fall asleep after getting into bed (Oura `latency`). */
+  sleep_latency_min: number | null;
   respiratory_rate: number | null;
   temperature_deviation: number | null;
   bedtime_start: string | null;
@@ -29,6 +31,7 @@ export interface CreateSleepEntry {
   rem_sleep_min?: number | null;
   light_sleep_min?: number | null;
   awake_time_min?: number | null;
+  sleep_latency_min?: number | null;
   respiratory_rate?: number | null;
   temperature_deviation?: number | null;
   bedtime_start?: string | null;
