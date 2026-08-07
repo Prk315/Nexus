@@ -86,6 +86,21 @@ function subDaysISO(n: number): string {
   return isoDate(d);
 }
 
+/** ISO timestamp → local "HH:MM" (null if unparseable). */
+function fmtTime(iso: string | null): string | null {
+  if (!iso) return null;
+  const d = new Date(iso);
+  return isNaN(d.getTime()) ? null : d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+}
+
+/** ISO timestamp + minutes → local "HH:MM". */
+function addMinutes(iso: string, mins: number): string | null {
+  const d = new Date(iso);
+  if (isNaN(d.getTime())) return null;
+  d.setMinutes(d.getMinutes() + mins);
+  return d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+}
+
 type Datum = Record<string, number | string | null>;
 interface RawRow { [key: string]: number | string | null; date: string; }
 
@@ -192,6 +207,18 @@ export default function SleepChart({
       ].filter(Boolean)
     : [];
 
+  // In bed → asleep → woke, with the time it took to fall asleep.
+  const asleepAt = ls?.bedtime_start && ls.sleep_latency_min != null ? addMinutes(ls.bedtime_start, ls.sleep_latency_min) : null;
+  const timingLine = ls?.bedtime_start
+    ? [
+        `In bed ${fmtTime(ls.bedtime_start)}`,
+        asleepAt
+          ? `asleep ${asleepAt}${ls.sleep_latency_min != null ? ` (${ls.sleep_latency_min}m)` : ""}`
+          : ls.sleep_latency_min != null ? `asleep in ${ls.sleep_latency_min}m` : null,
+        ls.bedtime_end ? `woke ${fmtTime(ls.bedtime_end)}` : null,
+      ].filter(Boolean).join("  →  ")
+    : null;
+
   const stageRing = (key: "deep" | "rem" | "light") => (
     <RingStat key={key} label={METRIC[key].label} value={latest.byKey[key]?.value ?? "—"} pct={latest.byKey[key]?.pct ?? null} color={METRIC[key].color} />
   );
@@ -274,8 +301,11 @@ export default function SleepChart({
           <div style={{ display: "flex", flexWrap: "wrap", gap: "14px 24px", justifyContent: "center", marginTop: 12 }}>
             {columnRings}
           </div>
+          {timingLine && (
+            <div style={{ textAlign: "center", fontSize: 11, color: "var(--text-secondary)", marginTop: 10, fontWeight: 500 }}>{timingLine}</div>
+          )}
           {extras.length > 0 && (
-            <div style={{ textAlign: "center", fontSize: 11, color: "var(--text-muted)", marginTop: 10 }}>{extras.join(" · ")}</div>
+            <div style={{ textAlign: "center", fontSize: 11, color: "var(--text-muted)", marginTop: 6 }}>{extras.join(" · ")}</div>
           )}
         </>
       ) : (
@@ -283,8 +313,11 @@ export default function SleepChart({
           <div style={{ flex: 1, minWidth: 0 }}>{chart}</div>
           <div style={{ width: 196, flexShrink: 0, display: "flex", flexDirection: "column", justifyContent: "center", gap: 18, borderLeft: "1px solid var(--border)", paddingLeft: 22 }}>
             {columnRings}
+            {timingLine && (
+              <div style={{ fontSize: 11, color: "var(--text-secondary)", lineHeight: 1.6, marginTop: 4, fontWeight: 500 }}>{timingLine}</div>
+            )}
             {extras.length > 0 && (
-              <div style={{ fontSize: 11, color: "var(--text-muted)", lineHeight: 1.6, marginTop: 4 }}>{extras.join(" · ")}</div>
+              <div style={{ fontSize: 11, color: "var(--text-muted)", lineHeight: 1.6, marginTop: 2 }}>{extras.join(" · ")}</div>
             )}
           </div>
         </div>
