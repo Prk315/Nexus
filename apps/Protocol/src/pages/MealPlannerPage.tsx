@@ -1,26 +1,30 @@
-import { Fragment, useEffect, useMemo, useState } from "react";
-import { ChevronLeft, ChevronRight, Plus, Check, Trash2 } from "lucide-react";
+import { useEffect, useMemo, useState } from "react";
+import { CalendarDays, ChefHat, Apple, BarChart3 } from "lucide-react";
 import { useAppDispatch, useAppSelector } from "../store/hooks";
 import {
   fetchFoods, addFood, fetchMeals, fetchMealItems,
   fetchMealPlanEntries, addMealPlanEntry,
   toggleMealPlanEntryLogged, removeMealPlanEntry, fetchNutritionGoals, saveNutritionGoals,
 } from "../store/slices/mealPlannerSlice";
-import { CARD_STYLE, isoDate } from "../lib/uiHelpers";
+import { isoDate } from "../lib/uiHelpers";
 import { entryNutrition, sumNutrition } from "../lib/mealNutrition";
 import FoodSearchPanel from "../components/mealplanner/FoodSearchPanel";
 import NutrientOverview from "../components/mealplanner/NutrientOverview";
 import GoalsWidget from "../components/mealplanner/GoalsWidget";
+import PlanPane from "../components/mealplanner/panes/PlanPane";
+import MealsPane from "../components/mealplanner/panes/MealsPane";
+import FoodsPane from "../components/mealplanner/panes/FoodsPane";
 import type { CreateFood, MealPlanEntry, MealSlot, UpdateNutritionGoals } from "../store/types";
 
-const SLOTS: { id: MealSlot; label: string }[] = [
-  { id: "breakfast", label: "Breakfast" },
-  { id: "lunch", label: "Lunch" },
-  { id: "dinner", label: "Dinner" },
-  { id: "snack", label: "Snacks" },
-];
-
 const DAY_LABELS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
+
+type PaneId = "plan" | "meals" | "foods" | "overview";
+const PANES: { id: PaneId; label: string; icon: typeof CalendarDays }[] = [
+  { id: "plan", label: "Plan", icon: CalendarDays },
+  { id: "meals", label: "My Meals", icon: ChefHat },
+  { id: "foods", label: "Foods", icon: Apple },
+  { id: "overview", label: "Overview", icon: BarChart3 },
+];
 
 function mondayOf(dateISO: string): string {
   const d = new Date(dateISO + "T00:00:00");
@@ -48,6 +52,7 @@ export default function MealPlannerPage() {
   const goals = useAppSelector((s) => s.mealPlanner.goals);
 
   const today = isoDate(new Date());
+  const [pane, setPane] = useState<PaneId>("plan");
   const [weekStart, setWeekStart] = useState(mondayOf(today));
   const [addingSlot, setAddingSlot] = useState<{ date: string; slot: MealSlot } | null>(null);
 
@@ -128,7 +133,7 @@ export default function MealPlannerPage() {
   }
 
   return (
-    <div style={{ padding: 28, display: "flex", flexDirection: "column", gap: 24 }}>
+    <div style={{ padding: 28, display: "flex", flexDirection: "column", gap: 20 }}>
       <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 20, flexWrap: "wrap" }}>
         <div>
           <h2 style={{ fontSize: 22, fontWeight: 700, color: "var(--text)", marginBottom: 4 }}>Meal Planner</h2>
@@ -139,88 +144,54 @@ export default function MealPlannerPage() {
         <GoalsWidget todayTotals={todayTotals} goals={goals} onSave={handleSaveGoals} />
       </div>
 
-      <NutrientOverview perDay={perDayCalories} todayTotals={todayTotals} goals={goals} />
-
-      {/* Week navigation */}
-      <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
-        <button onClick={() => setWeekStart(addDays(weekStart, -7))} style={{ background: "none", border: "1px solid var(--border)", borderRadius: "var(--radius-sm)", padding: 6, cursor: "pointer", color: "var(--text-secondary)" }}>
-          <ChevronLeft size={16} />
-        </button>
-        <span style={{ fontSize: 14, fontWeight: 600, color: "var(--text)" }}>
-          {days[0]} — {days[6]}
-        </span>
-        <button onClick={() => setWeekStart(addDays(weekStart, 7))} style={{ background: "none", border: "1px solid var(--border)", borderRadius: "var(--radius-sm)", padding: 6, cursor: "pointer", color: "var(--text-secondary)" }}>
-          <ChevronRight size={16} />
-        </button>
-        {weekStart !== mondayOf(today) && (
-          <button onClick={() => setWeekStart(mondayOf(today))} style={{ background: "none", border: "none", color: "var(--accent)", fontSize: 12, fontWeight: 600, cursor: "pointer" }}>
-            This week
+      {/* Pane tabs */}
+      <div style={{ display: "flex", gap: 4, borderBottom: "1px solid var(--border)", flexWrap: "wrap" }}>
+        {PANES.map(({ id, label, icon: Icon }) => (
+          <button
+            key={id}
+            onClick={() => setPane(id)}
+            style={{
+              display: "flex", alignItems: "center", gap: 6,
+              background: "none", border: "none", cursor: "pointer",
+              padding: "8px 12px", marginRight: 4,
+              fontSize: 13, fontWeight: 600,
+              color: pane === id ? "var(--accent)" : "var(--text-muted)",
+              borderBottom: `2px solid ${pane === id ? "var(--accent)" : "transparent"}`,
+            }}
+          >
+            <Icon size={15} /> {label}
           </button>
-        )}
+        ))}
       </div>
 
-      {/* Weekly grid */}
-      <div style={{ overflowX: "auto" }}>
-        <div style={{ display: "grid", gridTemplateColumns: `100px repeat(7, minmax(150px, 1fr))`, gap: 8, minWidth: 900 }}>
-          <div />
-          {days.map((d, i) => (
-            <div key={d} style={{ textAlign: "center", padding: "6px 0" }}>
-              <div style={{ fontSize: 11, color: "var(--text-muted)", fontWeight: 600, textTransform: "uppercase" }}>{DAY_LABELS[i]}</div>
-              <div style={{ fontSize: 13, fontWeight: 700, color: d === today ? "var(--accent)" : "var(--text)" }}>{d.slice(5)}</div>
-            </div>
-          ))}
+      {pane === "plan" && (
+        <PlanPane
+          days={days}
+          today={today}
+          weekLabel={`${days[0]} — ${days[6]}`}
+          isThisWeek={weekStart === mondayOf(today)}
+          entriesByDaySlot={entriesByDaySlot}
+          foodsById={foodsById}
+          mealsById={mealsById}
+          mealItemsById={mealItemsById}
+          onPrevWeek={() => setWeekStart(addDays(weekStart, -7))}
+          onNextWeek={() => setWeekStart(addDays(weekStart, 7))}
+          onThisWeek={() => setWeekStart(mondayOf(today))}
+          onAddSlot={(date, slot) => setAddingSlot({ date, slot })}
+          onToggle={(id, logged) => dispatch(toggleMealPlanEntryLogged({ id, logged }))}
+          onRemove={(id) => dispatch(removeMealPlanEntry(id))}
+        />
+      )}
 
-          {SLOTS.map(({ id: slot, label }) => (
-            <Fragment key={slot}>
-              <div style={{ display: "flex", alignItems: "center", fontSize: 12, fontWeight: 600, color: "var(--text-muted)" }}>
-                {label}
-              </div>
-              {days.map((d) => {
-                const entries = entriesByDaySlot.get(`${d}__${slot}`) ?? [];
-                return (
-                  <div key={`${slot}-${d}`} style={{ ...CARD_STYLE, padding: 8, minHeight: 64, display: "flex", flexDirection: "column", gap: 4 }}>
-                    {entries.map((e) => {
-                      const name = e.food_id
-                        ? foodsById.get(e.food_id)?.name ?? "…"
-                        : mealsById.get(e.meal_id ?? "")?.name ?? "…";
-                      const n = entryNutrition(e, foodsById, mealsById, mealItemsById);
-                      return (
-                        <div key={e.id} style={{ display: "flex", alignItems: "center", gap: 4, fontSize: 11 }}>
-                          <button
-                            onClick={() => dispatch(toggleMealPlanEntryLogged({ id: e.id, logged: !e.logged }))}
-                            title={e.logged ? "Mark as not eaten" : "Mark as eaten"}
-                            style={{
-                              width: 14, height: 14, borderRadius: "50%", flexShrink: 0, padding: 0,
-                              background: e.logged ? "var(--accent)" : "transparent",
-                              border: `1.5px solid ${e.logged ? "var(--accent)" : "var(--border)"}`,
-                              display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer",
-                            }}
-                          >
-                            {e.logged && <Check size={9} strokeWidth={4} color="var(--accent-fg)" />}
-                          </button>
-                          <span style={{ flex: 1, minWidth: 0, color: "var(--text)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
-                            {name}
-                          </span>
-                          <span style={{ color: "var(--text-muted)", flexShrink: 0 }}>{n?.calories != null ? Math.round(n.calories) : "—"}</span>
-                          <button onClick={() => dispatch(removeMealPlanEntry(e.id))} style={{ background: "none", border: "none", color: "var(--text-muted)", cursor: "pointer", padding: 0, flexShrink: 0 }}>
-                            <Trash2 size={10} />
-                          </button>
-                        </div>
-                      );
-                    })}
-                    <button
-                      onClick={() => setAddingSlot({ date: d, slot })}
-                      style={{ display: "flex", alignItems: "center", gap: 4, background: "none", border: "none", color: "var(--text-muted)", fontSize: 11, cursor: "pointer", padding: "2px 0" }}
-                    >
-                      <Plus size={11} /> Add
-                    </button>
-                  </div>
-                );
-              })}
-            </Fragment>
-          ))}
-        </div>
-      </div>
+      {pane === "meals" && (
+        <MealsPane meals={meals} mealItemsById={mealItemsById} foodsById={foodsById} />
+      )}
+
+      {pane === "foods" && <FoodsPane foods={foods} />}
+
+      {pane === "overview" && (
+        <NutrientOverview perDay={perDayCalories} todayTotals={todayTotals} goals={goals} />
+      )}
 
       {addingSlot && (
         <FoodSearchPanel

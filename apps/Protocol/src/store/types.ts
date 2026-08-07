@@ -301,6 +301,9 @@ export type FoodSource = "usda" | "openfoodfacts" | "frida" | "manual";
 /** Nutrient values are always per 100g/100ml — servings apply a multiplier. */
 export interface Food {
   id: string;
+  /** Contributor. The catalog is a SHARED library — everyone reads every row,
+   *  but only the contributor may edit or delete their own. */
+  user_id: string | null;
   source: FoodSource;
   external_id: string | null;
   name: string;
@@ -322,7 +325,7 @@ export interface Food {
   created_at: string;
 }
 
-export type CreateFood = Omit<Food, "id" | "created_at">;
+export type CreateFood = Omit<Food, "id" | "user_id" | "created_at">;
 
 export interface Meal {
   id: string;

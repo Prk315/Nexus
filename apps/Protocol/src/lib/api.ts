@@ -557,6 +557,7 @@ export async function removeHabitCompletionFromCloud(habitId: string, date: stri
 function rowToFood(row: Record<string, unknown>): Food {
   return {
     id: row.id as string,
+    user_id: (row.user_id as string | null) ?? null,
     source: row.source as Food["source"],
     external_id: row.external_id as string | null,
     name: row.name as string,
@@ -579,12 +580,14 @@ function rowToFood(row: Record<string, unknown>): Food {
   };
 }
 
+// The food catalog is a SHARED library: every signed-in user reads every row.
+// Contribution is still attributed (user_id), and RLS only lets you edit/delete
+// your own rows — see migration 20260807120000_protocol_shared_foods.sql.
 export async function fetchFoodsFromCloud(): Promise<Food[]> {
   const sb = getSupabaseClient();
   const { data, error } = await sb
     .from("protocol_foods")
     .select("*")
-    .eq("user_id", getUserId())
     .order("name", { ascending: true });
   if (error) throw new Error(error.message);
   return (data ?? []).map(rowToFood);
@@ -593,6 +596,28 @@ export async function fetchFoodsFromCloud(): Promise<Food[]> {
 export async function pushFoodToCloud(food: CreateFood & { id: string }): Promise<void> {
   const sb = getSupabaseClient();
   const { error } = await sb.from("protocol_foods").upsert({ ...food, user_id: getUserId() });
+  if (error) throw new Error(error.message);
+}
+
+/** Edit an existing food. RLS silently no-ops if it isn't yours. */
+export async function updateFoodInCloud(food: CreateFood & { id: string }): Promise<void> {
+  const sb = getSupabaseClient();
+  const { error } = await sb
+    .from("protocol_foods")
+    .update({ ...food, user_id: getUserId() })
+    .eq("id", food.id)
+    .eq("user_id", getUserId());
+  if (error) throw new Error(error.message);
+}
+
+/** Remove a food you contributed. RLS blocks deleting others' rows. */
+export async function deleteFoodFromCloud(id: string): Promise<void> {
+  const sb = getSupabaseClient();
+  const { error } = await sb
+    .from("protocol_foods")
+    .delete()
+    .eq("id", id)
+    .eq("user_id", getUserId());
   if (error) throw new Error(error.message);
 }
 

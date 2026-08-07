@@ -70,7 +70,7 @@ export default function FoodPicker({
   }
 
   function selectLocal(f: Food) {
-    const { id: _id, created_at: _createdAt, ...rest } = f;
+    const { id: _id, user_id: _userId, created_at: _createdAt, ...rest } = f;
     setSelected(rest);
     setQuantity(f.serving_qty || 100);
   }

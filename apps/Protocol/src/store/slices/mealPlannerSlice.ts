@@ -34,6 +34,20 @@ export const addFood = createAsyncThunk("mealPlanner/addFood", async (food: Crea
   return createFood(food);
 });
 
+export const updateFood = createAsyncThunk(
+  "mealPlanner/updateFood",
+  async (food: CreateFood & { id: string }) => {
+    const { updateFood: update } = await import("../../lib/tauriApi");
+    return update(food);
+  },
+);
+
+export const removeFood = createAsyncThunk("mealPlanner/removeFood", async (id: string) => {
+  const { deleteFood } = await import("../../lib/tauriApi");
+  await deleteFood(id);
+  return id;
+});
+
 export const fetchMeals = createAsyncThunk("mealPlanner/fetchMeals", async () => {
   const { getMeals } = await import("../../lib/tauriApi");
   return getMeals();
@@ -43,6 +57,14 @@ export const addMeal = createAsyncThunk("mealPlanner/addMeal", async (meal: Crea
   const { createMeal } = await import("../../lib/tauriApi");
   return createMeal(meal);
 });
+
+export const updateMeal = createAsyncThunk(
+  "mealPlanner/updateMeal",
+  async (meal: CreateMeal & { id: string; created_at?: string }) => {
+    const { updateMeal: update } = await import("../../lib/tauriApi");
+    return update(meal);
+  },
+);
 
 export const removeMeal = createAsyncThunk("mealPlanner/removeMeal", async (id: string) => {
   const { deleteMeal } = await import("../../lib/tauriApi");
@@ -127,8 +149,19 @@ const mealPlannerSlice = createSlice({
         state.error = action.error.message ?? "Failed to load foods";
       })
       .addCase(addFood.fulfilled, (state, action) => { state.foods.push(action.payload); })
+      .addCase(updateFood.fulfilled, (state, action) => {
+        const i = state.foods.findIndex((f) => f.id === action.payload.id);
+        if (i >= 0) state.foods[i] = action.payload;
+      })
+      .addCase(removeFood.fulfilled, (state, action) => {
+        state.foods = state.foods.filter((f) => f.id !== action.payload);
+      })
       .addCase(fetchMeals.fulfilled, (state, action) => { state.meals = action.payload; })
       .addCase(addMeal.fulfilled, (state, action) => { state.meals.push(action.payload); })
+      .addCase(updateMeal.fulfilled, (state, action) => {
+        const i = state.meals.findIndex((m) => m.id === action.payload.id);
+        if (i >= 0) state.meals[i] = action.payload;
+      })
       .addCase(removeMeal.fulfilled, (state, action) => {
         state.meals = state.meals.filter((m) => m.id !== action.payload);
       })
