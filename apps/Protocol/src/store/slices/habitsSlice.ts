@@ -75,6 +75,14 @@ export const addHabitStack = createAsyncThunk("habits/addStack", async (stack: C
   return createHabitStack(stack);
 });
 
+export const editHabitStack = createAsyncThunk(
+  "habits/editStack",
+  async (stack: { id: string; name: string; sort_order: number }) => {
+    const { updateHabitStack } = await import("../../lib/tauriApi");
+    return updateHabitStack(stack);
+  },
+);
+
 export const removeHabitStack = createAsyncThunk("habits/removeStack", async (id: string) => {
   const { deleteHabitStack } = await import("../../lib/tauriApi");
   await deleteHabitStack(id);
@@ -125,6 +133,10 @@ const habitsSlice = createSlice({
       })
       .addCase(addHabitStack.fulfilled, (state, action) => {
         state.stacks.push(action.payload);
+      })
+      .addCase(editHabitStack.fulfilled, (state, action) => {
+        const i = state.stacks.findIndex((s) => s.id === action.payload.id);
+        if (i >= 0) state.stacks[i] = action.payload;
       })
       .addCase(removeHabitStack.fulfilled, (state, action) => {
         state.stacks = state.stacks.filter((s) => s.id !== action.payload);
