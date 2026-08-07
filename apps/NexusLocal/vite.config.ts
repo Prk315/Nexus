@@ -27,5 +27,33 @@ export default defineConfig({
       process.env.TAURI_ENV_PLATFORM === "windows" ? "chrome105" : "safari13",
     minify: !process.env.TAURI_ENV_DEBUG ? "esbuild" : false,
     sourcemap: !!process.env.TAURI_ENV_DEBUG,
+    rollupOptions: {
+      output: {
+        manualChunks: (id) => {
+          if (!id.includes("node_modules")) return undefined;
+          if (id.includes("katex")) return "katex";
+          if (
+            id.includes("react-markdown") ||
+            id.includes("/remark-") ||
+            id.includes("/rehype-") ||
+            id.includes("mdast") ||
+            id.includes("micromark") ||
+            id.includes("unist-") ||
+            id.includes("unified") ||
+            id.includes("hast-") ||
+            id.includes("vfile")
+          ) {
+            return "markdown";
+          }
+          if (id.includes("react-dom") || id.includes("/react/") || id.includes("scheduler")) {
+            return "react-vendor";
+          }
+          if (id.includes("@supabase/supabase-js") || id.includes("@supabase/")) {
+            return "supabase";
+          }
+          return undefined;
+        },
+      },
+    },
   },
 });

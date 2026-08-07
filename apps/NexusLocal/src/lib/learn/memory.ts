@@ -1,0 +1,176 @@
+/**
+ * TS port of the memory model in
+ * `/Users/bastianthomsen/Repositories/LearnAndRetain/pipeline/memory/memory.py`
+ * and the graduation seeding in
+ * `/Users/bastianthomsen/Repositories/LearnAndRetain/pipeline/modules/progress.py`.
+ * Constants and formulas below are copied from those files line-for-line
+ * (cited per constant); this file is client-side so the learner gets instant
+ * grading feedback, while decay itself stays server-side (Phase 3,
+ * `learn-evaluate`) — the module comment in memory.py's docstring:
+ * "heat — ACT-R retrievability proxy, decays exponentially with time.
+ *  Spikes on every attempt regardless of correctness. value — Beta(alpha,
+ *  beta) distribution tracking mastery. alpha increments on correct, beta on
+ *  incorrect. Never decays."
+ *
+ * ── Grade (0–3) vs. Python's binary correct/incorrect ──────────────────────
+ * `memory.py`'s `log_attempt(user_id, concept_id, correct)` (lines 172–229)
+ * only ever takes a boolean `correct` — there is no grade-weighted alpha/beta
+ * increment or spike-scaling-by-grade anywhere in the Python source (checked:
+ * `grep -rn grade pipeline/` turns up nothing that varies the update amount).
+ * `lr_attempt_log.grade` (0 don't-know | 1 hard | 2 normal | 3 easy) is a
+ * Nexus Local UI convenience for richer self-report, not a Python concept.
+ * This port is faithful to the *binary* update by mapping:
+ *   grade 0 (don't know)         -> correct = false
+ *   grade 1, 2, 3 (hard/normal/easy) -> correct = true
+ * exactly reproducing `log_attempt`'s alpha += 1 / beta += 1 (never a
+ * fraction) and its unconditional heat spike ("regardless of correctness").
+ * If per-grade weighting is wanted later, it does not exist upstream to port
+ * — it would be a new invention, which LEARN_PLAN.md explicitly says not to do
+ * without reading the Python first.
+ */
+
+import type { Grade, Lens, LensCounts, LrMemoryState } from "./types";
+
+// ── Tuning constants — memory.py lines 34–40 ────────────────────────────────
+export const HALF_LIFE_HOURS = 24.0;
+export const DECAY_K = Math.log(2) / HALF_LIFE_HOURS; // memory.py:35
+export const SPIKE_FACTOR = 0.6; // memory.py:36
+
+// ── Bootstrap defaults — memory.py bootstrap_memory(), lines 144–148 ───────
+export const DEFAULT_ALPHA = 1.0;
+export const DEFAULT_BETA = 1.0;
+export const DEFAULT_HEAT = 0.0;
+
+// ── Stability thresholds — selector.py lines 38–40 ──────────────────────────
+// Used by selector.py's `_prereq_stable` (a prereq concept is "stable" once
+// its value_mean clears PREREQ_THRESHOLD with at least MIN_EVIDENCE attempts
+// behind it) and `_score_concept`'s evidence_factor, which ramps from 0 at
+// confidence<=2 to 1 at confidence>=EVIDENCE_CAP.
+export const PREREQ_THRESHOLD = 0.6; // selector.py:38 — "stable" value_mean floor
+export const MIN_EVIDENCE = 4; // selector.py:39 — "stable" value_confidence floor
+export const EVIDENCE_CAP = 8; // selector.py:41 — confidence for full retention weight
+
+// ── Graduation heat seeding — progress.py line 13, graduate_unit() ─────────
+// "a just-learned concept starts hot, then decays in retention"
+export const FRESH_HEAT = 1.0; // progress.py:13 FRESH_HEAT
+
+/** Bootstrap defaults for a concept never seen before (memory.py bootstrap_memory). */
+export function defaultMemoryState(
+  userId: string,
+  conceptId: string,
+  nowIso: string = new Date().toISOString()
+): LrMemoryState {
+  return {
+    user_id: userId,
+    concept_id: conceptId,
+    value_alpha: DEFAULT_ALPHA,
+    value_beta: DEFAULT_BETA,
+    heat: DEFAULT_HEAT,
+    lens_counts: {},
+    last_reviewed: nowIso,
+    last_decayed: nowIso,
+  };
+}
+
+/** Hours between an ISO timestamp and `now` (memory.py `_hours_since`). */
+function hoursSince(lastIso: string, now: Date): number {
+  const then = new Date(lastIso).getTime();
+  return (now.getTime() - then) / (1000 * 60 * 60);
+}
+
+/**
+ * Lazy exponential decay: `heat *= exp(-k * hours)` (memory.py `_decay_heat`,
+ * lines 99–104). Read-only — mirrors `get_state()`'s "decayed to current time
+ * but NOT persisted" behavior; callers decide whether to persist.
+ */
+export function decayHeat(heat: number, lastDecayedIso: string, now: Date = new Date()): number {
+  const hours = hoursSince(lastDecayedIso, now);
+  if (hours <= 0) return heat;
+  return heat * Math.exp(-DECAY_K * hours);
+}
+
+export function valueMean(alpha: number, beta: number): number {
+  return alpha / (alpha + beta);
+}
+
+export function valueConfidence(alpha: number, beta: number): number {
+  return alpha + beta;
+}
+
+/**
+ * A concept is "stable" once it clears both the value-mean and evidence
+ * floors used by selector.py's `_prereq_stable` to gate DAG eligibility.
+ */
+export function isStable(state: Pick<LrMemoryState, "value_alpha" | "value_beta">): boolean {
+  const mean = valueMean(state.value_alpha, state.value_beta);
+  const confidence = valueConfidence(state.value_alpha, state.value_beta);
+  return mean >= PREREQ_THRESHOLD && confidence >= MIN_EVIDENCE;
+}
+
+function incrementLensCount(counts: LensCounts, lens: Lens | null): LensCounts {
+  if (lens === null) return counts;
+  return { ...counts, [lens]: (counts[lens] ?? 0) + 1 };
+}
+
+/**
+ * Faithful port of `log_attempt` (memory.py lines 172–229), extended with
+ * `lens_counts` increment (LEARN_PLAN.md's lens-coverage mastery dimension,
+ * not present upstream — Python has no lens concept).
+ *
+ * Steps, matching the source 1:1:
+ *   1. Lazy-decay heat from `last_decayed` to `now`.
+ *   2. Spike heat unconditionally: `heat += (1 - heat) * SPIKE_FACTOR`,
+ *      capped at 1.0 (memory.py:200–202).
+ *   3. Beta update: correct -> alpha += 1; incorrect -> beta += 1
+ *      (memory.py:205–206) — see the grade-mapping note in the file header.
+ *   4. Stamp `last_reviewed` / `last_decayed` to `now`.
+ *   5. Increment `lens_counts[lens]` (Nexus Local addition).
+ *
+ * Pure — returns the next state; the caller persists via `api.upsertMemory`.
+ */
+export function applyGrade(
+  state: LrMemoryState,
+  grade: Grade,
+  lens: Lens,
+  now: Date = new Date()
+): LrMemoryState {
+  const nowIso = now.toISOString();
+  const correct = grade > 0; // grade 0 = don't know; 1–3 = correct (see header)
+
+  const decayedHeat = decayHeat(state.heat, state.last_decayed, now);
+  const spikedHeat = Math.min(decayedHeat + (1.0 - decayedHeat) * SPIKE_FACTOR, 1.0);
+
+  const nextAlpha = state.value_alpha + (correct ? 1.0 : 0.0);
+  const nextBeta = state.value_beta + (correct ? 0.0 : 1.0);
+
+  return {
+    ...state,
+    heat: spikedHeat,
+    value_alpha: nextAlpha,
+    value_beta: nextBeta,
+    lens_counts: incrementLensCount(state.lens_counts, lens),
+    last_reviewed: nowIso,
+    last_decayed: nowIso,
+  };
+}
+
+/**
+ * Graduation seeding (progress.py `graduate_unit`, lines 20–36): preserve the
+ * alpha/beta earned during acquisition, refresh heat to FRESH_HEAT since the
+ * concept was "just learned", and re-stamp both timestamps to now.
+ */
+export function seedGraduationHeat(state: LrMemoryState, now: Date = new Date()): LrMemoryState {
+  const nowIso = now.toISOString();
+  return {
+    ...state,
+    heat: FRESH_HEAT,
+    last_reviewed: nowIso,
+    last_decayed: nowIso,
+  };
+}
+
+/** Least-seen lens for a concept, for the review selector (LEARN_PLAN.md's lens-coverage rule). */
+export function leastSeenLens(counts: LensCounts): Lens {
+  const lenses: Lens[] = ["row", "matrix", "column"];
+  return lenses.reduce((least, lens) => ((counts[lens] ?? 0) < (counts[least] ?? 0) ? lens : least));
+}

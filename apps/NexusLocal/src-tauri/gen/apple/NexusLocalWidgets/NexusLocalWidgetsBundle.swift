@@ -13,6 +13,7 @@ struct NexusLocalWidgetsBundle: WidgetBundle {
         SleepWidget()
         TasksWidget()
         TimeTrackerWidget()
+        LearnWidget()
         // Also the autonomy mechanism for Safari blocking: its timeline refresh
         // is what recompiles the block rules while the app is closed.
         FocusBlockerWidget()
