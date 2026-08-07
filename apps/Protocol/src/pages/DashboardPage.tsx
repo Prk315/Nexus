@@ -8,7 +8,7 @@ import {
   Tooltip,
   ResponsiveContainer,
 } from "recharts";
-import { Moon, Activity, TrendingUp, Flame } from "lucide-react";
+import { Activity, TrendingUp, Flame } from "lucide-react";
 import { useAppDispatch, useAppSelector } from "../store/hooks";
 import { fetchSleep, fetchBodyMetrics } from "../store/slices/biomarkersSlice";
 import { fetchWorkoutSessions } from "../store/slices/workoutsSlice";
@@ -116,13 +116,7 @@ export default function DashboardPage() {
     nutritionByDate.set(entry.date, (nutritionByDate.get(entry.date) ?? 0) + n.calories);
   }
 
-  // Most recent logged night, not an average — broader trends live on Biomarkers.
-  const lastNight = [...sleep].sort((a, b) => b.date.localeCompare(a.date))[0] ?? null;
-  const lastNightLabel = lastNight
-    ? lastNight.date === today
-      ? "last night"
-      : new Date(`${lastNight.date}T00:00:00`).toLocaleDateString(undefined, { month: "short", day: "numeric" })
-    : "no data";
+  // Last night's sleep now lives inside the SleepChart card (ring column).
 
   // Single-pass: find the entry with the most-recent date that has a weight reading
   const lastWeight = bodyMetrics.reduce<{ date: string; weight: number } | null>((best, e) => {
@@ -175,30 +169,8 @@ export default function DashboardPage() {
         </div>
       )}
 
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 16 }}>
-        <div style={STAT_CARD}>
-          <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 4 }}>
-            <Moon size={14} color="var(--accent)" />
-            <span style={{ fontSize: 12, color: "var(--text-muted)", fontWeight: 500 }}>Sleep Quality</span>
-          </div>
-          <span style={{ fontSize: 28, fontWeight: 700, color: "var(--text)" }}>
-            {lastNight ? lastNight.quality_score.toFixed(1) : "—"}
-          </span>
-          <span style={{ fontSize: 12, color: "var(--text-muted)" }}>/ 10, {lastNightLabel}</span>
-        </div>
-
-        <div style={STAT_CARD}>
-          <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 4 }}>
-            <Moon size={14} color="var(--accent)" />
-            <span style={{ fontSize: 12, color: "var(--text-muted)", fontWeight: 500 }}>Sleep Duration</span>
-          </div>
-          <span style={{ fontSize: 28, fontWeight: 700, color: "var(--text)" }}>
-            {lastNight ? formatMinutes(lastNight.duration_min) : "—"}
-          </span>
-          <span style={{ fontSize: 12, color: "var(--text-muted)" }}>{lastNightLabel}</span>
-        </div>
-
-        <div style={STAT_CARD}>
+      <div style={{ display: "flex", gap: 16, flexWrap: "wrap" }}>
+        <div style={{ ...STAT_CARD, minWidth: 200 }}>
           <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 4 }}>
             <TrendingUp size={14} color="var(--accent)" />
             <span style={{ fontSize: 12, color: "var(--text-muted)", fontWeight: 500 }}>Body Weight</span>
@@ -210,34 +182,7 @@ export default function DashboardPage() {
         </div>
       </div>
 
-      <div style={{ ...CARD_STYLE, padding: "20px 20px 16px" }}>
-        <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 16 }}>
-          <Moon size={15} color="var(--accent)" />
-          <span style={{ fontWeight: 600, color: "var(--text)", fontSize: 14 }}>Last Night's Sleep</span>
-        </div>
-        {!lastNight ? NO_DATA : (
-          <>
-            <div style={{ display: "flex", gap: 24, flexWrap: "wrap" }}>
-              <StatTile label="Deep sleep" value={lastNight.deep_sleep_min != null ? formatMinutes(lastNight.deep_sleep_min) : "—"} />
-              <StatTile label="REM sleep" value={lastNight.rem_sleep_min != null ? formatMinutes(lastNight.rem_sleep_min) : "—"} />
-              <StatTile label="Light sleep" value={lastNight.light_sleep_min != null ? formatMinutes(lastNight.light_sleep_min) : "—"} />
-              <StatTile label="Awake time" value={lastNight.awake_time_min != null ? formatMinutes(lastNight.awake_time_min) : "—"} />
-            </div>
-            <div style={{ display: "flex", gap: 24, flexWrap: "wrap", marginTop: 16, paddingTop: 16, borderTop: "1px solid var(--border-subtle)" }}>
-              <StatTile
-                label="Respiratory rate"
-                value={lastNight.respiratory_rate != null ? lastNight.respiratory_rate.toFixed(1) : "—"}
-                sub="breaths/min"
-              />
-              <StatTile
-                label="Temp deviation"
-                value={lastNight.temperature_deviation != null ? `${lastNight.temperature_deviation > 0 ? "+" : ""}${lastNight.temperature_deviation.toFixed(2)}°` : "—"}
-              />
-            </div>
-          </>
-        )}
-      </div>
-
+      {/* Sleep trend + last-night ring column (Quality, Duration, Deep, REM, Light). */}
       <SleepChart sleep={sleep} bodyMetrics={bodyMetrics} />
 
       <div style={{ ...CARD_STYLE, padding: "20px 24px" }}>
