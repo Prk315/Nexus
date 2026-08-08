@@ -1,5 +1,5 @@
 import { useState, useEffect } from "react";
-import { Plus, Trash2, CheckCircle2, ChevronRight, Timer } from "lucide-react";
+import { Plus, Trash2, CheckCircle2, ChevronRight, Timer, Pencil, Check } from "lucide-react";
 import { useAppDispatch, useAppSelector } from "../../store/hooks";
 import {
   addWorkoutSession,
@@ -7,13 +7,66 @@ import {
   removeWorkoutSession,
   fetchExercises,
   addExercise,
+  editExercise,
   removeExercise,
 } from "../../store/slices/workoutsSlice";
-import type { WorkoutSession } from "../../store/types";
+import type { Exercise, WorkoutSession } from "../../store/types";
 import { CARD_PADDED, CARD_TIGHT, INPUT_STYLE, INPUT_SM, SECTION_LABEL, BTN_PRIMARY, BTN_GHOST, ICON_BTN, todayISO } from "../../lib/uiHelpers";
 
 interface WorkoutSessionLoggerProps {
   planId?: string | null;
+  /** Expand this session on mount / when it changes (e.g. one just started). */
+  initialExpandedId?: string | null;
+}
+
+/** A logged exercise — view its actuals, or tap the pencil to edit sets/reps/kg. */
+function ExerciseRow({ ex }: { ex: Exercise }) {
+  const dispatch = useAppDispatch();
+  const [edit, setEdit] = useState(false);
+  const [sets, setSets] = useState(ex.sets?.toString() ?? "");
+  const [reps, setReps] = useState(ex.reps?.toString() ?? "");
+  const [weight, setWeight] = useState(ex.weight_kg?.toString() ?? "");
+
+  const save = () => {
+    dispatch(editExercise({
+      ...ex,
+      sets: sets ? Number(sets) : null,
+      reps: reps ? Number(reps) : null,
+      weight_kg: weight ? Number(weight) : null,
+    }));
+    setEdit(false);
+  };
+
+  return (
+    <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "8px 12px", background: "var(--bg)", borderRadius: "var(--radius-sm)", gap: 8 }}>
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <span style={{ fontSize: 13, fontWeight: 500, color: "var(--text)" }}>{ex.name}</span>
+        {edit ? (
+          <div style={{ display: "flex", gap: 6, marginTop: 4 }}>
+            <input style={{ ...INPUT_SM, width: 52 }} value={sets} onChange={(e) => setSets(e.target.value)} placeholder="sets" inputMode="numeric" />
+            <input style={{ ...INPUT_SM, width: 52 }} value={reps} onChange={(e) => setReps(e.target.value)} placeholder="reps" inputMode="numeric" />
+            <input style={{ ...INPUT_SM, width: 60 }} value={weight} onChange={(e) => setWeight(e.target.value)} placeholder="kg" inputMode="decimal" />
+          </div>
+        ) : (
+          <div style={{ display: "flex", gap: 10, marginTop: 2, flexWrap: "wrap" }}>
+            {ex.sets != null && <span style={{ fontSize: 11, color: "var(--text-muted)" }}>{ex.sets} sets</span>}
+            {ex.reps != null && <span style={{ fontSize: 11, color: "var(--text-muted)" }}>{ex.reps} reps</span>}
+            {ex.weight_kg != null && <span style={{ fontSize: 11, color: "var(--text-muted)" }}>{ex.weight_kg} kg</span>}
+            {ex.duration_min != null && <span style={{ fontSize: 11, color: "var(--text-muted)" }}>{ex.duration_min} min</span>}
+            {ex.notes && <span style={{ fontSize: 11, color: "var(--text-muted)", fontStyle: "italic" }}>{ex.notes}</span>}
+          </div>
+        )}
+      </div>
+      <div style={{ display: "flex", gap: 2, flexShrink: 0 }}>
+        {edit ? (
+          <button onClick={save} style={{ ...ICON_BTN, padding: 2, color: "var(--accent)" }} title="Save"><Check size={14} /></button>
+        ) : (
+          <button onClick={() => setEdit(true)} style={{ ...ICON_BTN, padding: 2 }} title="Edit actuals"><Pencil size={13} /></button>
+        )}
+        <button onClick={() => dispatch(removeExercise(ex.id))} style={{ ...ICON_BTN, padding: 2 }}><Trash2 size={13} /></button>
+      </div>
+    </div>
+  );
 }
 
 function ExerciseList({ session }: { session: WorkoutSession }) {
@@ -53,36 +106,8 @@ function ExerciseList({ session }: { session: WorkoutSession }) {
       </p>
 
       {exercises.length > 0 && (
-        <div style={{ marginBottom: 12 }}>
-          {exercises.map((ex) => (
-            <div
-              key={ex.id}
-              style={{
-                display: "flex",
-                alignItems: "center",
-                justifyContent: "space-between",
-                padding: "8px 12px",
-                background: "var(--bg)",
-                borderRadius: "var(--radius-sm)",
-                marginBottom: 6,
-                gap: 8,
-              }}
-            >
-              <div style={{ flex: 1, minWidth: 0 }}>
-                <span style={{ fontSize: 13, fontWeight: 500, color: "var(--text)" }}>{ex.name}</span>
-                <div style={{ display: "flex", gap: 10, marginTop: 2, flexWrap: "wrap" }}>
-                  {ex.sets != null && <span style={{ fontSize: 11, color: "var(--text-muted)" }}>{ex.sets} sets</span>}
-                  {ex.reps != null && <span style={{ fontSize: 11, color: "var(--text-muted)" }}>{ex.reps} reps</span>}
-                  {ex.weight_kg != null && <span style={{ fontSize: 11, color: "var(--text-muted)" }}>{ex.weight_kg} kg</span>}
-                  {ex.duration_min != null && <span style={{ fontSize: 11, color: "var(--text-muted)" }}>{ex.duration_min} min</span>}
-                  {ex.notes && <span style={{ fontSize: 11, color: "var(--text-muted)", fontStyle: "italic" }}>{ex.notes}</span>}
-                </div>
-              </div>
-              <button onClick={() => dispatch(removeExercise(ex.id))} style={{ ...ICON_BTN, padding: 2 }}>
-                <Trash2 size={13} />
-              </button>
-            </div>
-          ))}
+        <div style={{ marginBottom: 12, display: "flex", flexDirection: "column", gap: 6 }}>
+          {exercises.map((ex) => <ExerciseRow key={ex.id} ex={ex} />)}
         </div>
       )}
 
@@ -107,7 +132,7 @@ function ExerciseList({ session }: { session: WorkoutSession }) {
   );
 }
 
-export default function WorkoutSessionLogger({ planId }: WorkoutSessionLoggerProps) {
+export default function WorkoutSessionLogger({ planId, initialExpandedId }: WorkoutSessionLoggerProps) {
   const dispatch = useAppDispatch();
   const allSessions = useAppSelector((s) => s.workouts.sessions);
   const sessions = planId
@@ -117,7 +142,12 @@ export default function WorkoutSessionLogger({ planId }: WorkoutSessionLoggerPro
   const [sessionName, setSessionName] = useState("");
   const [scheduledDate, setScheduledDate] = useState(todayISO());
   const [notes, setNotes] = useState("");
-  const [expandedId, setExpandedId] = useState<string | null>(null);
+  const [expandedId, setExpandedId] = useState<string | null>(initialExpandedId ?? null);
+
+  // Expand a session that was just started from a routine.
+  useEffect(() => {
+    if (initialExpandedId) setExpandedId(initialExpandedId);
+  }, [initialExpandedId]);
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();

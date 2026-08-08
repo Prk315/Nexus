@@ -6,6 +6,7 @@ import type {
   CreateNutritionEntry, CreateSleepEntry,
   Exercise, CreateExercise, RunningPlan, RunningSession, CreateRunningSession,
   SleepEntry, WorkoutPlan, WorkoutSession, CreateWorkoutSession,
+  WorkoutRoutine, CreateWorkoutRoutine, RoutineExercise, CreateRoutineExercise, ExerciseHistory,
   NutritionEntry, Habit, CreateHabit, UpdateHabit, HabitCompletion,
   HabitStack, CreateHabitStack,
   Food, CreateFood, Meal, CreateMeal, MealItem, CreateMealItem,
@@ -252,6 +253,98 @@ export async function fetchExercisesFromCloud(sessionId: string): Promise<Exerci
   return (data ?? []) as Exercise[];
 }
 
+// ── Training routines (program designer) ─────────────────────────────────────
+
+export async function fetchRoutinesFromCloud(): Promise<WorkoutRoutine[]> {
+  const sb = getSupabaseClient();
+  const { data, error } = await sb
+    .from("protocol_workout_routines")
+    .select("*")
+    .eq("user_id", getUserId())
+    .order("sort_order", { ascending: true })
+    .order("created_at", { ascending: true });
+  if (error) throw new Error(error.message);
+  return (data ?? []) as WorkoutRoutine[];
+}
+
+export async function pushRoutineToCloud(r: CreateWorkoutRoutine & { id: string }): Promise<void> {
+  const sb = getSupabaseClient();
+  const { error } = await sb.from("protocol_workout_routines").upsert({
+    id: r.id,
+    user_id: getUserId(),
+    plan_id: r.plan_id ?? null,
+    name: r.name,
+    day_label: r.day_label ?? null,
+    sort_order: r.sort_order ?? 0,
+    notes: r.notes ?? null,
+  });
+  if (error) throw new Error(error.message);
+}
+
+export async function deleteRoutineFromCloud(id: string): Promise<void> {
+  const sb = getSupabaseClient();
+  const { error } = await sb.from("protocol_workout_routines").delete().eq("id", id);
+  if (error) throw new Error(error.message);
+}
+
+export async function fetchRoutineExercisesFromCloud(routineId: string): Promise<RoutineExercise[]> {
+  const sb = getSupabaseClient();
+  const { data, error } = await sb
+    .from("protocol_routine_exercises")
+    .select("*")
+    .eq("routine_id", routineId)
+    .order("sort_order", { ascending: true });
+  if (error) throw new Error(error.message);
+  return (data ?? []) as RoutineExercise[];
+}
+
+export async function pushRoutineExerciseToCloud(e: CreateRoutineExercise & { id: string }): Promise<void> {
+  const sb = getSupabaseClient();
+  const { error } = await sb.from("protocol_routine_exercises").upsert({
+    id: e.id,
+    user_id: getUserId(),
+    routine_id: e.routine_id,
+    name: e.name,
+    target_sets: e.target_sets ?? null,
+    target_reps: e.target_reps ?? null,
+    rest_sec: e.rest_sec ?? null,
+    target_weight_kg: e.target_weight_kg ?? null,
+    target_rpe: e.target_rpe ?? null,
+    tempo: e.tempo ?? null,
+    sort_order: e.sort_order ?? 0,
+    notes: e.notes ?? null,
+  });
+  if (error) throw new Error(error.message);
+}
+
+export async function deleteRoutineExerciseFromCloud(id: string): Promise<void> {
+  const sb = getSupabaseClient();
+  const { error } = await sb.from("protocol_routine_exercises").delete().eq("id", id);
+  if (error) throw new Error(error.message);
+}
+
+/** All logged exercises across the given sessions, joined to each session's date
+ *  — drives the progression charts. */
+export async function fetchExerciseHistoryFromCloud(
+  sessions: { id: string; date: string }[],
+): Promise<ExerciseHistory[]> {
+  if (sessions.length === 0) return [];
+  const sb = getSupabaseClient();
+  const dateById = new Map(sessions.map((s) => [s.id, s.date]));
+  const { data, error } = await sb
+    .from("protocol_exercises")
+    .select("session_id, name, sets, reps, weight_kg")
+    .in("session_id", sessions.map((s) => s.id));
+  if (error) throw new Error(error.message);
+  return (data ?? []).map((r) => ({
+    name: r.name as string,
+    date: dateById.get(r.session_id as string) ?? "",
+    sets: (r.sets as number | null) ?? null,
+    reps: (r.reps as number | null) ?? null,
+    weight_kg: (r.weight_kg as number | null) ?? null,
+  })).filter((e) => e.date);
+}
+
 // ── Running Plans ─────────────────────────────────────────────────────────────
 
 export async function fetchRunningPlansFromCloud(): Promise<RunningPlan[]> {
@@ -339,6 +432,7 @@ export async function pushWorkoutSessionToCloud(
     id: session.id,
     user_id: getUserId(),
     plan_id: session.plan_id ?? null,
+    routine_id: session.routine_id ?? null,
     name: session.name,
     scheduled_date: session.scheduled_date,
     completed: session.completed ?? false,
