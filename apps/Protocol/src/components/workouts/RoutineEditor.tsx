@@ -6,8 +6,8 @@ import {
   addRoutineExercise, editRoutineExercise, removeRoutineExercise,
 } from "../../store/slices/workoutsSlice";
 import { CARD_STYLE, INPUT_STYLE, INPUT_SM, LABEL_STYLE, FIELD_GROUP } from "../../lib/uiHelpers";
-import { searchExerciseLibrary } from "../../lib/exerciseLibrary";
-import type { WorkoutPlan, WorkoutRoutine, ExerciseLibraryItem } from "../../store/types";
+import ExerciseNameInput from "./ExerciseNameInput";
+import type { WorkoutPlan, WorkoutRoutine } from "../../store/types";
 
 interface DraftItem {
   key: string;
@@ -215,58 +215,3 @@ const miniBtn: React.CSSProperties = {
   padding: 0, display: "flex", alignItems: "center", justifyContent: "center", lineHeight: 1,
 };
 
-/** Searchable exercise-name field backed by the shared library — picking a match
- *  fills the name and captures its muscles; free-typing is still allowed. */
-function ExerciseNameInput({
-  value, onChange,
-}: {
-  value: string;
-  onChange: (name: string, primary: string[] | null, secondary: string[] | null) => void;
-}) {
-  const [results, setResults] = useState<ExerciseLibraryItem[]>([]);
-  const [open, setOpen] = useState(false);
-  const [loading, setLoading] = useState(false);
-
-  useEffect(() => {
-    const q = value.trim();
-    if (q.length < 2) { setResults([]); return; }
-    setLoading(true);
-    const t = setTimeout(() => {
-      searchExerciseLibrary(q).then((r) => setResults(r)).finally(() => setLoading(false));
-    }, 220);
-    return () => clearTimeout(t);
-  }, [value]);
-
-  return (
-    <div style={{ position: "relative", minWidth: 0 }}>
-      <input
-        style={INPUT_SM}
-        value={value}
-        onChange={(e) => { onChange(e.target.value, null, null); setOpen(true); }}
-        onFocus={() => setOpen(true)}
-        onBlur={() => setTimeout(() => setOpen(false), 150)}
-        placeholder="Search exercises…"
-      />
-      {open && value.trim().length >= 2 && (results.length > 0 || loading) && (
-        <div style={{ position: "absolute", top: "calc(100% + 2px)", left: 0, width: 300, maxWidth: "70vw", maxHeight: 240, overflowY: "auto", background: "var(--surface)", border: "1px solid var(--border)", borderRadius: "var(--radius-sm)", boxShadow: "0 8px 24px rgba(0,0,0,0.25)", zIndex: 5 }}>
-          {loading && results.length === 0 && (
-            <div style={{ padding: "8px 10px", fontSize: 12, color: "var(--text-muted)" }}>Searching…</div>
-          )}
-          {results.map((r) => (
-            <button
-              key={r.id}
-              type="button"
-              onMouseDown={(e) => { e.preventDefault(); onChange(r.name, r.primary_muscles, r.secondary_muscles); setOpen(false); }}
-              style={{ display: "flex", flexDirection: "column", alignItems: "flex-start", gap: 1, width: "100%", textAlign: "left", padding: "7px 10px", background: "none", border: "none", borderBottom: "1px solid var(--border)", cursor: "pointer" }}
-            >
-              <span style={{ fontSize: 13, fontWeight: 500, color: "var(--text)" }}>{r.name}</span>
-              <span style={{ fontSize: 11, color: "var(--text-muted)" }}>
-                {r.primary_muscles.join(", ")}{r.equipment ? ` · ${r.equipment}` : ""}
-              </span>
-            </button>
-          ))}
-        </div>
-      )}
-    </div>
-  );
-}

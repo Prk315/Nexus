@@ -6,9 +6,9 @@ import {
   computeMuscleStatus,
   type MuscleGroup,
   type MuscleStatus,
+  type SetLike,
 } from "../../lib/muscleMap";
 import { isoDate } from "../../lib/uiHelpers";
-import type { ExerciseSet } from "../../store/types";
 
 const COLOR_STEPS = 8;
 
@@ -92,7 +92,7 @@ function Figure({
   return <div ref={containerRef} style={{ width, height }} />;
 }
 
-export default function MuscleMap({ sets, minimal = false }: { sets: ExerciseSet[]; minimal?: boolean }) {
+export default function MuscleMap({ sets, minimal = false }: { sets: SetLike[]; minimal?: boolean }) {
   const today = isoDate(new Date());
   const status = useMemo(() => computeMuscleStatus(sets, today), [sets, today]);
   const data = useMemo(() => buildData(status), [status]);
