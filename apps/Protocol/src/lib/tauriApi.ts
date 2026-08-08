@@ -10,6 +10,8 @@ import type {
   CreateRunningPlan, CreateRunningSession,
   Exercise, NutritionEntry, RunningPlan, RunningSession,
   SleepEntry, WorkoutPlan, WorkoutSession,
+  WorkoutRoutine, CreateWorkoutRoutine, UpdateWorkoutRoutine,
+  RoutineExercise, CreateRoutineExercise, UpdateRoutineExercise, ExerciseHistory,
   Habit, CreateHabit, UpdateHabit, HabitCompletion, HabitStack, CreateHabitStack,
   Food, CreateFood, Meal, CreateMeal, MealItem, CreateMealItem,
   MealPlanEntry, CreateMealPlanEntry, NutritionGoals, UpdateNutritionGoals,
@@ -24,6 +26,9 @@ import {
   fetchWorkoutSessionsFromCloud, pushWorkoutSessionToCloud,
   completeWorkoutSessionInCloud, deleteWorkoutSessionFromCloud,
   fetchExercisesFromCloud, pushExerciseToCloud, deleteExerciseFromCloud,
+  fetchRoutinesFromCloud, pushRoutineToCloud, deleteRoutineFromCloud,
+  fetchRoutineExercisesFromCloud, pushRoutineExerciseToCloud, deleteRoutineExerciseFromCloud,
+  fetchExerciseHistoryFromCloud,
   fetchRunningPlansFromCloud, pushRunningPlanToCloud, deleteRunningPlanFromCloud,
   fetchRunningSessionsFromCloud, pushRunningSessionToCloud,
   completeRunningSessionInCloud, deleteRunningSessionFromCloud,
@@ -152,6 +157,7 @@ export async function createWorkoutSession(session: CreateWorkoutSession): Promi
   return {
     id, ...session,
     plan_id: session.plan_id ?? null,
+    routine_id: session.routine_id ?? null,
     duration_min: session.duration_min ?? null,
     calories_burned: session.calories_burned ?? null,
     avg_heart_rate: session.avg_heart_rate ?? null,
@@ -186,7 +192,85 @@ export async function createExercise(exercise: CreateExercise): Promise<Exercise
   };
 }
 
+/** Edit a logged exercise's actuals (upsert by id). */
+export async function updateExercise(exercise: Exercise): Promise<Exercise> {
+  await pushExerciseToCloud(exercise);
+  return exercise;
+}
+
 export const deleteExercise = (id: string): Promise<void> => deleteExerciseFromCloud(id);
+
+// ── Training routines (program designer) ─────────────────────────────────────
+
+export const getRoutines = (): Promise<WorkoutRoutine[]> => fetchRoutinesFromCloud();
+
+export async function createRoutine(r: CreateWorkoutRoutine): Promise<WorkoutRoutine> {
+  const id = crypto.randomUUID();
+  await pushRoutineToCloud({ ...r, id });
+  return {
+    id,
+    plan_id: r.plan_id ?? null,
+    name: r.name,
+    day_label: r.day_label ?? null,
+    sort_order: r.sort_order ?? 0,
+    notes: r.notes ?? null,
+    created_at: new Date().toISOString(),
+  };
+}
+
+export async function updateRoutine(r: UpdateWorkoutRoutine & { created_at?: string }): Promise<WorkoutRoutine> {
+  await pushRoutineToCloud(r);
+  return {
+    id: r.id,
+    plan_id: r.plan_id ?? null,
+    name: r.name,
+    day_label: r.day_label ?? null,
+    sort_order: r.sort_order ?? 0,
+    notes: r.notes ?? null,
+    created_at: r.created_at ?? new Date().toISOString(),
+  };
+}
+
+export const deleteRoutine = (id: string): Promise<void> => deleteRoutineFromCloud(id);
+
+export const getRoutineExercises = (routineId: string): Promise<RoutineExercise[]> =>
+  fetchRoutineExercisesFromCloud(routineId);
+
+export async function createRoutineExercise(e: CreateRoutineExercise): Promise<RoutineExercise> {
+  const id = crypto.randomUUID();
+  await pushRoutineExerciseToCloud({ ...e, id });
+  return {
+    id, routine_id: e.routine_id, name: e.name,
+    target_sets: e.target_sets ?? null,
+    target_reps: e.target_reps ?? null,
+    rest_sec: e.rest_sec ?? null,
+    target_weight_kg: e.target_weight_kg ?? null,
+    target_rpe: e.target_rpe ?? null,
+    tempo: e.tempo ?? null,
+    sort_order: e.sort_order ?? 0,
+    notes: e.notes ?? null,
+  };
+}
+
+export async function updateRoutineExercise(e: UpdateRoutineExercise): Promise<RoutineExercise> {
+  await pushRoutineExerciseToCloud(e);
+  return {
+    id: e.id, routine_id: e.routine_id, name: e.name,
+    target_sets: e.target_sets ?? null,
+    target_reps: e.target_reps ?? null,
+    rest_sec: e.rest_sec ?? null,
+    target_weight_kg: e.target_weight_kg ?? null,
+    target_rpe: e.target_rpe ?? null,
+    tempo: e.tempo ?? null,
+    sort_order: e.sort_order ?? 0,
+    notes: e.notes ?? null,
+  };
+}
+
+export const deleteRoutineExercise = (id: string): Promise<void> => deleteRoutineExerciseFromCloud(id);
+
+export const getExerciseHistory = (sessions: { id: string; date: string }[]): Promise<ExerciseHistory[]> =>
+  fetchExerciseHistoryFromCloud(sessions);
 
 // ── Running Plans ─────────────────────────────────────────────────────────────
 

@@ -152,6 +152,7 @@ export interface CreateWorkoutPlan {
 export interface WorkoutSession {
   id: string;
   plan_id: string | null;
+  routine_id: string | null;
   name: string;
   scheduled_date: string;
   completed: boolean;
@@ -164,12 +165,77 @@ export interface WorkoutSession {
 
 export interface CreateWorkoutSession {
   plan_id?: string | null;
+  routine_id?: string | null;
   name: string;
   scheduled_date: string;
   duration_min?: number | null;
   calories_burned?: number | null;
   avg_heart_rate?: number | null;
   notes?: string | null;
+}
+
+// ── Training-program designer ────────────────────────────────────────────────
+
+/** A training day within a program (WorkoutPlan) — e.g. "Push A". Holds an
+ *  ordered list of prescribed exercises (RoutineExercise). */
+export interface WorkoutRoutine {
+  id: string;
+  plan_id: string | null;
+  name: string;
+  day_label: string | null;
+  sort_order: number;
+  notes: string | null;
+  created_at: string;
+}
+
+export interface CreateWorkoutRoutine {
+  plan_id?: string | null;
+  name: string;
+  day_label?: string | null;
+  sort_order?: number;
+  notes?: string | null;
+}
+
+export type UpdateWorkoutRoutine = CreateWorkoutRoutine & { id: string };
+
+/** A prescribed exercise inside a routine — the target you design, not what you
+ *  logged. `target_reps` is text so ranges like "8-12" are allowed. */
+export interface RoutineExercise {
+  id: string;
+  routine_id: string;
+  name: string;
+  target_sets: number | null;
+  target_reps: string | null;
+  rest_sec: number | null;
+  target_weight_kg: number | null;
+  target_rpe: number | null;
+  tempo: string | null;
+  sort_order: number;
+  notes: string | null;
+}
+
+export interface CreateRoutineExercise {
+  routine_id: string;
+  name: string;
+  target_sets?: number | null;
+  target_reps?: string | null;
+  rest_sec?: number | null;
+  target_weight_kg?: number | null;
+  target_rpe?: number | null;
+  tempo?: string | null;
+  sort_order?: number;
+  notes?: string | null;
+}
+
+export type UpdateRoutineExercise = CreateRoutineExercise & { id: string };
+
+/** A logged exercise joined to its session date — for progression charts. */
+export interface ExerciseHistory {
+  name: string;
+  date: string;
+  sets: number | null;
+  reps: number | null;
+  weight_kg: number | null;
 }
 
 export interface Exercise {
