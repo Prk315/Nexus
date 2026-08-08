@@ -91,6 +91,17 @@ export default function RoutinesDesigner({ onStart }: { onStart: (r: WorkoutRout
                     ))}
                   </div>
 
+                  {(() => {
+                    const muscles = [...new Set(exs.flatMap((e) => e.primary_muscles ?? []))];
+                    return muscles.length > 0 ? (
+                      <div style={{ display: "flex", flexWrap: "wrap", gap: 4 }}>
+                        {muscles.map((m) => (
+                          <span key={m} style={{ fontSize: 10, fontWeight: 600, color: "var(--accent)", background: "var(--accent-tint)", borderRadius: 999, padding: "2px 8px", textTransform: "capitalize" }}>{m}</span>
+                        ))}
+                      </div>
+                    ) : null;
+                  })()}
+
                   {confirmDelete === r.id ? (
                     <div style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12 }}>
                       <span style={{ color: "var(--text-secondary)" }}>Delete this day?</span>
