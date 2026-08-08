@@ -115,6 +115,36 @@ export function categoryToMuscles(category: string): MuscleGroup[] {
   return CATEGORY_TO_MUSCLES[category.toUpperCase()] ?? [];
 }
 
+/** free-exercise-db muscle names → body-highlighter groups. Lets manually-logged
+ *  strength work (exercises picked from the library) feed the same fatigue model
+ *  as Garmin sets. Untracked groups (e.g. neck, adductors) are dropped by
+ *  computeMuscleStatus's result guard. */
+const MUSCLE_NAME_TO_GROUP: Record<string, MuscleGroup[]> = {
+  chest: [MuscleType.CHEST],
+  shoulders: [MuscleType.FRONT_DELTOIDS, MuscleType.BACK_DELTOIDS],
+  triceps: [MuscleType.TRICEPS],
+  biceps: [MuscleType.BICEPS],
+  forearms: [MuscleType.FOREARM],
+  quadriceps: [MuscleType.QUADRICEPS],
+  hamstrings: [MuscleType.HAMSTRING],
+  glutes: [MuscleType.GLUTEAL],
+  calves: [MuscleType.CALVES],
+  abdominals: [MuscleType.ABS],
+  traps: [MuscleType.TRAPEZIUS],
+  "middle back": [MuscleType.UPPER_BACK],
+  lats: [MuscleType.UPPER_BACK],
+  "lower back": [MuscleType.LOWER_BACK],
+  neck: [MuscleType.NECK],
+  adductors: [MuscleType.ABDUCTOR],
+  abductors: [MuscleType.ABDUCTORS],
+};
+
+export function libraryMusclesToGroups(names: string[]): MuscleGroup[] {
+  const out = new Set<MuscleGroup>();
+  for (const n of names) for (const g of MUSCLE_NAME_TO_GROUP[n.toLowerCase()] ?? []) out.add(g);
+  return [...out];
+}
+
 // ── Fatigue / recovery model ────────────────────────────────────────────────
 //
 // Each set contributes a training "impulse" (reps × load) to every muscle its
@@ -171,11 +201,14 @@ export interface MuscleStatus {
   readyInHours: number;
 }
 
-interface SetLike {
+export interface SetLike {
   date: string;
   category: string;
   reps: number | null;
   weight_kg: number | null;
+  /** Pre-resolved muscle groups (logged library exercises). When present these
+   *  are used directly; otherwise the Garmin `category` is mapped. */
+  muscles?: MuscleGroup[];
 }
 
 function daysBetween(fromDate: string, toDate: string): number {
@@ -198,7 +231,7 @@ export function computeMuscleStatus(
   }
 
   for (const set of sets) {
-    const muscles = categoryToMuscles(set.category);
+    const muscles = set.muscles ?? categoryToMuscles(set.category);
     if (muscles.length === 0) continue;
     const age = daysBetween(set.date, today);
     if (age < 0) continue;
@@ -213,6 +246,7 @@ export function computeMuscleStatus(
 
     for (const group of muscles) {
       const status = result[group];
+      if (!status) continue; // group not tracked (e.g. neck, adductors)
       if (status.lastTrainedDate == null || set.date > status.lastTrainedDate) {
         status.lastTrainedDate = set.date;
         status.daysSince = age;

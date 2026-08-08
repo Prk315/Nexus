@@ -1,7 +1,9 @@
+import { useMemo } from "react";
 import { Activity } from "lucide-react";
 import MuscleMap from "../workouts/MuscleMap";
 import GarminSyncPanel from "./GarminSyncPanel";
 import { useExerciseSets } from "../../lib/useExerciseSets";
+import { useLoggedMuscleWork } from "../../lib/useLoggedMuscleWork";
 import { CARD_STYLE } from "../../lib/uiHelpers";
 
 /** Self-contained — fetches its own data, so it can be dropped into any page
@@ -10,6 +12,13 @@ import { CARD_STYLE } from "../../lib/uiHelpers";
  * placements like Dashboard/Biomarkers). */
 export default function MuscleMapCard({ showSync = false }: { showSync?: boolean }) {
   const { exerciseSets, reload } = useExerciseSets();
+  const { loggedContributions, reloadLogged } = useLoggedMuscleWork();
+
+  // Garmin per-set data + manually-logged strength work (matched to the exercise
+  // library for its muscles) feed the same fatigue model.
+  const sets = useMemo(() => [...exerciseSets, ...loggedContributions], [exerciseSets, loggedContributions]);
+
+  const refresh = () => { reload(); reloadLogged(); };
 
   return (
     <div style={{ ...CARD_STYLE, padding: "20px 24px" }}>
@@ -18,16 +27,16 @@ export default function MuscleMapCard({ showSync = false }: { showSync?: boolean
         <span style={{ fontWeight: 600, color: "var(--text)", fontSize: 14 }}>Muscle Map</span>
       </div>
       <div style={{ fontSize: 12, color: "var(--text-muted)", marginBottom: 16 }}>
-        Fatigue by muscle group, from Garmin strength-training sets — brighter = more fatigued, fades as it recovers
+        Fatigue by muscle group, from Garmin sets + your logged workouts — brighter = more fatigued, fades as it recovers
       </div>
 
       {showSync && (
         <div style={{ marginBottom: 16 }}>
-          <GarminSyncPanel mode="exercise_sets" onSynced={reload} />
+          <GarminSyncPanel mode="exercise_sets" onSynced={refresh} />
         </div>
       )}
 
-      <MuscleMap sets={exerciseSets} />
+      <MuscleMap sets={sets} />
     </div>
   );
 }

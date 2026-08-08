@@ -12,6 +12,7 @@ import {
 } from "../../store/slices/workoutsSlice";
 import type { Exercise, WorkoutSession } from "../../store/types";
 import { CARD_PADDED, CARD_TIGHT, INPUT_STYLE, INPUT_SM, SECTION_LABEL, BTN_PRIMARY, BTN_GHOST, ICON_BTN, todayISO } from "../../lib/uiHelpers";
+import ExerciseNameInput from "./ExerciseNameInput";
 
 interface WorkoutSessionLoggerProps {
   planId?: string | null;
@@ -113,7 +114,7 @@ function ExerciseList({ session }: { session: WorkoutSession }) {
 
       <form onSubmit={handleAddExercise}>
         <div style={{ marginBottom: 8 }}>
-          <input style={INPUT_SM} value={exName} onChange={(e) => setExName(e.target.value)} placeholder="Exercise name" required />
+          <ExerciseNameInput value={exName} onChange={(name) => setExName(name)} placeholder="Search exercises…" />
         </div>
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr 1fr", gap: 6, marginBottom: 8 }}>
           <input style={INPUT_SM} type="number" value={sets} onChange={(e) => setSets(e.target.value)} placeholder="Sets" min={0} />
