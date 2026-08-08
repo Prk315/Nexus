@@ -6,7 +6,8 @@ import {
   addRoutineExercise, editRoutineExercise, removeRoutineExercise,
 } from "../../store/slices/workoutsSlice";
 import { CARD_STYLE, INPUT_STYLE, INPUT_SM, LABEL_STYLE, FIELD_GROUP } from "../../lib/uiHelpers";
-import type { WorkoutPlan, WorkoutRoutine } from "../../store/types";
+import { searchExerciseLibrary } from "../../lib/exerciseLibrary";
+import type { WorkoutPlan, WorkoutRoutine, ExerciseLibraryItem } from "../../store/types";
 
 interface DraftItem {
   key: string;
@@ -18,10 +19,13 @@ interface DraftItem {
   weight: string;        // kg
   rpe: string;
   notes: string;
+  primary: string[] | null;   // muscles from the picked library exercise
+  secondary: string[] | null;
 }
 
 const blankItem = (): DraftItem => ({
   key: crypto.randomUUID(), name: "", sets: "", reps: "", rest: "", weight: "", rpe: "", notes: "",
+  primary: null, secondary: null,
 });
 
 /** Design or edit a training day (routine): name/day/program + an ordered list of
@@ -57,6 +61,7 @@ export default function RoutineEditor({
         sets: e.target_sets?.toString() ?? "", reps: e.target_reps ?? "",
         rest: e.rest_sec?.toString() ?? "", weight: e.target_weight_kg?.toString() ?? "",
         rpe: e.target_rpe?.toString() ?? "", notes: e.notes ?? "",
+        primary: e.primary_muscles, secondary: e.secondary_muscles,
       })) : [blankItem()]);
       setSeeded(true);
     }
@@ -64,6 +69,8 @@ export default function RoutineEditor({
 
   const patch = (key: string, field: keyof DraftItem, value: string) =>
     setItems((list) => list.map((i) => (i.key === key ? { ...i, [field]: value } : i)));
+  const patchItem = (key: string, partial: Partial<DraftItem>) =>
+    setItems((list) => list.map((i) => (i.key === key ? { ...i, ...partial } : i)));
   const addRow = () => setItems((l) => [...l, blankItem()]);
   const removeRow = (key: string) => setItems((l) => (l.length > 1 ? l.filter((i) => i.key !== key) : l));
   const move = (key: string, dir: -1 | 1) =>
@@ -110,6 +117,7 @@ export default function RoutineEditor({
           target_sets: num(r.sets), target_reps: r.reps.trim() || null,
           rest_sec: num(r.rest), target_weight_kg: num(r.weight),
           target_rpe: num(r.rpe), tempo: null, sort_order: i, notes: r.notes.trim() || null,
+          primary_muscles: r.primary, secondary_muscles: r.secondary,
         };
         if (r.id) await dispatch(editRoutineExercise({ ...payload, id: r.id })).unwrap();
         else await dispatch(addRoutineExercise(payload)).unwrap();
@@ -167,7 +175,10 @@ export default function RoutineEditor({
                   <button onClick={() => move(it.key, -1)} disabled={i === 0} style={miniBtn}><ChevronUp size={11} /></button>
                   <button onClick={() => move(it.key, 1)} disabled={i === items.length - 1} style={miniBtn}><ChevronDown size={11} /></button>
                 </div>
-                <input style={INPUT_SM} value={it.name} onChange={(e) => patch(it.key, "name", e.target.value)} placeholder="Bench press" />
+                <ExerciseNameInput
+                  value={it.name}
+                  onChange={(name, p, s) => patchItem(it.key, { name, primary: p, secondary: s })}
+                />
                 <input style={INPUT_SM} value={it.sets} onChange={(e) => patch(it.key, "sets", e.target.value)} placeholder="3" inputMode="numeric" />
                 <input style={INPUT_SM} value={it.reps} onChange={(e) => patch(it.key, "reps", e.target.value)} placeholder="8-12" />
                 <input style={INPUT_SM} value={it.rest} onChange={(e) => patch(it.key, "rest", e.target.value)} placeholder="120" inputMode="numeric" />
@@ -203,3 +214,59 @@ const miniBtn: React.CSSProperties = {
   background: "none", border: "none", cursor: "pointer", color: "var(--text-muted)",
   padding: 0, display: "flex", alignItems: "center", justifyContent: "center", lineHeight: 1,
 };
+
+/** Searchable exercise-name field backed by the shared library — picking a match
+ *  fills the name and captures its muscles; free-typing is still allowed. */
+function ExerciseNameInput({
+  value, onChange,
+}: {
+  value: string;
+  onChange: (name: string, primary: string[] | null, secondary: string[] | null) => void;
+}) {
+  const [results, setResults] = useState<ExerciseLibraryItem[]>([]);
+  const [open, setOpen] = useState(false);
+  const [loading, setLoading] = useState(false);
+
+  useEffect(() => {
+    const q = value.trim();
+    if (q.length < 2) { setResults([]); return; }
+    setLoading(true);
+    const t = setTimeout(() => {
+      searchExerciseLibrary(q).then((r) => setResults(r)).finally(() => setLoading(false));
+    }, 220);
+    return () => clearTimeout(t);
+  }, [value]);
+
+  return (
+    <div style={{ position: "relative", minWidth: 0 }}>
+      <input
+        style={INPUT_SM}
+        value={value}
+        onChange={(e) => { onChange(e.target.value, null, null); setOpen(true); }}
+        onFocus={() => setOpen(true)}
+        onBlur={() => setTimeout(() => setOpen(false), 150)}
+        placeholder="Search exercises…"
+      />
+      {open && value.trim().length >= 2 && (results.length > 0 || loading) && (
+        <div style={{ position: "absolute", top: "calc(100% + 2px)", left: 0, width: 300, maxWidth: "70vw", maxHeight: 240, overflowY: "auto", background: "var(--surface)", border: "1px solid var(--border)", borderRadius: "var(--radius-sm)", boxShadow: "0 8px 24px rgba(0,0,0,0.25)", zIndex: 5 }}>
+          {loading && results.length === 0 && (
+            <div style={{ padding: "8px 10px", fontSize: 12, color: "var(--text-muted)" }}>Searching…</div>
+          )}
+          {results.map((r) => (
+            <button
+              key={r.id}
+              type="button"
+              onMouseDown={(e) => { e.preventDefault(); onChange(r.name, r.primary_muscles, r.secondary_muscles); setOpen(false); }}
+              style={{ display: "flex", flexDirection: "column", alignItems: "flex-start", gap: 1, width: "100%", textAlign: "left", padding: "7px 10px", background: "none", border: "none", borderBottom: "1px solid var(--border)", cursor: "pointer" }}
+            >
+              <span style={{ fontSize: 13, fontWeight: 500, color: "var(--text)" }}>{r.name}</span>
+              <span style={{ fontSize: 11, color: "var(--text-muted)" }}>
+                {r.primary_muscles.join(", ")}{r.equipment ? ` · ${r.equipment}` : ""}
+              </span>
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}

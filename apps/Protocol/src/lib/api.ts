@@ -313,6 +313,8 @@ export async function pushRoutineExerciseToCloud(e: CreateRoutineExercise & { id
     tempo: e.tempo ?? null,
     sort_order: e.sort_order ?? 0,
     notes: e.notes ?? null,
+    primary_muscles: e.primary_muscles ?? null,
+    secondary_muscles: e.secondary_muscles ?? null,
   });
   if (error) throw new Error(error.message);
 }

@@ -212,6 +212,9 @@ export interface RoutineExercise {
   tempo: string | null;
   sort_order: number;
   notes: string | null;
+  /** Muscles of the picked library exercise (null when free-typed). */
+  primary_muscles: string[] | null;
+  secondary_muscles: string[] | null;
 }
 
 export interface CreateRoutineExercise {
@@ -225,9 +228,25 @@ export interface CreateRoutineExercise {
   tempo?: string | null;
   sort_order?: number;
   notes?: string | null;
+  primary_muscles?: string[] | null;
+  secondary_muscles?: string[] | null;
 }
 
 export type UpdateRoutineExercise = CreateRoutineExercise & { id: string };
+
+/** A reference exercise from the shared library (free-exercise-db). */
+export interface ExerciseLibraryItem {
+  id: string;
+  name: string;
+  category: string | null;
+  equipment: string | null;
+  force: string | null;
+  level: string | null;
+  mechanic: string | null;
+  primary_muscles: string[];
+  secondary_muscles: string[];
+  instructions: string[];
+}
 
 /** A logged exercise joined to its session date — for progression charts. */
 export interface ExerciseHistory {

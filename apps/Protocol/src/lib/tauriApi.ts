@@ -249,6 +249,8 @@ export async function createRoutineExercise(e: CreateRoutineExercise): Promise<R
     tempo: e.tempo ?? null,
     sort_order: e.sort_order ?? 0,
     notes: e.notes ?? null,
+    primary_muscles: e.primary_muscles ?? null,
+    secondary_muscles: e.secondary_muscles ?? null,
   };
 }
 
@@ -264,6 +266,8 @@ export async function updateRoutineExercise(e: UpdateRoutineExercise): Promise<R
     tempo: e.tempo ?? null,
     sort_order: e.sort_order ?? 0,
     notes: e.notes ?? null,
+    primary_muscles: e.primary_muscles ?? null,
+    secondary_muscles: e.secondary_muscles ?? null,
   };
 }
 
