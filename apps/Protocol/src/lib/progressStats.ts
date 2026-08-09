@@ -1,5 +1,6 @@
 import { isoDate } from "./uiHelpers";
 import type { RunningSession, BodyMetric, ExerciseHistory } from "../store/types";
+import { RUN_METRIC_OPTIONS, type TrackingConfig } from "./trackingConfig";
 
 export type TimeRange = "week" | "month" | "3months" | "year" | "all";
 
@@ -12,28 +13,27 @@ export const TIME_RANGES: { id: TimeRange; label: string; days: number }[] = [
 ];
 
 /** One small named circle — 100 = baseline, >100 = improved (green overflow). */
-export interface GaugeMetric {
-  name: string;
-  pct: number;
-}
+export interface GaugeMetric { name: string; pct: number; }
+
+type Row = Record<string, number | string | null>;
 
 export interface ProgressData {
   empty: boolean;
-  /** Big pie: overall % toward the headline goal. */
   overallPct: number;
   overallLabel: string;
   metrics: GaugeMetric[];
-  /** Graph 1 — cumulative progress toward the period goal. */
-  goal: { label: string; unit: string; data: { label: string; value: number; goal: number }[] };
-  /** Graph 2 — recurring output vs a per-week target. */
-  output: { label: string; unit: string; target: number; data: { label: string; value: number }[] };
-  /** Biomarkers / proxies connected to the activity, over time. Each series is
-   *  normalised onto a shared 0–100 axis for display (`<key>_pos`) while the raw
-   *  value is kept for the tooltip (`<key>_raw`). */
+  /** Hero chart — a glowing "progress score" (mean of the tracked component lines,
+   *  each normalised 0–100) plus the component lines themselves. */
+  trend: {
+    data: Row[]; // { label, full, score, <key>_pos, <key>_raw }
+    series: { key: string; name: string; color: string; unit: string }[];
+  };
+  /** Biomarkers over time — normalised onto a shared 0–100 axis (`<key>_pos`) with
+   *  the raw value kept for the tooltip (`<key>_raw`). Filtered by config. */
   biomarkers: {
     label: string;
     series: { key: string; name: string; color: string; unit: string }[];
-    data: Record<string, number | string | null>[];
+    data: Row[];
   };
 }
 
@@ -48,6 +48,10 @@ const BIO_SPECS: BioSpec[] = [
   { key: "avghr", name: "Avg HR", color: "#fb923c", field: "avg_heart_rate_bpm", higherBetter: false, unit: "bpm" },
 ];
 
+export const BIOMARKER_OPTIONS = BIO_SPECS.map((s) => ({ key: s.key, name: s.name, color: s.color }));
+
+const EX_PALETTE = ["#38bdf8", "#f59e0b", "#a78bfa", "#22c55e", "#ec4899", "#14b8a6", "#eab308", "#f472b6"];
+
 function cutoffISO(days: number): string {
   if (!isFinite(days)) return "0000-01-01";
   const d = new Date();
@@ -55,10 +59,9 @@ function cutoffISO(days: number): string {
   return isoDate(d);
 }
 
-/** Monday-of-week key for a date string. */
 function weekKey(dateStr: string): string {
   const d = new Date(`${dateStr}T00:00:00`);
-  const dow = (d.getDay() + 6) % 7; // 0 = Monday
+  const dow = (d.getDay() + 6) % 7;
   d.setDate(d.getDate() - dow);
   return isoDate(d);
 }
@@ -67,12 +70,9 @@ function shortDate(dateStr: string): string {
   return new Date(`${dateStr}T00:00:00`).toLocaleDateString(undefined, { month: "short", day: "numeric" });
 }
 
-/** Improvement of `second` over `first`, as a % where 100 = no change. Neutral
- *  (100) when there isn't enough data — matching "initially 100%". */
 function improvement(first: number | null, second: number | null, higherBetter: boolean): number {
   if (first == null || second == null || first === 0 || second === 0) return 100;
-  const ratio = higherBetter ? second / first : first / second;
-  return Math.round(ratio * 100);
+  return Math.round((higherBetter ? second / first : first / second) * 100);
 }
 
 function mean(xs: number[]): number | null {
@@ -80,7 +80,6 @@ function mean(xs: number[]): number | null {
   return v.length ? v.reduce((a, b) => a + b, 0) / v.length : null;
 }
 
-/** Split rows (sorted by date) into earlier / later halves for baseline vs current. */
 function halves<T extends { date: string }>(rows: T[]): [T[], T[]] {
   const sorted = [...rows].sort((a, b) => a.date.localeCompare(b.date));
   const mid = Math.floor(sorted.length / 2);
@@ -95,36 +94,69 @@ function weeksInRange(days: number, rows: { date: string }[]): number {
   return Math.max(1, span / 7);
 }
 
-const RUN_WEEKLY_KM = 30; // default output goal — user-configurable later
+interface Comp { key: string; name: string; color: string; unit: string; higherBetter: boolean; byWeek: Map<string, number>; }
+
+/** Normalise each component's per-week values onto a shared 0–100 axis (direction-
+ *  aware) and derive the glowing hero "score" as the mean of the present positions. */
+function assembleTrend(weekKeys: string[], comps: Comp[]): ProgressData["trend"] {
+  const bounds = comps.map((c) => {
+    const vals = weekKeys.map((w) => c.byWeek.get(w)).filter((v): v is number => typeof v === "number");
+    return vals.length ? { min: Math.min(...vals), max: Math.max(...vals) } : null;
+  });
+  const data: Row[] = weekKeys.map((w) => {
+    const row: Row = { label: shortDate(w), full: w };
+    let sum = 0, n = 0;
+    comps.forEach((c, i) => {
+      const v = c.byWeek.get(w);
+      const b = bounds[i];
+      if (typeof v !== "number" || !b) { row[`${c.key}_pos`] = null; row[`${c.key}_raw`] = null; return; }
+      const frac = b.max === b.min ? 0.5 : (v - b.min) / (b.max - b.min);
+      const pos = Math.round((c.higherBetter ? frac : 1 - frac) * 100);
+      row[`${c.key}_pos`] = pos;
+      row[`${c.key}_raw`] = Math.round(v * 10) / 10;
+      sum += pos; n++;
+    });
+    row.score = n > 0 ? Math.round(sum / n) : null;
+    return row;
+  });
+  return { data, series: comps.map((c) => ({ key: c.key, name: c.name, color: c.color, unit: c.unit })) };
+}
+
+const RUN_WEEKLY_KM = 30;
 const STRENGTH_WEEKLY_SESSIONS = 4;
 
-export function buildRunningStats(runs: RunningSession[], body: BodyMetric[], range: TimeRange): ProgressData {
+export function buildRunningStats(runs: RunningSession[], body: BodyMetric[], range: TimeRange, config: TrackingConfig): ProgressData {
   const days = TIME_RANGES.find((r) => r.id === range)!.days;
   const since = cutoffISO(days);
   const inRange = runs.filter((r) => r.date >= since).sort((a, b) => a.date.localeCompare(b.date));
-
   const empty = inRange.length === 0;
   const weeks = weeksInRange(days, inRange);
 
-  // Output — distance per week vs target.
-  const byWeek = new Map<string, number>();
-  for (const r of inRange) byWeek.set(weekKey(r.date), (byWeek.get(weekKey(r.date)) ?? 0) + (r.actual_km ?? 0));
-  const outputData = [...byWeek.entries()].sort().map(([k, v]) => ({ label: shortDate(k), value: Math.round(v * 10) / 10 }));
+  const weekKeys = [...new Set(inRange.map((r) => weekKey(r.date)))].sort();
+
+  // Per-week aggregates for each run metric.
+  const agg = (fn: (rs: RunningSession[]) => number | null) => {
+    const m = new Map<string, number>();
+    for (const w of weekKeys) {
+      const rs = inRange.filter((r) => weekKey(r.date) === w);
+      const v = fn(rs);
+      if (v != null) m.set(w, v);
+    }
+    return m;
+  };
+  const perMetric: Record<string, Map<string, number>> = {
+    speed: agg((rs) => { const p = mean(rs.map((r) => r.avg_pace_s_per_km).filter((x): x is number => x != null && x > 0)); return p ? 3600 / p : null; }),
+    distance: agg((rs) => rs.reduce((s, r) => s + (r.actual_km ?? 0), 0) || null),
+    hr: agg((rs) => mean(rs.map((r) => r.heart_rate_avg).filter((x): x is number => x != null))),
+    cadence: agg((rs) => mean(rs.map((r) => r.cadence_avg).filter((x): x is number => x != null))),
+  };
+  const comps: Comp[] = RUN_METRIC_OPTIONS
+    .filter((o) => config.runMetrics.includes(o.key))
+    .map((o) => ({ ...o, byWeek: perMetric[o.key] ?? new Map() }));
+
   const totalKm = inRange.reduce((s, r) => s + (r.actual_km ?? 0), 0);
   const avgWeeklyKm = totalKm / weeks;
-  const overallPct = Math.round((avgWeeklyKm / RUN_WEEKLY_KM) * 100);
 
-  // Goal — cumulative distance vs pro-rated target line.
-  const goalTotal = RUN_WEEKLY_KM * weeks;
-  let cum = 0;
-  const first = inRange[0]?.date;
-  const goalData = inRange.map((r) => {
-    cum += r.actual_km ?? 0;
-    const elapsedWeeks = first ? Math.max(0, (new Date(r.date).getTime() - new Date(first).getTime()) / 604800000) : 0;
-    return { label: shortDate(r.date), value: Math.round(cum * 10) / 10, goal: Math.round(Math.min(goalTotal, RUN_WEEKLY_KM * elapsedWeeks + RUN_WEEKLY_KM) * 10) / 10 };
-  });
-
-  // Metrics — baseline (earlier half) vs current (later half).
   const [a, b] = halves(inRange);
   const metrics: GaugeMetric[] = [
     { name: "Weekly km", pct: improvement(mean(a.map((r) => r.actual_km ?? 0)), mean(b.map((r) => r.actual_km ?? 0)), true) },
@@ -135,48 +167,47 @@ export function buildRunningStats(runs: RunningSession[], body: BodyMetric[], ra
 
   return {
     empty,
-    overallPct,
+    overallPct: Math.round((avgWeeklyKm / RUN_WEEKLY_KM) * 100),
     overallLabel: `${avgWeeklyKm.toFixed(1)} / ${RUN_WEEKLY_KM} km·wk`,
     metrics,
-    goal: { label: "Cumulative distance vs goal", unit: "km", data: goalData },
-    output: { label: `Weekly distance · target ${RUN_WEEKLY_KM} km`, unit: "km", target: RUN_WEEKLY_KM, data: outputData },
-    biomarkers: buildBiomarkers(body, since),
+    trend: assembleTrend(weekKeys, comps),
+    biomarkers: buildBiomarkers(body, since, config.biomarkers),
   };
 }
 
-export function buildStrengthStats(history: ExerciseHistory[], body: BodyMetric[], range: TimeRange): ProgressData {
+export function buildStrengthStats(history: ExerciseHistory[], body: BodyMetric[], range: TimeRange, config: TrackingConfig): ProgressData {
   const days = TIME_RANGES.find((r) => r.id === range)!.days;
   const since = cutoffISO(days);
   const inRange = history.filter((h) => h.date >= since).sort((a, b) => a.date.localeCompare(b.date));
-
   const empty = inRange.length === 0;
   const weeks = weeksInRange(days, inRange);
 
-  const vol = (h: ExerciseHistory) => (h.sets ?? 1) * (h.reps ?? 0) * (h.weight_kg ?? 0);
   const e1rm = (h: ExerciseHistory) => (h.weight_kg != null && h.reps != null ? h.weight_kg * (1 + h.reps / 30) : 0);
+  const weekKeys = [...new Set(inRange.map((h) => weekKey(h.date)))].sort();
 
-  // Output — sessions (distinct dates) per week vs target.
-  const sessionDatesByWeek = new Map<string, Set<string>>();
-  for (const h of inRange) {
-    const k = weekKey(h.date);
-    if (!sessionDatesByWeek.has(k)) sessionDatesByWeek.set(k, new Set());
-    sessionDatesByWeek.get(k)!.add(h.date);
+  // Which exercises to track: explicit config, else the top 3 most-logged.
+  let tracked = config.exercises;
+  if (tracked.length === 0) {
+    const count = new Map<string, number>();
+    for (const h of inRange) count.set(h.name, (count.get(h.name) ?? 0) + 1);
+    tracked = [...count.entries()].sort((a, b) => b[1] - a[1]).slice(0, 3).map(([n]) => n);
   }
-  const outputData = [...sessionDatesByWeek.entries()].sort().map(([k, set]) => ({ label: shortDate(k), value: set.size }));
-  const totalSessions = new Set(inRange.map((h) => h.date)).size;
-  const avgWeeklySessions = totalSessions / weeks;
-  const overallPct = Math.round((avgWeeklySessions / STRENGTH_WEEKLY_SESSIONS) * 100);
 
-  // Goal — cumulative volume vs pro-rated target (target derived from period pace).
-  const totalVol = inRange.reduce((s, h) => s + vol(h), 0);
-  const goalTotal = totalVol > 0 ? totalVol * 1.1 : 1; // 10% stretch on current pace
-  let cum = 0;
-  const goalData = inRange.map((h) => {
-    cum += vol(h);
-    return { label: shortDate(h.date), value: Math.round(cum), goal: Math.round(goalTotal) };
+  // Per-week top est-1RM for each tracked exercise.
+  const comps: Comp[] = tracked.map((name, i) => {
+    const byWeek = new Map<string, number>();
+    for (const w of weekKeys) {
+      const best = Math.max(0, ...inRange.filter((h) => h.name === name && weekKey(h.date) === w).map(e1rm));
+      if (best > 0) byWeek.set(w, Math.round(best * 10) / 10);
+    }
+    return { key: `ex${i}`, name, color: EX_PALETTE[i % EX_PALETTE.length], unit: "kg", higherBetter: true, byWeek };
   });
 
+  const totalSessions = new Set(inRange.map((h) => h.date)).size;
+  const avgWeeklySessions = totalSessions / weeks;
+
   const [a, b] = halves(inRange);
+  const vol = (h: ExerciseHistory) => (h.sets ?? 1) * (h.reps ?? 0) * (h.weight_kg ?? 0);
   const metrics: GaugeMetric[] = [
     { name: "Top 1RM", pct: improvement(Math.max(0, ...a.map(e1rm)), Math.max(0, ...b.map(e1rm)), true) },
     { name: "Volume", pct: improvement(mean(a.map(vol)), mean(b.map(vol)), true) },
@@ -186,36 +217,28 @@ export function buildStrengthStats(history: ExerciseHistory[], body: BodyMetric[
 
   return {
     empty,
-    overallPct,
+    overallPct: Math.round((avgWeeklySessions / STRENGTH_WEEKLY_SESSIONS) * 100),
     overallLabel: `${avgWeeklySessions.toFixed(1)} / ${STRENGTH_WEEKLY_SESSIONS} sessions·wk`,
     metrics,
-    goal: { label: "Cumulative volume vs goal", unit: "kg", data: goalData },
-    output: { label: `Weekly sessions · target ${STRENGTH_WEEKLY_SESSIONS}`, unit: "", target: STRENGTH_WEEKLY_SESSIONS, data: outputData },
-    biomarkers: buildBiomarkers(body, since),
+    trend: assembleTrend(weekKeys, comps),
+    biomarkers: buildBiomarkers(body, since, config.biomarkers),
   };
 }
 
-/** Recovery/fitness proxies connected to the activity, over the window. Every
- *  biomarker with data is normalised (min–max, direction-aware so "better" is up)
- *  onto a shared 0–100 axis so many series can overlay like the sleep chart; the
- *  raw value rides along for the tooltip. */
-function buildBiomarkers(body: BodyMetric[], since: string): ProgressData["biomarkers"] {
+function buildBiomarkers(body: BodyMetric[], since: string, selected: string[]): ProgressData["biomarkers"] {
   const rows = body.filter((m) => m.date >= since).sort((a, b) => a.date.localeCompare(b.date));
+  const active = BIO_SPECS.filter((s) => selected.includes(s.key) && rows.some((m) => typeof m[s.field] === "number"));
 
-  // Which biomarkers actually have data in this window.
-  const active = BIO_SPECS.filter((s) => rows.some((m) => typeof m[s.field] === "number"));
-
-  // Per-series min/max for normalisation.
   const bounds = new Map<string, { min: number; max: number }>();
   for (const s of active) {
     const vals = rows.map((m) => m[s.field]).filter((v): v is number => typeof v === "number");
     bounds.set(s.key, { min: Math.min(...vals), max: Math.max(...vals) });
   }
 
-  const data = rows
+  const data: Row[] = rows
     .filter((m) => active.some((s) => typeof m[s.field] === "number"))
     .map((m) => {
-      const row: Record<string, number | string | null> = { label: shortDate(m.date), full: m.date };
+      const row: Row = { label: shortDate(m.date), full: m.date };
       for (const s of active) {
         const v = m[s.field];
         if (typeof v !== "number") { row[`${s.key}_pos`] = null; row[`${s.key}_raw`] = null; continue; }
