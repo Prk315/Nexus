@@ -1,9 +1,12 @@
 /**
  * Per-activity tracking config — which biomarkers to chart, which specific
  * exercises' weight to track (strength), and which run metrics like speed to track
- * (running). Stored in localStorage for now; a Supabase table can back this later
- * for cross-device sync (same shape).
+ * (running). Source of truth is the `protocol_progress_config` Supabase table
+ * (syncs across devices); localStorage is a cache for instant first render and an
+ * offline / signed-out fallback.
  */
+
+import { fetchProgressConfig, upsertProgressConfig } from "./progressConfigApi";
 
 export type Activity = "running" | "strength";
 
@@ -30,7 +33,9 @@ const DEFAULTS: Record<Activity, TrackingConfig> = {
 
 const storeKey = (a: Activity) => `protocol_progress_cfg_${a}`;
 
-export function getTrackingConfig(a: Activity): TrackingConfig {
+/** Synchronous read from the localStorage cache (or defaults) — used to seed React
+ *  state so the card renders instantly before the Supabase round-trip resolves. */
+export function getCachedConfig(a: Activity): TrackingConfig {
   try {
     const raw = localStorage.getItem(storeKey(a));
     if (raw) return { ...DEFAULTS[a], ...JSON.parse(raw) };
@@ -40,10 +45,24 @@ export function getTrackingConfig(a: Activity): TrackingConfig {
   return { ...DEFAULTS[a] };
 }
 
-export function saveTrackingConfig(a: Activity, cfg: TrackingConfig): void {
+function writeCache(a: Activity, cfg: TrackingConfig): void {
+  try { localStorage.setItem(storeKey(a), JSON.stringify(cfg)); } catch { /* ignore */ }
+}
+
+/** Load the config from Supabase (source of truth), caching it locally. Falls back
+ *  to the cache/defaults when signed out, offline, or no row exists yet. */
+export async function loadTrackingConfig(a: Activity): Promise<TrackingConfig> {
   try {
-    localStorage.setItem(storeKey(a), JSON.stringify(cfg));
+    const remote = await fetchProgressConfig(a);
+    if (remote) { writeCache(a, remote); return remote; }
   } catch {
-    /* ignore */
+    /* not authenticated / offline — use the cache */
   }
+  return getCachedConfig(a);
+}
+
+/** Persist the config: write the cache immediately, then upsert to Supabase. */
+export async function saveTrackingConfig(a: Activity, cfg: TrackingConfig): Promise<void> {
+  writeCache(a, cfg);
+  try { await upsertProgressConfig(a, cfg); } catch { /* best effort — cache still holds it */ }
 }

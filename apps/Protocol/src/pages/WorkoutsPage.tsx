@@ -6,7 +6,7 @@ import { fetchRunningSessions } from "../store/slices/runningSlice";
 import { fetchBodyMetrics } from "../store/slices/biomarkersSlice";
 import { CARD_STYLE, isoDate } from "../lib/uiHelpers";
 import { buildRunningStats, buildStrengthStats, type TimeRange } from "../lib/progressStats";
-import { getTrackingConfig, saveTrackingConfig, type TrackingConfig, type Activity } from "../lib/trackingConfig";
+import { getCachedConfig, loadTrackingConfig, saveTrackingConfig, type TrackingConfig, type Activity } from "../lib/trackingConfig";
 import { ConsistencyHeatmap, buildHeatmapGrid } from "../components/habits/HabitCharts";
 import ProgressStats from "../components/workouts/ProgressStats";
 import RecoveryCard from "../components/workouts/RecoveryCard";
@@ -46,12 +46,18 @@ export default function WorkoutsPage() {
 
   const [runRange, setRunRange] = useState<TimeRange>("3months");
   const [strRange, setStrRange] = useState<TimeRange>("3months");
-  const [runCfg, setRunCfg] = useState<TrackingConfig>(() => getTrackingConfig("running"));
-  const [strCfg, setStrCfg] = useState<TrackingConfig>(() => getTrackingConfig("strength"));
+  const [runCfg, setRunCfg] = useState<TrackingConfig>(() => getCachedConfig("running"));
+  const [strCfg, setStrCfg] = useState<TrackingConfig>(() => getCachedConfig("strength"));
+
+  // Cache seeds the first render; Supabase is the source of truth once it resolves.
+  useEffect(() => {
+    loadTrackingConfig("running").then(setRunCfg);
+    loadTrackingConfig("strength").then(setStrCfg);
+  }, []);
 
   const updateCfg = (a: Activity, c: TrackingConfig) => {
-    saveTrackingConfig(a, c);
     if (a === "running") setRunCfg(c); else setStrCfg(c);
+    void saveTrackingConfig(a, c);
   };
 
   const refresh = () => {
