@@ -1012,3 +1012,32 @@ export async function upsertDataSourceSettingsInCloud(settings: DataSourceSettin
   });
   if (error) throw new Error(error.message);
 }
+
+/** Friendly-name map for imported exercises: Garmin source key → display name. */
+export async function fetchExerciseAliases(): Promise<Record<string, string>> {
+  const sb = getSupabaseClient();
+  const { data, error } = await sb
+    .from("protocol_exercise_aliases")
+    .select("source_key, display_name")
+    .eq("user_id", getUserId());
+  if (error) throw new Error(error.message);
+  const map: Record<string, string> = {};
+  for (const r of (data ?? []) as { source_key: string; display_name: string }[]) map[r.source_key] = r.display_name;
+  return map;
+}
+
+/** Set (or, with an empty name, clear) a friendly name for an imported exercise. */
+export async function upsertExerciseAlias(sourceKey: string, displayName: string): Promise<void> {
+  const sb = getSupabaseClient();
+  const trimmed = displayName.trim();
+  if (!trimmed) {
+    const { error } = await sb.from("protocol_exercise_aliases").delete().eq("user_id", getUserId()).eq("source_key", sourceKey);
+    if (error) throw new Error(error.message);
+    return;
+  }
+  const { error } = await sb.from("protocol_exercise_aliases").upsert(
+    { user_id: getUserId(), source_key: sourceKey, display_name: trimmed, updated_at: new Date().toISOString() },
+    { onConflict: "user_id,source_key" },
+  );
+  if (error) throw new Error(error.message);
+}
