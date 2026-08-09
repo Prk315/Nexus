@@ -1,5 +1,6 @@
 {
   "$schema": "https://openapi.vercel.sh/vercel.json",
+  "ignoreCommand": "if [ -n \"$VERCEL_GIT_PREVIOUS_SHA\" ] && npx --yes turbo@^2 query affected --base=$VERCEL_GIT_PREVIOUS_SHA --packages vault --exit-code; then exit 0; else exit 1; fi",
   "installCommand": "npm install",
   "buildCommand": "npm run build --workspace=apps/Vault/Vault",
   "outputDirectory": "apps/Vault/Vault/dist",
