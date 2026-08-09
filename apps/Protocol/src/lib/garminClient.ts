@@ -30,6 +30,9 @@ export interface GarminBodyRaw {
 
 export interface GarminActivityRaw {
   type: "run" | "workout";
+  /** Garmin's own activity id. Absent on bridges older than 2026-08-09. */
+  activity_id?: number | string | null;
+  start_time?: string | null;
   date: string;
   name: string;
   actual_km?: number;

@@ -433,6 +433,7 @@ export async function pushWorkoutSessionToCloud(
   const { error } = await sb.from("protocol_workout_sessions").upsert({
     id: session.id,
     user_id: getUserId(),
+    external_id: session.external_id ?? null,
     plan_id: session.plan_id ?? null,
     routine_id: session.routine_id ?? null,
     name: session.name,
@@ -485,6 +486,7 @@ export async function pushRunningSessionToCloud(
   const { error } = await sb.from("protocol_running_sessions").upsert({
     id: session.id,
     user_id: getUserId(),
+    external_id: session.external_id ?? null,
     plan_id: session.plan_id ?? null,
     date: session.date,
     planned_km: session.planned_km ?? null,
