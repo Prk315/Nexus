@@ -4,7 +4,7 @@ import { useAppDispatch, useAppSelector } from "../store/hooks";
 import { fetchWorkoutSessions, fetchExerciseHistory, fetchWorkoutPlans, fetchRoutineExercises, startSessionFromRoutine } from "../store/slices/workoutsSlice";
 import { fetchRunningSessions } from "../store/slices/runningSlice";
 import { fetchBodyMetrics } from "../store/slices/biomarkersSlice";
-import { fetchExerciseSetsFromCloud } from "../lib/api";
+import { fetchExerciseSetsFromCloud, fetchExerciseAliases, upsertExerciseAlias } from "../lib/api";
 import { CARD_STYLE, isoDate, todayISO } from "../lib/uiHelpers";
 import { buildRunningStats, buildStrengthStats, type TimeRange } from "../lib/progressStats";
 import { getCachedConfig, loadTrackingConfig, saveTrackingConfig, type TrackingConfig, type Activity } from "../lib/trackingConfig";
@@ -12,6 +12,7 @@ import { ConsistencyHeatmap, buildHeatmapGrid } from "../components/habits/Habit
 import ProgressStats from "../components/workouts/ProgressStats";
 import RecoveryCard from "../components/workouts/RecoveryCard";
 import RoutinesDesigner from "../components/workouts/RoutinesDesigner";
+import ExerciseAliasEditor from "../components/workouts/ExerciseAliasEditor";
 import LogPlanCard from "../components/workouts/LogPlanCard";
 import RunsCard from "../components/workouts/RunsCard";
 import ProgressionView from "../components/workouts/ProgressionView";
@@ -50,6 +51,16 @@ export default function WorkoutsPage() {
   const [runCfg, setRunCfg] = useState<TrackingConfig>(() => getCachedConfig("running"));
   const [strCfg, setStrCfg] = useState<TrackingConfig>(() => getCachedConfig("strength"));
   const [strengthSets, setStrengthSets] = useState<ExerciseSet[]>([]);
+  const [aliases, setAliases] = useState<Record<string, string>>({});
+
+  const saveAlias = (key: string, name: string) => {
+    setAliases((prev) => {
+      const next = { ...prev };
+      if (name.trim()) next[key] = name.trim(); else delete next[key];
+      return next;
+    });
+    void upsertExerciseAlias(key, name);
+  };
 
   // Cache seeds the first render; Supabase is the source of truth once it resolves.
   useEffect(() => {
@@ -74,6 +85,7 @@ export default function WorkoutsPage() {
     // Garmin strength lands in protocol_exercise_sets (per-set), not
     // protocol_exercises — pull a wide window so strength progress populates too.
     fetchExerciseSetsFromCloud(isoDate(new Date(Date.now() - 730 * 86400000))).then(setStrengthSets);
+    fetchExerciseAliases().then(setAliases).catch(() => {});
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [dispatch]);
 
@@ -97,9 +109,13 @@ export default function WorkoutsPage() {
   // the manually-logged sessions — those are often a duplicate re-log of the same
   // workout, so combining would double-count. Each set → one ExerciseHistory row;
   // name falls back to category when Garmin leaves exercise_name null.
+  const strengthKeys = useMemo(() => [...new Set(strengthSets.map((s) => s.exercise_name ?? s.category))].sort(), [strengthSets]);
   const strengthEntries = useMemo<ExerciseHistory[]>(() =>
-    strengthSets.map((s) => ({ name: s.exercise_name ?? s.category, date: s.date, sets: 1, reps: s.reps, weight_kg: s.weight_kg })),
-  [strengthSets]);
+    strengthSets.map((s) => {
+      const key = s.exercise_name ?? s.category;
+      return { name: aliases[key] ?? key, date: s.date, sets: 1, reps: s.reps, weight_kg: s.weight_kg };
+    }),
+  [strengthSets, aliases]);
   const strData = useMemo(() => buildStrengthStats(strengthEntries, bodyMetrics, strRange, strCfg), [strengthEntries, bodyMetrics, strRange, strCfg]);
 
   const today = isoDate(new Date());
@@ -122,7 +138,7 @@ export default function WorkoutsPage() {
       {/* Progress overview — running & strength side by side */}
       <div style={{ display: "flex", gap: 16, flexWrap: "wrap", alignItems: "stretch" }}>
         <ProgressStats title="Running" color="var(--series-running)" activity="running" range={runRange} onRange={setRunRange} config={runCfg} onConfigChange={(c) => updateCfg("running", c)} data={runData} />
-        <ProgressStats title="Strength" color="var(--series-workout)" activity="strength" range={strRange} onRange={setStrRange} config={strCfg} onConfigChange={(c) => updateCfg("strength", c)} data={strData} />
+        <ProgressStats title="Strength" color="var(--series-workout)" activity="strength" range={strRange} onRange={setStrRange} config={strCfg} onConfigChange={(c) => updateCfg("strength", c)} data={strData} extraConfig={<ExerciseAliasEditor keys={strengthKeys} aliases={aliases} onSave={saveAlias} />} />
       </div>
 
       <div>

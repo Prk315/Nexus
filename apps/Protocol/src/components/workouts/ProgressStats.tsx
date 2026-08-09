@@ -70,7 +70,7 @@ function Legend({ items, hero }: { items: { key: string; name: string; color: st
  *   across the top of the multi-line biomarker chart.
  */
 export default function ProgressStats({
-  title, color, activity, range, onRange, config, onConfigChange, data,
+  title, color, activity, range, onRange, config, onConfigChange, data, extraConfig,
 }: {
   title: string;
   color: string;
@@ -80,6 +80,7 @@ export default function ProgressStats({
   config: TrackingConfig;
   onConfigChange: (c: TrackingConfig) => void;
   data: ProgressData;
+  extraConfig?: React.ReactNode;
 }) {
   const [editing, setEditing] = useState(false);
   const HeroTip = rawTooltip(data.trend.series, "Progress score");
@@ -108,7 +109,12 @@ export default function ProgressStats({
         </div>
       </div>
 
-      {editing && <ProgressConfigEditor activity={activity} config={config} onChange={onConfigChange} />}
+      {editing && (
+        <>
+          <ProgressConfigEditor activity={activity} config={config} onChange={onConfigChange} />
+          {extraConfig}
+        </>
+      )}
 
       {data.empty ? (
         <div style={{ minHeight: 220, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 14, color: "var(--text-muted)" }}>
