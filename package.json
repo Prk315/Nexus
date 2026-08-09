@@ -2,6 +2,7 @@
   "name": "nexus-ecosystem",
   "version": "0.0.1",
   "private": true,
+  "packageManager": "npm@11.5.1",
   "workspaces": [
     "apps/*",
     "apps/Vault/Vault",
