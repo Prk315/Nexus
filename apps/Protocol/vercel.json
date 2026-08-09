@@ -1,5 +1,6 @@
 {
   "$schema": "https://openapi.vercel.sh/vercel.json",
+  "ignoreCommand": "npx turbo-ignore protocol-app",
   "installCommand": "cd ../.. && npm install",
   "buildCommand": "cd ../.. && npm run build --workspace=apps/Protocol",
   "outputDirectory": "dist",

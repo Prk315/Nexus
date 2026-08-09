@@ -1,5 +1,6 @@
 {
   "$schema": "https://openapi.vercel.sh/vercel.json",
+  "ignoreCommand": "npx turbo-ignore pathfinder-tmp",
   "installCommand": "cd ../.. && npm install",
   "buildCommand": "cd ../.. && npm run build --workspace=apps/PathFinder",
   "outputDirectory": "dist",
