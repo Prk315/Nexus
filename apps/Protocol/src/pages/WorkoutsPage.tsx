@@ -87,7 +87,7 @@ export default function WorkoutsPage() {
   const hasTraining = workoutSessions.length > 0 || runningSessions.length > 0;
 
   return (
-    <div style={{ padding: 32, maxWidth: 1320, margin: "0 auto", display: "flex", flexDirection: "column", gap: 24 }}>
+    <div style={{ padding: "28px 32px", display: "flex", flexDirection: "column", gap: 24 }}>
       <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
         <Dumbbell size={24} color="var(--accent)" />
         <div>
