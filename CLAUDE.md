@@ -362,6 +362,48 @@ it within seconds, and the only symptom was one line in a log. `#[serde(flatten)
 extra` now round-trips unknown keys — two processes share that file and are not always
 the same build. Keep it when adding fields.
 
+### Garmin: the bridge, and where the mapping lives
+
+`modules/garmin.rs` wraps a vendored Python script driven by
+`std::process::Command`, using tokens in `~/.garminconnect`. It only **fetches**.
+
+⚠️ **The installed daemon looks for the script in `~/.nexuslocal/modules/garmin/`.**
+Path resolution also has a `#[cfg(debug_assertions)]` dev path and a walk-up from
+the executable, but the release daemon runs from `/Applications/Nexus Local.app/…`,
+which has no `modules/` above it, and the bundle carries no copy — so Garmin worked
+under `tauri dev` and failed on every installed build until that lookup existed.
+After changing the bridge, `cp` it to `~/.nexuslocal/modules/garmin/` or nothing
+picks it up. Keep the two vendored copies (`apps/NexusLocal/modules/garmin/` and
+`apps/Protocol/garmin_bridge/`) **identical**; NexusLocal's was a stale fork missing
+`exercise_sets`, so strength sync silently could not work through the grid.
+
+**Mapping into `protocol_*` happens in the `garmin-import` edge function**, not in
+any client. It was Protocol-only before, which is why Nexus Local could pull but not
+import. Do not re-implement it client-side: two drifting copies of health-data
+mapping produce *wrong* numbers, which is worse than none.
+
+Three things that function gets right and a reimplementation won't:
+
+- **`protocol_data_source_settings` is load-bearing.** It decides per metric whether
+  Garmin or Oura wins. The real config here is Garmin for workouts, Oura for sleep
+  and body — so importing everything Garmin returns would overwrite Oura's sleep.
+  Skips are reported explicitly; "0 imported because Oura owns it" and "0 imported
+  because it broke" must not look the same.
+- **Idempotency comes from Garmin's `activityId`**, which the bridge now emits
+  (it was being discarded). The primary key is derived from it, and
+  `(user_id, external_id)` is uniquely indexed — Protocol's importer mints a random
+  UUID per sync against tables unique on `id` alone, which is how duplicate
+  activities got into this database. The index is **not partial**: PostgREST cannot
+  infer a partial index for `on_conflict`, and NULLs are distinct anyway, so manual
+  entries stay unconstrained.
+- **Exercise sets are replaced by date range, never upserted.** Three sets of 10 reps
+  at 60 kg in one session are three legitimately identical rows, and Garmin gives
+  sets no per-set id. The range is required — a delete without bounds would wipe the
+  history.
+
+Nearly every numeric column in `protocol_*` is `integer` while Garmin sends floats
+(elevation arrives as `156.109375`); the function rounds on the way in.
+
 ### Conventions that fail silently
 
 - **`supabasePublic`, not `supabase`**, for `time_entries` / `active_sessions` /

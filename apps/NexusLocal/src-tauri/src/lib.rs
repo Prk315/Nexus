@@ -3,6 +3,7 @@ mod config;
 mod content_blocker;
 mod device;
 mod enforcement;
+mod garmin_cmd;
 mod grid;
 mod ios_bridge;
 mod live_activities;
@@ -269,6 +270,11 @@ pub fn run() {
             // daemon's JSONL day files from disk — on macOS the tracker runs in
             // the daemon, not here.
             usage_cmd::tt_usage_today,
+            usage_cmd::tt_usage_range,
+            garmin_cmd::tt_garmin_run,
+            garmin_cmd::tt_garmin_import_config,
+            usage_cmd::tt_active_profile_get,
+            usage_cmd::tt_active_profile_set,
             usage_cmd::tt_usage_token
         ])
         .run(tauri::generate_context!())

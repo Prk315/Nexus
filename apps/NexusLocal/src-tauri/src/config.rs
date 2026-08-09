@@ -39,6 +39,24 @@ pub struct AppConfig {
     /// is in `$HOME` and never leaves the machine.
     #[serde(default)]
     pub usage_ingest_key: String,
+    /// Which Supabase account usage is exported to — an `auth.users` uid.
+    ///
+    /// Written by the app when you switch profile, read by the daemon on every
+    /// sync pass. It exists because the two processes have no IPC: the app knows
+    /// who is signed in, the daemon is the one that uploads, and this file is
+    /// how that fact crosses the boundary (same channel as `blocking_enabled`).
+    ///
+    /// Empty means "whoever the edge function defaults to", which keeps a config
+    /// written before this field existed working unchanged.
+    #[serde(default)]
+    pub active_user_id: String,
+    /// Scoped secret for the `garmin-import` edge function. Empty = the manual
+    /// Garmin sync can pull but not import.
+    ///
+    /// In this file rather than the source for the same reason as
+    /// `usage_ingest_key`: the repo is public.
+    #[serde(default)]
+    pub garmin_import_key: String,
     /// Every key this binary does not recognise, preserved verbatim.
     ///
     /// `load()` persists on read, so without this a binary that predates a field
@@ -79,6 +97,8 @@ impl Default for AppConfig {
             poll_secs: default_poll_secs(),
             blocking_enabled: false,
             usage_ingest_key: String::new(),
+            active_user_id: String::new(),
+            garmin_import_key: String::new(),
             extra: serde_json::Map::new(),
         }
     }
@@ -183,6 +203,25 @@ impl AppConfig {
         let raw = fs::read_to_string(config_path()).ok()?;
         let parsed: serde_json::Value = serde_json::from_str(&raw).ok()?;
         parsed.get("blocking_enabled")?.as_bool()
+    }
+
+    /// Read the export target without `load`'s persist-on-read side effect.
+    ///
+    /// Polled by the daemon's sync pass, so it must not rewrite the file — and
+    /// `None` (unreadable, mid-write) must leave the caller's current value
+    /// alone rather than silently reverting the export target to the default
+    /// account, which would file one person's usage under the other's name.
+    pub fn read_active_user_id() -> Option<String> {
+        let raw = fs::read_to_string(config_path()).ok()?;
+        let parsed: serde_json::Value = serde_json::from_str(&raw).ok()?;
+        Some(parsed.get("active_user_id")?.as_str()?.to_string())
+    }
+
+    /// Set the export target and persist it.
+    pub fn set_active_user_id(uid: &str) -> Result<(), String> {
+        let mut config = AppConfig::load();
+        config.active_user_id = uid.to_string();
+        config.save()
     }
 
     /// Flip the enforcement switch and persist it.

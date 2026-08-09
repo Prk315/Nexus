@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { HourlyChart, SharePie, formatDuration } from "./UsageCharts";
 
 /**
  * Today's foreground time: which apps, which sites.
@@ -31,35 +32,46 @@ import { invoke } from "@tauri-apps/api/core";
 
 type AppUsage = { name: string; seconds: number };
 type SiteUsage = { host: string; seconds: number };
+type DayTotal = { date: string; seconds: number };
 type Usage = {
   apps: AppUsage[];
   sites: SiteUsage[];
   total_seconds: number;
   tracking: boolean;
+  hours: number[];
+  days: DayTotal[];
 };
+
+type Range = "today" | "week";
+
+/**
+ * `Mon`, `Tue`, … from a `YYYY-MM-DD` local date.
+ *
+ * Parsed as a **local** date deliberately: `new Date("2026-08-07")` is
+ * interpreted as UTC midnight, which renders as the *previous* day for anyone
+ * west of Greenwich and would label every bar wrong. Splitting the parts and
+ * using the local constructor avoids the shift entirely.
+ */
+function weekdayLabel(isoDate: string): string {
+  const [y, m, d] = isoDate.split("-").map(Number);
+  if (!y || !m || !d) return "";
+  return new Date(y, m - 1, d).toLocaleDateString(undefined, { weekday: "short" });
+}
+
+function isToday(isoDate: string): boolean {
+  const now = new Date();
+  const local = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(
+    now.getDate(),
+  ).padStart(2, "0")}`;
+  return local === isoDate;
+}
 
 /** Where the extension is loaded from — the one-time setup the token is for. */
 const EXTENSION_PATH = "apps/NexusLocal/extensions/chrome-usage";
 
-/**
- * `1h 23m` / `4m 12s` / `12s`.
- *
- * Two units, never three: a reading of `1h 23m 07s` implies a precision the
- * 5-second sampling tick does not have, and the seconds stop mattering the
- * moment there is an hour on the clock.
- */
-function formatDuration(totalSeconds: number): string {
-  const s = Math.max(0, Math.floor(totalSeconds));
-  const hours = Math.floor(s / 3600);
-  const minutes = Math.floor((s % 3600) / 60);
-  const seconds = s % 60;
-  if (hours > 0) return `${hours}h ${minutes}m`;
-  if (minutes > 0) return `${minutes}m ${seconds}s`;
-  return `${seconds}s`;
-}
-
 export function UsagePanel() {
   const [usage, setUsage] = useState<Usage | null>(null);
+  const [range, setRange] = useState<Range>("today");
   const [token, setToken] = useState("");
   const [copied, setCopied] = useState(false);
   const [showToken, setShowToken] = useState(false);
@@ -67,12 +79,12 @@ export function UsagePanel() {
   const mounted = useRef(true);
   const alive = useCallback(() => mounted.current, []);
 
-  const load = useCallback(async () => {
+  const load = useCallback(async (which: Range) => {
     try {
-      // No arguments, but the rule still applies to anything added here:
       // `invoke()` keys are camelCase — snake_case works on macOS and
-      // hard-fails on iOS with `invalid args`.
-      const next = await invoke<Usage>("tt_usage_today");
+      // hard-fails on iOS with `invalid args`. `range` is one word, but the
+      // rule still governs anything added here.
+      const next = await invoke<Usage>("tt_usage_range", { range: which });
       if (alive()) setUsage(next);
     } catch {
       // The command is infallible by design (a missing day file is an empty
@@ -83,18 +95,20 @@ export function UsagePanel() {
 
   useEffect(() => {
     mounted.current = true;
-    load();
+    // Re-runs when `range` changes, so switching tab refetches immediately
+    // rather than showing the old range until the next poll.
+    load(range);
     invoke<string>("tt_usage_token")
       .then((t) => alive() && setToken(t))
       .catch(() => undefined);
     // Slow poll: intervals only close when the frontmost app changes, so
     // anything faster mostly re-renders the same numbers.
-    const t = setInterval(load, 15000);
+    const t = setInterval(() => load(range), 15000);
     return () => {
       mounted.current = false;
       clearInterval(t);
     };
-  }, [load, alive]);
+  }, [load, alive, range]);
 
   async function copyToken() {
     try {
@@ -120,10 +134,41 @@ export function UsagePanel() {
 
   return (
     <section className="flex flex-col gap-2">
-      <div className="flex items-baseline justify-between">
-        <h2 className="text-xs uppercase tracking-wide text-white/40">Usage · today</h2>
-        <span className="text-[10px] text-white/45">{formatDuration(usage.total_seconds)}</span>
+      <div className="flex items-center justify-between gap-2">
+        <h2 className="text-xs uppercase tracking-wide text-white/40">Usage</h2>
+        <div className="flex items-center gap-2">
+          <span className="font-mono text-[10px] text-white/45">
+            {formatDuration(usage.total_seconds)}
+          </span>
+          <div className="flex gap-0.5 rounded-lg bg-white/[0.04] p-0.5">
+            {(["today", "week"] as const).map((r) => (
+              <button
+                key={r}
+                type="button"
+                onClick={() => setRange(r)}
+                className={`rounded-md px-2 py-1 text-[10px] font-medium capitalize transition-colors ${
+                  range === r ? "bg-white/10 text-white/90" : "text-white/40 hover:text-white/70"
+                }`}
+              >
+                {r}
+              </button>
+            ))}
+          </div>
+        </div>
       </div>
+
+      {range === "week" && usage.days.length > 1 && <WeekStrip days={usage.days} />}
+
+      {hasData && (
+        <>
+          <HourlyChart hours={usage.hours ?? []} multiDay={range === "week"} />
+          <SharePie
+            slices={usage.apps.map((a) => ({ label: a.name, seconds: a.seconds }))}
+            total={usage.total_seconds}
+            label={range === "week" ? "this week" : "today"}
+          />
+        </>
+      )}
 
       {!usage.tracking && (
         <div className="rounded-xl border border-amber-500/20 bg-amber-500/[0.07] p-3 text-[10px] text-amber-200/80">
@@ -191,6 +236,59 @@ export function UsagePanel() {
         Stored on this Mac only, in ~/.nexuslocal/usage — never synced anywhere.
       </p>
     </section>
+  );
+}
+
+/**
+ * Seven days of app time as a bar strip.
+ *
+ * Bars are scaled to the busiest day in the range, not to a fixed ceiling, so
+ * the shape of a quiet week is still readable. Today is highlighted because it
+ * is the one bar that is still growing — comparing a part-day against six whole
+ * ones is the easiest way to misread this chart.
+ */
+function WeekStrip({ days }: { days: DayTotal[] }) {
+  const max = Math.max(...days.map((d) => d.seconds), 1);
+  return (
+    <div className="rounded-xl border border-white/10 bg-white/[0.03] p-3">
+      {/* `items-stretch`, not `items-end` — see the note in UsageCharts.tsx.
+          `flex-end` collapses each column to its content height and every bar
+          below resolves to 0%. */}
+      <div className="flex items-stretch justify-between gap-1.5" style={{ height: 64 }}>
+        {days.map((d) => {
+          const today = isToday(d.date);
+          // A day with a little time still gets a visible sliver; a genuinely
+          // empty day stays flat, so "nothing" and "barely anything" look
+          // different.
+          const pct = d.seconds > 0 ? Math.max(6, Math.round((d.seconds / max) * 100)) : 0;
+          return (
+            <div key={d.date} className="flex min-w-0 flex-1 flex-col items-center gap-1">
+              <div className="flex w-full flex-1 items-end">
+                <div
+                  className={`w-full rounded-sm ${today ? "bg-indigo-400/70" : "bg-white/25"}`}
+                  style={{ height: `${pct}%` }}
+                  title={`${d.date} · ${formatDuration(d.seconds)}`}
+                />
+              </div>
+              <span
+                className={`text-[9px] ${today ? "text-indigo-300/80" : "text-white/30"}`}
+              >
+                {weekdayLabel(d.date)}
+              </span>
+            </div>
+          );
+        })}
+      </div>
+      <div className="mt-2 flex items-baseline justify-between text-[10px]">
+        <span className="text-white/30">
+          Daily average{" "}
+          <span className="font-mono text-white/45">
+            {formatDuration(Math.round(days.reduce((a, d) => a + d.seconds, 0) / days.length))}
+          </span>
+        </span>
+        <span className="text-white/25">today is partial</span>
+      </div>
+    </div>
   );
 }
 

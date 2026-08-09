@@ -67,6 +67,25 @@ pub fn blocking_hosts_domains() -> Result<Vec<String>, String> {
     }
 }
 
+/// Run one Garmin bridge action directly (no command queue).
+///
+/// Shim for the same reason as the blocking ones: the `garmin` module only
+/// compiles off-iOS, but `garmin_cmd` is registered on every platform.
+pub async fn garmin_run(
+    action: &str,
+    payload: &serde_json::Value,
+) -> Result<serde_json::Value, String> {
+    #[cfg(target_os = "ios")]
+    {
+        let _ = (action, payload);
+        Err("the Garmin bridge runs on the Mac node, not on iOS".to_string())
+    }
+    #[cfg(not(target_os = "ios"))]
+    {
+        garmin::run_action(action, payload).await
+    }
+}
+
 /// Fetch and apply the server's verdict right now.
 pub async fn blocking_enforce_now(
     ctx: &crate::grid::ModuleContext,

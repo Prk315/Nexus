@@ -118,12 +118,35 @@ Deno.serve(async (req: Request) => {
     return json({ error: "unauthorized" }, 401);
   }
 
-  let body: { device_id?: unknown; entries?: unknown };
+  let body: { device_id?: unknown; entries?: unknown; user_id?: unknown };
   try {
     body = await req.json();
   } catch {
     return json({ error: "bad_json" }, 400);
   }
+
+  // Which account these intervals belong to. Absent means the default owner,
+  // which is what a config written before profile switching existed sends.
+  //
+  // A caller-supplied user id is only honoured if it is on the allowlist. That
+  // matters: the scoped key ships in a binary on the user's machine and is
+  // extractable, and without this check a leaked key could file arbitrary
+  // browsing history under any account in the project. The allowlist keeps the
+  // blast radius at "the handful of profiles that share this Mac".
+  //
+  // Deliberately 403 rather than falling back to the owner on a mismatch:
+  // attributing one person's usage to another is a worse failure than not
+  // storing it, and a silent fallback would hide a misconfigured switch forever.
+  const allowed = (Deno.env.get("USAGE_ALLOWED_UIDS") ?? "")
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean);
+  const requested = typeof body.user_id === "string" ? body.user_id.trim() : "";
+  if (requested && !allowed.includes(requested)) {
+    console.error("usage-ingest: rejected non-allowlisted user_id");
+    return json({ error: "user_not_allowed" }, 403);
+  }
+  const targetUser = requested || owner;
 
   const deviceId = typeof body.device_id === "string" ? body.device_id : "";
   if (!deviceId) return json({ error: "missing_device_id" }, 400);
@@ -139,7 +162,7 @@ Deno.serve(async (req: Request) => {
       continue;
     }
     rows.push({
-      user_id: owner,
+      user_id: targetUser,
       device_id: deviceId,
       kind: e.kind,
       app_name: e.app_name,

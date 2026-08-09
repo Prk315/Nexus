@@ -26,6 +26,7 @@ impl NexusModule for GarminModule {
                 "sleep".to_string(),
                 "body_stats".to_string(),
                 "activities".to_string(),
+                "exercise_sets".to_string(),
             ],
             tick_interval_secs: None,
         }
@@ -47,12 +48,33 @@ impl NexusModule for GarminModule {
     }
 }
 
+/// Run a bridge action directly, without going through the command queue.
+///
+/// The queue path (`handle`) is how *Protocol* reaches this machine: it is in a
+/// browser, so it enqueues and a daemon claims. The desktop app is already on
+/// the machine, so making it round-trip through Supabase to reach a process
+/// sharing its own disk would be absurd — and, more importantly, would stop
+/// working in exactly the situation this exists for. A manual pull is what you
+/// reach for when the normal path is broken, and "the normal path" includes
+/// Supabase being unreachable and the daemon being down.
+///
+/// Same `build_args` + `run_bridge` as the queue action, so the two cannot
+/// drift in how they invoke Python.
+pub async fn run_action(action: &str, payload: &Value) -> Result<Value, String> {
+    let args = build_args(action, payload)?;
+    let raw = tokio::task::spawn_blocking(move || run_bridge(args))
+        .await
+        .map_err(|e| e.to_string())??;
+    serde_json::from_str::<Value>(raw.trim())
+        .map_err(|e| format!("bridge returned non-JSON: {e} — {raw}"))
+}
+
 /// Translate a queue action + payload into `garmin_bridge.py` CLI args.
 fn build_args(action: &str, payload: &Value) -> Result<Vec<String>, String> {
     let mut args = vec![action.to_string()];
     match action {
         "check" | "status" => {}
-        "sleep" | "body_stats" | "activities" => {
+        "sleep" | "body_stats" | "activities" | "exercise_sets" => {
             let date = payload
                 .get("date")
                 .and_then(|v| v.as_str())
@@ -85,6 +107,20 @@ fn bridge_script_path() -> Result<PathBuf, String> {
 
     const REL: &str = "modules/garmin/garmin_bridge.py";
 
+    // Installed copy under `~/.nexuslocal/modules/garmin/`.
+    //
+    // This is the one that matters in production. The walk-up below only finds
+    // the script in a *repo* layout, and the release daemon runs from
+    // `/Applications/Nexus Local.app/Contents/MacOS/` — where walking up eight
+    // levels reaches `/` without ever passing a `modules/` directory. The
+    // bundle carries no copy either, so before this existed every queued Garmin
+    // command failed with "garmin_bridge.py not found" on any installed build,
+    // while working perfectly under `tauri dev`.
+    let installed = crate::config::state_dir().join(REL);
+    if installed.exists() {
+        return Ok(installed);
+    }
+
     // Dev: CARGO_MANIFEST_DIR is <app>/src-tauri; the bridge is at <app>/modules/…
     #[cfg(debug_assertions)]
     {
@@ -110,7 +146,11 @@ fn bridge_script_path() -> Result<PathBuf, String> {
         }
     }
 
-    Err("garmin_bridge.py not found — set GARMIN_BRIDGE_PATH to override".to_string())
+    Err(format!(
+        "garmin_bridge.py not found. Install it with \
+         `cp -R apps/NexusLocal/modules {}/` , or set GARMIN_BRIDGE_PATH.",
+        crate::config::state_dir().display()
+    ))
 }
 
 /// Interpreters to try, in order. A module-owned venv is preferred so the module
