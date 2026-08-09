@@ -27,12 +27,32 @@
 import { createClient } from "jsr:@supabase/supabase-js@2";
 
 const MIN_KEY_LEN = 32;
+
+/**
+ * CORS, because a **browser** calls this one.
+ *
+ * `usage-ingest` never needed it: only the daemon posts there, via reqwest,
+ * which does not preflight. This function is called from the Nexus Local
+ * WebView, and the custom `X-Garmin-Key` header makes the request non-simple —
+ * so WebKit sends an `OPTIONS` preflight first. Rejecting that (405, no CORS
+ * headers) meant the real POST was never sent, and the only symptom in the UI
+ * was WebKit's uselessly generic "Load failed".
+ *
+ * `*` is safe here: the scoped key is the authentication, and CORS is not the
+ * boundary. A page that lacks the key gains nothing from being allowed to ask.
+ */
+const CORS = {
+  "Access-Control-Allow-Origin": "*",
+  "Access-Control-Allow-Headers": "authorization, content-type, x-garmin-key",
+  "Access-Control-Allow-Methods": "POST, OPTIONS",
+  "Access-Control-Max-Age": "86400",
+};
 const MAX_ITEMS = 2000;
 
 function json(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), {
     status,
-    headers: { "Content-Type": "application/json" },
+    headers: { "Content-Type": "application/json", ...CORS },
   });
 }
 
@@ -92,6 +112,7 @@ const int = (v: unknown): number | null => {
 };
 
 Deno.serve(async (req: Request) => {
+  if (req.method === "OPTIONS") return new Response(null, { status: 204, headers: CORS });
   if (req.method !== "POST") return json({ error: "method_not_allowed" }, 405);
 
   const url = Deno.env.get("SUPABASE_URL");
