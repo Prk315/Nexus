@@ -22,6 +22,9 @@ export interface ProgressData {
   overallPct: number;
   overallLabel: string;
   metrics: GaugeMetric[];
+  /** Lead indicator — cumulative input toward the period goal vs a pro-rated goal
+   *  line ("are you doing the work?"). */
+  goal: { label: string; unit: string; data: Row[] };
   /** Hero chart — a glowing "progress score" (mean of the tracked component lines,
    *  each normalised 0–100) plus the component lines themselves. */
   trend: {
@@ -165,11 +168,21 @@ export function buildRunningStats(runs: RunningSession[], body: BodyMetric[], ra
     { name: "Longest", pct: improvement(Math.max(0, ...a.map((r) => r.actual_km ?? 0)), Math.max(0, ...b.map((r) => r.actual_km ?? 0)), true) },
   ];
 
+  // Lead: cumulative distance vs a linear goal line (30 km/wk pro-rated).
+  const first = inRange[0]?.date;
+  let cum = 0;
+  const goalData: Row[] = inRange.map((r) => {
+    cum += r.actual_km ?? 0;
+    const days = first ? Math.max(0, (new Date(r.date).getTime() - new Date(first).getTime()) / 86400000) : 0;
+    return { label: shortDate(r.date), full: r.date, value: Math.round(cum * 10) / 10, goal: Math.round((RUN_WEEKLY_KM / 7) * (days + 1) * 10) / 10 };
+  });
+
   return {
     empty,
     overallPct: Math.round((avgWeeklyKm / RUN_WEEKLY_KM) * 100),
     overallLabel: `${avgWeeklyKm.toFixed(1)} / ${RUN_WEEKLY_KM} km·wk`,
     metrics,
+    goal: { label: "Progress toward goal · km", unit: "km", data: goalData },
     trend: assembleTrend(weekKeys, comps),
     biomarkers: buildBiomarkers(body, since, config.biomarkers),
   };
@@ -215,11 +228,20 @@ export function buildStrengthStats(history: ExerciseHistory[], body: BodyMetric[
     { name: "Top weight", pct: improvement(Math.max(0, ...a.map((h) => h.weight_kg ?? 0)), Math.max(0, ...b.map((h) => h.weight_kg ?? 0)), true) },
   ];
 
+  // Lead: cumulative sessions vs a linear target line (4/wk pro-rated).
+  const sessionDates = [...new Set(inRange.map((h) => h.date))].sort();
+  const first = sessionDates[0];
+  const goalData: Row[] = sessionDates.map((d, i) => {
+    const days = first ? Math.max(0, (new Date(d).getTime() - new Date(first).getTime()) / 86400000) : 0;
+    return { label: shortDate(d), full: d, value: i + 1, goal: Math.round((STRENGTH_WEEKLY_SESSIONS / 7) * (days + 1) * 10) / 10 };
+  });
+
   return {
     empty,
     overallPct: Math.round((avgWeeklySessions / STRENGTH_WEEKLY_SESSIONS) * 100),
     overallLabel: `${avgWeeklySessions.toFixed(1)} / ${STRENGTH_WEEKLY_SESSIONS} sessions·wk`,
     metrics,
+    goal: { label: "Progress toward goal · sessions", unit: "sessions", data: goalData },
     trend: assembleTrend(weekKeys, comps),
     biomarkers: buildBiomarkers(body, since, config.biomarkers),
   };

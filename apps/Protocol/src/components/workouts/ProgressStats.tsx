@@ -10,6 +10,8 @@ import ProgressConfigEditor from "./ProgressConfigEditor";
 const TOOLTIP = { background: "var(--surface)", border: "1px solid var(--border)", borderRadius: "var(--radius-sm)", fontSize: 12 };
 const AXIS = { fontSize: 10, fill: "var(--text-muted)" } as const;
 
+const sectionLabel: React.CSSProperties = { fontSize: 10, fontWeight: 700, color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: "0.06em", marginBottom: 6 };
+
 /** Tooltip showing each series' RAW value (lines are drawn on a 0–100 normalised axis). */
 function rawTooltip(series: { key: string; name: string; color: string; unit: string }[], heroLabel?: string) {
   return function Tip({ active, payload }: { active?: boolean; payload?: Array<{ payload: Record<string, number | string | null> }> }) {
@@ -61,11 +63,11 @@ function Legend({ items, hero }: { items: { key: string; name: string; color: st
 }
 
 /**
- * Reusable activity progress card, laid out in two columns:
- * - Left: a glowing "progress score" hero line (mean of the tracked components,
- *   each normalised) with those component lines overlaid.
- * - Right: baseline gauges + a big overall gauge on top, the multi-line biomarker
- *   chart underneath.
+ * Reusable activity progress card, two columns:
+ * - Left: the lead-vs-lag pair, stacked — a glowing "progress score" hero (LAG,
+ *   the outcome) on top, "progress toward goal" (LEAD, the input) underneath.
+ * - Right: biomarkers & proxies — the gauges (big overall + baseline circles) on
+ *   top, with the multi-line biomarker chart underneath.
  * A gear opens CRUD over what's tracked; a W/M/3M/Y/All toggle drives it all.
  */
 export default function ProgressStats({
@@ -115,36 +117,61 @@ export default function ProgressStats({
         </div>
       ) : (
         <div style={{ display: "flex", gap: 24, flexWrap: "wrap", alignItems: "flex-start" }}>
-          {/* LEFT: glowing hero progress chart */}
-          <div style={{ flex: "2 1 320px", minWidth: 0, display: "flex", flexDirection: "column", gap: 8 }}>
-            <Legend items={data.trend.series} hero={{ name: "Progress score", color }} />
-            <ResponsiveContainer width="100%" height={440}>
-              <ComposedChart data={data.trend.data} margin={{ top: 12, right: 10, bottom: 0, left: -22 }}>
-                <defs>
-                  <linearGradient id={`hero-${gid}`} x1="0" y1="0" x2="0" y2="1">
-                    <stop offset="0%" stopColor={color} stopOpacity={0.28} />
-                    <stop offset="60%" stopColor={color} stopOpacity={0.05} />
-                    <stop offset="100%" stopColor={color} stopOpacity={0} />
-                  </linearGradient>
-                  <filter id={`glow-${gid}`} x="-20%" y="-30%" width="140%" height="160%">
-                    <feDropShadow dx="0" dy="3" stdDeviation="4" floodColor={color} floodOpacity="0.55" />
-                  </filter>
-                </defs>
-                <CartesianGrid strokeDasharray="2 7" stroke="var(--border)" strokeOpacity={0.5} vertical={false} />
-                <XAxis dataKey="label" tick={AXIS} axisLine={false} tickLine={false} minTickGap={26} />
-                <YAxis domain={[0, 105]} tick={false} axisLine={false} tickLine={false} width={0} />
-                <ReferenceLine y={100} stroke="var(--text-muted)" strokeDasharray="4 4" strokeOpacity={0.4} />
-                <Tooltip content={<HeroTip />} />
-                {data.trend.series.map((s) => (
-                  <Line key={s.key} type="monotone" dataKey={`${s.key}_pos`} name={s.name} stroke={s.color} strokeWidth={1.75} strokeOpacity={0.85} dot={false} activeDot={{ r: 3, fill: s.color }} connectNulls isAnimationActive={false} />
-                ))}
-                <Area type="monotone" dataKey="score" name="Progress score" stroke={color} strokeWidth={4.5} fill={`url(#hero-${gid})`} filter={`url(#glow-${gid})`} dot={false} activeDot={{ r: 4, fill: color }} connectNulls isAnimationActive={false} />
-              </ComposedChart>
-            </ResponsiveContainer>
+          {/* LEFT — lead vs lag, stacked */}
+          <div style={{ flex: "2 1 320px", minWidth: 0, display: "flex", flexDirection: "column", gap: 16 }}>
+            {/* LAG — progress score */}
+            <div>
+              <div style={sectionLabel}>Lag · are you improving?</div>
+              <Legend items={data.trend.series} hero={{ name: "Progress score", color }} />
+              <ResponsiveContainer width="100%" height={260}>
+                <ComposedChart data={data.trend.data} margin={{ top: 12, right: 10, bottom: 0, left: -22 }}>
+                  <defs>
+                    <linearGradient id={`hero-${gid}`} x1="0" y1="0" x2="0" y2="1">
+                      <stop offset="0%" stopColor={color} stopOpacity={0.28} />
+                      <stop offset="60%" stopColor={color} stopOpacity={0.05} />
+                      <stop offset="100%" stopColor={color} stopOpacity={0} />
+                    </linearGradient>
+                    <filter id={`glow-${gid}`} x="-20%" y="-30%" width="140%" height="160%">
+                      <feDropShadow dx="0" dy="3" stdDeviation="4" floodColor={color} floodOpacity="0.55" />
+                    </filter>
+                  </defs>
+                  <CartesianGrid strokeDasharray="2 7" stroke="var(--border)" strokeOpacity={0.5} vertical={false} />
+                  <XAxis dataKey="label" tick={AXIS} axisLine={false} tickLine={false} minTickGap={26} />
+                  <YAxis domain={[0, 105]} tick={false} axisLine={false} tickLine={false} width={0} />
+                  <ReferenceLine y={100} stroke="var(--text-muted)" strokeDasharray="4 4" strokeOpacity={0.4} />
+                  <Tooltip content={<HeroTip />} />
+                  {data.trend.series.map((s) => (
+                    <Line key={s.key} type="monotone" dataKey={`${s.key}_pos`} name={s.name} stroke={s.color} strokeWidth={1.75} strokeOpacity={0.85} dot={false} activeDot={{ r: 3, fill: s.color }} connectNulls isAnimationActive={false} />
+                  ))}
+                  <Area type="monotone" dataKey="score" name="Progress score" stroke={color} strokeWidth={4.5} fill={`url(#hero-${gid})`} filter={`url(#glow-${gid})`} dot={false} activeDot={{ r: 4, fill: color }} connectNulls isAnimationActive={false} />
+                </ComposedChart>
+              </ResponsiveContainer>
+            </div>
+
+            {/* LEAD — progress toward goal */}
+            <div>
+              <div style={sectionLabel}>Lead · {data.goal.label}</div>
+              <ResponsiveContainer width="100%" height={190}>
+                <ComposedChart data={data.goal.data} margin={{ top: 8, right: 10, bottom: 0, left: -22 }}>
+                  <defs>
+                    <linearGradient id={`goal-${gid}`} x1="0" y1="0" x2="0" y2="1">
+                      <stop offset="0%" stopColor={color} stopOpacity={0.4} />
+                      <stop offset="100%" stopColor={color} stopOpacity={0} />
+                    </linearGradient>
+                  </defs>
+                  <CartesianGrid strokeDasharray="2 7" stroke="var(--border)" strokeOpacity={0.5} vertical={false} />
+                  <XAxis dataKey="label" tick={AXIS} axisLine={false} tickLine={false} minTickGap={26} />
+                  <YAxis tick={AXIS} axisLine={false} tickLine={false} width={30} />
+                  <Tooltip contentStyle={TOOLTIP} />
+                  <Line type="monotone" dataKey="goal" name="Goal" stroke="var(--text-muted)" strokeWidth={1.5} strokeDasharray="4 4" dot={false} isAnimationActive={false} />
+                  <Area type="monotone" dataKey="value" name={data.goal.unit} stroke={color} strokeWidth={2.5} fill={`url(#goal-${gid})`} dot={false} isAnimationActive={false} />
+                </ComposedChart>
+              </ResponsiveContainer>
+            </div>
           </div>
 
-          {/* RIGHT: gauges on top, biomarker chart underneath */}
-          <div style={{ flex: "1 1 220px", minWidth: 0, display: "flex", flexDirection: "column", gap: 18 }}>
+          {/* RIGHT — biomarkers & proxies: gauges on top, biomarker chart underneath */}
+          <div style={{ flex: "1 1 240px", minWidth: 0, display: "flex", flexDirection: "column", gap: 18 }}>
             <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 12 }}>
               <RadialGauge pct={data.overallPct} size={140} thickness={12} color={color} />
               <span style={{ fontSize: 11, color: "var(--text-muted)", textAlign: "center", marginTop: -4 }}>{data.overallLabel}</span>
@@ -157,10 +184,10 @@ export default function ProgressStats({
 
             {data.biomarkers.data.length > 0 && (
               <div>
-                <div style={{ fontSize: 12, fontWeight: 600, color: "var(--text)", marginBottom: 4 }}>{data.biomarkers.label}</div>
-                <div style={{ marginBottom: 6 }}><Legend items={data.biomarkers.series} /></div>
+                <div style={sectionLabel}>Biomarkers &amp; proxies</div>
+                <Legend items={data.biomarkers.series} />
                 <ResponsiveContainer width="100%" height={180}>
-                  <ComposedChart data={data.biomarkers.data} margin={{ top: 6, right: 8, bottom: 0, left: -30 }}>
+                  <ComposedChart data={data.biomarkers.data} margin={{ top: 8, right: 8, bottom: 0, left: -30 }}>
                     <CartesianGrid strokeDasharray="2 7" stroke="var(--border)" strokeOpacity={0.5} vertical={false} />
                     <XAxis dataKey="label" tick={AXIS} axisLine={false} tickLine={false} minTickGap={26} />
                     <YAxis domain={[0, 100]} tick={false} axisLine={false} tickLine={false} width={0} />
