@@ -3,7 +3,9 @@
  *
  * Two mount points, matching the two slots Nexus Local already has:
  *
- *  - `<TimeTrackerPanels />` — visible UI, rendered by `App.tsx` inside the auth
+ *  - `<TimeTrackerDashboard />` / `<TimeTrackerSettings />` — visible UI. The
+ *    first goes in the main column, the second in the sidebar; see the split
+ *    below. Both are rendered by `App.tsx` outside the auth
  *    gate. Each panel is a `<section>` appended to the array below.
  *  - `<TimeTrackerSync />`   — headless, mounted by `main.tsx` *outside* the auth
  *    gate so it runs signed out (these tables are anon-keyed).
@@ -37,37 +39,53 @@ import { EnforcementPanel } from "./EnforcementPanel";
 import { UsagePanel } from "./UsagePanel";
 
 // --- Visible panels -------------------------------------------------------
-// Work units append their panel component here.
-//   unit 3  TimerPanel
-//   unit 4  Pomodoro
-//   unit 5  BlockingPanel
-//   unit 6  SchedulePanel
-//   unit 7  RewardsPanel
+// Work units append their panel component to ONE of the two lists below.
 // One entry per line: a dozen units append here in parallel, and a same-line
 // edit to `= []` conflicts every single time.
-// Render order is the reading order of the app: what you're doing now, then the
-// clock around it, then what's blocked and why.
-const PANELS: Array<() => ReactElement | null> = [
+//
+// The split is "what is happening" vs "what I have configured".
+//
+// Dashboard panels answer a question you ask repeatedly through the day, and
+// whose answer changes on its own while you watch. Settings panels are lists you
+// edit occasionally and then stop thinking about — those live behind the sidebar
+// toggle, so the Learn dashboard isn't buried under blocking rules set up last
+// week.
+//
+// The test when adding a panel: does its content change by itself? Timer,
+// pomodoro and usage do. A list of blocked sites doesn't.
+const DASHBOARD_PANELS: Array<() => ReactElement | null> = [
   TimerPanel,
   Pomodoro,
+  // Where the day actually went, as measured rather than as intended. Renders
+  // null with no daemon and no data, which is every launch on iOS.
+  UsagePanel,
+];
+
+const SETTINGS_PANELS: Array<() => ReactElement | null> = [
   SchedulePanel,
   BlockingPanel,
   // Directly after BlockingPanel: that panel shows what *should* be blocked,
   // this one whether this machine is actually doing it. Renders null off macOS.
   EnforcementPanel,
-  // Where the day actually went, as measured rather than as intended. Sits
-  // after enforcement so the reading order stays "what I'm doing / the clock /
-  // what's blocked / what really happened". Renders null with no daemon and no
-  // data, which is every launch on iOS.
-  UsagePanel,
   RewardsPanel,
 ];
 
-export function TimeTrackerPanels() {
-  if (PANELS.length === 0) return null;
+export function TimeTrackerDashboard() {
+  if (DASHBOARD_PANELS.length === 0) return null;
   return (
     <>
-      {PANELS.map((Panel, i) => (
+      {DASHBOARD_PANELS.map((Panel, i) => (
+        <Panel key={i} />
+      ))}
+    </>
+  );
+}
+
+export function TimeTrackerSettings() {
+  if (SETTINGS_PANELS.length === 0) return null;
+  return (
+    <>
+      {SETTINGS_PANELS.map((Panel, i) => (
         <Panel key={i} />
       ))}
     </>

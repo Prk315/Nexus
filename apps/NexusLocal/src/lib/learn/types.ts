@@ -213,10 +213,31 @@ export interface LrAttemptLog {
 
 // Server-computed verdict row (blocking_state pattern). A missing row means
 // "never computed" — never "nothing due". See `api.fetchLearnState`.
+//
+// Shape pinned by LEARN_PLAN.md's "Phase 3 — lr_learn_state contract":
+// `due_concepts` / `frontier_units` are jsonb arrays of *objects*, not bare
+// id arrays — written only by the `learn-evaluate` edge function.
+
+export interface DueConcept {
+  concept_id: string;
+  unit_id: number;
+  priority: number;
+  least_seen_lens: Lens | null;
+}
+
+export interface FrontierUnit {
+  unit_id: number;
+  code: string;
+  status: "in_progress" | "available";
+}
+
 export interface LrLearnState {
   user_id: string;
-  due_concepts: string[] | null;
-  frontier_units: number[] | null;
+  // Sorted by priority desc, capped at 30 (server-side). Absent/empty is a
+  // legitimate "nothing due" reading ONLY when this row exists at all — see
+  // `api.fetchLearnState`'s null-row semantics.
+  due_concepts: DueConcept[] | null;
+  frontier_units: FrontierUnit[] | null;
   streak_days: number | null;
   last_session_date: string | null;
   computed_at: string | null;

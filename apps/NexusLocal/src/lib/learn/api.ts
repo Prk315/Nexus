@@ -8,7 +8,9 @@
 
 import { supabasePublic } from "../supabase";
 import type {
+  Archetype,
   ContentStatus,
+  Drill,
   Grade,
   Lens,
   LrLearnState,
@@ -17,6 +19,7 @@ import type {
   LrUnitContentRow,
   LrUnitProgress,
   PathUnit,
+  PracticeGroup,
   UnitProgressStatus,
 } from "./types";
 
@@ -172,4 +175,138 @@ export async function fetchLearnState(): Promise<LrLearnState | null> {
     .maybeSingle();
   if (error) throw error;
   return (data as LrLearnState | null) ?? null;
+}
+
+/** How many times (any grade) this user has attempted each of the given drill ids. */
+async function fetchAttemptCounts(itemRefs: string[]): Promise<Record<string, number>> {
+  if (itemRefs.length === 0) return {};
+  const { data, error } = await supabasePublic
+    .from("lr_attempt_log")
+    .select("item_ref")
+    .eq("user_id", USER_ID)
+    .in("item_ref", itemRefs);
+  if (error) throw error;
+  const counts: Record<string, number> = {};
+  for (const row of (data ?? []) as Array<{ item_ref: string }>) {
+    counts[row.item_ref] = (counts[row.item_ref] ?? 0) + 1;
+  }
+  return counts;
+}
+
+const REVIEW_QUEUE_SIZE = 10;
+
+/** One resolved drill in a review session, plus the bookkeeping ReviewSession.tsx needs. */
+export interface ReviewQueueItem {
+  drill: Drill;
+  // The drill's own practice group — grading credits every concept in
+  // `group.concept_ids`, exactly like Player.tsx's Practice step.
+  group: PracticeGroup;
+  archetype: Archetype;
+  // The due concept this item was selected to cover (may differ from every
+  // id in group.concept_ids — a group can span several concepts).
+  conceptId: string;
+  unitId: number;
+}
+
+/**
+ * Builds a flat, concept-level review queue (~`REVIEW_QUEUE_SIZE` drills)
+ * from `lr_learn_state.due_concepts` (LEARN_PLAN.md's pinned Phase 3
+ * contract — already sorted by priority desc, capped at 30 server-side).
+ *
+ * For each due concept, in priority order:
+ *   1. Resolve that concept's unit's best content row (live > approved >
+ *      draft, per `fetchUnitContent`).
+ *   2. Collect every drill in that unit whose *group* or *own* `concept_ids`
+ *      include the due concept.
+ *   3. Prefer drills whose `lens` matches the concept's `least_seen_lens`
+ *      (falls back to the full candidate pool when nothing matches or
+ *      `least_seen_lens` is null).
+ *   4. Within that pool, prefer the least-attempted drill (fewest rows in
+ *      `lr_attempt_log`, ties broken by content order).
+ *
+ * A due concept with no resolvable drill (unit has no content yet, or the
+ * concept is theory-only) is skipped, not an error — the queue is simply
+ * shorter. Stops once `limit` items are collected or due concepts run out.
+ *
+ * Returns `null` when `lr_learn_state` has no row at all — "never
+ * computed", per the blocking_state doctrine — so the UI can render "ingen
+ * dom endnu" instead of a queue that merely looks empty. Returns `[]` (a
+ * real, legitimate empty queue) when the row exists but nothing is due or
+ * resolvable — that is a different, honest state from "unknown".
+ */
+export async function fetchReviewQueue(limit: number = REVIEW_QUEUE_SIZE): Promise<ReviewQueueItem[] | null> {
+  const state = await fetchLearnState();
+  if (!state) return null;
+
+  const due = state.due_concepts ?? [];
+  if (due.length === 0) return [];
+
+  const unitIds = Array.from(new Set(due.map((d) => d.unit_id)));
+  const contentEntries = await Promise.all(
+    unitIds.map(async (uid) => [uid, await fetchUnitContent(uid).catch(() => null)] as const)
+  );
+  const contentByUnit = new Map(contentEntries);
+
+  type Candidate = { drill: Drill; group: PracticeGroup; archetype: Archetype };
+  const perConcept = new Map<string, Candidate[]>();
+  const allCandidateIds = new Set<string>();
+
+  for (const dc of due) {
+    const row = contentByUnit.get(dc.unit_id);
+    const content = row?.content;
+    if (!content) continue;
+    const candidates: Candidate[] = [];
+    for (const group of content.practice) {
+      const groupCovers = group.concept_ids.includes(dc.concept_id);
+      for (const drill of group.drills) {
+        const drillCovers = groupCovers || (drill.concept_ids?.includes(dc.concept_id) ?? false);
+        if (drillCovers) {
+          candidates.push({ drill, group, archetype: group.archetype });
+          allCandidateIds.add(drill.id);
+        }
+      }
+    }
+    if (candidates.length > 0) perConcept.set(dc.concept_id, candidates);
+  }
+
+  let attemptCounts: Record<string, number> = {};
+  try {
+    attemptCounts = await fetchAttemptCounts(Array.from(allCandidateIds));
+  } catch {
+    // Best-effort ranking signal only — an unattempted-looking pool (all
+    // zero counts) still yields a valid, deterministic pick.
+  }
+
+  const items: ReviewQueueItem[] = [];
+  for (const dc of due) {
+    if (items.length >= limit) break;
+    const candidates = perConcept.get(dc.concept_id);
+    if (!candidates || candidates.length === 0) continue;
+
+    let pool = candidates;
+    if (dc.least_seen_lens) {
+      const lensMatched = candidates.filter((c) => c.drill.lens === dc.least_seen_lens);
+      if (lensMatched.length > 0) pool = lensMatched;
+    }
+
+    let best = pool[0];
+    let bestCount = attemptCounts[best.drill.id] ?? 0;
+    for (const c of pool.slice(1)) {
+      const count = attemptCounts[c.drill.id] ?? 0;
+      if (count < bestCount) {
+        best = c;
+        bestCount = count;
+      }
+    }
+
+    items.push({
+      drill: best.drill,
+      group: best.group,
+      archetype: best.archetype,
+      conceptId: dc.concept_id,
+      unitId: dc.unit_id,
+    });
+  }
+
+  return items;
 }

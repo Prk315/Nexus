@@ -184,6 +184,7 @@ async fn post_batch(
     anon_key: &str,
     ingest_key: &str,
     device_id: &str,
+    active_user_id: &str,
     entries: &[Value],
 ) -> Result<(), String> {
     let url = format!("{}/functions/v1/usage-ingest", base_url.trim_end_matches('/'));
@@ -194,7 +195,18 @@ async fn post_batch(
         // write — `X-Usage-Key` is.
         .header("Authorization", format!("Bearer {anon_key}"))
         .header("X-Usage-Key", ingest_key)
-        .json(&json!({ "device_id": device_id, "entries": entries }))
+        // `user_id` is omitted when unset so a config written before profile
+        // switching existed keeps hitting the function's default owner. When
+        // present the function validates it against an allowlist and 403s on a
+        // mismatch — it must never silently fall back, because attributing one
+        // person's browsing to the other is worse than not uploading at all.
+        .json(&{
+            let mut body = json!({ "device_id": device_id, "entries": entries });
+            if !active_user_id.is_empty() {
+                body["user_id"] = json!(active_user_id);
+            }
+            body
+        })
         .send()
         .await
         .map_err(|e| format!("request failed: {e}"))?;
@@ -215,6 +227,10 @@ async fn sync_once(
     ingest_key: &str,
     device_id: &str,
 ) -> Result<usize, String> {
+    // Re-read every pass rather than caching at startup: switching profile in
+    // the app must change where the next batch lands without restarting the
+    // daemon. `None` (unreadable/mid-write) keeps the previous value.
+    let active_user_id = crate::config::AppConfig::read_active_user_id().unwrap_or_default();
     let mut state = load_state();
     let mut uploaded = 0usize;
 
@@ -235,7 +251,8 @@ async fn sync_once(
 
         let wire: Vec<Value> = entries.iter().map(|e| to_wire(e, &day)).collect();
         for chunk in wire.chunks(MAX_BATCH) {
-            post_batch(client, base_url, anon_key, ingest_key, device_id, chunk).await?;
+            post_batch(client, base_url, anon_key, ingest_key, device_id, &active_user_id, chunk)
+                .await?;
             uploaded += chunk.len();
         }
 

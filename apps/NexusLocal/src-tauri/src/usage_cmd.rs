@@ -17,6 +17,7 @@
 //! Nothing here is written to Supabase. See the privacy note in `usage.rs`.
 //! TODO(auth): sync only after RLS is scoped to auth.uid().
 
+use chrono::Timelike;
 use serde::Serialize;
 
 use crate::usage;
@@ -49,16 +50,159 @@ pub struct UsageToday {
     /// Whether anything is recording right now. False means the numbers below
     /// are a historical read of the day so far, not a live one.
     pub tracking: bool,
+    /// Foreground app seconds per local hour, always 24 entries indexed 0..=23.
+    pub hours: Vec<i64>,
+    /// One entry per day in the requested range, oldest first. A single
+    /// element for `"today"`. Days with no data are present with zero
+    /// rather than omitted, so the strip renders a gap honestly.
+    pub days: Vec<DayTotal>,
 }
 
-/// Today's totals, read from disk.
+/// One day's total, for the week strip.
+#[derive(Debug, Clone, Serialize)]
+pub struct DayTotal {
+    /// `YYYY-MM-DD`, local.
+    pub date: String,
+    pub seconds: i64,
+}
+
+/// How many days a `"week"` range covers, counting today.
+const WEEK_DAYS: i64 = 7;
+
+/// Seconds of foreground app time falling in each local hour, 0..=23.
+///
+/// Intervals are **split across hour boundaries** rather than attributed whole
+/// to their start hour. A session from 09:50 to 10:20 is 10 minutes in hour 9
+/// and 20 in hour 10; billing all 30 to hour 9 would put a visible spike at the
+/// start of every long session and leave the hours it actually spanned empty,
+/// which is precisely the shape this chart exists to show.
+fn hourly_buckets(entries: &[usage::UsageEntry]) -> Vec<i64> {
+    let mut hours = vec![0i64; 24];
+    for entry in entries.iter().filter(|e| e.is_app()) {
+        let (Some(start), Some(end)) = (parse_local(entry.start()), parse_local(entry.end())) else {
+            continue;
+        };
+        if end <= start {
+            continue;
+        }
+        let mut cursor = start;
+        while cursor < end {
+            // Start of the next hour, derived by truncating rather than by
+            // adding 3600s: an interval that spans a DST change would otherwise
+            // drift a whole hour off.
+            let next_hour = (cursor + chrono::Duration::hours(1))
+                .with_minute(0)
+                .and_then(|t| t.with_second(0))
+                .and_then(|t| t.with_nanosecond(0))
+                .unwrap_or(end);
+            let segment_end = next_hour.min(end);
+            let seconds = (segment_end - cursor).num_seconds().max(0);
+            let hour = cursor.hour() as usize;
+            if hour < 24 {
+                hours[hour] += seconds;
+            }
+            // Guard against a zero-length step wedging the loop if a timezone
+            // transition ever makes `next_hour` land on `cursor`.
+            if segment_end <= cursor {
+                break;
+            }
+            cursor = segment_end;
+        }
+    }
+    hours
+}
+
+/// An RFC3339 timestamp as a wall-clock time in [`usage::LOCAL_TZ`].
+fn parse_local(ts: &str) -> Option<chrono::DateTime<chrono_tz::Tz>> {
+    chrono::DateTime::parse_from_rfc3339(ts)
+        .ok()
+        .map(|t| t.with_timezone(&usage::LOCAL_TZ))
+}
+
+/// The local dates in a range, oldest first.
+///
+/// Walks back from today in whole local days rather than subtracting 24h from
+/// `now` repeatedly — the latter drifts across a DST boundary and would either
+/// skip a day or emit one twice.
+fn range_days(days: i64) -> Vec<String> {
+    let today = chrono::Utc::now();
+    let mut out: Vec<String> = (0..days)
+        .map(|back| usage::local_date_of(today - chrono::Duration::days(back)))
+        .collect();
+    out.dedup();
+    out.reverse();
+    out
+}
+
+/// Totals for a range, read from disk.
+///
+/// `range` is `"today"` or `"week"`; anything else is treated as `"today"`
+/// rather than erroring, because this is a display command and an unknown
+/// string should degrade to the narrower, safer view.
 ///
 /// Infallible by design: a day with no file is a day with no usage — the normal
 /// state of every morning — and a read error should leave the panel showing
 /// "nothing yet" rather than an error box that is indistinguishable from one.
 #[tauri::command]
+pub fn tt_usage_range(range: Option<String>) -> UsageToday {
+    let days = match range.as_deref() {
+        Some("week") => range_days(WEEK_DAYS),
+        _ => vec![usage::today_local()],
+    };
+
+    // Per-day totals BEFORE flattening, so the strip can show an empty day as a
+    // zero rather than omitting it — a gap in a bar chart reads as "no data
+    // recorded", which is a different claim from "nothing was used".
+    let mut per_day = Vec::with_capacity(days.len());
+    let mut entries = Vec::new();
+    for day in &days {
+        let day_entries = usage::read_day(day).unwrap_or_default();
+        per_day.push(DayTotal {
+            date: day.clone(),
+            seconds: day_entries
+                .iter()
+                .filter(|e| e.is_app())
+                .map(|e| e.seconds().max(0))
+                .sum(),
+        });
+        entries.extend(day_entries);
+    }
+
+    let apps: Vec<AppUsage> = usage::totals(&entries, Some(true))
+        .into_iter()
+        .take(TOP_N)
+        .map(|(name, seconds)| AppUsage { name, seconds })
+        .collect();
+    let sites: Vec<SiteUsage> = usage::totals(&entries, Some(false))
+        .into_iter()
+        .take(TOP_N)
+        .map(|(host, seconds)| SiteUsage { host, seconds })
+        .collect();
+    let total_seconds = entries
+        .iter()
+        .filter(|e| e.is_app())
+        .map(|e| e.seconds().max(0))
+        .sum();
+
+    UsageToday {
+        apps,
+        sites,
+        total_seconds,
+        tracking: tracking_now(),
+        hours: hourly_buckets(&entries),
+        days: per_day,
+    }
+}
+
+/// Today's totals, read from disk.
+///
+/// Kept as its own command rather than folded into `tt_usage_range`: it is the
+/// stable contract other callers may already use, and `range` defaulting to
+/// today makes them identical anyway.
+#[tauri::command]
 pub fn tt_usage_today() -> UsageToday {
-    let entries = usage::read_day(&usage::today_local()).unwrap_or_default();
+    let today = usage::today_local();
+    let entries = usage::read_day(&today).unwrap_or_default();
 
     let apps: Vec<AppUsage> = usage::totals(&entries, Some(true))
         .into_iter()
@@ -83,7 +227,42 @@ pub fn tt_usage_today() -> UsageToday {
         sites,
         total_seconds,
         tracking: tracking_now(),
+        hours: hourly_buckets(&entries),
+        days: vec![DayTotal { date: today, seconds: total_seconds }],
     }
+}
+
+/// Which account the daemon currently exports usage to.
+///
+/// Read from the config file rather than from the app's own auth session on
+/// purpose: the session says who is *signed in here*, and this says where the
+/// *daemon* is actually sending data. They can disagree — the app signs in
+/// instantly, the daemon picks the change up on its next pass — and a switcher
+/// that showed the session while claiming to show the export target would be
+/// lying at exactly the moment it matters.
+#[tauri::command]
+pub fn tt_active_profile_get() -> String {
+    crate::config::AppConfig::read_active_user_id().unwrap_or_default()
+}
+
+/// Point the daemon's usage export at a different account.
+///
+/// Takes effect on the daemon's next sync pass (within ~5 minutes); intervals
+/// already uploaded stay with the account that owned them at the time, which is
+/// correct — they were that person's.
+///
+/// The uid must be allowlisted server-side (`USAGE_ALLOWED_UIDS`), so writing a
+/// stranger's uid here does not let this Mac file usage under their account; the
+/// edge function 403s instead.
+#[tauri::command]
+pub fn tt_active_profile_set(user_id: String) -> Result<(), String> {
+    let trimmed = user_id.trim();
+    // A blank uid means "back to the function's default owner" and is allowed —
+    // that is what signing out leaves behind.
+    if !trimmed.is_empty() && trimmed.len() < 32 {
+        return Err(format!("'{trimmed}' is not a plausible user id"));
+    }
+    crate::config::AppConfig::set_active_user_id(trimmed)
 }
 
 /// The token the browser extension authenticates with, for the one-time setup.
@@ -201,5 +380,80 @@ mod tests {
         }
         #[cfg(target_os = "ios")]
         assert!(token.is_empty());
+    }
+
+    // ── hourly bucketing ────────────────────────────────────────────────────
+
+    /// An app interval given as local wall-clock times, converted to the RFC3339
+    /// UTC the store actually holds — so these tests exercise the same parsing
+    /// path as real data rather than a convenient fiction.
+    fn local_app(name: &str, start_local: &str, end_local: &str) -> usage::UsageEntry {
+        use chrono::TimeZone;
+        let parse = |s: &str| {
+            let naive = chrono::NaiveDateTime::parse_from_str(s, "%Y-%m-%d %H:%M:%S").unwrap();
+            usage::LOCAL_TZ
+                .from_local_datetime(&naive)
+                .single()
+                .unwrap()
+                .with_timezone(&chrono::Utc)
+        };
+        usage::UsageEntry::app(name, parse(start_local), parse(end_local)).unwrap()
+    }
+
+    #[test]
+    fn an_interval_is_split_across_the_hours_it_spans() {
+        // 09:50 -> 10:20 is 10 minutes in hour 9 and 20 in hour 10. Attributing
+        // all 30 to the start hour would spike the beginning of every long
+        // session and leave the hours it covered empty.
+        let hours = hourly_buckets(&[local_app("Ghostty", "2026-08-09 09:50:00", "2026-08-09 10:20:00")]);
+        assert_eq!(hours[9], 10 * 60);
+        assert_eq!(hours[10], 20 * 60);
+        assert_eq!(hours.iter().sum::<i64>(), 30 * 60, "no seconds invented or lost");
+    }
+
+    #[test]
+    fn a_multi_hour_interval_fills_every_hour_it_covers() {
+        let hours = hourly_buckets(&[local_app("Xcode", "2026-08-09 08:30:00", "2026-08-09 12:15:00")]);
+        assert_eq!(hours[8], 30 * 60);
+        assert_eq!(hours[9], 3600);
+        assert_eq!(hours[10], 3600);
+        assert_eq!(hours[11], 3600);
+        assert_eq!(hours[12], 15 * 60);
+        assert_eq!(hours.iter().sum::<i64>(), (3 * 60 + 45) * 60);
+    }
+
+    #[test]
+    fn web_entries_are_excluded_so_browser_time_is_not_double_counted() {
+        // Site time happens *inside* an app interval. Counting both would make
+        // an hour add up to more than 3600 seconds.
+        let entries = vec![
+            local_app("Google Chrome", "2026-08-09 14:00:00", "2026-08-09 14:30:00"),
+            usage::UsageEntry::Web {
+                host: "example.com".into(),
+                url: String::new(),
+                title: String::new(),
+                start: "2026-08-09T12:00:00+00:00".into(),
+                end: "2026-08-09T12:30:00+00:00".into(),
+                seconds: 1800,
+            },
+        ];
+        assert_eq!(hourly_buckets(&entries).iter().sum::<i64>(), 30 * 60);
+    }
+
+    #[test]
+    fn buckets_are_always_24_long_and_junk_timestamps_are_skipped() {
+        // A day with nothing still has to render 24 bars, and one unparseable
+        // row must not take the chart down with it.
+        let empty = hourly_buckets(&[]);
+        assert_eq!(empty.len(), 24);
+        assert!(empty.iter().all(|&s| s == 0));
+
+        let junk = usage::UsageEntry::App {
+            name: "Broken".into(),
+            start: "not a timestamp".into(),
+            end: "also not".into(),
+            seconds: 60,
+        };
+        assert_eq!(hourly_buckets(&[junk]).iter().sum::<i64>(), 0);
     }
 }

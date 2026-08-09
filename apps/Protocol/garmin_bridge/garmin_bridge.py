@@ -267,6 +267,11 @@ def cmd_activities(args):
             dist_m = act.get("distance") or 0
             results.append({
                 "type": "run",
+                # Garmin's own id + local start time. Without these an activity has
+                # no stable identity, so every re-sync inserts a duplicate row.
+                # Additive and backwards compatible: existing clients ignore them.
+                "activity_id": act.get("activityId"),
+                "start_time": start_ts or None,
                 "date": act_date,
                 "name": act.get("activityName", ""),
                 "actual_km": round(dist_m / 1000, 2) if dist_m else None,
@@ -281,6 +286,8 @@ def cmd_activities(args):
         else:
             results.append({
                 "type": "workout",
+                "activity_id": act.get("activityId"),
+                "start_time": start_ts or None,
                 "date": act_date,
                 "name": act.get("activityName", ""),
                 "duration_min": duration_min,

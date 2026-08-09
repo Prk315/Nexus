@@ -219,6 +219,34 @@ to `apps/NexusLocal/package.json`; `npm install` from repo root.
 `apps/NexusLocal` must pass. A terminal cannot prove the WebView renders
 (CLAUDE.md) — visual check is a human step at the end.
 
+## Phase 3 — `lr_learn_state` contract (pinned)
+
+Written only by the `learn-evaluate` edge function (service role), every 15 min
+via pg_cron. Shape:
+
+```jsonc
+{
+  "user_id": "default",
+  "due_concepts": [        // sorted by priority desc, capped at 30
+    { "concept_id": "la-…", "unit_id": 9, "priority": 0.87,
+      "least_seen_lens": "row" | "matrix" | "column" | null }
+  ],
+  "frontier_units": [      // the units to work on next, path order
+    { "unit_id": 9, "code": "LA 3 · U1", "status": "in_progress" | "available" }
+  ],
+  "streak_days": 4,        // consecutive local days (Europe/Copenhagen) with ≥1 attempt
+  "last_session_date": "2026-08-07",
+  "computed_at": "…"
+}
+```
+
+Semantics: due = retained concepts (`lr_retained_concept`) whose decayed heat or
+competence sits below the review thresholds, priority per LearnAndRetain's
+selector (retention-weighted, from the ported Python constants). Heat decay is
+applied to `lr_memory_state` by the same function (`last_decayed` bookkeeping).
+Consumers (ReviewPanel, LearnWidget) treat a missing row as "no verdict yet" and
+a stale `computed_at` as last-known-state — never as "nothing due".
+
 ## Conventions that bite (from CLAUDE.md — enforced)
 
 - camelCase IPC args from JS; snake_case in Rust.

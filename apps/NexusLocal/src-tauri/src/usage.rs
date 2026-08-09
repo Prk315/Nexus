@@ -120,6 +120,12 @@ impl UsageEntry {
         }
     }
 
+    pub fn end(&self) -> &str {
+        match self {
+            UsageEntry::App { end, .. } | UsageEntry::Web { end, .. } => end,
+        }
+    }
+
     pub fn is_app(&self) -> bool {
         matches!(self, UsageEntry::App { .. })
     }
