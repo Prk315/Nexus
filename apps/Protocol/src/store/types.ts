@@ -518,12 +518,35 @@ export type DataSource = "garmin" | "oura";
 
 export interface DataSourceSettings {
   sleep_source: DataSource;
-  body_vitals_source: DataSource;
   workouts_source: DataSource;
+  // Per-metric body-vitals sources (split out of the old body_vitals_source).
+  hrv_source: DataSource;
+  resting_hr_source: DataSource;
+  readiness_source: DataSource;
+  recovery_source: DataSource;
+  spo2_source: DataSource;
+  temperature_source: DataSource;
 }
+
+/** The body-vitals fields the user can route per-source, mapped to their
+ *  protocol_body_metrics columns. Keep in sync with DataSourceSettings + the
+ *  garmin/oura importers. */
+export const BODY_VITAL_SOURCES: { key: keyof DataSourceSettings; label: string }[] = [
+  { key: "hrv_source", label: "HRV" },
+  { key: "resting_hr_source", label: "Resting HR" },
+  { key: "readiness_source", label: "Readiness" },
+  { key: "recovery_source", label: "Recovery" },
+  { key: "spo2_source", label: "SpO2" },
+  { key: "temperature_source", label: "Temperature" },
+];
 
 export const DEFAULT_DATA_SOURCE_SETTINGS: DataSourceSettings = {
   sleep_source: "oura",
-  body_vitals_source: "oura",
   workouts_source: "garmin",
+  hrv_source: "oura",
+  resting_hr_source: "oura",
+  readiness_source: "oura",
+  recovery_source: "oura",
+  spo2_source: "oura",
+  temperature_source: "oura",
 };
