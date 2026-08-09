@@ -1,22 +1,23 @@
 import { useEffect, useMemo, useState } from "react";
 import { Dumbbell, Flame } from "lucide-react";
 import { useAppDispatch, useAppSelector } from "../store/hooks";
-import { fetchWorkoutSessions, fetchExerciseHistory } from "../store/slices/workoutsSlice";
+import { fetchWorkoutSessions, fetchExerciseHistory, fetchWorkoutPlans, fetchRoutineExercises, startSessionFromRoutine } from "../store/slices/workoutsSlice";
 import { fetchRunningSessions } from "../store/slices/runningSlice";
 import { fetchBodyMetrics } from "../store/slices/biomarkersSlice";
-import { CARD_STYLE, isoDate } from "../lib/uiHelpers";
+import { CARD_STYLE, isoDate, todayISO } from "../lib/uiHelpers";
 import { buildRunningStats, buildStrengthStats, type TimeRange } from "../lib/progressStats";
 import { getCachedConfig, loadTrackingConfig, saveTrackingConfig, type TrackingConfig, type Activity } from "../lib/trackingConfig";
 import { ConsistencyHeatmap, buildHeatmapGrid } from "../components/habits/HabitCharts";
 import ProgressStats from "../components/workouts/ProgressStats";
 import RecoveryCard from "../components/workouts/RecoveryCard";
+import RoutinesDesigner from "../components/workouts/RoutinesDesigner";
 import LogPlanCard from "../components/workouts/LogPlanCard";
 import RunsCard from "../components/workouts/RunsCard";
 import ProgressionView from "../components/workouts/ProgressionView";
 import ActivityModule from "../components/biomarkers/ActivityModule";
 import StravaImportPanel from "../components/shared/StravaImportPanel";
 import GarminSyncPanel from "../components/shared/GarminSyncPanel";
-import type { WorkoutSession, RunningSession } from "../store/types";
+import type { WorkoutSession, RunningSession, WorkoutRoutine } from "../store/types";
 
 const HEATMAP_WEEKS = 12;
 
@@ -68,8 +69,17 @@ export default function WorkoutsPage() {
   useEffect(() => {
     refresh();
     dispatch(fetchBodyMetrics());
+    dispatch(fetchWorkoutPlans());
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [dispatch]);
+
+  // "Log this day" from a training-day routine → spin up a session pre-filled with
+  // its prescribed exercises; it then shows in the Log & Plan card and progress.
+  const handleStartFromRoutine = async (routine: WorkoutRoutine) => {
+    const { items } = await dispatch(fetchRoutineExercises(routine.id)).unwrap();
+    await dispatch(startSessionFromRoutine({ routine, exercises: items, date: todayISO() })).unwrap();
+    dispatch(fetchWorkoutSessions());
+  };
 
   // Strength progress needs the per-exercise history across loaded sessions.
   useEffect(() => {
@@ -140,6 +150,16 @@ export default function WorkoutsPage() {
 
       {/* Runs — imported from Garmin/Strava */}
       <RunsCard />
+
+      {/* Strength training plans — programs, training days, prescribed exercises */}
+      <div style={{ ...CARD_STYLE, padding: "20px 24px" }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 16 }}>
+          <Dumbbell size={16} color="var(--accent)" />
+          <span style={{ fontWeight: 700, fontSize: 15, color: "var(--text)" }}>Strength Plans</span>
+          <span style={{ fontSize: 12, color: "var(--text-muted)" }}>· programs, training days &amp; prescribed exercises</span>
+        </div>
+        <RoutinesDesigner onStart={handleStartFromRoutine} />
+      </div>
 
       {/* Log & plan a workout with a live muscle map */}
       <LogPlanCard />
