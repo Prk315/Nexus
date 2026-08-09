@@ -1,59 +1,94 @@
-import { useState } from "react";
-import { Dumbbell, Footprints, Activity } from "lucide-react";
-import StrengthPane from "../components/workouts/panes/StrengthPane";
-import RunningPane from "../components/workouts/panes/RunningPane";
+import { useEffect } from "react";
+import { Dumbbell, Flame } from "lucide-react";
+import { useAppDispatch, useAppSelector } from "../store/hooks";
+import { fetchWorkoutSessions } from "../store/slices/workoutsSlice";
+import { CARD_STYLE, isoDate } from "../lib/uiHelpers";
+import { ConsistencyHeatmap, buildHeatmapGrid } from "../components/habits/HabitCharts";
+import RecoveryCard from "../components/workouts/RecoveryCard";
+import LogPlanCard from "../components/workouts/LogPlanCard";
+import ProgressionView from "../components/workouts/ProgressionView";
 import ActivityModule from "../components/biomarkers/ActivityModule";
+import StravaImportPanel from "../components/shared/StravaImportPanel";
+import GarminSyncPanel from "../components/shared/GarminSyncPanel";
+import type { WorkoutSession } from "../store/types";
 
-type PaneId = "strength" | "running" | "activities";
-const PANES: { id: PaneId; label: string; icon: typeof Dumbbell }[] = [
-  { id: "strength", label: "Strength Training", icon: Dumbbell },
-  { id: "running", label: "Running", icon: Footprints },
-  { id: "activities", label: "Activities", icon: Activity },
-];
+const HEATMAP_WEEKS = 12;
+
+/** 1 if any session that day completed, 0 if scheduled but not, absent otherwise. */
+function workoutFractions(sessions: WorkoutSession[]): Map<string, number> {
+  const m = new Map<string, number>();
+  for (const s of sessions) {
+    m.set(s.scheduled_date, Math.max(m.get(s.scheduled_date) ?? 0, s.completed ? 1 : 0));
+  }
+  return m;
+}
 
 /**
- * Workouts is the training dashboard — strength, running and general activities
- * all live here as panes. Running used to be its own top-level tab; it moved in
- * so everything training-related sits under one roof.
+ * Workouts — one scrolling dashboard. Recovery (muscle map + vitals) up top, then
+ * activity stats beside the workout heatmap, then a single Log & Plan card (build a
+ * workout and watch the muscles light up), then strength progression. Running and
+ * the old Design/Log/Progress sub-tabs are gone.
  */
 export default function WorkoutsPage() {
-  const [pane, setPane] = useState<PaneId>("strength");
+  const dispatch = useAppDispatch();
+  const workoutSessions = useAppSelector((s) => s.workouts.sessions);
+
+  useEffect(() => {
+    dispatch(fetchWorkoutSessions());
+  }, [dispatch]);
+
+  const today = isoDate(new Date());
+  const grid = buildHeatmapGrid(today, HEATMAP_WEEKS);
+  const fractions = workoutFractions(workoutSessions);
 
   return (
-    <div style={{ padding: 32, maxWidth: 900, margin: "0 auto" }}>
-      <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 20 }}>
+    <div style={{ padding: 32, maxWidth: 1100, margin: "0 auto", display: "flex", flexDirection: "column", gap: 24 }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
         <Dumbbell size={24} color="var(--accent)" />
         <div>
           <h1 style={{ fontSize: 22, fontWeight: 700, color: "var(--text)", margin: 0 }}>Workouts</h1>
           <p style={{ fontSize: 13, color: "var(--text-muted)", margin: 0 }}>
-            Strength, running and activities — your whole training picture in one place
+            Recovery, activity and strength — plan and log it all in one place
           </p>
         </div>
       </div>
 
-      {/* Pane tabs */}
-      <div style={{ display: "flex", gap: 4, borderBottom: "1px solid var(--border)", marginBottom: 24, flexWrap: "wrap" }}>
-        {PANES.map(({ id, label, icon: Icon }) => (
-          <button
-            key={id}
-            onClick={() => setPane(id)}
-            style={{
-              display: "flex", alignItems: "center", gap: 6,
-              background: "none", border: "none", cursor: "pointer",
-              padding: "8px 12px", marginRight: 4,
-              fontSize: 13, fontWeight: 600,
-              color: pane === id ? "var(--accent)" : "var(--text-muted)",
-              borderBottom: `2px solid ${pane === id ? "var(--accent)" : "transparent"}`,
-            }}
-          >
-            <Icon size={15} /> {label}
-          </button>
-        ))}
+      <div>
+        <StravaImportPanel mode="workouts" onImported={() => dispatch(fetchWorkoutSessions())} />
+        <GarminSyncPanel mode="activities" onSynced={() => dispatch(fetchWorkoutSessions())} />
       </div>
 
-      {pane === "strength" && <StrengthPane />}
-      {pane === "running" && <RunningPane />}
-      {pane === "activities" && <ActivityModule />}
+      {/* Recovery: muscle map + readiness/vitals */}
+      <RecoveryCard />
+
+      {/* Activity stats + workout heatmap */}
+      <div style={{ display: "flex", gap: 16, flexWrap: "wrap", alignItems: "stretch" }}>
+        <div style={{ flex: "3 1 480px", minWidth: 0 }}>
+          <ActivityModule />
+        </div>
+        <div style={{ ...CARD_STYLE, padding: "20px 24px", flex: "1 1 240px" }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 4 }}>
+            <Flame size={15} color="var(--warning)" />
+            <span style={{ fontWeight: 600, color: "var(--text)", fontSize: 14 }}>Workout Consistency</span>
+          </div>
+          <div style={{ fontSize: 12, color: "var(--text-muted)", marginBottom: 16 }}>
+            Completed workouts, last {HEATMAP_WEEKS} weeks
+          </div>
+          {workoutSessions.length > 0 ? (
+            <ConsistencyHeatmap grid={grid} today={today} fractionByDate={fractions} cellSize={16} />
+          ) : (
+            <div style={{ fontSize: 12, color: "var(--text-muted)", textAlign: "center", padding: "24px 0" }}>
+              No workouts logged yet.
+            </div>
+          )}
+        </div>
+      </div>
+
+      {/* Log & plan a workout with a live muscle map */}
+      <LogPlanCard />
+
+      {/* Strength progression over time */}
+      <ProgressionView />
     </div>
   );
 }
