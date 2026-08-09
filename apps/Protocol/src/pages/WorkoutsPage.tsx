@@ -1,10 +1,13 @@
-import { useEffect } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Dumbbell, Flame } from "lucide-react";
 import { useAppDispatch, useAppSelector } from "../store/hooks";
-import { fetchWorkoutSessions } from "../store/slices/workoutsSlice";
+import { fetchWorkoutSessions, fetchExerciseHistory } from "../store/slices/workoutsSlice";
 import { fetchRunningSessions } from "../store/slices/runningSlice";
+import { fetchBodyMetrics } from "../store/slices/biomarkersSlice";
 import { CARD_STYLE, isoDate } from "../lib/uiHelpers";
+import { buildRunningStats, buildStrengthStats, type TimeRange } from "../lib/progressStats";
 import { ConsistencyHeatmap, buildHeatmapGrid } from "../components/habits/HabitCharts";
+import ProgressStats from "../components/workouts/ProgressStats";
 import RecoveryCard from "../components/workouts/RecoveryCard";
 import LogPlanCard from "../components/workouts/LogPlanCard";
 import RunsCard from "../components/workouts/RunsCard";
@@ -29,16 +32,19 @@ function trainingFractions(workouts: WorkoutSession[], runs: RunningSession[]): 
 }
 
 /**
- * Workouts — one scrolling dashboard. A charts overview up top (strength
- * progression + the training-consistency heatmap), then Recovery (muscle map +
- * vitals), activity stats, a dedicated Runs card, and a single Log & Plan card
- * (build a workout and watch the muscles light up). The Garmin panel syncs
- * everything exercise-related — runs, workouts and strength sets — in one click.
+ * Workouts — one scrolling dashboard. Two side-by-side progress cards (Running,
+ * Strength) headline the page, then Recovery, activity stats, a Runs card and a
+ * single Log & Plan card. The Garmin panel syncs everything exercise-related.
  */
 export default function WorkoutsPage() {
   const dispatch = useAppDispatch();
   const workoutSessions = useAppSelector((s) => s.workouts.sessions);
   const runningSessions = useAppSelector((s) => s.running.sessions);
+  const exerciseHistory = useAppSelector((s) => s.workouts.exerciseHistory);
+  const bodyMetrics = useAppSelector((s) => s.biomarkers.bodyMetrics);
+
+  const [runRange, setRunRange] = useState<TimeRange>("3months");
+  const [strRange, setStrRange] = useState<TimeRange>("3months");
 
   const refresh = () => {
     dispatch(fetchWorkoutSessions());
@@ -47,8 +53,19 @@ export default function WorkoutsPage() {
 
   useEffect(() => {
     refresh();
+    dispatch(fetchBodyMetrics());
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [dispatch]);
+
+  // Strength progress needs the per-exercise history across loaded sessions.
+  useEffect(() => {
+    if (workoutSessions.length > 0) {
+      dispatch(fetchExerciseHistory(workoutSessions.map((s) => ({ id: s.id, date: s.scheduled_date }))));
+    }
+  }, [dispatch, workoutSessions]);
+
+  const runData = useMemo(() => buildRunningStats(runningSessions, bodyMetrics, runRange), [runningSessions, bodyMetrics, runRange]);
+  const strData = useMemo(() => buildStrengthStats(exerciseHistory, bodyMetrics, strRange), [exerciseHistory, bodyMetrics, strRange]);
 
   const today = isoDate(new Date());
   const grid = buildHeatmapGrid(today, HEATMAP_WEEKS);
@@ -67,12 +84,18 @@ export default function WorkoutsPage() {
         </div>
       </div>
 
+      {/* Progress overview — running & strength side by side */}
+      <div style={{ display: "flex", gap: 16, flexWrap: "wrap", alignItems: "stretch" }}>
+        <ProgressStats title="Running" color="var(--series-running)" range={runRange} onRange={setRunRange} data={runData} />
+        <ProgressStats title="Strength" color="var(--series-workout)" range={strRange} onRange={setStrRange} data={strData} />
+      </div>
+
       <div>
         <StravaImportPanel mode="workouts" onImported={refresh} />
         <GarminSyncPanel mode="workouts" onSynced={refresh} />
       </div>
 
-      {/* Charts overview — strength progression + training-consistency heatmap */}
+      {/* Training-consistency heatmap */}
       <div style={{ display: "flex", gap: 16, flexWrap: "wrap", alignItems: "flex-start" }}>
         <div style={{ ...CARD_STYLE, padding: "20px 24px", flex: "3 1 480px", minWidth: 0 }}>
           <ProgressionView />
