@@ -1,12 +1,14 @@
-import { useEffect, useState } from "react";
-import { X, Plus, Trash2, ChevronUp, ChevronDown, Dumbbell, Pencil } from "lucide-react";
+import { useEffect, useMemo, useState } from "react";
+import { X, Plus, Trash2, ChevronUp, ChevronDown, ChevronRight, Dumbbell, Pencil } from "lucide-react";
 import { useAppDispatch, useAppSelector } from "../../store/hooks";
 import {
   addRoutine, editRoutine, fetchRoutineExercises,
   addRoutineExercise, editRoutineExercise, removeRoutineExercise,
 } from "../../store/slices/workoutsSlice";
-import { CARD_STYLE, INPUT_STYLE, INPUT_SM, LABEL_STYLE, FIELD_GROUP } from "../../lib/uiHelpers";
+import { CARD_STYLE, INPUT_STYLE, INPUT_SM, LABEL_STYLE, FIELD_GROUP, todayISO } from "../../lib/uiHelpers";
+import { libraryMusclesToGroups, type SetLike } from "../../lib/muscleMap";
 import ExerciseNameInput from "./ExerciseNameInput";
+import MuscleMap from "./MuscleMap";
 import type { WorkoutPlan, WorkoutRoutine } from "../../store/types";
 
 interface DraftItem {
@@ -48,6 +50,9 @@ export default function RoutineEditor({
   const [items, setItems] = useState<DraftItem[]>([blankItem()]);
   const [saving, setSaving] = useState(false);
   const [seeded, setSeeded] = useState(!editing);
+  const [expandedKeys, setExpandedKeys] = useState<Set<string>>(() => new Set(items.map((i) => i.key)));
+  const toggleExpand = (key: string) =>
+    setExpandedKeys((prev) => { const n = new Set(prev); if (n.has(key)) n.delete(key); else n.add(key); return n; });
 
   // Load existing prescribed exercises when editing.
   useEffect(() => {
@@ -56,13 +61,16 @@ export default function RoutineEditor({
 
   useEffect(() => {
     if (editing && !seeded && existing) {
-      setItems(existing.length ? existing.map((e) => ({
+      const seededItems: DraftItem[] = existing.length ? existing.map((e) => ({
         key: crypto.randomUUID(), id: e.id, name: e.name,
         sets: e.target_sets?.toString() ?? "", reps: e.target_reps ?? "",
         rest: e.rest_sec?.toString() ?? "", weight: e.target_weight_kg?.toString() ?? "",
         rpe: e.target_rpe?.toString() ?? "", notes: e.notes ?? "",
         primary: e.primary_muscles, secondary: e.secondary_muscles,
-      })) : [blankItem()]);
+      })) : [blankItem()];
+      setItems(seededItems);
+      // Existing days start collapsed; a fresh blank starts expanded.
+      setExpandedKeys(existing.length ? new Set() : new Set(seededItems.map((i) => i.key)));
       setSeeded(true);
     }
   }, [editing, seeded, existing]);
@@ -71,7 +79,7 @@ export default function RoutineEditor({
     setItems((list) => list.map((i) => (i.key === key ? { ...i, [field]: value } : i)));
   const patchItem = (key: string, partial: Partial<DraftItem>) =>
     setItems((list) => list.map((i) => (i.key === key ? { ...i, ...partial } : i)));
-  const addRow = () => setItems((l) => [...l, blankItem()]);
+  const addRow = () => { const it = blankItem(); setItems((l) => [...l, it]); setExpandedKeys((p) => new Set(p).add(it.key)); };
   const removeRow = (key: string) => setItems((l) => (l.length > 1 ? l.filter((i) => i.key !== key) : l));
   const move = (key: string, dir: -1 | 1) =>
     setItems((l) => {
@@ -84,6 +92,20 @@ export default function RoutineEditor({
     });
 
   const num = (s: string) => (s.trim() ? Number(s) : null);
+
+  // Live muscle map for the whole training day — one SetLike per prescribed set,
+  // muscles resolved from each picked library exercise.
+  const today = todayISO();
+  const daySets = useMemo<SetLike[]>(() => {
+    const out: SetLike[] = [];
+    for (const it of items) {
+      const groups = libraryMusclesToGroups([...(it.primary ?? []), ...(it.secondary ?? [])]);
+      if (groups.length === 0) continue;
+      const count = Math.max(1, Math.min(Number(it.sets) || 1, 12));
+      for (let k = 0; k < count; k++) out.push({ date: today, category: "", reps: Number(it.reps) || null, weight_kg: Number(it.weight) || null, muscles: groups });
+    }
+    return out;
+  }, [items, today]);
 
   async function save() {
     const rows = items.filter((i) => i.name.trim());
@@ -163,30 +185,63 @@ export default function RoutineEditor({
           </div>
         </div>
 
-        {/* Prescribed exercises */}
-        <div>
-          <div style={{ display: "grid", gridTemplateColumns: "16px 1fr 52px 64px 60px 60px 48px 24px", gap: 6, alignItems: "center", padding: "0 2px 6px", fontSize: 10, fontWeight: 700, color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: "0.04em" }}>
-            <span /><span>Exercise</span><span>Sets</span><span>Reps</span><span>Rest s</span><span>kg</span><span>RPE</span><span />
+        {/* Muscles this training day trains — live as you build it */}
+        {daySets.length > 0 && (
+          <div>
+            <div style={sectionLabel}>Muscles trained</div>
+            <div style={{ display: "flex", justifyContent: "center" }}>
+              <MuscleMap sets={daySets} minimal />
+            </div>
           </div>
-          <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-            {items.map((it, i) => (
-              <div key={it.key} style={{ display: "grid", gridTemplateColumns: "16px 1fr 52px 64px 60px 60px 48px 24px", gap: 6, alignItems: "center" }}>
-                <div style={{ display: "flex", flexDirection: "column" }}>
-                  <button onClick={() => move(it.key, -1)} disabled={i === 0} style={miniBtn}><ChevronUp size={11} /></button>
-                  <button onClick={() => move(it.key, 1)} disabled={i === items.length - 1} style={miniBtn}><ChevronDown size={11} /></button>
+        )}
+
+        {/* Prescribed exercises — expandable cards */}
+        <div>
+          <div style={sectionLabel}>Exercises</div>
+          <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+            {items.map((it, i) => {
+              const expanded = expandedKeys.has(it.key);
+              const hasMuscles = (it.primary?.length ?? 0) + (it.secondary?.length ?? 0) > 0;
+              return (
+                <div key={it.key} style={{ border: "1px solid var(--border)", borderRadius: "var(--radius-sm)", background: "var(--bg)" }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "8px 10px" }}>
+                    <div style={{ display: "flex", flexDirection: "column" }}>
+                      <button onClick={() => move(it.key, -1)} disabled={i === 0} style={miniBtn}><ChevronUp size={11} /></button>
+                      <button onClick={() => move(it.key, 1)} disabled={i === items.length - 1} style={miniBtn}><ChevronDown size={11} /></button>
+                    </div>
+                    <button onClick={() => toggleExpand(it.key)} style={{ flex: 1, display: "flex", alignItems: "center", gap: 8, background: "none", border: "none", cursor: "pointer", textAlign: "left", minWidth: 0, padding: 0 }}>
+                      <ChevronRight size={13} color="var(--text-muted)" style={{ transform: expanded ? "rotate(90deg)" : "none", transition: "transform .15s", flexShrink: 0 }} />
+                      <span style={{ fontSize: 13, fontWeight: 600, color: "var(--text)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{it.name.trim() || "New exercise"}</span>
+                      <span style={{ fontSize: 11, color: "var(--text-muted)", flexShrink: 0, whiteSpace: "nowrap" }}>
+                        {it.sets && it.reps ? `${it.sets}×${it.reps}` : ""}{it.weight ? ` · ${it.weight} kg` : ""}
+                      </span>
+                    </button>
+                    <button onClick={() => removeRow(it.key)} style={miniBtn} title="Remove"><Trash2 size={12} /></button>
+                  </div>
+                  {expanded && (
+                    <div style={{ padding: 10, display: "flex", flexDirection: "column", gap: 8, borderTop: "1px solid var(--border)" }}>
+                      <ExerciseNameInput value={it.name} onChange={(name, p, s) => patchItem(it.key, { name, primary: p, secondary: s })} />
+                      <div style={{ display: "grid", gridTemplateColumns: "repeat(5, 1fr)", gap: 6 }}>
+                        <input style={INPUT_SM} value={it.sets} onChange={(e) => patch(it.key, "sets", e.target.value)} placeholder="Sets" inputMode="numeric" />
+                        <input style={INPUT_SM} value={it.reps} onChange={(e) => patch(it.key, "reps", e.target.value)} placeholder="Reps" />
+                        <input style={INPUT_SM} value={it.rest} onChange={(e) => patch(it.key, "rest", e.target.value)} placeholder="Rest s" inputMode="numeric" />
+                        <input style={INPUT_SM} value={it.weight} onChange={(e) => patch(it.key, "weight", e.target.value)} placeholder="kg" inputMode="decimal" />
+                        <input style={INPUT_SM} value={it.rpe} onChange={(e) => patch(it.key, "rpe", e.target.value)} placeholder="RPE" inputMode="decimal" />
+                      </div>
+                      <input style={INPUT_SM} value={it.notes} onChange={(e) => patch(it.key, "notes", e.target.value)} placeholder="Notes (cues, tempo…)" />
+                      {hasMuscles ? (
+                        <div style={{ display: "flex", gap: 5, flexWrap: "wrap" }}>
+                          {(it.primary ?? []).map((m) => <span key={`p${m}`} style={{ fontSize: 10, padding: "2px 7px", borderRadius: 999, background: "var(--series-workout-track)", color: "var(--text)" }}>{m}</span>)}
+                          {(it.secondary ?? []).map((m) => <span key={`s${m}`} style={{ fontSize: 10, padding: "2px 7px", borderRadius: 999, background: "var(--bg)", border: "1px solid var(--border)", color: "var(--text-muted)" }}>{m}</span>)}
+                        </div>
+                      ) : it.name.trim() ? (
+                        <span style={{ fontSize: 11, color: "var(--warning)" }}>Not in the library — pick from the search to map muscles</span>
+                      ) : null}
+                    </div>
+                  )}
                 </div>
-                <ExerciseNameInput
-                  value={it.name}
-                  onChange={(name, p, s) => patchItem(it.key, { name, primary: p, secondary: s })}
-                />
-                <input style={INPUT_SM} value={it.sets} onChange={(e) => patch(it.key, "sets", e.target.value)} placeholder="3" inputMode="numeric" />
-                <input style={INPUT_SM} value={it.reps} onChange={(e) => patch(it.key, "reps", e.target.value)} placeholder="8-12" />
-                <input style={INPUT_SM} value={it.rest} onChange={(e) => patch(it.key, "rest", e.target.value)} placeholder="120" inputMode="numeric" />
-                <input style={INPUT_SM} value={it.weight} onChange={(e) => patch(it.key, "weight", e.target.value)} placeholder="100" inputMode="decimal" />
-                <input style={INPUT_SM} value={it.rpe} onChange={(e) => patch(it.key, "rpe", e.target.value)} placeholder="8" inputMode="decimal" />
-                <button onClick={() => removeRow(it.key)} style={{ ...miniBtn, color: "var(--text-muted)" }} title="Remove"><Trash2 size={12} /></button>
-              </div>
-            ))}
+              );
+            })}
           </div>
           <button onClick={addRow} style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 8, background: "none", border: "1px dashed var(--border)", borderRadius: "var(--radius-sm)", padding: "7px 12px", fontSize: 12, color: "var(--text-secondary)", cursor: "pointer", width: "100%", justifyContent: "center" }}>
             <Plus size={13} /> Add exercise
@@ -213,5 +268,10 @@ export default function RoutineEditor({
 const miniBtn: React.CSSProperties = {
   background: "none", border: "none", cursor: "pointer", color: "var(--text-muted)",
   padding: 0, display: "flex", alignItems: "center", justifyContent: "center", lineHeight: 1,
+};
+
+const sectionLabel: React.CSSProperties = {
+  fontSize: 10, fontWeight: 700, color: "var(--text-muted)", textTransform: "uppercase",
+  letterSpacing: "0.05em", marginBottom: 8,
 };
 
