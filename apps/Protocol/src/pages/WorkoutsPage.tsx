@@ -4,6 +4,7 @@ import { useAppDispatch, useAppSelector } from "../store/hooks";
 import { fetchWorkoutSessions, fetchExerciseHistory, fetchWorkoutPlans, fetchRoutineExercises, startSessionFromRoutine } from "../store/slices/workoutsSlice";
 import { fetchRunningSessions } from "../store/slices/runningSlice";
 import { fetchBodyMetrics } from "../store/slices/biomarkersSlice";
+import { fetchExerciseSetsFromCloud } from "../lib/api";
 import { CARD_STYLE, isoDate, todayISO } from "../lib/uiHelpers";
 import { buildRunningStats, buildStrengthStats, type TimeRange } from "../lib/progressStats";
 import { getCachedConfig, loadTrackingConfig, saveTrackingConfig, type TrackingConfig, type Activity } from "../lib/trackingConfig";
@@ -17,7 +18,7 @@ import ProgressionView from "../components/workouts/ProgressionView";
 import ActivityModule from "../components/biomarkers/ActivityModule";
 import StravaImportPanel from "../components/shared/StravaImportPanel";
 import GarminSyncPanel from "../components/shared/GarminSyncPanel";
-import type { WorkoutSession, RunningSession, WorkoutRoutine } from "../store/types";
+import type { WorkoutSession, RunningSession, WorkoutRoutine, ExerciseSet, ExerciseHistory } from "../store/types";
 
 const HEATMAP_WEEKS = 12;
 
@@ -42,13 +43,13 @@ export default function WorkoutsPage() {
   const dispatch = useAppDispatch();
   const workoutSessions = useAppSelector((s) => s.workouts.sessions);
   const runningSessions = useAppSelector((s) => s.running.sessions);
-  const exerciseHistory = useAppSelector((s) => s.workouts.exerciseHistory);
   const bodyMetrics = useAppSelector((s) => s.biomarkers.bodyMetrics);
 
   const [runRange, setRunRange] = useState<TimeRange>("3months");
   const [strRange, setStrRange] = useState<TimeRange>("3months");
   const [runCfg, setRunCfg] = useState<TrackingConfig>(() => getCachedConfig("running"));
   const [strCfg, setStrCfg] = useState<TrackingConfig>(() => getCachedConfig("strength"));
+  const [strengthSets, setStrengthSets] = useState<ExerciseSet[]>([]);
 
   // Cache seeds the first render; Supabase is the source of truth once it resolves.
   useEffect(() => {
@@ -70,6 +71,9 @@ export default function WorkoutsPage() {
     refresh();
     dispatch(fetchBodyMetrics());
     dispatch(fetchWorkoutPlans());
+    // Garmin strength lands in protocol_exercise_sets (per-set), not
+    // protocol_exercises — pull a wide window so strength progress populates too.
+    fetchExerciseSetsFromCloud(isoDate(new Date(Date.now() - 730 * 86400000))).then(setStrengthSets);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [dispatch]);
 
@@ -89,7 +93,14 @@ export default function WorkoutsPage() {
   }, [dispatch, workoutSessions]);
 
   const runData = useMemo(() => buildRunningStats(runningSessions, bodyMetrics, runRange, runCfg), [runningSessions, bodyMetrics, runRange, runCfg]);
-  const strData = useMemo(() => buildStrengthStats(exerciseHistory, bodyMetrics, strRange, strCfg), [exerciseHistory, bodyMetrics, strRange, strCfg]);
+  // Strength progress draws from the Garmin import (protocol_exercise_sets), NOT
+  // the manually-logged sessions — those are often a duplicate re-log of the same
+  // workout, so combining would double-count. Each set → one ExerciseHistory row;
+  // name falls back to category when Garmin leaves exercise_name null.
+  const strengthEntries = useMemo<ExerciseHistory[]>(() =>
+    strengthSets.map((s) => ({ name: s.exercise_name ?? s.category, date: s.date, sets: 1, reps: s.reps, weight_kg: s.weight_kg })),
+  [strengthSets]);
+  const strData = useMemo(() => buildStrengthStats(strengthEntries, bodyMetrics, strRange, strCfg), [strengthEntries, bodyMetrics, strRange, strCfg]);
 
   const today = isoDate(new Date());
   const grid = buildHeatmapGrid(today, HEATMAP_WEEKS);
