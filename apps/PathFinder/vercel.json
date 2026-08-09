@@ -1,6 +1,6 @@
 {
   "$schema": "https://openapi.vercel.sh/vercel.json",
-  "ignoreCommand": "npx turbo-ignore pathfinder-tmp",
+  "ignoreCommand": "npx --yes turbo@^2 query affected --base=$VERCEL_GIT_PREVIOUS_SHA --packages pathfinder-tmp --exit-code",
   "installCommand": "cd ../.. && npm install",
   "buildCommand": "cd ../.. && npm run build --workspace=apps/PathFinder",
   "outputDirectory": "dist",

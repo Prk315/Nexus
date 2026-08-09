@@ -1,4 +1,4 @@
 {
   "$schema": "https://openapi.vercel.sh/vercel.json",
-  "ignoreCommand": "npx turbo-ignore vault"
+  "ignoreCommand": "npx --yes turbo@^2 query affected --base=$VERCEL_GIT_PREVIOUS_SHA --packages vault --exit-code"
 }
