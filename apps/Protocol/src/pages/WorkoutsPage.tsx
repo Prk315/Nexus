@@ -189,7 +189,7 @@ export default function WorkoutsPage() {
       </div>
 
       {/* Log & plan a workout with a live muscle map */}
-      <LogPlanCard />
+      <LogPlanCard exerciseSets={strengthSets} aliases={aliases} />
     </div>
   );
 }
