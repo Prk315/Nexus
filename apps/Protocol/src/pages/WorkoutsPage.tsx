@@ -6,6 +6,7 @@ import { fetchRunningSessions } from "../store/slices/runningSlice";
 import { fetchBodyMetrics } from "../store/slices/biomarkersSlice";
 import { CARD_STYLE, isoDate } from "../lib/uiHelpers";
 import { buildRunningStats, buildStrengthStats, type TimeRange } from "../lib/progressStats";
+import { getTrackingConfig, saveTrackingConfig, type TrackingConfig, type Activity } from "../lib/trackingConfig";
 import { ConsistencyHeatmap, buildHeatmapGrid } from "../components/habits/HabitCharts";
 import ProgressStats from "../components/workouts/ProgressStats";
 import RecoveryCard from "../components/workouts/RecoveryCard";
@@ -45,6 +46,13 @@ export default function WorkoutsPage() {
 
   const [runRange, setRunRange] = useState<TimeRange>("3months");
   const [strRange, setStrRange] = useState<TimeRange>("3months");
+  const [runCfg, setRunCfg] = useState<TrackingConfig>(() => getTrackingConfig("running"));
+  const [strCfg, setStrCfg] = useState<TrackingConfig>(() => getTrackingConfig("strength"));
+
+  const updateCfg = (a: Activity, c: TrackingConfig) => {
+    saveTrackingConfig(a, c);
+    if (a === "running") setRunCfg(c); else setStrCfg(c);
+  };
 
   const refresh = () => {
     dispatch(fetchWorkoutSessions());
@@ -64,8 +72,8 @@ export default function WorkoutsPage() {
     }
   }, [dispatch, workoutSessions]);
 
-  const runData = useMemo(() => buildRunningStats(runningSessions, bodyMetrics, runRange), [runningSessions, bodyMetrics, runRange]);
-  const strData = useMemo(() => buildStrengthStats(exerciseHistory, bodyMetrics, strRange), [exerciseHistory, bodyMetrics, strRange]);
+  const runData = useMemo(() => buildRunningStats(runningSessions, bodyMetrics, runRange, runCfg), [runningSessions, bodyMetrics, runRange, runCfg]);
+  const strData = useMemo(() => buildStrengthStats(exerciseHistory, bodyMetrics, strRange, strCfg), [exerciseHistory, bodyMetrics, strRange, strCfg]);
 
   const today = isoDate(new Date());
   const grid = buildHeatmapGrid(today, HEATMAP_WEEKS);
@@ -86,8 +94,8 @@ export default function WorkoutsPage() {
 
       {/* Progress overview — running & strength side by side */}
       <div style={{ display: "flex", gap: 16, flexWrap: "wrap", alignItems: "stretch" }}>
-        <ProgressStats title="Running" color="var(--series-running)" range={runRange} onRange={setRunRange} data={runData} />
-        <ProgressStats title="Strength" color="var(--series-workout)" range={strRange} onRange={setStrRange} data={strData} />
+        <ProgressStats title="Running" color="var(--series-running)" activity="running" range={runRange} onRange={setRunRange} config={runCfg} onConfigChange={(c) => updateCfg("running", c)} data={runData} />
+        <ProgressStats title="Strength" color="var(--series-workout)" activity="strength" range={strRange} onRange={setStrRange} config={strCfg} onConfigChange={(c) => updateCfg("strength", c)} data={strData} />
       </div>
 
       <div>
