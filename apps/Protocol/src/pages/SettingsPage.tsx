@@ -12,6 +12,7 @@ import {
 import OuraConnectPanel from "../components/biomarkers/OuraConnectPanel";
 import { CARD_STYLE, BTN_GHOST, INPUT_STYLE, LABEL_STYLE } from "../lib/uiHelpers";
 import type { Theme, DataSource } from "../store/types";
+import { BODY_VITAL_SOURCES } from "../store/types";
 
 const GARMIN_BLUE = "#009CDE";
 
@@ -424,10 +425,10 @@ export default function SettingsPage() {
         <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
           {(
             [
-              { key: "sleep_source" as const, label: "Sleep" },
-              { key: "body_vitals_source" as const, label: "Body Vitals" },
-              { key: "workouts_source" as const, label: "Workouts" },
-            ]
+              { key: "sleep_source", label: "Sleep" },
+              { key: "workouts_source", label: "Workouts" },
+              ...BODY_VITAL_SOURCES,
+            ] as { key: keyof typeof dataSources; label: string }[]
           ).map(({ key, label }) => (
             <div key={key} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12 }}>
               <span style={{ fontSize: 13, color: "var(--text)" }}>{label}</span>

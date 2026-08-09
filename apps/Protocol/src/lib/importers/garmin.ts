@@ -16,7 +16,7 @@ import {
   type GarminActivityRaw,
   type GarminExerciseSetRaw,
 } from "../garminClient";
-import type { CreateSleepEntry, CreateBodyMetric, CreateRunningSession, CreateWorkoutSession, CreateExerciseSet } from "../../store/types";
+import type { CreateSleepEntry, CreateBodyMetric, CreateRunningSession, CreateWorkoutSession, CreateExerciseSet, DataSourceSettings, DataSource } from "../../store/types";
 import { DEFAULT_DATA_SOURCE_SETTINGS } from "../../store/types";
 import { isoDate } from "../uiHelpers";
 
@@ -67,19 +67,26 @@ function mapSleepRaw(raw: GarminSleepRaw): CreateSleepEntry & { id: string } {
   };
 }
 
-function mapBodyRaw(raw: GarminBodyRaw): CreateBodyMetric & { id: string } {
+/** Only the per-metric fields the user routed to Garmin are set; the rest are left
+ *  `undefined` so pushBodyMetricToCloud omits them and Oura's values survive. Weight
+ *  is intentionally left to the scale (bodyscan-sync), never Garmin body sync. */
+function mapBodyRaw(raw: GarminBodyRaw, s: DataSourceSettings): CreateBodyMetric & { id: string } {
+  const g = (source: DataSource, v: number | null | undefined) => (source === "garmin" ? (v ?? null) : undefined);
   return {
     id: crypto.randomUUID(),
     date: raw.date,
-    weight_kg: raw.weight_kg,
-    hrv_ms: raw.hrv_ms,
-    resting_hr_bpm: raw.resting_hr_bpm,
-    spo2_pct: raw.spo2_pct,
-    readiness_score: raw.readiness_score,
-    temperature_deviation: raw.temperature_deviation,
-    recovery_index: raw.recovery_index,
-    notes: raw.notes || null,
+    hrv_ms: g(s.hrv_source, raw.hrv_ms),
+    resting_hr_bpm: g(s.resting_hr_source, raw.resting_hr_bpm),
+    spo2_pct: g(s.spo2_source, raw.spo2_pct),
+    readiness_score: g(s.readiness_source, raw.readiness_score),
+    temperature_deviation: g(s.temperature_source, raw.temperature_deviation),
+    recovery_index: g(s.recovery_source, raw.recovery_index),
   };
+}
+
+function hasBodyField(e: CreateBodyMetric): boolean {
+  return e.hrv_ms !== undefined || e.resting_hr_bpm !== undefined || e.spo2_pct !== undefined
+    || e.readiness_score !== undefined || e.temperature_deviation !== undefined || e.recovery_index !== undefined;
 }
 
 /**
@@ -192,15 +199,12 @@ export async function syncGarminBodyStats(
   days: number,
 ): Promise<{ count: number; warnings: string[] }> {
   const settings = await getDataSourceSettings();
-  if (settings.body_vitals_source !== "garmin") {
-    return { count: 0, warnings: ["Skipped — Oura is the selected body vitals source (change in Settings)"] };
-  }
   const raw = await garminFetchBodyStats(date, days);
-  return syncItems(
-    raw.map(mapBodyRaw),
-    pushBodyMetricToCloud,
-    (e) => `Body ${e.date}`,
-  );
+  const entries = raw.map((r) => mapBodyRaw(r, settings)).filter(hasBodyField);
+  if (entries.length === 0) {
+    return { count: 0, warnings: ["No body vitals are set to Garmin — pick per-metric sources in Settings"] };
+  }
+  return syncItems(entries, pushBodyMetricToCloud, (e) => `Body ${e.date}`);
 }
 
 function mapExerciseSetRaw(raw: GarminExerciseSetRaw): CreateExerciseSet & { id: string } {

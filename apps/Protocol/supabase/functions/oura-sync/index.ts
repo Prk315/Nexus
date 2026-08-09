@@ -118,13 +118,23 @@ async function ensureFreshToken(
 type DataSource = "garmin" | "oura";
 interface DataSourceSettings {
   sleep_source: DataSource;
-  body_vitals_source: DataSource;
   workouts_source: DataSource;
+  hrv_source: DataSource;
+  resting_hr_source: DataSource;
+  readiness_source: DataSource;
+  recovery_source: DataSource;
+  spo2_source: DataSource;
+  temperature_source: DataSource;
 }
 const DEFAULT_DATA_SOURCE_SETTINGS: DataSourceSettings = {
   sleep_source: "oura",
-  body_vitals_source: "oura",
   workouts_source: "garmin",
+  hrv_source: "oura",
+  resting_hr_source: "oura",
+  readiness_source: "oura",
+  recovery_source: "oura",
+  spo2_source: "oura",
+  temperature_source: "oura",
 };
 
 /** No settings row means the user has never opened Settings — fall back to
@@ -136,7 +146,7 @@ async function getDataSourceSettings(
 ): Promise<DataSourceSettings> {
   const { data } = await supabase
     .from("protocol_data_source_settings")
-    .select("sleep_source, body_vitals_source, workouts_source")
+    .select("sleep_source, workouts_source, hrv_source, resting_hr_source, readiness_source, recovery_source, spo2_source, temperature_source")
     .eq("user_id", userId)
     .maybeSingle();
   return (data as DataSourceSettings | null) ?? DEFAULT_DATA_SOURCE_SETTINGS;
@@ -334,17 +344,21 @@ async function syncUser(
       // wiped the Vellafit scale's real weight every morning (the scale's
       // body-composition row shares this row). Leaving the key out means the
       // update never touches weight_kg, so the scale value survives.
-      const overlappingFields = settings.body_vitals_source === "oura" ? {
-        hrv_ms: period?.average_hrv ?? null,
-        resting_hr_bpm: period?.lowest_heart_rate ?? null,
-        spo2_pct: spo2?.spo2_percentage?.average ?? null,
-        readiness_score: readiness?.score ?? null,
-        temperature_deviation: readiness?.temperature_deviation ?? null,
-        recovery_index: readiness?.contributors?.recovery_index ?? null,
-        avg_heart_rate_bpm: heartRate?.avg ?? null,
-        min_heart_rate_bpm: heartRate?.min ?? null,
-        max_heart_rate_bpm: heartRate?.max ?? null,
-      } : {};
+      // Per-metric: Oura only writes a field it owns, so a "garmin" selection for
+      // that metric isn't clobbered. avg/min/max HR ride with resting_hr_source.
+      const overlappingFields = {
+        ...(settings.hrv_source === "oura" ? { hrv_ms: period?.average_hrv ?? null } : {}),
+        ...(settings.resting_hr_source === "oura" ? { resting_hr_bpm: period?.lowest_heart_rate ?? null } : {}),
+        ...(settings.spo2_source === "oura" ? { spo2_pct: spo2?.spo2_percentage?.average ?? null } : {}),
+        ...(settings.readiness_source === "oura" ? { readiness_score: readiness?.score ?? null } : {}),
+        ...(settings.temperature_source === "oura" ? { temperature_deviation: readiness?.temperature_deviation ?? null } : {}),
+        ...(settings.recovery_source === "oura" ? { recovery_index: readiness?.contributors?.recovery_index ?? null } : {}),
+        ...(settings.resting_hr_source === "oura" ? {
+          avg_heart_rate_bpm: heartRate?.avg ?? null,
+          min_heart_rate_bpm: heartRate?.min ?? null,
+          max_heart_rate_bpm: heartRate?.max ?? null,
+        } : {}),
+      };
       // Oura-exclusive — Garmin has no equivalent, so always write these
       // regardless of the body-vitals toggle; there's no real conflict to
       // arbitrate.

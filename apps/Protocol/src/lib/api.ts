@@ -152,16 +152,23 @@ export async function fetchBodyMetricsFromCloud(): Promise<BodyMetric[]> {
 export async function pushBodyMetricToCloud(entry: CreateBodyMetric & { id: string }): Promise<void> {
   const sb = getSupabaseClient();
   const userId = getUserId();
-  const fields = {
-    weight_kg: entry.weight_kg ?? null,
-    hrv_ms: entry.hrv_ms ?? null,
-    resting_hr_bpm: entry.resting_hr_bpm ?? null,
-    spo2_pct: entry.spo2_pct ?? null,
-    readiness_score: entry.readiness_score ?? null,
-    temperature_deviation: entry.temperature_deviation ?? null,
-    recovery_index: entry.recovery_index ?? null,
-    notes: entry.notes ?? null,
+  // Only include keys the caller actually provided — an `undefined` field is
+  // omitted so the update never clobbers a value owned by the other source
+  // (e.g. Garmin writing only its per-metric-selected fields). An explicit
+  // `null` still clears the column.
+  const fields: Record<string, unknown> = {};
+  const add = (key: string, val: number | string | null | undefined) => {
+    if (val !== undefined) fields[key] = val;
   };
+  add("weight_kg", entry.weight_kg);
+  add("hrv_ms", entry.hrv_ms);
+  add("resting_hr_bpm", entry.resting_hr_bpm);
+  add("spo2_pct", entry.spo2_pct);
+  add("readiness_score", entry.readiness_score);
+  add("temperature_deviation", entry.temperature_deviation);
+  add("recovery_index", entry.recovery_index);
+  add("notes", entry.notes);
+  if (Object.keys(fields).length === 0) return;
 
   const { data: existing, error: selectError } = await sb
     .from("protocol_body_metrics")
@@ -989,7 +996,7 @@ export async function fetchDataSourceSettingsFromCloud(): Promise<DataSourceSett
   const sb = getSupabaseClient();
   const { data, error } = await sb
     .from("protocol_data_source_settings")
-    .select("sleep_source, body_vitals_source, workouts_source")
+    .select("sleep_source, workouts_source, hrv_source, resting_hr_source, readiness_source, recovery_source, spo2_source, temperature_source")
     .eq("user_id", getUserId())
     .maybeSingle();
   if (error) throw new Error(error.message);
