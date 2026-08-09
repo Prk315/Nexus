@@ -7,6 +7,7 @@ import { CARD_STYLE, formatMinutes, isoDate } from "../../lib/uiHelpers";
 import RingGauge from "../mealplanner/RingGauge";
 import { StatTile } from "../shared/StatTile";
 import MuscleMap from "./MuscleMap";
+import type { BodyMetric } from "../../store/types";
 
 /** Recovery header for the Workouts dashboard: the muscle-recovery figure beside
  *  the full readiness/vitals read. Reuses the same protocol_body_metrics fields as
@@ -22,12 +23,40 @@ export default function RecoveryCard() {
   }, [dispatch]);
 
   const today = isoDate(new Date());
-  const v = [...bodyMetrics].sort((a, b) => b.date.localeCompare(a.date))[0] ?? null;
-  const dateLabel = v
-    ? v.date === today
+  // Each vital is filled from the most recent day it actually has a value, rather
+  // than the single latest row — today's row is often activity-only (no readiness/
+  // HRV yet), which left the whole panel blank.
+  const sorted = [...bodyMetrics].sort((a, b) => b.date.localeCompare(a.date));
+  const pick = (field: keyof BodyMetric): number | string | null => {
+    for (const m of sorted) { const val = m[field]; if (val != null) return val as number | string; }
+    return null;
+  };
+  const v = bodyMetrics.length > 0 ? {
+    readiness_score: pick("readiness_score") as number | null,
+    spo2_pct: pick("spo2_pct") as number | null,
+    recovery_index: pick("recovery_index") as number | null,
+    hrv_ms: pick("hrv_ms") as number | null,
+    resting_hr_bpm: pick("resting_hr_bpm") as number | null,
+    avg_heart_rate_bpm: pick("avg_heart_rate_bpm") as number | null,
+    min_heart_rate_bpm: pick("min_heart_rate_bpm") as number | null,
+    max_heart_rate_bpm: pick("max_heart_rate_bpm") as number | null,
+    stress_high_min: pick("stress_high_min") as number | null,
+    stress_summary: pick("stress_summary") as string | null,
+    stress_recovery_min: pick("stress_recovery_min") as number | null,
+    resilience_level: pick("resilience_level") as string | null,
+    resilience_sleep_recovery: pick("resilience_sleep_recovery") as number | null,
+    resilience_daytime_recovery: pick("resilience_daytime_recovery") as number | null,
+    resilience_stress: pick("resilience_stress") as number | null,
+    cardio_age: pick("cardio_age") as number | null,
+    pulse_wave_velocity: pick("pulse_wave_velocity") as number | null,
+    temperature_deviation: pick("temperature_deviation") as number | null,
+  } : null;
+  const latestVitalDate = sorted.find((m) => m.readiness_score != null || m.hrv_ms != null || m.resting_hr_bpm != null)?.date ?? null;
+  const dateLabel = latestVitalDate
+    ? latestVitalDate === today
       ? "today"
-      : new Date(`${v.date}T00:00:00`).toLocaleDateString(undefined, { month: "short", day: "numeric" })
-    : "no data";
+      : new Date(`${latestVitalDate}T00:00:00`).toLocaleDateString(undefined, { month: "short", day: "numeric" })
+    : bodyMetrics.length > 0 ? "latest" : "no data";
 
   const num = (n: number | null | undefined, suffix = "") => (n != null ? `${n}${suffix}` : "—");
 
