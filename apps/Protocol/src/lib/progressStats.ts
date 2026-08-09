@@ -27,9 +27,26 @@ export interface ProgressData {
   goal: { label: string; unit: string; data: { label: string; value: number; goal: number }[] };
   /** Graph 2 — recurring output vs a per-week target. */
   output: { label: string; unit: string; target: number; data: { label: string; value: number }[] };
-  /** Biomarkers / proxies connected to the activity, over time. */
-  biomarkers: { label: string; series: { key: string; name: string; color: string }[]; data: Record<string, number | string | null>[] };
+  /** Biomarkers / proxies connected to the activity, over time. Each series is
+   *  normalised onto a shared 0–100 axis for display (`<key>_pos`) while the raw
+   *  value is kept for the tooltip (`<key>_raw`). */
+  biomarkers: {
+    label: string;
+    series: { key: string; name: string; color: string; unit: string }[];
+    data: Record<string, number | string | null>[];
+  };
 }
+
+interface BioSpec { key: string; name: string; color: string; field: keyof BodyMetric; higherBetter: boolean; unit: string; }
+
+const BIO_SPECS: BioSpec[] = [
+  { key: "readiness", name: "Readiness", color: "#d946ef", field: "readiness_score", higherBetter: true, unit: "" },
+  { key: "hrv", name: "HRV", color: "#f59e0b", field: "hrv_ms", higherBetter: true, unit: "ms" },
+  { key: "rhr", name: "Resting HR", color: "#ef4444", field: "resting_hr_bpm", higherBetter: false, unit: "bpm" },
+  { key: "recovery", name: "Recovery", color: "#22c55e", field: "recovery_index", higherBetter: true, unit: "" },
+  { key: "spo2", name: "SpO2", color: "#38bdf8", field: "spo2_pct", higherBetter: true, unit: "%" },
+  { key: "avghr", name: "Avg HR", color: "#fb923c", field: "avg_heart_rate_bpm", higherBetter: false, unit: "bpm" },
+];
 
 function cutoffISO(days: number): string {
   if (!isFinite(days)) return "0000-01-01";
@@ -178,19 +195,41 @@ export function buildStrengthStats(history: ExerciseHistory[], body: BodyMetric[
   };
 }
 
-/** Recovery/fitness proxies shared by both activities: resting HR (lower better)
- *  and HRV (higher better), over the selected window. */
+/** Recovery/fitness proxies connected to the activity, over the window. Every
+ *  biomarker with data is normalised (min–max, direction-aware so "better" is up)
+ *  onto a shared 0–100 axis so many series can overlay like the sleep chart; the
+ *  raw value rides along for the tooltip. */
 function buildBiomarkers(body: BodyMetric[], since: string): ProgressData["biomarkers"] {
-  const rows = body
-    .filter((m) => m.date >= since && (m.resting_hr_bpm != null || m.hrv_ms != null))
-    .sort((a, b) => a.date.localeCompare(b.date))
-    .map((m) => ({ label: shortDate(m.date), rhr: m.resting_hr_bpm, hrv: m.hrv_ms }));
+  const rows = body.filter((m) => m.date >= since).sort((a, b) => a.date.localeCompare(b.date));
+
+  // Which biomarkers actually have data in this window.
+  const active = BIO_SPECS.filter((s) => rows.some((m) => typeof m[s.field] === "number"));
+
+  // Per-series min/max for normalisation.
+  const bounds = new Map<string, { min: number; max: number }>();
+  for (const s of active) {
+    const vals = rows.map((m) => m[s.field]).filter((v): v is number => typeof v === "number");
+    bounds.set(s.key, { min: Math.min(...vals), max: Math.max(...vals) });
+  }
+
+  const data = rows
+    .filter((m) => active.some((s) => typeof m[s.field] === "number"))
+    .map((m) => {
+      const row: Record<string, number | string | null> = { label: shortDate(m.date), full: m.date };
+      for (const s of active) {
+        const v = m[s.field];
+        if (typeof v !== "number") { row[`${s.key}_pos`] = null; row[`${s.key}_raw`] = null; continue; }
+        const { min, max } = bounds.get(s.key)!;
+        const frac = max === min ? 0.5 : (v - min) / (max - min);
+        row[`${s.key}_pos`] = Math.round((s.higherBetter ? frac : 1 - frac) * 100);
+        row[`${s.key}_raw`] = v;
+      }
+      return row;
+    });
+
   return {
-    label: "Recovery proxies over time",
-    series: [
-      { key: "rhr", name: "Resting HR", color: "var(--series-running)" },
-      { key: "hrv", name: "HRV", color: "var(--series-workout)" },
-    ],
-    data: rows,
+    label: "Biomarkers & proxies over time",
+    series: active.map((s) => ({ key: s.key, name: s.name, color: s.color, unit: s.unit })),
+    data,
   };
 }
