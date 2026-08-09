@@ -116,9 +116,30 @@ export default function ProgressStats({
           No {title.toLowerCase()} in this range yet.
         </div>
       ) : (
-        <div style={{ display: "flex", gap: 24, flexWrap: "wrap", alignItems: "flex-start" }}>
-          {/* LEFT — lead vs lag, stacked */}
-          <div style={{ flex: "2 1 320px", minWidth: 0, display: "flex", flexDirection: "column", gap: 16 }}>
+        <div style={{ display: "flex", gap: 24, flexWrap: "wrap", alignItems: "stretch" }}>
+          {/* LEFT — lead vs lag, stacked (lead on top, lag below) */}
+          <div style={{ flex: "1 1 380px", minWidth: 0, display: "flex", flexDirection: "column", gap: 16 }}>
+            {/* LEAD — progress toward goal */}
+            <div>
+              <div style={sectionLabel}>Lead · {data.goal.label}</div>
+              <ResponsiveContainer width="100%" height={200}>
+                <ComposedChart data={data.goal.data} margin={{ top: 10, right: 10, bottom: 0, left: -22 }}>
+                  <defs>
+                    <linearGradient id={`goal-${gid}`} x1="0" y1="0" x2="0" y2="1">
+                      <stop offset="0%" stopColor={color} stopOpacity={0.4} />
+                      <stop offset="100%" stopColor={color} stopOpacity={0} />
+                    </linearGradient>
+                  </defs>
+                  <CartesianGrid strokeDasharray="2 7" stroke="var(--border)" strokeOpacity={0.5} vertical={false} />
+                  <XAxis dataKey="label" tick={AXIS} axisLine={false} tickLine={false} minTickGap={26} />
+                  <YAxis tick={AXIS} axisLine={false} tickLine={false} width={30} />
+                  <Tooltip contentStyle={TOOLTIP} />
+                  <Line type="monotone" dataKey="goal" name="Goal" stroke="var(--text-muted)" strokeWidth={1.5} strokeDasharray="4 4" dot={false} isAnimationActive={false} />
+                  <Area type="monotone" dataKey="value" name={data.goal.unit} stroke={color} strokeWidth={2.5} fill={`url(#goal-${gid})`} dot={false} isAnimationActive={false} />
+                </ComposedChart>
+              </ResponsiveContainer>
+            </div>
+
             {/* LAG — progress score */}
             <div>
               <div style={sectionLabel}>Lag · are you improving?</div>
@@ -147,47 +168,14 @@ export default function ProgressStats({
                 </ComposedChart>
               </ResponsiveContainer>
             </div>
-
-            {/* LEAD — progress toward goal */}
-            <div>
-              <div style={sectionLabel}>Lead · {data.goal.label}</div>
-              <ResponsiveContainer width="100%" height={190}>
-                <ComposedChart data={data.goal.data} margin={{ top: 8, right: 10, bottom: 0, left: -22 }}>
-                  <defs>
-                    <linearGradient id={`goal-${gid}`} x1="0" y1="0" x2="0" y2="1">
-                      <stop offset="0%" stopColor={color} stopOpacity={0.4} />
-                      <stop offset="100%" stopColor={color} stopOpacity={0} />
-                    </linearGradient>
-                  </defs>
-                  <CartesianGrid strokeDasharray="2 7" stroke="var(--border)" strokeOpacity={0.5} vertical={false} />
-                  <XAxis dataKey="label" tick={AXIS} axisLine={false} tickLine={false} minTickGap={26} />
-                  <YAxis tick={AXIS} axisLine={false} tickLine={false} width={30} />
-                  <Tooltip contentStyle={TOOLTIP} />
-                  <Line type="monotone" dataKey="goal" name="Goal" stroke="var(--text-muted)" strokeWidth={1.5} strokeDasharray="4 4" dot={false} isAnimationActive={false} />
-                  <Area type="monotone" dataKey="value" name={data.goal.unit} stroke={color} strokeWidth={2.5} fill={`url(#goal-${gid})`} dot={false} isAnimationActive={false} />
-                </ComposedChart>
-              </ResponsiveContainer>
-            </div>
           </div>
 
-          {/* RIGHT — biomarkers & proxies: gauges on top, biomarker chart underneath */}
-          <div style={{ flex: "1 1 240px", minWidth: 0, display: "flex", flexDirection: "column", gap: 18 }}>
-            <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 12 }}>
-              <RadialGauge pct={data.overallPct} size={140} thickness={12} color={color} />
-              <span style={{ fontSize: 11, color: "var(--text-muted)", textAlign: "center", marginTop: -4 }}>{data.overallLabel}</span>
-              <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(62px, 1fr))", gap: 12, width: "100%" }}>
-                {data.metrics.map((m) => (
-                  <RadialGauge key={m.name} pct={m.pct} size={60} thickness={5} color={color} label={m.name} />
-                ))}
-              </div>
-            </div>
-
-            {data.biomarkers.data.length > 0 && (
-              <div>
-                <div style={sectionLabel}>Biomarkers &amp; proxies</div>
-                <Legend items={data.biomarkers.series} />
-                <ResponsiveContainer width="100%" height={180}>
-                  <ComposedChart data={data.biomarkers.data} margin={{ top: 8, right: 8, bottom: 0, left: -30 }}>
+          {/* RIGHT — biomarkers & proxies (chart) with the gauges overlaid across the top */}
+          <div style={{ flex: "1 1 380px", minWidth: 0, display: "flex", flexDirection: "column" }}>
+            <div style={{ position: "relative", flex: 1, minHeight: 420 }}>
+              {data.biomarkers.data.length > 0 ? (
+                <ResponsiveContainer width="100%" height="100%">
+                  <ComposedChart data={data.biomarkers.data} margin={{ top: 132, right: 10, bottom: 0, left: -30 }}>
                     <CartesianGrid strokeDasharray="2 7" stroke="var(--border)" strokeOpacity={0.5} vertical={false} />
                     <XAxis dataKey="label" tick={AXIS} axisLine={false} tickLine={false} minTickGap={26} />
                     <YAxis domain={[0, 100]} tick={false} axisLine={false} tickLine={false} width={0} />
@@ -197,6 +185,30 @@ export default function ProgressStats({
                     ))}
                   </ComposedChart>
                 </ResponsiveContainer>
+              ) : (
+                <div style={{ position: "absolute", inset: 0, top: 140, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 12, color: "var(--text-muted)" }}>
+                  No biomarker data in this range.
+                </div>
+              )}
+
+              {/* Overlaid gauges across the top: small progress circles (2 rows) · medium pie */}
+              <div style={{ position: "absolute", top: 0, left: 4, right: 4, display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 16, pointerEvents: "none" }}>
+                <div style={{ display: "grid", gridTemplateRows: "repeat(2, auto)", gridAutoFlow: "column", gap: "8px 14px" }}>
+                  {data.metrics.map((m) => (
+                    <RadialGauge key={m.name} pct={m.pct} size={54} thickness={4} color={color} label={m.name} />
+                  ))}
+                </div>
+                <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 2, flexShrink: 0 }}>
+                  <RadialGauge pct={data.overallPct} size={104} thickness={9} color={color} />
+                  <span style={{ fontSize: 10, color: "var(--text-muted)", textAlign: "center", maxWidth: 130 }}>{data.overallLabel}</span>
+                </div>
+              </div>
+            </div>
+
+            {data.biomarkers.data.length > 0 && (
+              <div style={{ marginTop: 8 }}>
+                <span style={{ ...sectionLabel, marginBottom: 4, display: "inline-block" }}>Biomarkers &amp; proxies</span>
+                <Legend items={data.biomarkers.series} />
               </div>
             )}
           </div>
