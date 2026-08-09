@@ -8,7 +8,7 @@ import { CARD_STYLE, todayISO } from "../../lib/uiHelpers";
 const GARMIN_BLUE = "#009CDE";
 
 interface GarminSyncPanelProps {
-  mode: "all" | "sleep" | "body" | "activities" | "exercise_sets";
+  mode: "all" | "sleep" | "body" | "activities" | "exercise_sets" | "workouts";
   onSynced: () => void;
 }
 
@@ -66,6 +66,24 @@ export default function GarminSyncPanel({ mode, onSynced }: GarminSyncPanelProps
     return runSync(async (date, d) => {
       const { count } = await syncGarminExerciseSets(date, d);
       return `Imported ${count} exercise sets`;
+    });
+  }
+
+  // "Everything exercise-related" in one click: runs + workouts (activities) plus
+  // the strength exercise-sets that feed the muscle map. Exercise-sets sync is
+  // desktop-only, so a web/grid failure there is reported, not fatal.
+  async function handleSyncEverything() {
+    return runSync(async (date, d) => {
+      const { runCount, workoutCount, warnings } = await syncGarminActivities(date, d);
+      let setInfo = "";
+      try {
+        const { count } = await syncGarminExerciseSets(date, d);
+        setInfo = ` · ${count} sets`;
+      } catch {
+        setInfo = " · sets need desktop";
+      }
+      const skip = warnings.find((w) => w.startsWith("Skipped"));
+      return `${runCount} runs · ${workoutCount} workouts${setInfo}${skip ? ` — ${skip}` : ""}`;
     });
   }
 
@@ -163,6 +181,11 @@ export default function GarminSyncPanel({ mode, onSynced }: GarminSyncPanelProps
             {mode === "exercise_sets" && (
               <button onClick={handleSyncExerciseSets} disabled={syncing} style={syncBtnStyle}>
                 Sync Exercise Sets
+              </button>
+            )}
+            {mode === "workouts" && (
+              <button onClick={handleSyncEverything} disabled={syncing} style={syncBtnStyle}>
+                Sync Runs, Workouts & Sets
               </button>
             )}
           </div>
