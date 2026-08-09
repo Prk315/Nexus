@@ -11,12 +11,14 @@ export default function RadialGauge({
   thickness = 6,
   color = "var(--accent)",
   label,
+  showText = true,
 }: {
   pct: number;
   size?: number;
   thickness?: number;
   color?: string;
   label?: string;
+  showText?: boolean;
 }) {
   const overflowPad = 4;
   const r = (size - thickness) / 2 - overflowPad;
@@ -49,11 +51,13 @@ export default function RadialGauge({
             />
           )}
         </svg>
-        <div style={{ position: "absolute", inset: 0, display: "flex", alignItems: "center", justifyContent: "center" }}>
-          <span style={{ fontSize: size < 72 ? 12 : 18, fontWeight: 700, color: improved ? GREEN : "var(--text)" }}>
-            {Math.round(pct)}%
-          </span>
-        </div>
+        {showText && (
+          <div style={{ position: "absolute", inset: 0, display: "flex", alignItems: "center", justifyContent: "center" }}>
+            <span style={{ fontSize: size < 40 ? 10 : size < 72 ? 12 : 18, fontWeight: 700, color: improved ? GREEN : "var(--text)" }}>
+              {Math.round(pct)}%
+            </span>
+          </div>
+        )}
       </div>
       {label && (
         <span style={{ fontSize: 10, color: "var(--text-muted)", textAlign: "center", lineHeight: 1.2, maxWidth: size + 16 }}>
