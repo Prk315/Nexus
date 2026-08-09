@@ -24,6 +24,15 @@
 // among the three settings-controlled categories, and Oura has no equivalent.
 // That matches the behaviour of the Protocol importer this replaces.
 
+// ⚠️ DEPLOY WITH `--no-verify-jwt`.
+//
+// The Nexus Local WebView calls this with `X-Garmin-Key` and no `Authorization`
+// header. With the platform's JWT check on, the gateway returns 401 *before*
+// this code runs, and the UI shows a bare "import failed (401)" that looks like
+// a bad scoped key. Same posture as `habit-toggle`, the closest precedent:
+// the scoped secret is the authentication, and the anon key the gateway would
+// demand is public anyway — requiring it adds friction, not security.
+
 import { createClient } from "jsr:@supabase/supabase-js@2";
 
 const MIN_KEY_LEN = 32;
