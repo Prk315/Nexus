@@ -1,5 +1,7 @@
 {
   "$schema": "https://openapi.vercel.sh/vercel.json",
+  "//": "Vault's Vercel project builds from the REPO ROOT, so this file is its config — unlike PathFinder and Protocol, which each have their own under apps/. That is why the ignoreCommand was missing here: it was added to the two app-level files and this one was overlooked, so Vault rebuilt on every push to every branch, including PRs that never touched it. On a Hobby plan that is a third of the build quota spent on nothing.",
+  "ignoreCommand": "if [ -n \"$VERCEL_GIT_PREVIOUS_SHA\" ] && npx --yes turbo@^2 query affected --base=$VERCEL_GIT_PREVIOUS_SHA --packages vault --exit-code; then exit 0; else exit 1; fi",
   "installCommand": "npm install",
   "buildCommand": "npm run build --workspace=apps/Vault/Vault",
   "outputDirectory": "apps/Vault/Vault/dist",
