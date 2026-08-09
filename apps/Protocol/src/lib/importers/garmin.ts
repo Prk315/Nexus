@@ -82,16 +82,63 @@ function mapBodyRaw(raw: GarminBodyRaw): CreateBodyMetric & { id: string } {
   };
 }
 
-function mapActivityRaw(
+/**
+ * A UUID derived deterministically from a Garmin activity id.
+ *
+ * MUST match `stableId` in `supabase/functions/garmin-import/index.ts`, byte for
+ * byte — the two write the same rows, and if they disagree on the id they will
+ * each insert their own copy of every activity.
+ *
+ * This is what stops re-syncing from duplicating. `protocol_running_sessions`
+ * and `protocol_workout_sessions` are unique on `id` alone, and this importer
+ * used `crypto.randomUUID()` on every run, so pressing the Garmin button on the
+ * workout dashboard twice inserted the same workout twice with nothing able to
+ * catch it.
+ *
+ * Manual entries keep a random id and a null `external_id`, so they are
+ * untouched by any of this.
+ */
+async function stableId(namespace: string, key: string): Promise<string> {
+  const digest = await crypto.subtle.digest(
+    "SHA-256",
+    new TextEncoder().encode(`${namespace}:${key}`),
+  );
+  const b = Array.from(new Uint8Array(digest)).slice(0, 16);
+  b[6] = (b[6] & 0x0f) | 0x50;
+  b[8] = (b[8] & 0x3f) | 0x80;
+  const h = b.map((x) => x.toString(16).padStart(2, "0")).join("");
+  return `${h.slice(0, 8)}-${h.slice(8, 12)}-${h.slice(12, 16)}-${h.slice(16, 20)}-${h.slice(20)}`;
+}
+
+/**
+ * The identity of an activity. Garmin sends `activityId` as a NUMBER, so it must
+ * not be string-guarded — doing so rejects every real id and silently falls
+ * through to the composite, which is the one case this exists to avoid.
+ *
+ * The composite is the fallback for a bridge predating `activity_id`: still
+ * stable per (day, type, name, start), so an older client updates rather than
+ * duplicating.
+ */
+function activityKey(raw: GarminActivityRaw): string {
+  const id = raw.activity_id;
+  if (id !== null && id !== undefined && String(id).trim() !== "") return String(id);
+  return `${raw.date}|${raw.type}|${raw.name ?? ""}|${raw.start_time ?? ""}`;
+}
+
+async function mapActivityRaw(
   raw: GarminActivityRaw,
 ):
-  | { kind: "run"; entry: CreateRunningSession & { id: string; completed: boolean } }
-  | { kind: "workout"; entry: CreateWorkoutSession & { id: string; completed: boolean } } {
+  | Promise<
+      | { kind: "run"; entry: CreateRunningSession & { id: string; completed: boolean } }
+      | { kind: "workout"; entry: CreateWorkoutSession & { id: string; completed: boolean } }
+    > {
+  const key = activityKey(raw);
   if (raw.type === "run") {
     return {
       kind: "run",
       entry: {
-        id: crypto.randomUUID(),
+        id: await stableId("garmin:run", key),
+        external_id: `garmin:${key}`,
         plan_id: null,
         date: raw.date,
         planned_km: null,
@@ -110,7 +157,8 @@ function mapActivityRaw(
   return {
     kind: "workout",
     entry: {
-      id: crypto.randomUUID(),
+      id: await stableId("garmin:workout", key),
+      external_id: `garmin:${key}`,
       plan_id: null,
       name: raw.name,
       scheduled_date: raw.date,
@@ -192,7 +240,7 @@ export async function syncGarminActivities(
   let skippedWorkouts = 0;
   for (const r of raw) {
     try {
-      const mapped = mapActivityRaw(r);
+      const mapped = await mapActivityRaw(r);
       if (mapped.kind === "run") {
         // Running isn't one of the 3 gated data-source categories — always synced.
         await pushRunningSessionToCloud(mapped.entry);

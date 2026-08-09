@@ -164,6 +164,8 @@ export interface WorkoutSession {
 }
 
 export interface CreateWorkoutSession {
+  /** Source id (Garmin activityId). NULL for manual entries. Unique per user. */
+  external_id?: string | null;
   plan_id?: string | null;
   routine_id?: string | null;
   name: string;
@@ -314,6 +316,8 @@ export interface RunningSession {
 }
 
 export interface CreateRunningSession {
+  /** Source id (Garmin activityId). NULL for manual entries. Unique per user. */
+  external_id?: string | null;
   plan_id?: string | null;
   date: string;
   planned_km?: number | null;
