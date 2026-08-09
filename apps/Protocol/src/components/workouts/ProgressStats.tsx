@@ -88,17 +88,17 @@ export default function ProgressStats({
   const gid = title.replace(/\s/g, "");
 
   return (
-    <div style={{ ...CARD_STYLE, padding: "22px 26px", flex: "1 1 520px", minWidth: 0, minHeight: 520, display: "flex", flexDirection: "column", gap: 16 }}>
+    <div style={{ ...CARD_STYLE, padding: "16px 18px", flex: "1 1 480px", minWidth: 0, minHeight: 380, display: "flex", flexDirection: "column", gap: 12 }}>
       {/* Header */}
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, flexWrap: "wrap" }}>
         <div style={{ display: "flex", alignItems: "center", gap: 9 }}>
-          <span style={{ width: 12, height: 12, borderRadius: "50%", background: color, boxShadow: `0 0 8px ${color}` }} />
-          <span style={{ fontWeight: 700, fontSize: 18, color: "var(--text)" }}>{title}</span>
+          <span style={{ width: 10, height: 10, borderRadius: "50%", background: color, boxShadow: `0 0 7px ${color}` }} />
+          <span style={{ fontWeight: 700, fontSize: 15, color: "var(--text)" }}>{title}</span>
         </div>
         <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
           <div style={{ display: "flex", gap: 3 }}>
             {TIME_RANGES.map((r) => (
-              <button key={r.id} onClick={() => onRange(r.id)} style={{ padding: "5px 11px", fontSize: 12, fontWeight: 700, cursor: "pointer", borderRadius: "var(--radius-sm)", border: "none", background: range === r.id ? color : "transparent", color: range === r.id ? "#fff" : "var(--text-muted)" }}>
+              <button key={r.id} onClick={() => onRange(r.id)} style={{ padding: "4px 9px", fontSize: 11, fontWeight: 700, cursor: "pointer", borderRadius: "var(--radius-sm)", border: "none", background: range === r.id ? color : "transparent", color: range === r.id ? "#fff" : "var(--text-muted)" }}>
                 {r.label}
               </button>
             ))}
@@ -122,8 +122,8 @@ export default function ProgressStats({
             {/* LEAD — progress toward goal */}
             <div>
               <div style={sectionLabel}>Lead · {data.goal.label}</div>
-              <ResponsiveContainer width="100%" height={200}>
-                <ComposedChart data={data.goal.data} margin={{ top: 10, right: 10, bottom: 0, left: -22 }}>
+              <ResponsiveContainer width="100%" height={160}>
+                <ComposedChart data={data.goal.data} margin={{ top: 8, right: 10, bottom: 0, left: -22 }}>
                   <defs>
                     <linearGradient id={`goal-${gid}`} x1="0" y1="0" x2="0" y2="1">
                       <stop offset="0%" stopColor={color} stopOpacity={0.4} />
@@ -144,8 +144,8 @@ export default function ProgressStats({
             <div>
               <div style={sectionLabel}>Lag · are you improving?</div>
               <Legend items={data.trend.series} hero={{ name: "Progress score", color }} />
-              <ResponsiveContainer width="100%" height={260}>
-                <ComposedChart data={data.trend.data} margin={{ top: 12, right: 10, bottom: 0, left: -22 }}>
+              <ResponsiveContainer width="100%" height={210}>
+                <ComposedChart data={data.trend.data} margin={{ top: 10, right: 10, bottom: 0, left: -22 }}>
                   <defs>
                     <linearGradient id={`hero-${gid}`} x1="0" y1="0" x2="0" y2="1">
                       <stop offset="0%" stopColor={color} stopOpacity={0.28} />
@@ -172,10 +172,10 @@ export default function ProgressStats({
 
           {/* RIGHT — biomarkers & proxies (chart) with the gauges overlaid across the top */}
           <div style={{ flex: "1 1 380px", minWidth: 0, display: "flex", flexDirection: "column" }}>
-            <div style={{ position: "relative", flex: 1, minHeight: 420 }}>
+            <div style={{ position: "relative", flex: 1, minHeight: 320 }}>
               {data.biomarkers.data.length > 0 ? (
                 <ResponsiveContainer width="100%" height="100%">
-                  <ComposedChart data={data.biomarkers.data} margin={{ top: 132, right: 10, bottom: 0, left: -30 }}>
+                  <ComposedChart data={data.biomarkers.data} margin={{ top: 96, right: 10, bottom: 0, left: -30 }}>
                     <CartesianGrid strokeDasharray="2 7" stroke="var(--border)" strokeOpacity={0.5} vertical={false} />
                     <XAxis dataKey="label" tick={AXIS} axisLine={false} tickLine={false} minTickGap={26} />
                     <YAxis domain={[0, 100]} tick={false} axisLine={false} tickLine={false} width={0} />
@@ -186,21 +186,21 @@ export default function ProgressStats({
                   </ComposedChart>
                 </ResponsiveContainer>
               ) : (
-                <div style={{ position: "absolute", inset: 0, top: 140, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 12, color: "var(--text-muted)" }}>
+                <div style={{ position: "absolute", inset: 0, top: 104, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 12, color: "var(--text-muted)" }}>
                   No biomarker data in this range.
                 </div>
               )}
 
               {/* Overlaid gauges across the top: small progress circles (2 rows) · medium pie */}
               <div style={{ position: "absolute", top: 0, left: 4, right: 4, display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 16, pointerEvents: "none" }}>
-                <div style={{ display: "grid", gridTemplateRows: "repeat(2, auto)", gridAutoFlow: "column", gap: "8px 14px" }}>
+                <div style={{ display: "grid", gridTemplateRows: "repeat(2, auto)", gridAutoFlow: "column", gap: "6px 12px" }}>
                   {data.metrics.map((m) => (
-                    <RadialGauge key={m.name} pct={m.pct} size={54} thickness={4} color={color} label={m.name} />
+                    <RadialGauge key={m.name} pct={m.pct} size={38} thickness={3.5} color={color} label={m.name} />
                   ))}
                 </div>
                 <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 2, flexShrink: 0 }}>
-                  <RadialGauge pct={data.overallPct} size={104} thickness={9} color={color} />
-                  <span style={{ fontSize: 10, color: "var(--text-muted)", textAlign: "center", maxWidth: 130 }}>{data.overallLabel}</span>
+                  <RadialGauge pct={data.overallPct} size={64} thickness={6} color={color} />
+                  <span style={{ fontSize: 10, color: "var(--text-muted)", textAlign: "center", maxWidth: 120 }}>{data.overallLabel}</span>
                 </div>
               </div>
             </div>
