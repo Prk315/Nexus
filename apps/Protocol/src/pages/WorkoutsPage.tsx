@@ -24,10 +24,10 @@ function workoutFractions(sessions: WorkoutSession[]): Map<string, number> {
 }
 
 /**
- * Workouts — one scrolling dashboard. Recovery (muscle map + vitals) up top, then
- * activity stats beside the workout heatmap, then a single Log & Plan card (build a
- * workout and watch the muscles light up), then strength progression. Running and
- * the old Design/Log/Progress sub-tabs are gone.
+ * Workouts — one scrolling dashboard. A charts overview up top (strength
+ * progression + the workout-consistency heatmap), then Recovery (muscle map +
+ * vitals), activity stats, and a single Log & Plan card (build a workout and watch
+ * the muscles light up). Running and the old Design/Log/Progress sub-tabs are gone.
  */
 export default function WorkoutsPage() {
   const dispatch = useAppDispatch();
@@ -58,13 +58,10 @@ export default function WorkoutsPage() {
         <GarminSyncPanel mode="activities" onSynced={() => dispatch(fetchWorkoutSessions())} />
       </div>
 
-      {/* Recovery: muscle map + readiness/vitals */}
-      <RecoveryCard />
-
-      {/* Activity stats + workout heatmap */}
-      <div style={{ display: "flex", gap: 16, flexWrap: "wrap", alignItems: "stretch" }}>
-        <div style={{ flex: "3 1 480px", minWidth: 0 }}>
-          <ActivityModule />
+      {/* Charts overview — strength progression + workout-consistency heatmap */}
+      <div style={{ display: "flex", gap: 16, flexWrap: "wrap", alignItems: "flex-start" }}>
+        <div style={{ ...CARD_STYLE, padding: "20px 24px", flex: "3 1 480px", minWidth: 0 }}>
+          <ProgressionView />
         </div>
         <div style={{ ...CARD_STYLE, padding: "20px 24px", flex: "1 1 240px" }}>
           <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 4 }}>
@@ -84,11 +81,14 @@ export default function WorkoutsPage() {
         </div>
       </div>
 
+      {/* Recovery: muscle map + readiness/vitals */}
+      <RecoveryCard />
+
+      {/* Activity stats (steps, calories, sessions + trends) */}
+      <ActivityModule />
+
       {/* Log & plan a workout with a live muscle map */}
       <LogPlanCard />
-
-      {/* Strength progression over time */}
-      <ProgressionView />
     </div>
   );
 }
