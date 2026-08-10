@@ -8,6 +8,16 @@
  * fully saturated (celebratory moments are the one place the palette is
  * allowed to stay loud); the inner hole and the surrounding text switch from
  * white-on-dark to ink-on-paper.
+ *
+ * v3 (2026-08-10): reused for proof-unit completion (LEARN_PLAN.md "Proof
+ * side-paths"). `label` overrides the eyebrow text ("MASTERED" for a unit,
+ * "PROOF COMPLETE" for a proof); `conceptIds` is passed `[]` by the proof
+ * caller so the "Added to review" chip block — which would otherwise imply
+ * concepts just entered the retention space — never renders. A proof's
+ * concept credit already flowed through normal drill grading during the
+ * session, not through this ceremony; showing the chips here would double up
+ * on that story and misstate the "no effect on lr_retained_concept"
+ * invariant.
  */
 
 import type { Lens } from "../types";
@@ -24,6 +34,7 @@ export function Graduation({
   estMinutes,
   exercisedLenses,
   conceptIds,
+  label = "MASTERED",
   onContinue,
 }: {
   title: string;
@@ -33,6 +44,8 @@ export function Graduation({
   estMinutes: number;
   exercisedLenses: Set<Lens>;
   conceptIds: string[];
+  /** Eyebrow text — "MASTERED" (default, unit) or "PROOF COMPLETE" (proof). */
+  label?: string;
   onContinue: () => void;
 }) {
   return (
@@ -69,7 +82,7 @@ export function Graduation({
         <p
           className="mt-6 animate-[learn-step-in_.3s_ease-out_both] bg-gradient-to-r from-indigo-600 to-fuchsia-600 bg-clip-text text-[11px] font-semibold tracking-[0.42em] text-transparent [animation-delay:380ms]"
         >
-          MASTERED
+          {label}
         </p>
         <p className="mt-1 animate-[learn-step-in_.3s_ease-out_both] text-lg font-semibold text-[#1A1A24]/90 [animation-delay:420ms]">
           {title}

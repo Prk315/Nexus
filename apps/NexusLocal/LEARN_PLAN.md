@@ -293,6 +293,35 @@ not understood → 0; understood at svær/mellem/let → 1/2/3.
 Feedback lands in `lr_item_feedback` (append-only log; migration
 `20260810*_learn_item_feedback.sql`).
 
+## Proof side-paths (pinned, 2026-08-10 — pilot: LA 2 · U1)
+
+Optional proof units branch off the linearized path: when a module is
+**mastered**, its proof unit (if one exists) unlocks as a side node. Never
+blocks the main spine; completing one writes `lr_proof_progress`, NOT
+`lr_unit_progress` (no effect on `lr_retained_concept`). Concept credit flows
+only through normal drill grading.
+
+Tables: `lr_proof_unit` (proof_id, parent_unit_id, code `la_2_u1-proofs`,
+title) · `lr_proof_content` (versioned JSONB, draft→live, same curation gate)
+· `lr_proof_progress` (available | in_progress | completed; "locked" is
+derived client-side from parent mastery).
+
+**Content is `UnitContent`-shaped** (same schema v1.1 — the Player renders it):
+- theory: one box per proved statement (the theorem/lemma, cited by number)
+  plus a "Forudsætninger" remark box naming exactly what the proof may use.
+- practice: ONE group per proof: `master_demo` = the complete proof as
+  {what/why/how} steps (what = the move, why = why it's legal/what it buys,
+  how = the concrete manipulation); drills = ≥1 build-mode tiles drill
+  ("saml beviset" — proof steps as tiles in order, ≥2 distractor steps that
+  are plausible-but-illegal moves) + ≥1 self-graded text drill ("skriv hele
+  beviset selv", full proof in solution_md) + optionally short identity
+  drills. Tag concept_ids from the parent unit.
+- test: 2–4 MCQ about the proof's *structure* (which step uses which
+  assumption; where would the proof break if …), unlock_ratio as usual.
+- techniques named explicitly in intro_md (direkte bevis, modstrid,
+  induktion, entydighedsargument …) — the exam asks "hvordan ville du bevise",
+  and naming the technique is half the answer.
+
 ## Conventions that bite (from CLAUDE.md — enforced)
 
 - camelCase IPC args from JS; snake_case in Rust.

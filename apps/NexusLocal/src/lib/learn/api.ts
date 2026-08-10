@@ -17,11 +17,16 @@ import type {
   LrItemRenderRow,
   LrLearnState,
   LrMemoryState,
+  LrProofContentRow,
+  LrProofProgress,
+  LrProofUnit,
   LrUnit,
   LrUnitContentRow,
   LrUnitProgress,
   PathUnit,
   PracticeGroup,
+  ProofProgressStatus,
+  ProofUnitEntry,
   UnitProgressStatus,
 } from "./types";
 
@@ -39,7 +44,10 @@ const STATUS_RANK: Record<ContentStatus, number> = {
   draft: 0,
 };
 
-function bestContentRow(rows: LrUnitContentRow[]): LrUnitContentRow | null {
+// Generic over `LrUnitContentRow` / `LrProofContentRow` — both carry the same
+// `{ status, version }` shape and the same live > approved > draft, then
+// highest-version-within-status resolution rule.
+function bestContentRow<T extends { status: ContentStatus; version: number }>(rows: T[]): T | null {
   if (rows.length === 0) return null;
   return rows.reduce((best, row) => {
     const rankDiff = STATUS_RANK[row.status] - STATUS_RANK[best.status];
@@ -136,6 +144,115 @@ export async function demoteUnitContent(unitId: number, version: number): Promis
     .update({ status: "draft" })
     .eq("unit_id", unitId)
     .eq("version", version);
+  if (error) throw error;
+}
+
+// ── Proof side-paths (LEARN_PLAN.md "Proof side-paths (pinned, 2026-08-10)")
+// — optional content branching off a mastered unit. Same anon-keyed
+// `supabasePublic` posture, same live > approved > draft resolution as the
+// unit-content functions above. Never touches `lr_unit_progress`,
+// `lr_unit_content`, or memory/heat state — those stay Player.tsx's job via
+// the normal grading path, unchanged for proof drills. ─────────────────────
+
+/**
+ * Every proof unit, this user's progress on it (defaulting to "available" —
+ * the DB column's own default; a proof is available the moment its parent
+ * masters, not locked-until-granted), and whether it has content — same
+ * three-way join shape as `fetchPath()`. PathPanel filters this by
+ * `parent_unit_id` and derives "locked" itself from the parent unit's
+ * mastery; this function does no such filtering, matching `fetchPath()`'s
+ * "return everything, let the caller derive display status" contract.
+ */
+export async function fetchProofUnits(): Promise<ProofUnitEntry[]> {
+  const [proofRes, progressRes, contentRes] = await Promise.all([
+    supabasePublic.from("lr_proof_unit").select("*"),
+    supabasePublic.from("lr_proof_progress").select("*").eq("user_id", await nodeUserId()),
+    supabasePublic.from("lr_proof_content").select("proof_id, version, status"),
+  ]);
+
+  if (proofRes.error) throw proofRes.error;
+  if (progressRes.error) throw progressRes.error;
+  if (contentRes.error) throw contentRes.error;
+
+  const proofUnits = (proofRes.data ?? []) as LrProofUnit[];
+  const progressByProof = new Map<number, ProofProgressStatus>();
+  for (const p of (progressRes.data ?? []) as LrProofProgress[]) {
+    progressByProof.set(p.proof_id, p.status);
+  }
+
+  const contentByProof = new Map<number, ContentStatus[]>();
+  for (const row of (contentRes.data ?? []) as Array<Pick<LrProofContentRow, "proof_id" | "version" | "status">>) {
+    const list = contentByProof.get(row.proof_id) ?? [];
+    list.push(row.status);
+    contentByProof.set(row.proof_id, list);
+  }
+
+  return proofUnits.map((proofUnit) => {
+    const statuses = contentByProof.get(proofUnit.proof_id) ?? [];
+    const best = statuses.reduce<ContentStatus | null>((acc, s) => {
+      if (acc === null || STATUS_RANK[s] > STATUS_RANK[acc]) return s;
+      return acc;
+    }, null);
+    return {
+      proofUnit,
+      progress: progressByProof.get(proofUnit.proof_id) ?? "available",
+      hasContent: statuses.length > 0,
+      contentStatus: best,
+    };
+  });
+}
+
+/**
+ * Best available content for one proof unit: prefer status live > approved >
+ * draft, then the highest version within that status. Returns null if the
+ * proof has no content rows at all — callers render the quiet "ikke klar
+ * endnu" state, not an error (LEARN_PLAN.md: the pilot content is authored
+ * concurrently with this app slice).
+ */
+export async function fetchProofContent(proofId: number): Promise<LrProofContentRow | null> {
+  const { data, error } = await supabasePublic.from("lr_proof_content").select("*").eq("proof_id", proofId);
+  if (error) throw error;
+  return bestContentRow((data ?? []) as LrProofContentRow[]);
+}
+
+/** The draft → live curation transition for proof content — mirrors `approveUnitContent`. */
+export async function approveProofContent(proofId: number, version: number): Promise<void> {
+  const { error } = await supabasePublic
+    .from("lr_proof_content")
+    .update({ status: "live" })
+    .eq("proof_id", proofId)
+    .eq("version", version);
+  if (error) throw error;
+}
+
+/** The undo side of `approveProofContent` — mirrors `demoteUnitContent`. */
+export async function demoteProofContent(proofId: number, version: number): Promise<void> {
+  const { error } = await supabasePublic
+    .from("lr_proof_content")
+    .update({ status: "draft" })
+    .eq("proof_id", proofId)
+    .eq("version", version);
+  if (error) throw error;
+}
+
+/**
+ * Flip a proof's progress status. Deliberately separate from
+ * `setUnitProgress` — a proof completion must never touch
+ * `lr_unit_progress` or trigger heat-seeding; concept credit for proof
+ * drills flows only through the normal `logAttempt`/`upsertMemory` path in
+ * Player.tsx's grading handler, identical to a unit's drills.
+ */
+export async function setProofProgress(proofId: number, status: ProofProgressStatus): Promise<void> {
+  const { error } = await supabasePublic.from("lr_proof_progress").upsert(
+    {
+      user_id: await nodeUserId(),
+      proof_id: proofId,
+      status,
+      ...(status === "completed" ? { completed_at: new Date().toISOString() } : {}),
+      updated_at: new Date().toISOString(),
+    },
+    { onConflict: "user_id,proof_id" }
+  );
   if (error) throw error;
 }
 

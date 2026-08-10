@@ -27,8 +27,27 @@
  * (`api.fetchSolvedDrillIds`), so re-entering a unit resumes at the first
  * layer that still owes drills instead of restarting at layer 1.
  *
- * Public contract is exactly `{ unitId: number, onClose: () => void }` per
- * LEARN_PLAN.md's file-ownership table — no other props, no default export.
+ * Public contract is `{ unitId, onClose }` (unit mode — unchanged, every
+ * existing caller keeps working with no edits) OR `{ proofId, onClose }`
+ * (proof mode — LEARN_PLAN.md "Proof side-paths"). No other props, no
+ * default export.
+ *
+ * ── Proof mode (2026-08-10) ──────────────────────────────────────────────
+ * A proof unit's content is `UnitContent`-shaped, so it derives layers,
+ * renders theory/practice/test and grades drills through the *exact same*
+ * code path as a unit — `mode` only changes three things: which table
+ * content/approve/demote read and write (`fetchProofContent` /
+ * `approveProofContent` / `demoteProofContent` vs. their unit-content
+ * counterparts), what graduating writes (`setProofProgress(id, "completed")`
+ * — never `lr_unit_progress`, never heat-seeding; proof completion is side
+ * content, concept credit already flowed through the identical
+ * `handleGrade` every drill uses), and two chrome details: a "BEVIS" chip in
+ * the header, and the graduation ceremony's eyebrow text
+ * ("PROOF COMPLETE" instead of "MASTERED", concept chips suppressed — see
+ * `player/Graduation.tsx`'s v3 comment). `lr_proof_progress`'s "in_progress"
+ * write on first open lives in `PathPanel.tsx` (it already holds the current
+ * progress status for every proof node, so it can guard against
+ * downgrading a completed proof back to in_progress — see that file).
  *
  * DESIGN.md §5 asks for the shared motion + KaTeX phone-width `<style>` to be
  * injected once, reachable even when `Player` isn't mounted (via
@@ -42,21 +61,26 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import type {
+  ContentStatus,
   Drill,
   Grade,
   Lens,
   LrMemoryState,
-  LrUnitContentRow,
   PracticeGroup,
+  UnitContent,
   UnitFlow,
 } from "./types";
 import {
+  approveProofContent,
   approveUnitContent,
+  demoteProofContent,
   demoteUnitContent,
   fetchMemoryStates,
+  fetchProofContent,
   fetchSolvedDrillIds,
   fetchUnitContent,
   logAttempt,
+  setProofProgress,
   setUnitProgress,
   upsertMemory,
 } from "./api";
@@ -102,8 +126,26 @@ function stepLabel(step: Step): string {
   return "Test";
 }
 
-export function Player({ unitId, onClose }: { unitId: number; onClose: () => void }) {
-  const [row, setRow] = useState<LrUnitContentRow | null | undefined>(undefined); // undefined = loading
+// Normalized shape both `LrUnitContentRow` and `LrProofContentRow` satisfy —
+// everything past content-loading only ever needs these three fields, so the
+// rest of the component doesn't have to branch on `mode` a second time.
+interface ContentRow {
+  version: number;
+  status: ContentStatus;
+  content: UnitContent;
+}
+
+type PlayerProps = { unitId: number; onClose: () => void } | { proofId: number; onClose: () => void };
+
+export function Player(props: PlayerProps) {
+  const mode: "unit" | "proof" = "unitId" in props ? "unit" : "proof";
+  // The one entity id this Player instance is loading — a unit_id in unit
+  // mode, a proof_id in proof mode. Every table read/write below branches on
+  // `mode` to pick the right table, but shares this single id.
+  const id = "unitId" in props ? props.unitId : props.proofId;
+  const { onClose } = props;
+
+  const [row, setRow] = useState<ContentRow | null | undefined>(undefined); // undefined = loading
   const [loadError, setLoadError] = useState<string | null>(null);
   const [stepIdx, setStepIdx] = useState(0);
   const [maxVisited, setMaxVisited] = useState(0);
@@ -146,7 +188,8 @@ export function Player({ unitId, onClose }: { unitId: number; onClose: () => voi
 
   useEffect(() => {
     let alive = true;
-    fetchUnitContent(unitId)
+    const load = mode === "unit" ? fetchUnitContent(id) : fetchProofContent(id);
+    load
       .then((r) => {
         if (!alive) return;
         setRow(r);
@@ -159,7 +202,7 @@ export function Player({ unitId, onClose }: { unitId: number; onClose: () => voi
     return () => {
       alive = false;
     };
-  }, [unitId]);
+  }, [mode, id]);
 
   useEffect(() => {
     if (allConceptIds.length === 0) return;
@@ -241,14 +284,23 @@ export function Player({ unitId, onClose }: { unitId: number; onClose: () => voi
 
   async function handleTestPass(score: number, total: number) {
     try {
-      await setUnitProgress(unitId, "mastered", new Date().toISOString());
-      await Promise.all(
-        allConceptIds.map(async (conceptId) => {
-          const existing = memoryCache[conceptId] ?? defaultMemoryState("default", conceptId);
-          const seeded = seedGraduationHeat(existing);
-          await upsertMemory(seeded);
-        })
-      );
+      if (mode === "unit") {
+        await setUnitProgress(id, "mastered", new Date().toISOString());
+        await Promise.all(
+          allConceptIds.map(async (conceptId) => {
+            const existing = memoryCache[conceptId] ?? defaultMemoryState("default", conceptId);
+            const seeded = seedGraduationHeat(existing);
+            await upsertMemory(seeded);
+          })
+        );
+      } else {
+        // Proof completion: `lr_proof_progress` only. Never
+        // `lr_unit_progress`, never heat-seeding — concept credit already
+        // flowed through the normal grading path above, and seeding heat
+        // here would double-credit concepts that a proof's drills already
+        // touched (LEARN_PLAN.md "Proof side-paths").
+        await setProofProgress(id, "completed");
+      }
     } catch (e) {
       console.error("[learn] graduation persistence failed", e);
     }
@@ -265,7 +317,8 @@ export function Player({ unitId, onClose }: { unitId: number; onClose: () => voi
     if (!row) return;
     setApproveUi("busy");
     try {
-      await approveUnitContent(unitId, row.version);
+      if (mode === "unit") await approveUnitContent(id, row.version);
+      else await approveProofContent(id, row.version);
       setApproveUi("approved");
       if (approveUndoTimerRef.current !== null) window.clearTimeout(approveUndoTimerRef.current);
       // ~5s undo window, then the control disappears entirely — a live unit
@@ -286,7 +339,8 @@ export function Player({ unitId, onClose }: { unitId: number; onClose: () => voi
     }
     setApproveUi("busy");
     try {
-      await demoteUnitContent(unitId, row.version);
+      if (mode === "unit") await demoteUnitContent(id, row.version);
+      else await demoteProofContent(id, row.version);
       setApproveUi("idle");
     } catch (e) {
       console.error("[learn] demoteUnitContent failed", e);
@@ -344,7 +398,7 @@ export function Player({ unitId, onClose }: { unitId: number; onClose: () => voi
   // The DB row's own status — never mutated locally. `approveUi` layers the
   // in-flight/just-approved UI on top without waiting on a refetch.
   const contentIsDraft = row?.status === "draft";
-  const title = content?.title || content?.unit_code || `Unit ${unitId}`;
+  const title = content?.title || content?.unit_code || (mode === "unit" ? `Unit ${id}` : `Proof ${id}`);
   const step: Step | undefined = steps[stepIdx];
   const nextStep: Step | undefined = steps[stepIdx + 1];
   const nextIsLockedTest = nextStep?.kind === "test" && !testUnlocked;
@@ -378,6 +432,14 @@ export function Player({ unitId, onClose }: { unitId: number; onClose: () => voi
               ✕
             </button>
             <span className="truncate text-[13px] font-medium text-[#1A1A24]/85">{title}</span>
+
+            {/* Proof mode marker — distinguishes a side-path proof from the
+                unit it branched off (LEARN_PLAN.md "Proof side-paths"). */}
+            {mode === "proof" && (
+              <span className="shrink-0 rounded px-1.5 py-0.5 text-[9px] font-semibold tracking-[0.12em] bg-black/[0.05] text-[#6E6E78]">
+                BEVIS
+              </span>
+            )}
 
             {/* Draft → live curation control. Only ever shown on draft
                 content (DESIGN.md §1.3: "Approved (not yet live): no badge.
@@ -457,7 +519,28 @@ export function Player({ unitId, onClose }: { unitId: number; onClose: () => voi
         </main>
       )}
 
-      {row === null && (
+      {row === null && !loadError && mode === "proof" && (
+        // Quiet "unknown/not-ready" grammar, per DESIGN.md §4.2's doctrine for
+        // this kind of state: dashed, dim, no red, no error tone — a proof
+        // with no content row yet is an authoring-in-progress fact, not a
+        // failure. LEARN_PLAN.md: the pilot proof content is authored
+        // concurrently with this app slice.
+        <main className="flex min-h-0 flex-1 flex-col items-center justify-center px-4">
+          <div className="flex max-w-[22rem] items-center gap-3 rounded-xl border border-dashed border-black/[0.12] bg-black/[0.02] p-4">
+            <span className="grid h-8 w-8 shrink-0 animate-[learn-pulse_2.6s_ease-in-out_infinite] place-items-center rounded-full bg-black/[0.04] text-[#6E6E78]/45">
+              ∴
+            </span>
+            <div className="min-w-0">
+              <p className="text-[13px] text-[#1A1A24]/70">Ikke klar endnu</p>
+              <p className="mt-0.5 text-[11px] leading-relaxed text-[#6E6E78]/60">
+                This proof has no content yet.
+              </p>
+            </div>
+          </div>
+        </main>
+      )}
+
+      {row === null && (loadError || mode === "unit") && (
         <main className="flex min-h-0 flex-1 flex-col items-center justify-center gap-2 px-4 text-center">
           <p className="text-[13px] text-[#1A1A24]/70">
             {loadError ? "Could not load this unit." : "No content yet for this unit."}
@@ -474,7 +557,10 @@ export function Player({ unitId, onClose }: { unitId: number; onClose: () => voi
           testTotal={graduation.total}
           estMinutes={content.est_minutes}
           exercisedLenses={exercisedLenses}
-          conceptIds={allConceptIds}
+          // Proof mode: [] suppresses "Added to review" — a proof never adds
+          // concepts to retention (see Graduation.tsx's v3 comment).
+          conceptIds={mode === "unit" ? allConceptIds : []}
+          label={mode === "unit" ? "MASTERED" : "PROOF COMPLETE"}
           onContinue={onClose}
         />
       )}

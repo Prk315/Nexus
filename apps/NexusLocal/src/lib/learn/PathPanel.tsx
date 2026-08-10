@@ -37,11 +37,25 @@
  *    rail's earned-fill height still use the real `lr_unit_progress` row
  *    (ground truth for "how far along"), independent of what the node looks
  *    like — so the fill can end at a `no_content`-styled node.
+ *
+ * ── Proof side-paths (LEARN_PLAN.md "Proof side-paths", pinned 2026-08-10) ──
+ *
+ * When a unit masters, its proof unit (if any exists for that `parent_unit_id`)
+ * unlocks as a compact side node branching off the unit row — a dashed
+ * connector to a small "∴" glyph, muted until tapped, filled with a check once
+ * `lr_proof_progress.status = "completed"`. A unit with no proof gets nothing:
+ * no empty slot, no placeholder — the reward only appears when it exists.
+ * A unit that is *not* mastered renders no side node at all, even if a proof
+ * row exists for it — "locked" is never a visible state here, it's simply
+ * absence, so proofs read as rewards rather than one more locked thing on the
+ * spine. Tapping always opens the Player (even with no content row yet — it
+ * renders its own quiet "ikke klar endnu" state); PathPanel's only job on tap
+ * is the `lr_proof_progress` "in_progress" upsert on first open (§ below).
  */
 
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import { fetchPath, fetchUnitContent, setUnitProgress } from "./api";
-import type { PathUnit, UnitContent } from "./types";
+import { fetchPath, fetchProofContent, fetchProofUnits, fetchUnitContent, setProofProgress, setUnitProgress } from "./api";
+import type { PathUnit, ProofUnitEntry, UnitContent } from "./types";
 import { Player } from "./Player";
 
 type DisplayStatus = "locked" | "available" | "in_progress" | "mastered" | "no_content";
@@ -89,34 +103,53 @@ export function PathPanel() {
   const [contentByUnit, setContentByUnit] = useState<Map<number, UnitContent>>(new Map());
   const [expandedLocked, setExpandedLocked] = useState<number | null>(null);
   const [selectedUnitId, setSelectedUnitId] = useState<number | null>(null);
+  const [proofEntries, setProofEntries] = useState<ProofUnitEntry[]>([]);
+  const [proofContentByProof, setProofContentByProof] = useState<Map<number, UnitContent>>(new Map());
+  const [selectedProofId, setSelectedProofId] = useState<number | null>(null);
   const [reloadNonce, setReloadNonce] = useState(0);
   const [railHeightPx, setRailHeightPx] = useState(0);
 
   const listRef = useRef<HTMLDivElement | null>(null);
   const rowRefs = useRef<Map<number, HTMLDivElement>>(new Map());
 
-  // Load the spine, then fill in per-unit content (title/counts) for whatever
-  // has any — see contract-gap note #1 above.
+  // Load the spine + every proof unit (regardless of parent mastery — display
+  // status is derived below), then fill in per-unit/per-proof content
+  // (title/counts) for whatever has any — see contract-gap note #1 above,
+  // which applies identically to proof content.
   useEffect(() => {
     let cancelled = false;
     (async () => {
       try {
         setError(null);
-        const p = await fetchPath();
+        const [p, proofs] = await Promise.all([fetchPath(), fetchProofUnits()]);
         if (cancelled) return;
         setPath(p);
+        setProofEntries(proofs);
 
         const withContent = p.filter((pu) => pu.hasContent);
-        const pairs = await Promise.all(
-          withContent.map(async (pu) => {
-            const row = await fetchUnitContent(pu.unit.unit_id).catch(() => null);
-            return [pu.unit.unit_id, row?.content ?? null] as const;
-          })
-        );
+        const proofsWithContent = proofs.filter((pe) => pe.hasContent);
+        const [unitPairs, proofPairs] = await Promise.all([
+          Promise.all(
+            withContent.map(async (pu) => {
+              const row = await fetchUnitContent(pu.unit.unit_id).catch(() => null);
+              return [pu.unit.unit_id, row?.content ?? null] as const;
+            })
+          ),
+          Promise.all(
+            proofsWithContent.map(async (pe) => {
+              const row = await fetchProofContent(pe.proofUnit.proof_id).catch(() => null);
+              return [pe.proofUnit.proof_id, row?.content ?? null] as const;
+            })
+          ),
+        ]);
         if (cancelled) return;
         const map = new Map<number, UnitContent>();
-        for (const [id, content] of pairs) if (content) map.set(id, content);
+        for (const [id, content] of unitPairs) if (content) map.set(id, content);
         setContentByUnit(map);
+
+        const proofMap = new Map<number, UnitContent>();
+        for (const [id, content] of proofPairs) if (content) proofMap.set(id, content);
+        setProofContentByProof(proofMap);
       } catch (e) {
         if (!cancelled) setError(String(e));
       }
@@ -125,6 +158,18 @@ export function PathPanel() {
       cancelled = true;
     };
   }, [reloadNonce]);
+
+  // proof_id[] per parent unit — a unit renders every proof branching off it
+  // once mastered (pilot data is 1:1, the join doesn't assume it).
+  const proofsByParentUnit = useMemo(() => {
+    const map = new Map<number, ProofUnitEntry[]>();
+    for (const pe of proofEntries) {
+      const list = map.get(pe.proofUnit.parent_unit_id) ?? [];
+      list.push(pe);
+      map.set(pe.proofUnit.parent_unit_id, list);
+    }
+    return map;
+  }, [proofEntries]);
 
   // Status per unit + the label of "what to master first" for locked rows +
   // the ground-truth mastered count for the header ring / rail fill.
@@ -225,6 +270,24 @@ export function PathPanel() {
     }
   }
 
+  // Opens a proof side-node. The one write this file owns for proofs: flip
+  // "available" -> "in_progress" on first open (LEARN_PLAN.md step 5) —
+  // guarded so a *completed* proof reopened for review is never downgraded
+  // back to in_progress, and an already-in_progress proof isn't re-written
+  // pointlessly.
+  function openProof(entry: ProofUnitEntry) {
+    const proofId = entry.proofUnit.proof_id;
+    setSelectedProofId(proofId);
+    if (entry.progress !== "available") return;
+    setProofEntries((prev) =>
+      prev.map((pe) => (pe.proofUnit.proof_id === proofId ? { ...pe, progress: "in_progress" } : pe))
+    );
+    setProofProgress(proofId, "in_progress").catch(() => {
+      // Best-effort, same posture as practiceAnyway above — a failed flip
+      // here just means the node reads "available" again on next reload.
+    });
+  }
+
   return (
     <section className="flex flex-col gap-2 md:gap-3">
       <svg width="0" height="0" className="absolute" aria-hidden>
@@ -293,25 +356,42 @@ export function PathPanel() {
                   {units.map((pu) => {
                     const status = statusByUnit.get(pu.unit.unit_id) ?? "locked";
                     const content = contentByUnit.get(pu.unit.unit_id);
+                    // Proof side-nodes only ever appear once the parent has
+                    // mastered — "locked" is absence here, not a visible
+                    // state (see the file-header note above).
+                    const proofs = status === "mastered" ? (proofsByParentUnit.get(pu.unit.unit_id) ?? []) : [];
                     return (
-                      <UnitRow
-                        key={pu.unit.unit_id}
-                        pu={pu}
-                        status={status}
-                        content={content}
-                        draft={pu.contentStatus === "draft"}
-                        expanded={expandedLocked === pu.unit.unit_id}
-                        lockedReasonLabel={`Låst — mestr ${prevLabelByUnit.get(pu.unit.unit_id) ?? "forrige lektion"} først.`}
-                        onToggleExpand={() =>
-                          setExpandedLocked((cur) => (cur === pu.unit.unit_id ? null : pu.unit.unit_id))
-                        }
-                        onOpen={() => setSelectedUnitId(pu.unit.unit_id)}
-                        onPracticeAnyway={() => practiceAnyway(pu)}
-                        setRowRef={(el) => {
-                          if (el) rowRefs.current.set(pu.unit.unit_id, el);
-                          else rowRefs.current.delete(pu.unit.unit_id);
-                        }}
-                      />
+                      <div key={pu.unit.unit_id}>
+                        <UnitRow
+                          pu={pu}
+                          status={status}
+                          content={content}
+                          draft={pu.contentStatus === "draft"}
+                          expanded={expandedLocked === pu.unit.unit_id}
+                          lockedReasonLabel={`Låst — mestr ${prevLabelByUnit.get(pu.unit.unit_id) ?? "forrige lektion"} først.`}
+                          onToggleExpand={() =>
+                            setExpandedLocked((cur) => (cur === pu.unit.unit_id ? null : pu.unit.unit_id))
+                          }
+                          onOpen={() => setSelectedUnitId(pu.unit.unit_id)}
+                          onPracticeAnyway={() => practiceAnyway(pu)}
+                          setRowRef={(el) => {
+                            if (el) rowRefs.current.set(pu.unit.unit_id, el);
+                            else rowRefs.current.delete(pu.unit.unit_id);
+                          }}
+                        />
+                        {proofs.map((entry) => (
+                          <ProofNode
+                            key={entry.proofUnit.proof_id}
+                            entry={entry}
+                            title={
+                              proofContentByProof.get(entry.proofUnit.proof_id)?.title ||
+                              entry.proofUnit.title ||
+                              entry.proofUnit.code
+                            }
+                            onOpen={() => openProof(entry)}
+                          />
+                        ))}
+                      </div>
                     );
                   })}
                 </div>
@@ -326,6 +406,16 @@ export function PathPanel() {
           unitId={selectedUnitId}
           onClose={() => {
             setSelectedUnitId(null);
+            setReloadNonce((n) => n + 1);
+          }}
+        />
+      )}
+
+      {selectedProofId !== null && (
+        <Player
+          proofId={selectedProofId}
+          onClose={() => {
+            setSelectedProofId(null);
             setReloadNonce((n) => n + 1);
           }}
         />
@@ -481,6 +571,54 @@ function UnitRow({
           </div>
         </div>
       )}
+    </div>
+  );
+}
+
+/**
+ * A proof side-node — LEARN_PLAN.md "Proof side-paths". Branches off a
+ * mastered unit's row via a short dashed connector (never a full rail
+ * segment: this is a reward, not another stop on the spine). "∴" (QED-ish,
+ * matches the course's own proof vocabulary) reads muted until the proof is
+ * completed, at which point it swaps to the same gradient-fill + check the
+ * main spine uses for a mastered unit — one shared "done" language, smaller.
+ * Content-less proofs (pilot content authored concurrently, per
+ * LEARN_PLAN.md) still render and are still tappable: the Player itself
+ * carries the quiet "ikke klar endnu" empty state, so there is nothing this
+ * node needs to know about content presence.
+ */
+function ProofNode({
+  entry,
+  title,
+  onOpen,
+}: {
+  entry: ProofUnitEntry;
+  title: string;
+  onOpen: () => void;
+}) {
+  const completed = entry.progress === "completed";
+  return (
+    <div className="relative ml-10 flex items-center py-0.5 pl-4 before:absolute before:left-0 before:top-1/2 before:h-px before:w-4 before:-translate-y-1/2 before:border-t before:border-dashed before:border-black/[0.16] before:content-['']">
+      <button
+        type="button"
+        onClick={onOpen}
+        className="group flex min-h-[36px] min-w-0 flex-1 items-center gap-2 rounded-lg px-1.5 py-1 text-left transition-colors active:bg-black/[0.03] md:hover:bg-black/[0.025]"
+      >
+        <span
+          className={`grid h-5 w-5 shrink-0 place-items-center rounded-full text-[10px] ${
+            completed
+              ? "bg-gradient-to-br from-indigo-500 to-fuchsia-600 text-white ring-1 ring-black/10"
+              : "bg-transparent text-[#6E6E78]/40 ring-1 ring-dashed ring-black/[0.18] group-active:text-[#6E6E78]/75"
+          }`}
+        >
+          {completed ? "✓" : "∴"}
+        </span>
+        <span
+          className={`truncate text-[12px] ${completed ? "text-[#1A1A24]/75" : "text-[#6E6E78]/55"} md:text-[12.5px]`}
+        >
+          {title}
+        </span>
+      </button>
     </div>
   );
 }

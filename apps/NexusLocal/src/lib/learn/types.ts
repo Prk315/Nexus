@@ -291,6 +291,61 @@ export interface PathUnit {
   contentStatus: ContentStatus | null;
 }
 
+// --- Proof side-paths (LEARN_PLAN.md "Proof side-paths (pinned, 2026-08-10 —
+// pilot: LA 2 · U1)"). Optional content that branches off a mastered unit as
+// a side node — never blocks the main spine. Completing one writes
+// `lr_proof_progress`, NEVER `lr_unit_progress`: no effect on
+// `lr_retained_concept`. Concept credit flows only through normal drill
+// grading (same `handleGrade` path the Player already uses for units), so
+// these tables carry zero memory/heat fields of their own. Mirrors
+// `supabase/migrations/20260806190000_learn_lr_schema.sql`'s `lr_unit` /
+// `lr_unit_progress` / `lr_unit_content` triad 1:1, verified against the live
+// schema 2026-08-10 (no migration file for these three tables exists in this
+// repo yet — the pilot's DDL was applied directly).
+
+export interface LrProofUnit {
+  proof_id: number;
+  parent_unit_id: number;
+  code: string;
+  title: string | null;
+}
+
+// "locked" is never stored — it is derived client-side from parent-unit
+// mastery (LEARN_PLAN.md). The DB's own default is "available": a proof
+// becomes available the instant its parent masters, not on some later grant.
+export type ProofProgressStatus = "available" | "in_progress" | "completed";
+
+export interface LrProofProgress {
+  user_id: string;
+  proof_id: number;
+  status: ProofProgressStatus;
+  completed_at: string | null;
+  updated_at: string;
+}
+
+// Content is `UnitContent`-shaped (same schema v1.1) — the Player renders it
+// through the identical layer/practice/test machinery it uses for units.
+export interface LrProofContentRow {
+  proof_id: number;
+  version: number;
+  status: ContentStatus;
+  content: UnitContent;
+  authored_by: string | null;
+  notes: string | null;
+  created_at: string;
+}
+
+// Composite row `api.fetchProofUnits()` returns per proof unit — mirrors
+// `PathUnit`'s shape/defaulting exactly, just keyed by proof_id instead of
+// unit_id.
+export interface ProofUnitEntry {
+  proofUnit: LrProofUnit;
+  // Defaults to "available" when no lr_proof_progress row exists.
+  progress: ProofProgressStatus;
+  hasContent: boolean;
+  contentStatus: ContentStatus | null;
+}
+
 // --- Infinite exercises (LEARN_PLAN.md "Infinite exercises", pinned
 // 2026-08-10) — mirrors the ported problem-bank row and its feedback log. ---
 
