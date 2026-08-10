@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { supabasePublic } from "../supabase";
+import { nodeUserId } from "../nodeUser";
 
 /**
  * Unit 5 — blocking management UI.
@@ -32,7 +33,8 @@ import { supabasePublic } from "../supabase";
  * just mean fewer things get blocked.
  */
 
-const USER_ID = "default";
+// Resolved per call from the node config rather than hardcoded — see
+// `lib/nodeUser.ts`. Every use below is already inside an async function.
 
 type Site = {
   id: string;
@@ -133,12 +135,12 @@ export function BlockingPanel() {
       supabasePublic
         .from("blocked_sites")
         .select("id,domain,enabled")
-        .eq("user_id", USER_ID)
+        .eq("user_id", await nodeUserId())
         .order("domain"),
       supabasePublic
         .from("blocked_apps")
         .select("id,display_name,process_name,block_mode,enabled")
-        .eq("user_id", USER_ID)
+        .eq("user_id", await nodeUserId())
         .order("display_name"),
     ]);
     if (!alive() || seq !== fetchSeq.current) return;
@@ -235,7 +237,7 @@ export function BlockingPanel() {
       supabasePublic
         .from("blocked_sites")
         .upsert(
-          { user_id: USER_ID, domain, enabled: true, updated_at: stamp() },
+          { user_id: await nodeUserId(), domain, enabled: true, updated_at: stamp() },
           { onConflict: "user_id,domain" },
         ),
     );
@@ -252,7 +254,7 @@ export function BlockingPanel() {
     const ok = await run("add", async () =>
       supabasePublic.from("blocked_apps").upsert(
         {
-          user_id: USER_ID,
+          user_id: await nodeUserId(),
           display_name,
           process_name,
           block_mode: newAppMode,

@@ -47,6 +47,23 @@ fn grid_status(state: tauri::State<Arc<GridStatus>>) -> GridStatus {
     (**state).clone()
 }
 
+/// Which `user_id` this node's rows are keyed by — `user_id` in
+/// `~/.nexuslocalrc`, defaulting to `"default"`.
+///
+/// The frontend used to hardcode `"default"` in a dozen queries while the Rust
+/// side read it from config. That mismatch is worse than not supporting a second
+/// account at all: on a machine configured for someone else the daemon would
+/// scope correctly while the UI silently read and wrote the *other* person's
+/// rows, and it would look like it was working.
+///
+/// Read fresh rather than cached in `GridStatus`: the file is the boundary
+/// between the app and the daemon everywhere else in this codebase, and a value
+/// frozen at launch would need a restart to pick up a profile change.
+#[tauri::command]
+fn tt_node_user_id() -> String {
+    AppConfig::load().user_id
+}
+
 /// The background service: the grid node with no GUI at all.
 ///
 /// Run as `nexus-local --daemon`, normally by the LaunchAgent that
@@ -230,6 +247,7 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             grid_status,
+            tt_node_user_id,
             ios_bridge::store_session,
             ios_bridge::clear_session,
             ios_bridge::appgroup_debug,
