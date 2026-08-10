@@ -1,9 +1,10 @@
 import { useMemo, useState } from "react";
-import { Search, Plus, Pencil, Trash2, Users, User as UserIcon, X } from "lucide-react";
+import { Search, Plus, Pencil, Trash2, Users, User as UserIcon, X, Star } from "lucide-react";
 import { useNexusAuth } from "@nexus/core";
 import { useAppDispatch } from "../../../store/hooks";
 import { addFood, updateFood, removeFood } from "../../../store/slices/mealPlannerSlice";
 import { CARD_STYLE, INPUT_STYLE, LABEL_STYLE, FIELD_GROUP } from "../../../lib/uiHelpers";
+import { foodTier, tierCardStyle, tierMedalColor } from "../../../lib/foodQuality";
 import FoodPicker from "../FoodPicker";
 import NutrientFields from "../NutrientFields";
 import type { CreateFood, Food } from "../../../store/types";
@@ -42,6 +43,13 @@ export default function FoodsPane({ foods }: { foods: Food[] }) {
     setAdding(false);
   }
 
+  /** Flip the gold "detailed" flag. RLS only lets you touch your own rows, so
+   *  the button is shown for `mine` foods only. */
+  function toggleGold(f: Food) {
+    const { id: _id, user_id: _u, created_at: _c, ...rest } = f;
+    dispatch(updateFood({ ...rest, id: f.id, detailed: !f.detailed }));
+  }
+
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, flexWrap: "wrap" }}>
@@ -51,6 +59,18 @@ export default function FoodsPane({ foods }: { foods: Food[] }) {
           </div>
           <div style={{ fontSize: 12, color: "var(--text-muted)" }}>
             Shared across everyone — {foods.length} food{foods.length === 1 ? "" : "s"}. Anything you log is added here for all to reuse.
+          </div>
+          <div style={{ display: "flex", alignItems: "center", gap: 12, marginTop: 6, fontSize: 11, color: "var(--text-muted)" }}>
+            <span style={{ display: "inline-flex", alignItems: "center", gap: 4 }}>
+              <span style={{ width: 8, height: 8, borderRadius: "50%", border: "1px solid var(--border)", background: "var(--surface)" }} /> Basic
+            </span>
+            <span style={{ display: "inline-flex", alignItems: "center", gap: 4 }}>
+              <span style={{ width: 8, height: 8, borderRadius: "50%", background: tierMedalColor("silver") }} /> Frida
+            </span>
+            <span style={{ display: "inline-flex", alignItems: "center", gap: 4 }}>
+              <Star size={11} fill={tierMedalColor("gold")} color={tierMedalColor("gold")} /> Detailed
+            </span>
+            <span style={{ opacity: 0.75 }}>— richer data = higher tier</span>
           </div>
         </div>
         <button
@@ -80,10 +100,16 @@ export default function FoodsPane({ foods }: { foods: Food[] }) {
         <div style={{ display: "flex", flexDirection: "column", gap: 6, maxHeight: 380, overflowY: "auto" }}>
           {filtered.map((f) => {
             const mine = myId != null && f.user_id === myId;
+            const tier = foodTier(f);
             return (
-              <div key={f.id} style={{ ...CARD_STYLE, padding: "10px 12px", display: "flex", alignItems: "center", gap: 12 }}>
+              <div key={f.id} style={{ ...CARD_STYLE, padding: "10px 12px", display: "flex", alignItems: "center", gap: 12, ...tierCardStyle(tier) }}>
                 <div style={{ flex: 1, minWidth: 0 }}>
                   <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                    {tier !== "normal" && (
+                      tier === "gold"
+                        ? <Star size={12} fill={tierMedalColor("gold")} color={tierMedalColor("gold")} style={{ flexShrink: 0 }} />
+                        : <span title="Frida" style={{ width: 8, height: 8, borderRadius: "50%", background: tierMedalColor("silver"), flexShrink: 0 }} />
+                    )}
                     <span style={{ fontSize: 13, fontWeight: 600, color: "var(--text)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
                       {f.name}
                     </span>
@@ -110,6 +136,13 @@ export default function FoodsPane({ foods }: { foods: Food[] }) {
                     </div>
                   ) : (
                     <div style={{ display: "flex", gap: 4, flexShrink: 0 }}>
+                      <button
+                        onClick={() => toggleGold(f)}
+                        title={f.detailed ? "Detailed food — click to unmark" : "Mark as detailed (gold)"}
+                        style={{ ...iconBtn, ...(f.detailed ? { borderColor: "var(--tier-gold-border)", color: "var(--tier-gold-solid)" } : {}) }}
+                      >
+                        <Star size={14} fill={f.detailed ? "var(--tier-gold-solid)" : "none"} />
+                      </button>
                       <button onClick={() => setEditing(f)} title="Edit" style={iconBtn}><Pencil size={14} /></button>
                       <button onClick={() => setConfirmDelete(f.id)} title="Delete" style={iconBtn}><Trash2 size={14} /></button>
                     </div>

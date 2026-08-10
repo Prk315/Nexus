@@ -5,6 +5,7 @@ import {
   addFood, addMeal, updateMeal, addMealItem, removeMealItem,
 } from "../../store/slices/mealPlannerSlice";
 import { CARD_STYLE, INPUT_STYLE, LABEL_STYLE, FIELD_GROUP } from "../../lib/uiHelpers";
+import { foodTier, tierCardStyle, tierMedalColor } from "../../lib/foodQuality";
 import FoodPicker from "./FoodPicker";
 import type { CreateFood, Food, Meal, MealItem } from "../../store/types";
 
@@ -160,8 +161,13 @@ export default function MealBuilder({
 
               {items.length > 0 && (
                 <div style={{ display: "flex", flexDirection: "column", gap: 6, marginBottom: 10 }}>
-                  {items.map((i) => (
-                    <div key={i.key} style={{ display: "flex", alignItems: "center", gap: 8, padding: "6px 10px", background: "var(--bg)", border: "1px solid var(--border)", borderRadius: "var(--radius-sm)", fontSize: 12 }}>
+                  {items.map((i) => {
+                    const tier = foodTier(i.food);
+                    return (
+                    <div key={i.key} style={{ display: "flex", alignItems: "center", gap: 8, padding: "6px 10px", background: "var(--bg)", border: "1px solid var(--border)", borderRadius: "var(--radius-sm)", fontSize: 12, ...tierCardStyle(tier, "inset") }}>
+                      {tier !== "normal" && (
+                        <span title={tier === "gold" ? "Detailed" : "Frida"} style={{ width: 7, height: 7, borderRadius: "50%", background: tierMedalColor(tier), flexShrink: 0 }} />
+                      )}
                       <span style={{ flex: 1, minWidth: 0, color: "var(--text)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
                         {i.food.name}
                       </span>
@@ -172,7 +178,8 @@ export default function MealBuilder({
                         <Trash2 size={12} />
                       </button>
                     </div>
-                  ))}
+                    );
+                  })}
                 </div>
               )}
 
