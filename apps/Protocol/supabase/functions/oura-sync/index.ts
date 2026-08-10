@@ -4,6 +4,17 @@ import { createClient, type SupabaseClient } from "jsr:@supabase/supabase-js@2";
 const SYNC_WINDOW_DAYS = 7;
 const REFRESH_BUFFER_MS = 5 * 60 * 1000;
 
+/** Rows filled in by hand while the Oura ring was offline are tagged with a
+ * notes value starting with this marker; upsertByDate then refuses to overwrite
+ * them on a later Oura backfill. Applies to both protocol_sleep and
+ * protocol_body_metrics. Deliberately a narrow, explicit marker — NOT "any
+ * non-Oura note" — so ordinary "Garmin import" / "Synced from Oura" rows stay
+ * fully overwritable and Garmin↔Oura source arbitration is unchanged. */
+const OFFLINE_ESTIMATE_MARKER = "Estimated (Oura ring offline)";
+function isOfflineEstimate(notes: unknown): boolean {
+  return typeof notes === "string" && notes.startsWith(OFFLINE_ESTIMATE_MARKER);
+}
+
 function decodeJwtPayload(jwt: string): Record<string, unknown> {
   const payload = jwt.split(".")[1];
   return JSON.parse(atob(payload.replace(/-/g, "+").replace(/_/g, "/")));
@@ -172,17 +183,14 @@ async function upsertByDate(
     .limit(1);
 
   if (existing && existing.length > 0) {
-    // Never clobber a manually-entered / estimated sleep row (e.g. days filled
-    // in while the Oura ring was offline). Oura only overwrites its own rows
-    // (notes = "Synced from Oura") or blank ones; any other notes value marks
-    // the row as user-owned and protected. Scoped to sleep only — body_metrics
-    // keeps its existing merge behaviour.
-    if (table === "protocol_sleep") {
-      const notes = (existing[0] as { notes?: string | null }).notes;
-      if (notes && notes !== "Synced from Oura") {
-        console.log(`Skipped protected protocol_sleep row for ${userId} ${date} (notes: ${notes})`);
-        return;
-      }
+    // Never clobber a row explicitly locked as a ring-offline estimate — sleep
+    // or body vitals (HRV/RHR) filled in by hand while the Oura ring was dead.
+    // Everything else ("Synced from Oura", "Garmin import", blank) is
+    // overwritten exactly as before, so Garmin↔Oura arbitration is unchanged.
+    const notes = (existing[0] as { notes?: string | null }).notes;
+    if (isOfflineEstimate(notes)) {
+      console.log(`Skipped locked ${table} row for ${userId} ${date} (notes: ${notes})`);
+      return;
     }
     await supabase.from(table).update(fields).eq("id", existing[0].id);
   } else {
