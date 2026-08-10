@@ -95,6 +95,10 @@ export async function fetchPath(): Promise<PathUnit[]> {
  * Best available content for one unit: prefer status live > approved > draft,
  * then the highest version within that status. Returns null if the unit has
  * no content rows at all.
+ *
+ * Returns the full row (including `version`) so callers — namely Player.tsx's
+ * approve/demote control — can address exactly the row that was loaded
+ * without a second lookup.
  */
 export async function fetchUnitContent(unitId: number): Promise<LrUnitContentRow | null> {
   const { data, error } = await supabasePublic
@@ -103,6 +107,34 @@ export async function fetchUnitContent(unitId: number): Promise<LrUnitContentRow
     .eq("unit_id", unitId);
   if (error) throw error;
   return bestContentRow((data ?? []) as LrUnitContentRow[]);
+}
+
+/**
+ * The draft → live curation transition (LEARN_PLAN.md: "Humans flip status;
+ * agents only ever write `draft`"). Targets exactly one row via the table's
+ * `(unit_id, version)` primary key — never a bare `eq("unit_id", …)`, which
+ * would flip every version of the unit's content at once.
+ */
+export async function approveUnitContent(unitId: number, version: number): Promise<void> {
+  const { error } = await supabasePublic
+    .from("lr_unit_content")
+    .update({ status: "live" })
+    .eq("unit_id", unitId)
+    .eq("version", version);
+  if (error) throw error;
+}
+
+/**
+ * The undo side of `approveUnitContent` — mistakes happen. Sets exactly one
+ * row back to `draft` by its `(unit_id, version)` primary key.
+ */
+export async function demoteUnitContent(unitId: number, version: number): Promise<void> {
+  const { error } = await supabasePublic
+    .from("lr_unit_content")
+    .update({ status: "draft" })
+    .eq("unit_id", unitId)
+    .eq("version", version);
+  if (error) throw error;
 }
 
 /** Record one graded attempt (drill or test question). */

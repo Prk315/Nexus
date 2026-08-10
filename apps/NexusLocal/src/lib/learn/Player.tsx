@@ -51,6 +51,8 @@ import type {
   UnitFlow,
 } from "./types";
 import {
+  approveUnitContent,
+  demoteUnitContent,
   fetchMemoryStates,
   fetchSolvedDrillIds,
   fetchUnitContent,
@@ -109,6 +111,20 @@ export function Player({ unitId, onClose }: { unitId: number; onClose: () => voi
   const [memoryCache, setMemoryCache] = useState<Record<string, LrMemoryState>>({});
   const [graduation, setGraduation] = useState<{ score: number; total: number } | null>(null);
   const resumedRef = useRef(false);
+
+  // Curator draft → live control (KLADDE badge → "Godkend"). Human-only
+  // transition per LEARN_PLAN.md — agents only ever write `draft`. State
+  // machine: idle (draft, offer "Godkend") → confirming (inline "…→ live?")
+  // → busy (in flight) → approved (green LIVE chip + ~5s undo, then nothing —
+  // "status live" never shows a badge, per DESIGN.md §1.3).
+  const [approveUi, setApproveUi] = useState<"idle" | "confirming" | "busy" | "approved" | "done">("idle");
+  const approveUndoTimerRef = useRef<number | null>(null);
+
+  useEffect(() => {
+    return () => {
+      if (approveUndoTimerRef.current !== null) window.clearTimeout(approveUndoTimerRef.current);
+    };
+  }, []);
 
   const content = row?.content ?? null;
 
@@ -245,6 +261,42 @@ export function Player({ unitId, onClose }: { unitId: number; onClose: () => voi
     else goToStep(0);
   }
 
+  async function handleApprove() {
+    if (!row) return;
+    setApproveUi("busy");
+    try {
+      await approveUnitContent(unitId, row.version);
+      setApproveUi("approved");
+      if (approveUndoTimerRef.current !== null) window.clearTimeout(approveUndoTimerRef.current);
+      // ~5s undo window, then the control disappears entirely — a live unit
+      // gets no badge at all (DESIGN.md §1.3), so there is no "idle" state to
+      // fall back into here.
+      approveUndoTimerRef.current = window.setTimeout(() => setApproveUi("done"), 5000);
+    } catch (e) {
+      console.error("[learn] approveUnitContent failed", e);
+      setApproveUi("idle");
+    }
+  }
+
+  async function handleDemote() {
+    if (!row) return;
+    if (approveUndoTimerRef.current !== null) {
+      window.clearTimeout(approveUndoTimerRef.current);
+      approveUndoTimerRef.current = null;
+    }
+    setApproveUi("busy");
+    try {
+      await demoteUnitContent(unitId, row.version);
+      setApproveUi("idle");
+    } catch (e) {
+      console.error("[learn] demoteUnitContent failed", e);
+      // Unknown DB state — fail toward still showing the undo option rather
+      // than silently dropping back to "draft" when the demote may not have
+      // taken (fail-toward-caution, same posture as the productivity stack).
+      setApproveUi("approved");
+    }
+  }
+
   const exercisedLenses = useMemo(() => {
     const set = new Set<Lens>();
     if (content) {
@@ -289,7 +341,9 @@ export function Player({ unitId, onClose }: { unitId: number; onClose: () => voi
     });
   }, [flow, steps, stepIdx, maxVisited, solvedDrillIds, testUnlocked, graduation]);
 
-  const isDraft = row?.status === "draft";
+  // The DB row's own status — never mutated locally. `approveUi` layers the
+  // in-flight/just-approved UI on top without waiting on a refetch.
+  const contentIsDraft = row?.status === "draft";
   const title = content?.title || content?.unit_code || `Unit ${unitId}`;
   const step: Step | undefined = steps[stepIdx];
   const nextStep: Step | undefined = steps[stepIdx + 1];
@@ -324,11 +378,69 @@ export function Player({ unitId, onClose }: { unitId: number; onClose: () => voi
               ✕
             </button>
             <span className="truncate text-[13px] font-medium text-[#1A1A24]/85">{title}</span>
-            {isDraft && (
-              <span
-                className={`shrink-0 rounded px-1.5 py-0.5 text-[9px] font-semibold tracking-[0.12em] ${FEEDBACK.draft}`}
-              >
-                KLADDE
+
+            {/* Draft → live curation control. Only ever shown on draft
+                content (DESIGN.md §1.3: "Approved (not yet live): no badge.
+                Only draft is badged" — a live unit shows nothing here). */}
+            {contentIsDraft && approveUi === "idle" && (
+              <>
+                <span
+                  className={`shrink-0 rounded px-1.5 py-0.5 text-[9px] font-semibold tracking-[0.12em] ${FEEDBACK.draft}`}
+                >
+                  KLADDE
+                </span>
+                <button
+                  type="button"
+                  onClick={() => setApproveUi("confirming")}
+                  className="shrink-0 rounded px-1 py-0.5 text-[10px] font-medium text-[#6E6E78] underline decoration-black/15 underline-offset-2 active:text-[#1A1A24]"
+                >
+                  Godkend
+                </button>
+              </>
+            )}
+
+            {contentIsDraft && approveUi === "confirming" && row && (
+              <span className="inline-flex min-w-0 shrink-0 items-center gap-1.5 text-[10px] text-[#6E6E78]">
+                <span className="whitespace-nowrap">
+                  Godkend v{row.version} → live?
+                </span>
+                <button
+                  type="button"
+                  onClick={handleApprove}
+                  aria-label="Bekræft godkendelse"
+                  className={`rounded px-1.5 py-0.5 font-semibold ${FEEDBACK.correct}`}
+                >
+                  ✓
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setApproveUi("idle")}
+                  aria-label="Annullér"
+                  className="rounded px-1.5 py-0.5 text-[#6E6E78] active:text-[#1A1A24]"
+                >
+                  ✕
+                </button>
+              </span>
+            )}
+
+            {approveUi === "busy" && (
+              <span className="shrink-0 text-[10px] text-[#6E6E78]">Opdaterer…</span>
+            )}
+
+            {approveUi === "approved" && (
+              <span className="inline-flex shrink-0 items-center gap-1.5">
+                <span
+                  className={`rounded px-1.5 py-0.5 text-[9px] font-semibold tracking-[0.12em] ${FEEDBACK.correct}`}
+                >
+                  LIVE
+                </span>
+                <button
+                  type="button"
+                  onClick={handleDemote}
+                  className="text-[10px] text-[#6E6E78] underline decoration-black/15 underline-offset-2 active:text-[#1A1A24]"
+                >
+                  Fortryd
+                </button>
               </span>
             )}
           </div>
