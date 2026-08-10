@@ -165,13 +165,25 @@ async function upsertByDate(
 ) {
   const { data: existing } = await supabase
     .from(table)
-    .select("id")
+    .select("id, notes")
     .eq("user_id", userId)
     .eq("date", date)
     .order("created_at", { ascending: false })
     .limit(1);
 
   if (existing && existing.length > 0) {
+    // Never clobber a manually-entered / estimated sleep row (e.g. days filled
+    // in while the Oura ring was offline). Oura only overwrites its own rows
+    // (notes = "Synced from Oura") or blank ones; any other notes value marks
+    // the row as user-owned and protected. Scoped to sleep only — body_metrics
+    // keeps its existing merge behaviour.
+    if (table === "protocol_sleep") {
+      const notes = (existing[0] as { notes?: string | null }).notes;
+      if (notes && notes !== "Synced from Oura") {
+        console.log(`Skipped protected protocol_sleep row for ${userId} ${date} (notes: ${notes})`);
+        return;
+      }
+    }
     await supabase.from(table).update(fields).eq("id", existing[0].id);
   } else {
     await supabase.from(table).insert({ id: crypto.randomUUID(), user_id: userId, date, ...fields });
