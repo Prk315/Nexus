@@ -704,3 +704,11 @@ Cost real time; check here first.
 6. Render `<NexusHeader appName="AppName" />` at the top of the app layout.
 7. Add the workspace path to root `package.json` `workspaces` array and a `dev:<appname>` script.
 8. Add the app's `src-tauri` to the root `Cargo.toml` workspace members.
+9. **If it deploys to the web**, add it to `WEB_APPS` in `packages/nexus-core/src/apps.ts`
+   — that list *is* the header's app switcher. Use the app's **public production
+   alias**, and verify it in a private window with no Vercel session: you must get the
+   app's Supabase login screen, not a Vercel SSO page. A team-scoped
+   `*-bastian-thomsens-projects.vercel.app` URL is reachable only by Vercel team
+   members and will strand every real user on "Request Sent / Team owners emailed".
+   The `name` must match the `appName` passed to `<NexusHeader>` exactly, or the
+   switcher won't mark the app as current and will offer a link back to itself.
