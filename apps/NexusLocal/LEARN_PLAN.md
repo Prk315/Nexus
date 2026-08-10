@@ -219,6 +219,28 @@ to `apps/NexusLocal/package.json`; `npm install` from repo root.
 `apps/NexusLocal` must pass. A terminal cannot prove the WebView renders
 (CLAUDE.md) — visual check is a human step at the end.
 
+## Layered unit flow (pinned, 2026-08-10)
+
+Units are consumed as interleaved LAYERS, not Theory→Practice→Test blocks:
+
+```
+Layer 1: theory chunk → master demo (example) → drills
+Layer 2: theory chunk → master demo → drills
+  …
+Final practice: rapid tap-round (the archetype:"tiles" groups, whole-unit mix)
+Test  →  graduate iff pass (≥75 %)
+```
+
+Layers are **derived client-side** from existing content (no re-authoring, no
+schema change): walk `practice[]` in order (excluding `tiles` groups); each
+group's layer takes the not-yet-assigned theory boxes whose `concept_id` ∈ the
+group's `concept_ids`, in theory order. Unassigned theory boxes attach to the
+layer nearest their position in theory order (append to last if trailing). All
+`tiles` groups form the final-practice round. Degenerate cases: one practice
+group → one layer (old flow); no tiles groups → no final round. Test unlock
+ratio still counts across ALL drills. An authored `layers` field may override
+the derivation later; the derivation is the v1 mechanism.
+
 ## Phase 3 — `lr_learn_state` contract (pinned)
 
 Written only by the `learn-evaluate` edge function (service role), every 15 min

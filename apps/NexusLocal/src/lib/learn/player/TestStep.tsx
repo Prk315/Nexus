@@ -12,7 +12,7 @@
 import { useState } from "react";
 import type { TestQuestion, TestSection } from "../types";
 import { Markdown } from "../Markdown";
-import { FEEDBACK, LENS } from "./tokens";
+import { ANSWER_COL, CARD, DOCK_SHELL, DOCK_STACK, FEEDBACK, LENS, MAIN_SHELL, READING_COL } from "./tokens";
 
 function QuestionCard({
   question,
@@ -24,16 +24,18 @@ function QuestionCard({
   onSelect: (i: number) => void;
 }) {
   return (
-    <div className="rounded-xl border border-black/[0.06] bg-white p-3 shadow-[0_1px_8px_rgba(0,0,0,0.05)]">
-      <div className="mb-2 flex items-center justify-between">
+    <div className={`${CARD} p-3 md:p-8`}>
+      <div className="mb-2 flex items-center gap-2 md:mb-3">
         <span className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-medium tracking-wide ${LENS[question.lens].chip}`}>
           <span className={`h-1 w-1 rounded-full ${LENS[question.lens].dot}`} />
           {LENS[question.lens].label}
         </span>
       </div>
-      <Markdown className="text-[15px] leading-relaxed text-[#1A1A24]/85">{question.prompt_md}</Markdown>
+      <Markdown className="text-[15px] leading-relaxed text-[#1A1A24]/85 md:text-[16.5px]">
+        {question.prompt_md}
+      </Markdown>
 
-      <div className="mt-3 flex flex-col gap-2">
+      <div className={`mt-3 flex flex-col gap-2 md:mt-6 ${ANSWER_COL}`}>
         {question.options.map((opt, i) => {
           const answered = selected !== null;
           const isChosen = selected === i;
@@ -98,8 +100,8 @@ export function TestStep({
   if (!unlocked) {
     const pct = totalDrills > 0 ? Math.round((solvedCount / totalDrills) * 100) : 0;
     return (
-      <main className="flex min-h-0 flex-1 flex-col items-center justify-center overflow-y-auto overscroll-contain px-4 pb-40 pt-3">
-        <div className="w-full rounded-xl border border-dashed border-black/[0.12] bg-black/[0.02] p-4 text-center">
+      <main className="flex min-h-0 flex-1 flex-col items-center justify-center overflow-y-auto overscroll-contain px-4 pb-40 pt-3 md:px-8">
+        <div className="w-full max-w-[46rem] rounded-xl border border-dashed border-black/[0.12] bg-black/[0.02] p-4 text-center md:max-w-[26rem] md:rounded-2xl md:p-8">
           <div className="text-[10px] uppercase tracking-wide text-[#6E6E78]/70">Test locked</div>
           <div className="mt-2 font-mono text-2xl tabular-nums text-[#1A1A24]/80">
             {solvedCount} / {totalDrills}
@@ -127,21 +129,21 @@ export function TestStep({
     const pass = total > 0 && score / total >= 0.75;
     return (
       <>
-        <main className="flex min-h-0 flex-1 flex-col items-center justify-center overflow-y-auto overscroll-contain px-4 pb-40 pt-3 text-center">
+        <main className="flex min-h-0 flex-1 flex-col items-center justify-center overflow-y-auto overscroll-contain px-4 pb-40 pt-3 text-center md:px-8">
           <div
-            className="bg-clip-text font-mono text-4xl text-transparent"
+            className="bg-clip-text font-mono text-4xl text-transparent md:text-6xl"
             style={{ backgroundImage: "linear-gradient(to right, #4f46e5, #c026d3)" }}
           >
             {score} / {total}
           </div>
           {!pass && (
-            <p className={`mt-4 rounded-xl px-3 py-2.5 text-[13px] ${FEEDBACK.wrong}`}>
+            <p className={`mt-4 max-w-[28rem] rounded-xl px-3 py-2.5 text-[13px] ${FEEDBACK.wrong}`}>
               Not yet — {score}/{total}. Try again after another pass through the drills.
             </p>
           )}
         </main>
-        <footer className="pointer-events-none absolute inset-x-0 bottom-0 bg-gradient-to-t from-[#F6F5F1] via-[#F6F5F1]/95 to-transparent px-4 pt-8 pb-[max(1rem,env(safe-area-inset-bottom))]">
-          <div className="pointer-events-auto">
+        <footer className={DOCK_SHELL}>
+          <div className={DOCK_STACK}>
             <button
               type="button"
               onClick={() => (pass ? onPass(score, total) : onFail())}
@@ -160,18 +162,20 @@ export function TestStep({
 
   return (
     <>
-      <main className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-4 pt-3 pb-40">
-        <p className="mb-2 text-[10px] uppercase tracking-wide text-[#6E6E78]">
-          Question {qIdx + 1} / {total}
-        </p>
-        <QuestionCard
-          question={question}
-          selected={selected}
-          onSelect={(i) => setSelections((s) => ({ ...s, [question.id]: i }))}
-        />
+      <main className={`${MAIN_SHELL} pb-40`}>
+        <div className={READING_COL}>
+          <p className="mb-2 text-[10px] uppercase tracking-wide text-[#6E6E78] md:mb-3">
+            Question {qIdx + 1} / {total}
+          </p>
+          <QuestionCard
+            question={question}
+            selected={selected}
+            onSelect={(i) => setSelections((s) => ({ ...s, [question.id]: i }))}
+          />
+        </div>
       </main>
-      <footer className="pointer-events-none absolute inset-x-0 bottom-0 bg-gradient-to-t from-[#F6F5F1] via-[#F6F5F1]/95 to-transparent px-4 pt-8 pb-[max(1rem,env(safe-area-inset-bottom))]">
-        <div className="pointer-events-auto">
+      <footer className={DOCK_SHELL}>
+        <div className={DOCK_STACK}>
           <button
             type="button"
             onClick={() => setQIdx((n) => n + 1)}

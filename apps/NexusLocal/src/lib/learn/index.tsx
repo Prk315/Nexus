@@ -14,6 +14,13 @@
  * `flex-1` lets it fill the remaining viewport height below the shared
  * header/nav — the same trick as a `fixed inset-0` layer without covering
  * the chrome above it.
+ *
+ * v3 (2026-08-10): desktop reading layout — DESIGN.md §8. The page keeps ONE
+ * centred column at every width (`max-w-xl` → `md:max-w-2xl`) rather than
+ * fanning the spine and the review card out side-by-side on a wide Mac
+ * window. The spine is the hero and the review card is its footer stat; a
+ * two-column split at 2000px would leave both floating in the middle of
+ * nowhere. Wide windows buy margin, not more columns.
  */
 
 import { PathPanel } from "./PathPanel";
@@ -22,7 +29,7 @@ import { ReviewPanel } from "./ReviewPanel";
 export function LearnPage() {
   return (
     <div className="-mx-6 -mb-6 flex-1 overflow-y-auto bg-[#F6F5F1] text-[#1A1A24]">
-      <div className="mx-auto flex max-w-xl flex-col gap-6 px-4 pb-16 pt-6 sm:px-6">
+      <div className="mx-auto flex max-w-xl flex-col gap-6 px-4 pb-16 pt-6 sm:px-6 md:max-w-2xl md:gap-10 md:px-8 md:pb-24 md:pt-10">
         <PathPanel />
         <ReviewPanel />
       </div>

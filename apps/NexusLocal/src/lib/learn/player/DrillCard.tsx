@@ -1,7 +1,8 @@
 /**
  * One drill, full attention (`Player.tsx` §3.5). Owns its own check/hint/
- * solution/grade flow; `PracticeStep.tsx` remounts a fresh instance per drill
- * via `key={drill.id}` rather than resetting state itself.
+ * solution/grade flow; every caller (`LayerStep.tsx`, `FinalRound.tsx`,
+ * `ReviewSession.tsx`) remounts a fresh instance per drill via
+ * `key={drill.id}` rather than resetting state itself.
  *
  * `text`-type drills are self-graded (`answers.checkText` always returns
  * `null`): the "Check" button reads "Show solution" and there is no
@@ -19,7 +20,18 @@ import type { Archetype, Drill, Grade, Lens } from "../types";
 import { checkAnswer, checkTilesBuild, checkTilesSelect } from "../answers";
 import { Markdown } from "../Markdown";
 import { TileDrill } from "./TileDrill";
-import { FEEDBACK, LENS, SOLID_BAR, TRANSLATE_BAR } from "./tokens";
+import {
+  ANSWER_COL,
+  CARD,
+  DOCK_SHELL,
+  DOCK_STACK,
+  FEEDBACK,
+  LENS,
+  MAIN_SHELL,
+  READING_COL,
+  SOLID_BAR,
+  TRANSLATE_BAR,
+} from "./tokens";
 
 const ARCHETYPE_LABEL: Record<Archetype, string> = {
   computational: "COMPUTATIONAL",
@@ -117,15 +129,19 @@ export function DrillCard({
 
   return (
     <>
-      <main className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-4 pt-3 pb-48">
+      <main className={`${MAIN_SHELL} pb-48`}>
+        <div className={READING_COL}>
         <div className="flex items-center justify-between text-[10px] uppercase tracking-wide text-[#6E6E78]">
           <span>{indexLabel}</span>
         </div>
 
-        <div key={drill.id} className="relative mt-2 animate-[learn-step-in_.18s_ease-out] overflow-hidden rounded-xl border border-black/[0.06] bg-white p-3 shadow-[0_1px_8px_rgba(0,0,0,0.05)]">
+        <div
+          key={drill.id}
+          className={`relative mt-2 animate-[learn-step-in_.18s_ease-out] overflow-hidden ${CARD} p-3 md:mt-3 md:p-8`}
+        >
           <div className={`absolute inset-x-0 top-0 h-[2px] ${topBarClass}`} />
 
-          <div className="flex items-center justify-between">
+          <div className="flex items-center justify-between gap-3">
             <span className="text-[10px] font-semibold uppercase tracking-[0.14em] text-[#6E6E78]/70">
               {ARCHETYPE_LABEL[archetype]}
             </span>
@@ -145,9 +161,13 @@ export function DrillCard({
             </div>
           </div>
 
-          <Markdown className="mt-2 text-[15px] leading-relaxed text-[#1A1A24]/85">{drill.prompt_md}</Markdown>
+          <Markdown className="mt-2 text-[15px] leading-relaxed text-[#1A1A24]/85 md:mt-4 md:text-[16.5px]">
+            {drill.prompt_md}
+          </Markdown>
 
-          <div className={`mt-3 ${shaking ? "animate-[learn-shake_.34s]" : ""}`}>
+          {/* Answer surfaces stay hand-sized: a text field or an MCQ option
+              stretched to a 46rem measure reads as a form, not a question. */}
+          <div className={`mt-3 md:mt-6 ${ANSWER_COL} ${shaking ? "animate-[learn-shake_.34s]" : ""}`}>
             {drill.answer_type === "numeric" && (
               <input
                 inputMode="decimal"
@@ -243,7 +263,7 @@ export function DrillCard({
 
           {!isText && checked && result !== null && (
             <div
-              className={`mt-3 flex animate-[learn-step-in_.18s_ease-out] items-center gap-2 rounded-xl px-3 py-2.5 text-[13px] ${
+              className={`mt-3 flex animate-[learn-step-in_.18s_ease-out] items-center gap-2 rounded-xl px-3 py-2.5 text-[13px] md:mt-4 md:max-w-[34rem] ${
                 result ? FEEDBACK.correct : FEEDBACK.wrong
               }`}
             >
@@ -256,7 +276,7 @@ export function DrillCard({
             hints.slice(0, hintsShown).map((hint, i) => (
               <div
                 key={i}
-                className={`mt-2 animate-[learn-step-in_.2s_ease-out] rounded-r-lg py-2 pl-3 pr-2 text-[13px] text-[#1A1A24]/70 ${LENS[drill.lens].edge} ${LENS[drill.lens].tint}`}
+                className={`mt-2 animate-[learn-step-in_.2s_ease-out] rounded-r-lg py-2 pl-3 pr-2 text-[13px] text-[#1A1A24]/70 md:mt-3 md:py-3.5 md:pl-6 md:pr-5 md:text-[14.5px] ${LENS[drill.lens].edge} ${LENS[drill.lens].tint}`}
               >
                 <span className="mr-2 text-[10px] uppercase tracking-wide text-[#6E6E78]/70">Hint {i + 1}</span>
                 {hint}
@@ -264,17 +284,20 @@ export function DrillCard({
             ))}
 
           {showSolution && drill.solution_md && (
-            <div className="relative mt-3 overflow-hidden rounded-xl border border-black/[0.06] bg-white p-3">
+            <div className="relative mt-3 overflow-hidden rounded-xl border border-black/[0.06] bg-white p-3 pl-4 md:mt-6 md:rounded-2xl md:p-7 md:pl-9">
               <div className="absolute inset-y-0 left-0 w-[2px] bg-gradient-to-b from-indigo-500 to-fuchsia-600" />
               <p className="text-[10px] font-semibold uppercase tracking-[0.14em] text-[#6E6E78]/70">SOLUTION</p>
-              <Markdown className="mt-1.5 text-[14px] leading-relaxed text-[#1A1A24]/80">{drill.solution_md}</Markdown>
+              <Markdown className="mt-1.5 text-[14px] leading-relaxed text-[#1A1A24]/80 md:mt-3 md:text-[16px]">
+                {drill.solution_md}
+              </Markdown>
             </div>
           )}
         </div>
+        </div>
       </main>
 
-      <footer className="pointer-events-none absolute inset-x-0 bottom-0 bg-gradient-to-t from-[#F6F5F1] via-[#F6F5F1]/95 to-transparent px-4 pt-8 pb-[max(1rem,env(safe-area-inset-bottom))]">
-        <div className="pointer-events-auto flex flex-col gap-2">
+      <footer className={DOCK_SHELL}>
+        <div className={DOCK_STACK}>
           {!gradeVisible && (
             <div className="flex items-center gap-3 text-[12px]">
               {hintsShown < hints.length && (

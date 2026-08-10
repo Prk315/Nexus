@@ -226,7 +226,7 @@ export function PathPanel() {
   }
 
   return (
-    <section className="flex flex-col gap-2">
+    <section className="flex flex-col gap-2 md:gap-3">
       <svg width="0" height="0" className="absolute" aria-hidden>
         <defs>
           <linearGradient id="pathGrad" x1="0" y1="0" x2="1" y2="1">
@@ -237,7 +237,9 @@ export function PathPanel() {
       </svg>
 
       <div className="flex items-center justify-between">
-        <h2 className="text-xs uppercase tracking-wide text-[#6E6E78]">Learn · Lineær Algebra</h2>
+        <h2 className="text-xs uppercase tracking-[0.14em] text-[#6E6E78] md:text-[13px]">
+          Learn · Lineær Algebra
+        </h2>
         <button
           type="button"
           onClick={() => setReloadNonce((n) => n + 1)}
@@ -262,21 +264,21 @@ export function PathPanel() {
         </div>
       ) : (
         <>
-          <div className="flex items-center gap-3 rounded-xl border border-black/[0.06] bg-white p-3 shadow-[0_1px_8px_rgba(0,0,0,0.05)]">
+          <div className="flex items-center gap-3 rounded-xl border border-black/[0.06] bg-white p-3 shadow-[0_1px_8px_rgba(0,0,0,0.05)] md:gap-5 md:rounded-2xl md:p-5">
             <HeaderRing mastered={masteredCount} total={total} />
             <div className="min-w-0">
-              <div className="text-xs text-[#6E6E78]">
+              <div className="text-xs text-[#6E6E78] md:text-sm">
                 {masteredCount} / {total} mastered
               </div>
               {currentChapterLabel && (
-                <div className="mt-0.5 truncate text-[10px] uppercase tracking-wide text-[#6E6E78]/70">
+                <div className="mt-0.5 truncate text-[10px] uppercase tracking-wide text-[#6E6E78]/70 md:mt-1 md:text-[11px]">
                   {currentChapterLabel}
                 </div>
               )}
             </div>
           </div>
 
-          <div ref={listRef} className="relative flex flex-col">
+          <div ref={listRef} className="relative flex flex-col md:mt-1">
             <div className="pointer-events-none absolute left-[14px] top-0 bottom-0 w-px bg-black/[0.08]" />
             <div
               className="pointer-events-none absolute left-[14px] top-0 w-px rounded-full bg-gradient-to-b from-indigo-500 to-fuchsia-500 shadow-[0_0_10px_0_rgba(168,85,247,0.45)] transition-[height] duration-700 ease-[cubic-bezier(.16,1,.3,1)]"
@@ -371,8 +373,8 @@ function HeaderRing({ mastered, total }: { mastered: number; total: number }) {
 function ChapterHeader({ chapter, mastered, total }: { chapter: string; mastered: number; total: number }) {
   const pct = total > 0 ? Math.round((mastered / total) * 100) : 0;
   return (
-    <div className="relative flex items-center gap-2 pl-[14px] pt-4 pb-1">
-      <span className="-ml-[14px] w-7 shrink-0 bg-[#F6F5F1] text-center text-[10px] font-semibold tracking-wider text-[#6E6E78]/70">
+    <div className="relative flex items-center gap-2 pl-[14px] pt-4 pb-1 md:gap-3 md:pt-7 md:pb-2">
+      <span className="-ml-[14px] w-7 shrink-0 bg-[#F6F5F1] text-center text-[10px] font-semibold tracking-wider text-[#6E6E78]/70 md:text-[11px]">
         {chapter}
       </span>
       <span className="h-[2px] flex-1 overflow-hidden rounded-full bg-black/[0.07]">
@@ -447,14 +449,16 @@ function UnitRow({
         disabled={!clickable}
         aria-expanded={opensFold ? expanded : undefined}
         onClick={opensFold ? onToggleExpand : opensPlayer ? onOpen : undefined}
-        className={`group flex w-full items-start gap-3 rounded-xl px-1 py-2 text-left transition-colors ${
-          clickable ? "active:bg-black/[0.03]" : "cursor-default"
+        className={`group flex w-full items-start gap-3 rounded-xl px-1 py-2 text-left transition-colors md:gap-4 md:py-2.5 ${
+          clickable ? "active:bg-black/[0.03] md:hover:bg-black/[0.025]" : "cursor-default"
         }`}
       >
         <UnitNode status={status} draft={draft} />
         <span className="min-w-0 flex-1 pt-0.5">
-          <span className={`block truncate text-[14px] font-medium ${STATUS_ROW_TEXT[status]}`}>{title}</span>
-          <span className="mt-0.5 block text-[10px] text-[#6E6E78]/70">{meta}</span>
+          <span className={`block truncate text-[14px] font-medium md:text-[15px] ${STATUS_ROW_TEXT[status]}`}>
+            {title}
+          </span>
+          <span className="mt-0.5 block text-[10px] text-[#6E6E78]/70 md:text-[11px]">{meta}</span>
         </span>
         {opensPlayer && <span className="pt-1 text-[#6E6E78]/45 group-active:text-[#1A1A24]/60">›</span>}
       </button>

@@ -11,7 +11,7 @@
  */
 
 import type { Lens } from "../types";
-import { LENS } from "./tokens";
+import { DOCK_SHELL, DOCK_STACK, LENS } from "./tokens";
 
 const LENS_HEX: Record<Lens, string> = { row: "#22d3ee", matrix: "#818cf8", column: "#e879f9" };
 const SHARD_LENSES: Lens[] = ["row", "matrix", "column"];
@@ -102,7 +102,7 @@ export function Graduation({
         {conceptIds.length > 0 && (
           <div className="mt-6 max-w-full">
             <p className="text-[10px] uppercase tracking-wide text-[#6E6E78]/70">Added to review</p>
-            <div className="mt-2 flex max-w-[320px] flex-wrap justify-center gap-1.5">
+            <div className="mt-2 flex max-w-[320px] flex-wrap justify-center gap-1.5 md:max-w-[34rem]">
               {conceptIds.map((id, i) => (
                 <span
                   key={id}
@@ -117,8 +117,8 @@ export function Graduation({
         )}
       </main>
 
-      <footer className="pointer-events-none absolute inset-x-0 bottom-0 bg-gradient-to-t from-[#F6F5F1] via-[#F6F5F1]/95 to-transparent px-4 pt-8 pb-[max(1rem,env(safe-area-inset-bottom))]">
-        <div className="pointer-events-auto">
+      <footer className={DOCK_SHELL}>
+        <div className={DOCK_STACK}>
           <button
             type="button"
             onClick={onContinue}

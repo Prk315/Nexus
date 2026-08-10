@@ -16,6 +16,37 @@
 
 import type { Lens } from "../types";
 
+// --- Desktop reading layout (DESIGN.md §8) ----------------------------------
+//
+// The overlay is phone-first and stays byte-identical below `md`. Everything
+// here is the desktop enhancement: one centred reading column so prose never
+// runs to a 2000px measure, and a narrower action column so the dock doesn't
+// stretch a primary button across the whole window.
+//
+// Complete literal strings, per DESIGN.md §1.1 — nothing interpolated.
+
+/** ~72ch at the 15–16px body size. Wraps `<main>` content and the header. */
+export const READING_COL = "mx-auto w-full max-w-[46rem]";
+
+/** Scroll shell for a step's `<main>`. Call sites append their own `pb-*`. */
+export const MAIN_SHELL =
+  "min-h-0 flex-1 overflow-y-auto overscroll-contain px-4 pt-3 md:px-8 md:pt-8";
+
+/** The dock scrim. Full-bleed by design — only its *contents* are columnar. */
+export const DOCK_SHELL =
+  "pointer-events-none absolute inset-x-0 bottom-0 bg-gradient-to-t from-[#F6F5F1] via-[#F6F5F1]/95 to-transparent px-4 pt-8 pb-[max(1rem,env(safe-area-inset-bottom))] md:px-8";
+
+/** Action stack inside the dock: full width on phone, 26rem centred on desktop. */
+export const DOCK_STACK =
+  "pointer-events-auto mx-auto flex w-full max-w-[46rem] flex-col gap-2 md:max-w-[26rem]";
+
+/** White card stock + desktop padding step. */
+export const CARD =
+  "rounded-xl border border-black/[0.06] bg-white shadow-[0_1px_8px_rgba(0,0,0,0.05)] md:rounded-2xl";
+
+/** Interactive answer surfaces (inputs, MCQ options, tiles) stay hand-sized. */
+export const ANSWER_COL = "md:max-w-[34rem]";
+
 export const LENS: Record<
   Lens,
   {
@@ -142,7 +173,11 @@ export const PLAYER_STYLE = `
   *[class*="learn-"] { animation-duration: .01ms !important; animation-iteration-count: 1 !important; }
 }
 
-/* KaTeX at phone width — DESIGN.md §1.5 */
+/* KaTeX at phone width — DESIGN.md §1.5.
+   Note: Markdown.tsx owns the *layout* of display math (margins, alignment,
+   the scroller) under its higher-specificity ".learn-md .katex-display"
+   selector — DESIGN.md §8.3. What stays here is the size/weight/whitespace
+   trio, which applies to any KaTeX the overlay renders. */
 .katex-display { overflow-x: auto; overflow-y: hidden; padding: 2px 0; margin: 0.55em 0; }
 .katex { font-size: 1.03em; font-weight: 400; white-space: nowrap; }
 .katex-display > .katex { font-size: 1.12em; white-space: normal; }

@@ -196,6 +196,25 @@ async function fetchAttemptCounts(itemRefs: string[]): Promise<Record<string, nu
   return counts;
 }
 
+/**
+ * Which of these drills this user has already graded at least once — i.e. the
+ * Player's "solved" set, recovered from `lr_attempt_log`.
+ *
+ * Same definition of "solved" the Player uses in-session (a drill counts once
+ * it has been graded, at any grade), just persisted. The layered flow needs it
+ * for continuity: re-entering a unit resumes at the first layer with unsolved
+ * drills, and the test's `unlock_ratio` no longer resets every time the
+ * overlay is closed.
+ *
+ * Failures are the caller's to swallow — an empty set means "no evidence of
+ * solving", which keeps the test gate closed rather than opening it, the same
+ * fail-toward-still-gated posture the productivity stack uses.
+ */
+export async function fetchSolvedDrillIds(drillIds: string[]): Promise<Set<string>> {
+  const counts = await fetchAttemptCounts(drillIds);
+  return new Set(Object.keys(counts));
+}
+
 const REVIEW_QUEUE_SIZE = 10;
 
 /** One resolved drill in a review session, plus the bookkeeping ReviewSession.tsx needs. */

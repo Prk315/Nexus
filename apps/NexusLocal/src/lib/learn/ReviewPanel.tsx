@@ -122,8 +122,8 @@ export function ReviewPanel() {
   }, []);
 
   return (
-    <section className="flex flex-col gap-2">
-      <h2 className="text-xs uppercase tracking-wide text-[#6E6E78]">Review</h2>
+    <section className="flex flex-col gap-2 md:gap-3">
+      <h2 className="text-xs uppercase tracking-[0.14em] text-[#6E6E78] md:text-[13px]">Review</h2>
 
       {verdict === undefined && (
         <div className="rounded-xl border border-black/[0.06] bg-white p-4 text-center text-[12px] text-[#6E6E78]/70 shadow-[0_1px_8px_rgba(0,0,0,0.05)]">
@@ -138,7 +138,7 @@ export function ReviewPanel() {
             <button
               type="button"
               disabled
-              className="flex min-h-[44px] w-full items-center justify-center rounded-lg bg-black/[0.05] px-3 py-2 text-[13px] text-[#1A1A24]/70"
+              className="flex min-h-[44px] w-full items-center justify-center rounded-lg bg-black/[0.05] px-3 py-2 text-[13px] text-[#1A1A24]/70 md:max-w-[26rem]"
             >
               All caught up
             </button>
@@ -146,7 +146,7 @@ export function ReviewPanel() {
             <button
               type="button"
               onClick={() => setSessionOpen(true)}
-              className="w-full rounded-xl bg-gradient-to-r from-indigo-500 to-fuchsia-600 px-4 py-3 text-[15px] font-semibold text-white transition-transform active:scale-[0.985]"
+              className="w-full rounded-xl bg-gradient-to-r from-indigo-500 to-fuchsia-600 px-4 py-3 text-[15px] font-semibold text-white transition-transform active:scale-[0.985] md:max-w-[26rem]"
             >
               {`Start review${verdict.due_concepts?.length ? ` · ${verdict.due_concepts.length}` : ""}`}
             </button>
@@ -184,7 +184,7 @@ export function ReviewPanel() {
           <button
             type="button"
             onClick={() => setSessionOpen(true)}
-            className="w-full rounded-xl bg-gradient-to-r from-indigo-500 to-fuchsia-600 px-4 py-3 text-[15px] font-semibold text-white transition-transform active:scale-[0.985]"
+            className="w-full rounded-xl bg-gradient-to-r from-indigo-500 to-fuchsia-600 px-4 py-3 text-[15px] font-semibold text-white transition-transform active:scale-[0.985] md:max-w-[26rem]"
           >
             Start review
           </button>
@@ -208,10 +208,10 @@ function VerdictStats({
   const dots = weekDots(verdict.streak_days, verdict.last_session_date);
 
   return (
-    <div className="flex items-stretch gap-3 rounded-xl border border-black/[0.06] bg-white p-3 shadow-[0_1px_8px_rgba(0,0,0,0.05)]">
+    <div className="flex items-stretch gap-3 rounded-xl border border-black/[0.06] bg-white p-3 shadow-[0_1px_8px_rgba(0,0,0,0.05)] md:gap-5 md:rounded-2xl md:p-5">
       <div className="flex flex-col justify-between">
         <div
-          className={`font-mono text-3xl font-semibold leading-none tabular-nums ${
+          className={`font-mono text-3xl font-semibold leading-none tabular-nums md:text-4xl ${
             streak > 0 ? "bg-gradient-to-br from-indigo-600 to-fuchsia-600 bg-clip-text text-transparent" : "text-[#6E6E78]/50"
           }`}
         >
@@ -232,7 +232,9 @@ function VerdictStats({
       </div>
 
       <div className="ml-auto text-right">
-        <div className="font-mono text-3xl font-semibold leading-none tabular-nums text-[#1A1A24]/90">{due}</div>
+        <div className="font-mono text-3xl font-semibold leading-none tabular-nums text-[#1A1A24]/90 md:text-4xl">
+          {due}
+        </div>
         <div className="text-[10px] uppercase tracking-wide text-[#6E6E78]/80">concepts due</div>
         {stability && stability.total > 0 && (
           <div className="mt-1 text-[9px] text-[#6E6E78]/60">

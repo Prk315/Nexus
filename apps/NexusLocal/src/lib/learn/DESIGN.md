@@ -1021,3 +1021,317 @@ saturated step (`Easy`).
   element that forgets an explicit colour (e.g. an unstyled `<span>`) falls
   back to ink rather than inheriting the app body's dark-theme
   `color: #e5e7eb` from `index.css`.
+
+---
+
+## 8. Desktop reading layout — 2026-08-10
+
+Learn was designed phone-first and then reviewed on a ~2000 px Mac window,
+where it fell apart in six specific ways: prose at a ~300-character measure,
+an intro that read as one undifferentiated slab, GFM tables rendering with no
+borders/padding at all, theory cards whose lens chip was flung to the far edge
+away from its kind label, a "Practice →" button and a 3-segment stepper
+stretched edge-to-edge, and display math crammed against the card's left edge.
+
+**§0–§7 are unchanged.** This section is purely additive: everything below
+`md` (768 px) renders byte-identical to v2 with two deliberate exceptions,
+called out as such below. Every desktop change is an `md:`/`lg:` enhancement
+layered over the existing phone-first classes.
+
+### 8.1 The measure, and the three column widths
+
+There are exactly **three** widths in the Learn surface. Do not invent a
+fourth.
+
+| Column | Width | What sits in it |
+|---|---|---|
+| **Reading column** | `max-w-[46rem]` (736 px ≈ 72 ch at 15–16 px) | Everything inside the Player's `<main>` — and the Player's own `<header>`, so the chrome tracks the content and the overlay reads as one sheet of paper rather than a phone layout stretched wide. |
+| **Action column** | `md:max-w-[26rem]` (416 px) | The dock's contents: primary button, ghost row, the 0–3 grade bar, the test-locked meter. Full-width on phone. |
+| **Answer column** | `md:max-w-[34rem]` (544 px) | Inputs, MCQ options, tiles, the result banner. A text field or an option button stretched to 736 px reads as a *form*, not as a question. |
+
+The paper background (`#F6F5F1`) and the dock scrim stay **full-bleed** — only
+their contents are columnar. A scrim that stops at 736 px would draw a visible
+seam across the window.
+
+Shared literals live in `player/tokens.tsx` (complete class strings, §1.1):
+
+```ts
+READING_COL = "mx-auto w-full max-w-[46rem]"
+MAIN_SHELL  = "min-h-0 flex-1 overflow-y-auto overscroll-contain px-4 pt-3 md:px-8 md:pt-8"
+DOCK_SHELL  = "…absolute inset-x-0 bottom-0 …px-4 pt-8 pb-[max(1rem,env(safe-area-inset-bottom))] md:px-8"
+DOCK_STACK  = "pointer-events-auto mx-auto flex w-full max-w-[46rem] flex-col gap-2 md:max-w-[26rem]"
+CARD        = "rounded-xl border border-black/[0.06] bg-white shadow-[0_1px_8px_rgba(0,0,0,0.05)] md:rounded-2xl"
+ANSWER_COL  = "md:max-w-[34rem]"
+```
+
+`MAIN_SHELL` deliberately omits bottom padding — call sites append their own
+(`pb-40` normally, `pb-48` on `DrillCard`, which has a two-row dock). The §6
+checklist item "`<main>` has `pb-40`" still holds.
+
+### 8.2 Spacing scale
+
+One step up at `md`, never two. Card padding `p-3 → md:p-8` (`md:p-7` where the
+card is a nested/recessed surface). Gap between theory cards `gap-3 → md:gap-8`.
+Section rhythm inside a card: title `md:mt-3`, statement `md:mt-4`,
+translations `md:mt-5`, `connect_md` `md:mt-6` behind a `md:border-t
+md:border-black/[0.06] md:pt-5` hairline — on a tall card the closing aside
+needs a rule to stop reading as another paragraph of the statement.
+
+Body type steps once too: `text-[15px] → md:text-[16.5px]` for statements,
+prompts and solutions; `text-[13px] → md:text-[15.5px]` for the quieter
+translation/lens-note tier. Card titles go `text-[15px] → md:text-xl`.
+
+### 8.3 `Markdown.tsx` is now the typographic layer
+
+This was the actual root cause of "wall of text" and "tables are broken", and
+it is fixed in exactly one place so every consumer inherits it.
+
+`react-markdown` emits bare `<p>/<ul>/<table>` with **no classes**, and
+Tailwind's preflight strips list markers, table borders and cell padding. The
+result was unstyled HTML everywhere: paragraphs with no rhythm and GFM tables
+whose cells fused together (the three-perspectives translation table was the
+visible casualty).
+
+**Mechanism.** One stylesheet scoped under `.learn-md`, injected **once** into
+`document.head` by a module-level side effect, and a `learn-md` class added to
+every `Markdown` wrapper. Two non-obvious choices:
+
+- *Imperative head injection, not `<style>` in the JSX* — `Markdown` renders
+  dozens of times per screen (every statement, tile, MCQ option); a `<style>`
+  per instance would duplicate the sheet that many times.
+- *Unlayered CSS* — Tailwind v4 puts preflight in `@layer base`, and an
+  unlayered rule beats a layered one regardless of source order. That is
+  exactly what's needed to undo preflight's resets without an `!important` per
+  property. It also means `.learn-md` wins over a `leading-relaxed` on the same
+  wrapper, which is intended: **body line-height is 1.7**, set once.
+
+**Prose recipe:** `p` margin `0.85em 0`; first/last child margins zeroed;
+`strong` → `600` weight at full ink `#1A1A24` (callers render body at `/75`, so
+bold actually reads as emphasis); `ul`/`ol` markers restored with `1.4em`
+indent and `#6E6E78` markers; `h1–h4` at `1.32/1.18/1.06/1em` with
+`1.5em 0 0.5em` margins; `code`/`pre` on a `rgba(0,0,0,0.045)` chip;
+`blockquote` on a 2 px hairline rail.
+
+**Table recipe** (`.learn-md-table`, the wrapper div comes from a `components`
+override on `table` so the scroller exists at every width):
+
+| Part | Rule |
+|---|---|
+| Wrapper | `overflow-x: auto; overscroll-behavior-x: contain; margin: 1.25em 0` (`1.5em` at `md`) |
+| Table | `width: 100%; border-collapse: collapse; text-align: left; font-size: 0.94em; line-height: 1.55` |
+| Header | `0.45rem 0.75rem` padding, `0.76em` uppercase `0.08em`-tracked semibold in `#6E6E78`, `nowrap`, `1px` bottom rule at `rgba(0,0,0,0.16)` |
+| Cell | `0.55rem 0.75rem` padding, `vertical-align: top`, `1px` top hairline at `rgba(0,0,0,0.07)`, none on the first row |
+| First column | `font-weight: 600; color: #1A1A24` — it is the row's key (the lens name, the object being translated) |
+| Edges | first/last cell drop their outer padding so the table's ink aligns with the prose measure |
+| Math in cells | `.learn-md-table .katex { white-space: nowrap }` |
+
+**Display math is left-aligned, not centred** — this is a bug fix, not taste,
+and it is the *first* of the two changes that also lands on phone. KaTeX
+centres `.katex-display`; content wider than an `overflow-x: auto` box then
+places its own left edge at negative scroll, i.e. permanently unreachable in
+LTR. A wide `\begin{array}{rcrcrcr}` system was literally missing its first
+column with no way to scroll to it. Left alignment makes the scroll gesture
+recover the whole expression. Margins go `1.15em → md:1.4em`, and
+`.katex-display > .katex` steps to `1.18em` at `md`.
+
+`player/tokens.tsx`'s `PLAYER_STYLE` keeps only the §1.5 size/weight/whitespace
+trio; `Markdown.tsx` owns display-math *layout* under the
+higher-specificity `.learn-md .katex-display` selector.
+
+`.learn-md-lead > p:first-child` gets one size step (`1.06em`) at full ink —
+used by the unit intro. `.learn-md.inline > p` collapses to
+`display: inline; margin: 0` so MCQ options and tiles don't gain block rhythm.
+
+### 8.4 Theory step: a real header, and card anatomy
+
+The unit now opens with a **header block** instead of cold prose: the unit
+title as a display heading (`text-[22px] → md:text-[34px]`, `leading-[1.15]`,
+`tracking-[-0.015em]`), then a meta row of `unit_code · est_minutes min ·
+N boxes · M drills` plus the unit's lens chips. The overlay's chrome title is
+a 13 px truncated label — it was never a page title, and the intro was
+carrying that job with no typography to do it.
+
+`intro_md` keeps its gradient-left-rail card (`p-3 pl-4 → md:p-8 md:pl-10`) and
+picks up `.learn-md-lead`, so the opening sentence sets up the unit at one size
+step above the rest. **Long intros are not truncated** — measure and rhythm
+were the problem, not length.
+
+Theory card header: kind label and lens chip are now **adjacent**
+(`flex flex-wrap items-center gap-x-2.5`), not at opposite card edges. This is
+the *second* change that also lands on phone, and it is intentional: they are
+the typographic and chromatic halves of one "what is this box" statement, and
+at any width above a phone `justify-between` orphaned the chip. Then the title
+at `md:text-xl`, then the statement.
+
+### 8.5 The lens-note card is not a theory card
+
+The three-perspectives note is the unit's thesis, so it inverts the theory
+card's material: **recessed, not raised** — `bg-black/[0.025]` with a
+`border-black/[0.05]` hairline and no shadow, against the white raised cards
+around it — and carries a 2 px top bar
+`bg-gradient-to-r from-cyan-500 via-indigo-500 to-fuchsia-500` that literally
+*is* row → matrix → column. Its heading steps to `md:text-[18px]` and the three
+lens chips moved from a right-floated cluster to a row **under** the heading.
+This does not violate §0 rule 1: the bar is three lenses, not decoration.
+
+### 8.6 Path and Review: one column, not two
+
+`LearnPage` keeps **one centred column at every width** — `max-w-xl` →
+`md:max-w-2xl` (672 px), `md:gap-10 md:pt-10 md:pb-24`. A `lg:` side-by-side
+spine + review was considered and rejected: the spine is the hero and the
+review card is its footer stat, so splitting them at 2000 px leaves both
+floating in the middle of nowhere. **Wide windows buy margin, not more
+columns.** If a second column is ever added it should carry genuinely new
+content (a unit preview pane), not re-flow what's already there.
+
+Within that column, `md:` steps only: panel headings `text-xs →
+md:text-[13px]` at `tracking-[0.14em]`; the header-ring and streak cards
+`p-3 → md:p-5`, `rounded-xl → md:rounded-2xl`; the two big numerals
+`text-3xl → md:text-4xl`; unit rows `md:py-2.5` with `md:text-[15px]` titles
+and a `md:hover:bg-black/[0.025]` cursor affordance (hover as an extra only —
+§5's rule that no affordance may *depend* on hover still holds); chapter
+headers `md:pt-7`. Review CTAs are capped at `md:max-w-[26rem]`, matching the
+action column, so a page-level button is never 672 px wide.
+
+### 8.7 Checklist addendum
+
+- [ ] New content inside the Player goes in a `READING_COL` wrapper — never
+      straight into `<main>`.
+- [ ] New dock content goes in `DOCK_STACK`, not a bare `pointer-events-auto` div.
+- [ ] New interactive answer surfaces get `ANSWER_COL`.
+- [ ] Anything rendering authored markdown goes through `Markdown` — never a
+      hand-rolled `<div dangerouslySetInnerHTML>`, or it loses the whole §8.3
+      prose/table layer.
+- [ ] Phone rendering is unchanged unless the change is one of the two
+      deliberate exceptions above (display-math alignment, kind-label/chip
+      adjacency).
+
+---
+
+## 9. The layered unit flow — 2026-08-10
+
+The Player used to be three blocked steps: **all** theory, then **all**
+practice, then the test. Read on a real unit that means opening with six to
+nine theory cards in one scroll before a single question — which is exactly
+the "handed everything at once" feeling the product is supposed to avoid.
+
+The unit is now consumed as **interleaved layers**
+(`LEARN_PLAN.md`, "Layered unit flow (pinned, 2026-08-10)"):
+
+```
+Layer 1:  theory chunk  →  worked example  →  that chunk's drills
+Layer 2:  theory chunk  →  worked example  →  that chunk's drills
+   …
+Rapid round:  the archetype:"tiles" groups, whole-unit mix, no theory
+Test:         unchanged — graduate iff ≥ 75 %
+```
+
+**§0–§8 are unchanged.** Every card, token, column width and motion rule below
+`md` and above it is exactly as specified there; this section only says how
+they are now *sequenced*. Nothing in this section changes the DB — layers are
+derived client-side by `layers.ts` from the existing v1 content.
+
+### 9.1 Stepper anatomy
+
+Three fixed segments become **N**: one per layer, one for the rapid round if
+the unit has any tiles group, and the test. Real content runs 4 layers + round
++ test = **6 segments**, and that is the width budget the design has to hold at
+360 px.
+
+| Segment | Inactive | Active |
+|---|---|---|
+| Layer | the layer **number**, `1`–`N` | `Layer 3` |
+| Rapid round | a **2×2 dot glyph** (`bg-current`, inherits the tone ladder) — the tap/tile concept, never the word | `Rapid round` |
+| Test | `T` | `Test` |
+
+Rules that make six segments legible on a phone:
+
+- Inactive segments spend no horizontal space on words. **Numbers and glyphs
+  only.** Only the active segment renders its label, and it buys the room with
+  `flex-[1.7]` against its neighbours' `flex-1` rather than wrapping —
+  `whitespace-nowrap` + `truncate` are the backstop.
+- Every layer/round segment carries its **solved count** (`2/4`) in
+  `text-[9px] tabular-nums opacity-65`, next to the number. This is what makes
+  a soft gate honest: you can walk past unsolved drills, and the segment says
+  so.
+- The full string (`Layer 3 — 2/4 drills solved`) lives in `aria-label` and
+  `title`; nothing readable is glyph-only for a screen reader.
+
+The bar keeps §3.2's language exactly — a 3 px track filling with
+`from-indigo-500 to-fuchsia-500`. What the fill *means* is now per segment:
+
+- **Layer / rapid round** — the step's **solved-drill ratio**. A step you
+  walked through without solving anything reads as an empty bar, which is the
+  truth. (Steps with no drills fall back to visited = 100 %, active = 60 %.)
+- **Test** — 0, `50 %` while active, `100 %` after graduation.
+- The active segment's *track* darkens to `bg-black/[0.12]` (from
+  `bg-black/[0.07]`) so a 0 %-filled active segment is still identifiable.
+- The locked test keeps §3.2's cue verbatim: `bg-black/[0.04]` +
+  `ring-1 ring-dashed ring-black/10`, tone `text-[#6E6E78]/40`, non-tappable.
+
+Everything stays inside §8.1's reading column — the stepper lives in the
+Player's columnar `<header>`, untouched.
+
+### 9.2 Layer screen order
+
+One layer is a three-beat mini-sequence, each beat a full screen with its own
+dock (`player/LayerStep.tsx`):
+
+1. **Theory** — an eyebrow `LAYER 2 / 4` (`text-[10px]`, `uppercase`,
+   `tracking-[0.14em]`, `#6E6E78/70` — the same eyebrow as `DEFINITION` on a
+   card), then this layer's `TheoryCard`s, identical to §8.4. Layer 1 *only*
+   also carries `UnitOpening` — the display title, meta row, `intro_md` rail
+   card and the recessed lens-note card of §8.4–8.5 — above the eyebrow,
+   because those introduce the unit, not the layer. Dock: `Example →`, or
+   `Practice →` when the group has no `master_demo`.
+2. **Example** — `MasterDemoView`, the §3.4 progressive `{what/why/how}`
+   reveal, verbatim, with the eyebrow `LAYER 2 / 4 · Example`. Dock:
+   `Next step (n/m)` → `Start drills →`, ghost `Skip to drills`.
+3. **Drills** — `DrillCard` per §3.5, verbatim, index label
+   `Layer 2 · Drill 3 / 4`. A layer with no theory boxes (common: `translate`
+   and `truefalse` groups usually re-use concepts an earlier layer taught)
+   simply opens at beat 2.
+
+Then a small **layer-complete** card: `Layer complete — 3/4 drills solved`,
+ghost `Go through this layer again`, primary = the next step, named
+(`Layer 3 →`, `Rapid round →`, `Take the test →`).
+
+The **rapid round** (`player/FinalRound.tsx`) has no theory and no example by
+construction — tiles groups may omit `master_demo` per schema, and the point is
+speed over a whole-unit mix after the layers taught each piece in isolation.
+Its drills are `DrillCard`s labelled `Rapid round · 3 / 5`; the round header
+lives in the index label rather than a gate screen, so entering it costs zero
+taps. It closes on the same completion-card shape, with `Take the test →`.
+
+### 9.3 Continuity rules
+
+- **Solved is persistent.** The solved set is seeded from `lr_attempt_log`
+  (`api.fetchSolvedDrillIds`) — a drill counts as solved once it has been
+  graded, at any grade, which is exactly the in-session definition. A failed
+  lookup resolves to the empty set: "no evidence of solving" keeps the test
+  gate *shut*, never opens it.
+- **Resume forward.** Entering a unit lands on the first layer that still owes
+  drills (then the rapid round, then the test if everything is solved). Within
+  a layer, the drill cursor starts at that layer's first unsolved drill.
+  Failing the test returns you to the same computed resume point, not to
+  layer 1.
+- **Back-nav always works.** Any visited segment is tappable, so the theory of
+  a completed layer is always one tap away.
+- **Forward is soft, not gated.** The *next* segment is tappable too
+  (`i <= maxVisited + 1`), and the layer's primary button advances whether or
+  not its drills are solved. The unit has exactly **one** real gate: the test's
+  `unlock_ratio`, counted across **all** the unit's drills (layers + rapid
+  round), never per layer. When the next step is a locked test, the layer's
+  advance button is disabled and the dock line says how many drills are still
+  needed — the same wording the locked-test meter uses.
+- Grading, memory writes, the `KLADDE` draft badge and the graduation ceremony
+  are untouched by any of this.
+
+### 9.4 Checklist addendum
+
+- [ ] A new step kind adds a `StepSegment` — number-or-glyph when inactive, a
+      label only when active. Never a word on an inactive segment.
+- [ ] Anything that gates forward motion must be the test, or it is a bug:
+      layers are soft.
+- [ ] `deriveLayers` is pure and must stay so — no fetching, no dates, no
+      `Math.random`. It is the one piece of this flow that is unit-testable.

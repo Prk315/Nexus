@@ -153,6 +153,42 @@ export interface UnitContent {
   excluded_concepts?: string[];
 }
 
+// --- Derived layered flow (LEARN_PLAN.md "Layered unit flow", 2026-08-10) ----
+//
+// Client-side only: `layers.deriveLayers(content)` produces these from the
+// v1 content above. Nothing DB-side changes — no `layers` column, no new
+// authored field (an authored override may come later).
+
+export interface UnitLayer {
+  /** 0-based position in `UnitFlow.layers`; the stepper renders `index + 1`. */
+  index: number;
+  /** This layer's theory boxes, in the unit's original theory order. */
+  theory: TheoryBox[];
+  /**
+   * The practice group this layer is built around — its `master_demo` is the
+   * layer's worked example and its `drills` are the layer's practice. `null`
+   * only in the degenerate theory-only layer (a unit whose practice is all
+   * `tiles` groups, or has none at all).
+   */
+  group: PracticeGroup | null;
+  /** `group?.drills ?? []`, hoisted so callers don't null-check twice. */
+  drills: Drill[];
+}
+
+export interface UnitFlow {
+  layers: UnitLayer[];
+  /** The `archetype: "tiles"` groups — the closing rapid round. May be empty. */
+  finalRound: PracticeGroup[];
+  /** Every final-round drill, flattened in group order. */
+  finalDrills: Drill[];
+  test: TestSection;
+  /**
+   * Drills across layers AND the final round — the denominator of the test's
+   * `unlock_ratio`, which stays a whole-unit gate regardless of the split.
+   */
+  totalDrills: number;
+}
+
 // --- DB row types ------------------------------------------------------------
 // Mirror supabase/migrations/20260806190000_learn_lr_schema.sql.
 

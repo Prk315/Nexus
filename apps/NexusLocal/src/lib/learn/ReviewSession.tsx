@@ -27,7 +27,7 @@ import type { Grade, Lens, LrMemoryState } from "./types";
 import { fetchMemoryStates, fetchReviewQueue, logAttempt, upsertMemory, type ReviewQueueItem } from "./api";
 import { applyGrade, defaultMemoryState, isStable, valueMean } from "./memory";
 import { DrillCard } from "./player/DrillCard";
-import { detectSourceLens, PLAYER_STYLE } from "./player/tokens";
+import { detectSourceLens, DOCK_SHELL, DOCK_STACK, PLAYER_STYLE, READING_COL } from "./player/tokens";
 
 export function ReviewSession({ onClose }: { onClose: () => void }) {
   // undefined = loading, null = lr_learn_state has no row at all ("ingen dom
@@ -103,31 +103,33 @@ export function ReviewSession({ onClose }: { onClose: () => void }) {
     <div className="fixed inset-0 z-50 flex flex-col animate-[learn-overlay_.22s_ease-out] bg-[#F6F5F1]/97 backdrop-blur-xl text-[#1A1A24]">
       <style>{PLAYER_STYLE}</style>
 
-      <header className="shrink-0 border-b border-black/[0.08] px-4 pb-2 pt-[max(0.75rem,env(safe-area-inset-top))]">
-        <div className="flex items-center gap-2">
-          <button
-            type="button"
-            onClick={onClose}
-            className="grid h-11 w-11 shrink-0 place-items-center rounded-lg text-[#6E6E78] active:bg-black/[0.05]"
-            aria-label="Close"
-          >
-            ✕
-          </button>
-          <span className="truncate text-[13px] font-medium text-[#1A1A24]/85">Review</span>
+      <header className="shrink-0 border-b border-black/[0.08] px-4 pb-2 pt-[max(0.75rem,env(safe-area-inset-top))] md:px-8">
+        <div className={READING_COL}>
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={onClose}
+              className="grid h-11 w-11 shrink-0 place-items-center rounded-lg text-[#6E6E78] active:bg-black/[0.05]"
+              aria-label="Close"
+            >
+              ✕
+            </button>
+            <span className="truncate text-[13px] font-medium text-[#1A1A24]/85">Review</span>
+            {total > 0 && !done && (
+              <span className="ml-auto shrink-0 font-mono text-[11px] tabular-nums text-[#6E6E78]">
+                {Math.min(index + 1, total)} / {total}
+              </span>
+            )}
+          </div>
           {total > 0 && !done && (
-            <span className="ml-auto shrink-0 font-mono text-[11px] tabular-nums text-[#6E6E78]">
-              {Math.min(index + 1, total)} / {total}
-            </span>
+            <div className="mt-2 h-[3px] w-full overflow-hidden rounded-full bg-black/[0.07]">
+              <span
+                className="block h-full bg-gradient-to-r from-indigo-500 to-fuchsia-500 transition-[width] duration-500 ease-out"
+                style={{ width: `${(index / total) * 100}%` }}
+              />
+            </div>
           )}
         </div>
-        {total > 0 && !done && (
-          <div className="mt-2 h-[3px] w-full overflow-hidden rounded-full bg-black/[0.07]">
-            <span
-              className="block h-full bg-gradient-to-r from-indigo-500 to-fuchsia-500 transition-[width] duration-500 ease-out"
-              style={{ width: `${(index / total) * 100}%` }}
-            />
-          </div>
-        )}
       </header>
 
       {queue === undefined && (
@@ -248,8 +250,8 @@ function SessionEnd({
           </div>
         )}
       </main>
-      <footer className="pointer-events-none absolute inset-x-0 bottom-0 bg-gradient-to-t from-[#F6F5F1] via-[#F6F5F1]/95 to-transparent px-4 pt-8 pb-[max(1rem,env(safe-area-inset-bottom))]">
-        <div className="pointer-events-auto">
+      <footer className={DOCK_SHELL}>
+        <div className={DOCK_STACK}>
           <button
             type="button"
             onClick={onClose}
