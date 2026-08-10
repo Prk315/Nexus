@@ -737,10 +737,12 @@ export async function deleteFoodFromCloud(id: string): Promise<void> {
 
 export async function fetchMealsFromCloud(): Promise<Meal[]> {
   const sb = getSupabaseClient();
+  // Shared library (RLS: read-all, write-own) — every user's saved meals are
+  // visible so anyone can log a meal another user created. Ownership is carried
+  // on user_id and the UI only lets you edit/delete your own.
   const { data, error } = await sb
     .from("protocol_meals")
     .select("*")
-    .eq("user_id", getUserId())
     .order("name", { ascending: true });
   if (error) throw new Error(error.message);
   return (data ?? []) as Meal[];

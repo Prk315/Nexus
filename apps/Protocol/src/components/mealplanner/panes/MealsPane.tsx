@@ -1,5 +1,6 @@
 import { useState } from "react";
-import { ChefHat, Pencil, Trash2, Plus } from "lucide-react";
+import { ChefHat, Pencil, Trash2, Plus, Users, User as UserIcon } from "lucide-react";
+import { useNexusAuth } from "@nexus/core";
 import { useAppDispatch } from "../../../store/hooks";
 import { removeMeal } from "../../../store/slices/mealPlannerSlice";
 import { CARD_STYLE } from "../../../lib/uiHelpers";
@@ -8,9 +9,11 @@ import MealBuilder from "../MealBuilder";
 import type { Food, Meal, MealItem } from "../../../store/types";
 
 /**
- * Full CRUD surface for saved "My Meals" — create, read, edit, delete. Each
- * meal is a card showing its macros and ingredient preview; the whole ingredient
- * list is editable through MealBuilder (opened in edit mode).
+ * Full CRUD surface for the shared meal library — create, read, edit, delete.
+ * Every user's saved meals show here (RLS: read-all, write-own), so anyone can
+ * log a meal another user built; edit/delete are limited to your own. Each meal
+ * is a card showing its macros and ingredient preview; the ingredient list is
+ * editable through MealBuilder (opened in edit mode).
  */
 export default function MealsPane({
   meals, mealItemsById, foodsById,
@@ -20,6 +23,8 @@ export default function MealsPane({
   foodsById: Map<string, Food>;
 }) {
   const dispatch = useAppDispatch();
+  const { user } = useNexusAuth();
+  const myId = user?.id ?? null;
   const [creating, setCreating] = useState(false);
   const [editing, setEditing] = useState<Meal | null>(null);
   const [confirmDelete, setConfirmDelete] = useState<string | null>(null);
@@ -28,9 +33,11 @@ export default function MealsPane({
     <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12 }}>
         <div>
-          <div style={{ fontSize: 15, fontWeight: 700, color: "var(--text)" }}>My Meals</div>
+          <div style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 15, fontWeight: 700, color: "var(--text)" }}>
+            <Users size={16} color="var(--accent)" /> Meal Library
+          </div>
           <div style={{ fontSize: 12, color: "var(--text-muted)" }}>
-            Reusable combinations you can drop into any day in one tap.
+            Shared across everyone — log any meal in one tap. You can edit or delete the ones you built.
           </div>
         </div>
         <button
@@ -54,12 +61,18 @@ export default function MealsPane({
           {meals.map((meal) => {
             const items = mealItemsById[meal.id] ?? [];
             const n = mealNutrition(meal.id, foodsById, mealItemsById);
+            const mine = myId != null && meal.user_id === myId;
             return (
               <div key={meal.id} style={{ ...CARD_STYLE, padding: 16, display: "flex", flexDirection: "column", gap: 10 }}>
                 <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 8 }}>
                   <div style={{ minWidth: 0 }}>
-                    <div style={{ fontSize: 14, fontWeight: 700, color: "var(--text)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
-                      {meal.name}
+                    <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                      <span style={{ fontSize: 14, fontWeight: 700, color: "var(--text)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+                        {meal.name}
+                      </span>
+                      <span style={{ display: "inline-flex", alignItems: "center", gap: 3, fontSize: 10, fontWeight: 600, color: mine ? "var(--accent)" : "var(--text-muted)", background: mine ? "var(--accent-tint)" : "var(--bg)", border: "1px solid var(--border)", borderRadius: "var(--radius-sm)", padding: "1px 6px", flexShrink: 0 }}>
+                        {mine ? <UserIcon size={9} /> : <Users size={9} />} {mine ? "You" : "Shared"}
+                      </span>
                     </div>
                     {meal.description && (
                       <div style={{ fontSize: 12, color: "var(--text-muted)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
@@ -67,14 +80,16 @@ export default function MealsPane({
                       </div>
                     )}
                   </div>
-                  <div style={{ display: "flex", gap: 4, flexShrink: 0 }}>
-                    <button onClick={() => setEditing(meal)} title="Edit" style={iconBtn}>
-                      <Pencil size={14} />
-                    </button>
-                    <button onClick={() => setConfirmDelete(meal.id)} title="Delete" style={iconBtn}>
-                      <Trash2 size={14} />
-                    </button>
-                  </div>
+                  {mine && (
+                    <div style={{ display: "flex", gap: 4, flexShrink: 0 }}>
+                      <button onClick={() => setEditing(meal)} title="Edit" style={iconBtn}>
+                        <Pencil size={14} />
+                      </button>
+                      <button onClick={() => setConfirmDelete(meal.id)} title="Delete" style={iconBtn}>
+                        <Trash2 size={14} />
+                      </button>
+                    </div>
+                  )}
                 </div>
 
                 {/* Macro strip */}

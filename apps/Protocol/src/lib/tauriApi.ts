@@ -416,13 +416,14 @@ export const getMeals = (): Promise<Meal[]> => fetchMealsFromCloud();
 export async function createMeal(meal: CreateMeal): Promise<Meal> {
   const id = crypto.randomUUID();
   await pushMealToCloud({ ...meal, id });
-  return { id, name: meal.name, description: meal.description ?? null, created_at: new Date().toISOString() };
+  return { id, user_id: getUserId(), name: meal.name, description: meal.description ?? null, created_at: new Date().toISOString() };
 }
 
 export async function updateMeal(meal: CreateMeal & { id: string; created_at?: string }): Promise<Meal> {
   await pushMealToCloud(meal); // upsert by id
   return {
     id: meal.id,
+    user_id: getUserId(),
     name: meal.name,
     description: meal.description ?? null,
     created_at: meal.created_at ?? new Date().toISOString(),
