@@ -49,6 +49,16 @@
  * progress status for every proof node, so it can guard against
  * downgrading a completed proof back to in_progress — see that file).
  *
+ * Proof mode is kind-aware (LEARN_PLAN.md "Eksamensværksted", 2026-08-10): the
+ * same `lr_proof_*` trio also carries `kind: "workshop"` rows (chapter-end
+ * exam-technique units), content-shaped and graded identically to a proof —
+ * only the header chip ("VÆRKSTED" instead of "BEVIS") and the graduation
+ * eyebrow ("WORKSHOP COMPLETE" instead of "PROOF COMPLETE") differ. Since
+ * `LrProofContentRow` carries no `kind` of its own (only `lr_proof_unit`
+ * does, and this component never fetches that table — `PathPanel` already
+ * has it from `fetchProofUnits()`), the caller threads it through the
+ * optional `kind` prop rather than this component re-deriving it.
+ *
  * DESIGN.md §5 asks for the shared motion + KaTeX phone-width `<style>` to be
  * injected once, reachable even when `Player` isn't mounted (via
  * `Markdown.tsx`). `Markdown.tsx` as built doesn't inject it and is outside
@@ -67,6 +77,7 @@ import type {
   Lens,
   LrMemoryState,
   PracticeGroup,
+  ProofUnitKind,
   UnitContent,
   UnitFlow,
 } from "./types";
@@ -135,7 +146,13 @@ interface ContentRow {
   content: UnitContent;
 }
 
-type PlayerProps = { unitId: number; onClose: () => void } | { proofId: number; onClose: () => void };
+type PlayerProps =
+  | { unitId: number; onClose: () => void }
+  // `kind` defaults to "proof" (the pre-existing behaviour) when omitted —
+  // every current caller of proof mode is `PathPanel`, which always has the
+  // entry's `kind` in hand and passes it explicitly; the default only
+  // matters for future/incidental callers.
+  | { proofId: number; kind?: ProofUnitKind; onClose: () => void };
 
 export function Player(props: PlayerProps) {
   const mode: "unit" | "proof" = "unitId" in props ? "unit" : "proof";
@@ -143,6 +160,7 @@ export function Player(props: PlayerProps) {
   // mode, a proof_id in proof mode. Every table read/write below branches on
   // `mode` to pick the right table, but shares this single id.
   const id = "unitId" in props ? props.unitId : props.proofId;
+  const sideKind: ProofUnitKind = "proofId" in props ? (props.kind ?? "proof") : "proof";
   const { onClose } = props;
 
   const [row, setRow] = useState<ContentRow | null | undefined>(undefined); // undefined = loading
@@ -434,10 +452,11 @@ export function Player(props: PlayerProps) {
             <span className="truncate text-[13px] font-medium text-[#1A1A24]/85">{title}</span>
 
             {/* Proof mode marker — distinguishes a side-path proof from the
-                unit it branched off (LEARN_PLAN.md "Proof side-paths"). */}
+                unit it branched off (LEARN_PLAN.md "Proof side-paths"), or a
+                workshop from either ("Eksamensværksted", 2026-08-10). */}
             {mode === "proof" && (
               <span className="shrink-0 rounded px-1.5 py-0.5 text-[9px] font-semibold tracking-[0.12em] bg-black/[0.05] text-[#6E6E78]">
-                BEVIS
+                {sideKind === "workshop" ? "VÆRKSTED" : "BEVIS"}
               </span>
             )}
 
@@ -558,9 +577,11 @@ export function Player(props: PlayerProps) {
           estMinutes={content.est_minutes}
           exercisedLenses={exercisedLenses}
           // Proof mode: [] suppresses "Added to review" — a proof never adds
-          // concepts to retention (see Graduation.tsx's v3 comment).
+          // concepts to retention (see Graduation.tsx's v3 comment). Same
+          // reasoning applies to a workshop — its drills already granted
+          // concept credit through the normal grading path.
           conceptIds={mode === "unit" ? allConceptIds : []}
-          label={mode === "unit" ? "MASTERED" : "PROOF COMPLETE"}
+          label={mode === "unit" ? "MASTERED" : sideKind === "workshop" ? "WORKSHOP COMPLETE" : "PROOF COMPLETE"}
           onContinue={onClose}
         />
       )}

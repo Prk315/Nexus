@@ -51,12 +51,28 @@
  * spine. Tapping always opens the Player (even with no content row yet — it
  * renders its own quiet "ikke klar endnu" state); PathPanel's only job on tap
  * is the `lr_proof_progress` "in_progress" upsert on first open (§ below).
+ *
+ * ── Eksamensværksted side-paths (LEARN_PLAN.md "Eksamensværksted", pinned
+ * 2026-08-10) ────────────────────────────────────────────────────────────────
+ *
+ * The same `lr_proof_*` trio also carries `kind: "workshop"` rows — chapter-end
+ * exam-technique units. Unlike a `kind: "proof"` row (∴, hangs off its own
+ * `parent_unit_id`'s row, unlocks on THAT unit mastering), a workshop's
+ * `parent_unit_id` is the chapter's LAST unit, and it unlocks on the
+ * *chapter's* mastery rule — the same "≥1 unit mastered" gate the ⚡
+ * `ChapterChallengeNode` checkpoint already uses, reusing `masteredInChapter`
+ * rather than re-deriving it. It renders as a full-width sibling row right
+ * next to the checkpoint, not indented under a unit like a proof — a distinct
+ * "§" glyph (never ∴, that reads as proof-specific) with its own amber→fuchsia
+ * gradient accent once completed. `proofsByParentUnit` (below) is filtered to
+ * `kind: "proof"` so workshop rows never also render as a ∴ side node.
  */
 
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { fetchPath, fetchProofContent, fetchProofUnits, fetchUnitContent, setProofProgress, setUnitProgress } from "./api";
-import type { PathUnit, ProofUnitEntry, UnitContent } from "./types";
+import type { PathUnit, ProofUnitEntry, ProofUnitKind, UnitContent } from "./types";
 import { Player } from "./Player";
+import { ChallengeSession } from "./ChallengeSession";
 
 type DisplayStatus = "locked" | "available" | "in_progress" | "mastered" | "no_content";
 
@@ -106,6 +122,16 @@ export function PathPanel() {
   const [proofEntries, setProofEntries] = useState<ProofUnitEntry[]>([]);
   const [proofContentByProof, setProofContentByProof] = useState<Map<number, UnitContent>>(new Map());
   const [selectedProofId, setSelectedProofId] = useState<number | null>(null);
+  // Which side-unit flavour the currently open Player is showing — threaded
+  // into Player's `kind` prop so its header chip/graduation label can read
+  // "VÆRKSTED"/"WORKSHOP COMPLETE" for a workshop vs. "BEVIS"/"PROOF COMPLETE"
+  // for a proof, without Player having to look this up itself (proof content
+  // rows carry no `kind` of their own — only `lr_proof_unit` does).
+  const [selectedProofKind, setSelectedProofKind] = useState<ProofUnitKind>("proof");
+  // LEARN_PLAN.md's chapter-checkpoint pilot (2026-08-10) — a ⚡ Lynudfordring
+  // node after a chapter's last unit row, opening `ChallengeSession` scoped
+  // to that chapter's code prefix (e.g. "LA 2"). See `ChapterChallengeNode`.
+  const [selectedChallengeChapter, setSelectedChallengeChapter] = useState<string | null>(null);
   const [reloadNonce, setReloadNonce] = useState(0);
   const [railHeightPx, setRailHeightPx] = useState(0);
 
@@ -160,16 +186,38 @@ export function PathPanel() {
   }, [reloadNonce]);
 
   // proof_id[] per parent unit — a unit renders every proof branching off it
-  // once mastered (pilot data is 1:1, the join doesn't assume it).
+  // once mastered (pilot data is 1:1, the join doesn't assume it). Workshop
+  // rows are excluded here — they render at chapter-end instead, see below.
   const proofsByParentUnit = useMemo(() => {
     const map = new Map<number, ProofUnitEntry[]>();
     for (const pe of proofEntries) {
+      if (pe.proofUnit.kind !== "proof") continue;
       const list = map.get(pe.proofUnit.parent_unit_id) ?? [];
       list.push(pe);
       map.set(pe.proofUnit.parent_unit_id, list);
     }
     return map;
   }, [proofEntries]);
+
+  // Workshop entries grouped by the chapter they belong to — derived from
+  // their `parent_unit_id` (the chapter's last unit) via that unit's own
+  // `lr_unit.code` prefix, same `chapterOf()` split `ChapterHeader` uses.
+  const workshopsByChapter = useMemo(() => {
+    const map = new Map<string, ProofUnitEntry[]>();
+    if (!path) return map;
+    const codeByUnitId = new Map<number, string>();
+    for (const pu of path) codeByUnitId.set(pu.unit.unit_id, pu.unit.code);
+    for (const pe of proofEntries) {
+      if (pe.proofUnit.kind !== "workshop") continue;
+      const parentCode = codeByUnitId.get(pe.proofUnit.parent_unit_id);
+      if (!parentCode) continue;
+      const chapter = chapterOf(parentCode);
+      const list = map.get(chapter) ?? [];
+      list.push(pe);
+      map.set(chapter, list);
+    }
+    return map;
+  }, [proofEntries, path]);
 
   // Status per unit + the label of "what to master first" for locked rows +
   // the ground-truth mastered count for the header ring / rail fill.
@@ -278,6 +326,7 @@ export function PathPanel() {
   function openProof(entry: ProofUnitEntry) {
     const proofId = entry.proofUnit.proof_id;
     setSelectedProofId(proofId);
+    setSelectedProofKind(entry.proofUnit.kind);
     if (entry.progress !== "available") return;
     setProofEntries((prev) =>
       prev.map((pe) => (pe.proofUnit.proof_id === proofId ? { ...pe, progress: "in_progress" } : pe))
@@ -394,6 +443,28 @@ export function PathPanel() {
                       </div>
                     );
                   })}
+                  {/* Checkpoint node — practice only, never a gate: it must not
+                      block path progression, so it renders once ANY unit in
+                      the chapter has mastered, not once the whole chapter has. */}
+                  {masteredInChapter > 0 && (
+                    <ChapterChallengeNode chapter={chapter} onOpen={() => setSelectedChallengeChapter(chapter)} />
+                  )}
+                  {/* Workshop side-node(s) — same "≥1 unit mastered" gate as the
+                      checkpoint above, a full-width sibling row, never indented
+                      like a ∴ proof (LEARN_PLAN.md "Eksamensværksted"). */}
+                  {masteredInChapter > 0 &&
+                    (workshopsByChapter.get(chapter) ?? []).map((entry) => (
+                      <WorkshopNode
+                        key={entry.proofUnit.proof_id}
+                        entry={entry}
+                        title={
+                          proofContentByProof.get(entry.proofUnit.proof_id)?.title ||
+                          entry.proofUnit.title ||
+                          entry.proofUnit.code
+                        }
+                        onOpen={() => openProof(entry)}
+                      />
+                    ))}
                 </div>
               );
             })}
@@ -414,11 +485,16 @@ export function PathPanel() {
       {selectedProofId !== null && (
         <Player
           proofId={selectedProofId}
+          kind={selectedProofKind}
           onClose={() => {
             setSelectedProofId(null);
             setReloadNonce((n) => n + 1);
           }}
         />
+      )}
+
+      {selectedChallengeChapter !== null && (
+        <ChallengeSession chapter={selectedChallengeChapter} onClose={() => setSelectedChallengeChapter(null)} />
       )}
     </section>
   );
@@ -620,5 +696,74 @@ function ProofNode({
         </span>
       </button>
     </div>
+  );
+}
+
+/**
+ * A chapter checkpoint — LEARN_PLAN.md's "Lynudfordring — timed challenge"
+ * pilot (2026-08-10), piloted at LA 2's end but generic by chapter. Sits on
+ * the rail after a chapter's last unit row, distinct from both the unit
+ * nodes above it (status ramp, glyph-per-state) and the ∴ proof side-nodes
+ * (indented sub-branch off one mastered unit): this is a full-width row like
+ * `UnitRow`, but its own gradient-filled ⚡ disc marks it as "a practice
+ * mode", not "another stop on the spine" — and unlike every unit node, it is
+ * never locked/available/mastered itself. It opens
+ * `ChallengeSession({ chapter })`, which pulls its pool from the whole
+ * chapter regardless of per-unit lock state (api.fetchChallengePool's doc
+ * comment) — the checkpoint's own visibility (only once ≥1 unit in the
+ * chapter has mastered, see the call site) is the only gate, and even that
+ * is a practice invitation, not a progression requirement: the rest of the
+ * spine never checks whether a checkpoint was played.
+ */
+function ChapterChallengeNode({ chapter, onOpen }: { chapter: string; onOpen: () => void }) {
+  return (
+    <button
+      type="button"
+      onClick={onOpen}
+      className="group flex w-full items-center gap-3 rounded-xl px-1 py-2 text-left transition-colors active:bg-black/[0.03] md:gap-4 md:py-2.5 md:hover:bg-black/[0.025]"
+    >
+      <span className="relative z-10 grid h-7 w-7 shrink-0 place-items-center rounded-full bg-gradient-to-br from-indigo-500 to-fuchsia-600 text-[12px] text-white shadow-[0_0_14px_-4px_rgba(217,70,239,0.55)]">
+        ⚡
+      </span>
+      <span className="min-w-0 flex-1 pt-0.5">
+        <span className="block truncate text-[13px] font-medium text-[#1A1A24]/80 md:text-[14px]">
+          Lynudfordring · {chapter}
+        </span>
+        <span className="mt-0.5 block text-[10px] text-[#6E6E78]/70 md:text-[11px]">15 min · 3 runder · checkpoint</span>
+      </span>
+      <span className="pt-1 text-[#6E6E78]/45 group-active:text-[#1A1A24]/60">›</span>
+    </button>
+  );
+}
+
+/**
+ * An exam-workshop side-node — LEARN_PLAN.md "Eksamensværksted". Sits at
+ * chapter-end as a full-width sibling of `ChapterChallengeNode` (same row
+ * shape, same "≥1 unit in the chapter mastered" gate at the call site — never
+ * a per-unit rule like `ProofNode`'s ∴), but never confused with it: "§"
+ * marks it as a solve-and-present workshop rather than a timed drill round.
+ * Per DESIGN.md's "gradient means progress" rule, the disc reuses the same
+ * indigo→fuchsia gradient token the checkpoint's ⚡ disc uses — this node only
+ * exists once it's unlocked, so showing it at all already *is* the earned
+ * state; completion swaps the glyph to the shared "✓ done" language (same
+ * swap `ProofNode` makes) without changing the disc's gradient.
+ */
+function WorkshopNode({ entry, title, onOpen }: { entry: ProofUnitEntry; title: string; onOpen: () => void }) {
+  const completed = entry.progress === "completed";
+  return (
+    <button
+      type="button"
+      onClick={onOpen}
+      className="group flex w-full items-center gap-3 rounded-xl px-1 py-2 text-left transition-colors active:bg-black/[0.03] md:gap-4 md:py-2.5 md:hover:bg-black/[0.025]"
+    >
+      <span className="relative z-10 grid h-7 w-7 shrink-0 place-items-center rounded-full bg-gradient-to-br from-indigo-500 to-fuchsia-600 text-[12px] text-white shadow-[0_0_14px_-4px_rgba(217,70,239,0.55)]">
+        {completed ? "✓" : "§"}
+      </span>
+      <span className="min-w-0 flex-1 pt-0.5">
+        <span className="block truncate text-[13px] font-medium text-[#1A1A24]/80 md:text-[14px]">{title}</span>
+        <span className="mt-0.5 block text-[10px] text-[#6E6E78]/70 md:text-[11px]">Eksamensværksted</span>
+      </span>
+      <span className="pt-1 text-[#6E6E78]/45 group-active:text-[#1A1A24]/60">›</span>
+    </button>
   );
 }

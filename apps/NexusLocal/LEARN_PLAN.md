@@ -322,6 +322,61 @@ derived client-side from parent mastery).
   induktion, entydighedsargument …) — the exam asks "hvordan ville du bevise",
   and naming the technique is half the answer.
 
+## Lynudfordring — timed challenge (pinned, 2026-08-10)
+
+15-minute arcade session: 3 rounds × 5:00 countdown, auto-advance, skip
+allowed (0 points). Round composition by answer form:
+R1 "Hurtige svar" = numeric/vector/matrix/computational-choice ·
+R2 "Byg & saml" = tiles only · R3 "Dom" = truefalse/conceptual choice.
+No `text` drills. No hints/solutions during rounds; the end screen lists every
+drill with correctness, the correct answer, and full solution_md for review.
+
+Pool: difficulty ≤ 2 drills from units whose progress is mastered/in_progress/
+available (the unlocked region); if that yields < 24 eligible drills, widen to
+all units with content. Per round: shuffled queue of up to 10 drills, round
+ends at 0:00 or queue exhaustion; 15 s breather screen between rounds with the
+round score.
+
+Scoring: base = 100 × difficulty; speed bonus up to +50 by remaining fraction
+of a 30 s per-drill par; streak multiplier +10 % per consecutive correct,
+capped at ×2. Wrong = 0 points.
+
+Memory coupling is HALF-WEIGHT: attempts log to `lr_attempt_log`
+(item_ref = drill id, lens tagged), and applyGrade runs with weight 0.5 —
+correct → grade 2, wrong → grade 1 (never 0: a timed miss is weak evidence).
+
+Runs persist to `lr_challenge_run` (migration `20260810*_learn_challenge.sql`):
+score, correct/total, per-round breakdown jsonb, duration. Entry card on the
+Learn page shows the personal best.
+
+## Eksamensværksted — how-to-solve-exam-problems (pinned, 2026-08-10 — pilot: LA 2)
+
+A chapter-end side node (with the Lynudfordring checkpoint): teaches how to
+solve AND present exam-level problems for maximum points, on REAL past-exam
+items from the chapter, then the learner rebuilds the solutions with blocks.
+
+Storage: the lr_proof_* trio with `kind='workshop'` (migration
+`20260810230000_learn_side_unit_kind.sql`). parent_unit_id = the chapter's
+LAST unit; unlock = ≥1 unit of the chapter mastered (chapter-level, unlike
+proofs' per-unit rule). Content is UnitContent-shaped; Player renders it with
+a VÆRKSTED chip.
+
+Content conventions:
+- Problem selection: real exam items (year IS NOT NULL / prøve-slugs)
+  strongly linked via lr_qmatrix to the chapter's units' concepts; grounded in
+  lr_item_render (intro/task) + the recorded solution.
+- theory: 2-3 remark boxes on strategy — the chapter's problem-type patterns,
+  the max-points answer anatomy (opstilling → metode → udregning → konklusion
+  med kontrol), what the examiner scores, common point-losers.
+- practice: ONE group per exam problem: master_demo = the full max-points
+  solution as {what/why/how} where why ALSO says what the step earns
+  point-wise; drills = ≥1 build-tiles "byg besvarelsen" (solution outline
+  steps as tiles in exam-presentation order, ≥2 distractors that lose points:
+  skipped justification, wrong order, missing control), short typed drills for
+  the computational cores, choice drills on "hvilken formulering scorer
+  højest". solution_md cites the item slug it came from.
+- test: 2-4 MCQ on presentation strategy.
+
 ## Conventions that bite (from CLAUDE.md — enforced)
 
 - camelCase IPC args from JS; snake_case in Rust.

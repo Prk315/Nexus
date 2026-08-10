@@ -8,11 +8,14 @@
 
 import { supabasePublic } from "../supabase";
 import type {
+  AnswerType,
   Archetype,
+  ChallengeRoundSummary,
   ContentStatus,
   Drill,
   Grade,
   Lens,
+  LrChallengeRun,
   LrItemFeedback,
   LrItemRenderRow,
   LrLearnState,
@@ -735,5 +738,211 @@ export async function submitItemFeedback(row: {
     note: row.note ?? null,
   };
   const { error } = await supabasePublic.from("lr_item_feedback").insert(insert);
+  if (error) throw error;
+}
+
+// ── Lynudfordring — timed challenge (LEARN_PLAN.md "Lynudfordring — timed
+// challenge", pinned 2026-08-10; scoped chapter-checkpoint pilot added
+// 2026-08-10) — a 15-minute, 3-round arcade session drawn from the same unit
+// content `Player.tsx` renders, not a separate content pool. Two entry
+// points: the unscoped Learn-page card (whole unlocked course) and a
+// per-chapter checkpoint node on `PathPanel`'s spine (piloted at LA 2's end,
+// generic by chapter). ────────────────────────────────────────────────────
+
+/** Same `code.indexOf("·")` split `PathPanel.tsx` uses to derive a chapter
+ * label ("LA 2 · U1" -> "LA 2") — duplicated here (not imported from
+ * PathPanel, a UI file) so a chapter-scoped pool groups units exactly the way
+ * the chapter checkpoint node that requests it does. */
+function chapterOf(code: string): string {
+  const i = code.indexOf("·");
+  return i === -1 ? code.trim() : code.slice(0, i).trim();
+}
+
+/** Difficulty ≤ 2 drills, `text` excluded (never machine-checkable fast
+ * enough for a timer), classified into exactly one of the three rounds by
+ * `answer_type` and (for `choice`) the containing group's `archetype` —
+ * LEARN_PLAN.md: "R1 numeric/vector/matrix + computational choice · R2
+ * tiles only · R3 truefalse/conceptual choice". `numeric`/`vector`/`matrix`
+ * always land in R1 regardless of archetype (only `translate` drills use
+ * those types in practice, and a translate drill's numeric answer is still
+ * "a quick, machine-checkable answer" in the same sense a computational
+ * drill's is). `choice` needs the archetype split explicitly: a
+ * `computational`/`translate` choice question is a fast fact-check (R1); a
+ * `truefalse`/`conceptual` choice question is a judgment call (R3). Returns
+ * `null` for `text`/`tiles`-mismatched/unknown types — fail closed, not into
+ * a wrong round (tiles is handled by its own branch above this call).
+ */
+function classifyChallengeRound(archetype: Archetype, answerType: AnswerType): 1 | 2 | 3 | null {
+  switch (answerType) {
+    case "tiles":
+      return 2;
+    case "numeric":
+    case "vector":
+    case "matrix":
+      return 1;
+    case "choice":
+      return archetype === "truefalse" || archetype === "conceptual" ? 3 : 1;
+    default:
+      return null;
+  }
+}
+
+const CHALLENGE_MAX_DIFFICULTY = 2;
+const CHALLENGE_MIN_POOL = 24;
+
+export interface ChallengePoolDrill {
+  drill: Drill;
+  unitId: number;
+  unitCode: string;
+  /** `drill.concept_ids` when present, else the containing group's — same
+   * "credit every concept the drill's own group covers" rule Player.tsx's
+   * grading path and `fetchReviewQueue` both use. */
+  conceptIds: string[];
+  round: 1 | 2 | 3;
+}
+
+export interface ChallengePool {
+  r1: ChallengePoolDrill[];
+  r2: ChallengePoolDrill[];
+  r3: ChallengePoolDrill[];
+  /** True when the primary pool (unlocked region, or — for a chapter-scoped
+   * checkpoint — the whole chapter) fell under `CHALLENGE_MIN_POOL` and the
+   * fallback widened to every unit with content in the whole course, per
+   * LEARN_PLAN.md's pool rule. Exposed so the session/panel can be
+   * transparent about it rather than silently pulling in unrelated units. */
+  widened: boolean;
+}
+
+/**
+ * Builds the Lynudfordring drill pool.
+ *
+ * Unscoped (`opts.chapter` omitted — the Learn-page card): difficulty ≤ 2,
+ * non-`text` drills from units in the *unlocked region*
+ * (mastered/in_progress/available — mirrors `PathPanel.tsx`'s own status
+ * derivation exactly, since `lr_unit_progress` only ever stores
+ * `locked`/`in_progress`/`mastered` and "available" is a client-side read of
+ * "previous unit mastered, or this one already has progress"). Falls back to
+ * every unit with content in the whole course when that pool has fewer than
+ * `CHALLENGE_MIN_POOL` eligible drills total.
+ *
+ * Chapter-scoped (`opts.chapter` set, e.g. `"LA 2"` — a `PathPanel`
+ * checkpoint node): the unlocked-region rule does NOT apply — a checkpoint
+ * draws from every unit in that chapter (`chapterOf(unit.code) === chapter`)
+ * regardless of lock status, since the checkpoint itself is what determines
+ * reachability (rendered only once ≥1 unit in the chapter is mastered — see
+ * `PathPanel.tsx`), not `lr_unit_progress`. Same `< CHALLENGE_MIN_POOL`
+ * fallback, but widening always goes to *every* unit in the whole course
+ * (not just the rest of the chapter) — a thin chapter still owes the learner
+ * a full 3-round session.
+ */
+export async function fetchChallengePool(opts?: { chapter?: string }): Promise<ChallengePool> {
+  const chapter = opts?.chapter;
+  const path = await fetchPath();
+  const sorted = [...path].sort((a, b) => a.unit.idx - b.unit.idx);
+
+  const unlockedUnitIds = new Set<number>();
+  let prevMastered = true; // the first unit on the spine is never locked
+  for (const pu of sorted) {
+    const unlocked = pu.progress === "mastered" || pu.progress === "in_progress" || prevMastered;
+    if (unlocked) unlockedUnitIds.add(pu.unit.unit_id);
+    prevMastered = pu.progress === "mastered";
+  }
+
+  const withContent = sorted.filter((pu) => pu.hasContent);
+  const contentPairs = await Promise.all(
+    withContent.map(async (pu) => [pu.unit.unit_id, await fetchUnitContent(pu.unit.unit_id).catch(() => null)] as const)
+  );
+  const contentByUnit = new Map<number, LrUnitContentRow>();
+  for (const [id, row] of contentPairs) if (row) contentByUnit.set(id, row);
+
+  function collect(filterUnit: (pu: PathUnit) => boolean): ChallengePoolDrill[] {
+    const out: ChallengePoolDrill[] = [];
+    for (const pu of withContent) {
+      if (!filterUnit(pu)) continue;
+      const row = contentByUnit.get(pu.unit.unit_id);
+      if (!row) continue;
+      for (const group of row.content.practice) {
+        for (const drill of group.drills) {
+          const difficulty = drill.difficulty ?? 1;
+          if (difficulty > CHALLENGE_MAX_DIFFICULTY) continue;
+          const round = classifyChallengeRound(group.archetype, drill.answer_type);
+          if (round === null) continue;
+          out.push({
+            drill,
+            unitId: pu.unit.unit_id,
+            unitCode: pu.unit.code,
+            conceptIds: drill.concept_ids && drill.concept_ids.length > 0 ? drill.concept_ids : group.concept_ids,
+            round,
+          });
+        }
+      }
+    }
+    return out;
+  }
+
+  const primaryFilter = chapter
+    ? (pu: PathUnit) => chapterOf(pu.unit.code) === chapter
+    : (pu: PathUnit) => unlockedUnitIds.has(pu.unit.unit_id);
+
+  let pool = collect(primaryFilter);
+  let widened = false;
+  if (pool.length < CHALLENGE_MIN_POOL) {
+    pool = collect(() => true);
+    widened = true;
+  }
+
+  return {
+    r1: pool.filter((d) => d.round === 1),
+    r2: pool.filter((d) => d.round === 2),
+    r3: pool.filter((d) => d.round === 3),
+    widened,
+  };
+}
+
+/**
+ * This user's highest-scoring run for the given scope, or `null` if none has
+ * been submitted yet. `scope` is `null` for the unscoped whole-course session
+ * (the Learn-page card's personal best) or a chapter label (a checkpoint
+ * node's personal best) — matches whatever `submitChallengeRun` was called
+ * with. Filtered client-side on `rounds.scope` rather than a server-side
+ * jsonb-path query: the `rounds` column has no index for it and this table is
+ * one row per completed session (a handful at most), so a full per-user scan
+ * costs nothing meaningful today. Revisit with a real query (or a dedicated
+ * `scope` column) if that stops being true.
+ */
+export async function fetchChallengeBest(scope: string | null = null): Promise<LrChallengeRun | null> {
+  const { data, error } = await supabasePublic
+    .from("lr_challenge_run")
+    .select("*")
+    .eq("user_id", await nodeUserId())
+    .order("score", { ascending: false });
+  if (error) throw error;
+  const rows = (data ?? []) as LrChallengeRun[];
+  return rows.find((r) => (r.rounds?.scope ?? null) === scope) ?? null;
+}
+
+/** Persists one completed run. Append-only — every attempt gets its own row,
+ * `fetchChallengeBest` picks the max per scope. `scope` (`null` = unscoped
+ * whole-course session, else a chapter label) is folded into the `rounds`
+ * jsonb payload rather than a new column — see `LrChallengeRun.rounds`'s doc
+ * comment in types.ts. */
+export async function submitChallengeRun(row: {
+  score: number;
+  correct: number;
+  total: number;
+  bestStreak: number;
+  durationSecs: number;
+  rounds: ChallengeRoundSummary[];
+  scope?: string | null;
+}): Promise<void> {
+  const { error } = await supabasePublic.from("lr_challenge_run").insert({
+    user_id: await nodeUserId(),
+    score: row.score,
+    correct: row.correct,
+    total: row.total,
+    best_streak: row.bestStreak,
+    duration_secs: row.durationSecs,
+    rounds: { scope: row.scope ?? null, rounds: row.rounds },
+  });
   if (error) throw error;
 }

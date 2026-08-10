@@ -303,11 +303,21 @@ export interface PathUnit {
 // schema 2026-08-10 (no migration file for these three tables exists in this
 // repo yet — the pilot's DDL was applied directly).
 
+// `kind` distinguishes the two side-unit flavours sharing this trio (LEARN_PLAN.md
+// "Eksamensværksted" — migration `20260810230000_learn_side_unit_kind.sql`):
+// 'proof' = the original per-unit proof side node (∴), unlocks on its own
+// `parent_unit_id` mastering. 'workshop' = a chapter-end exam-workshop node (§),
+// whose `parent_unit_id` is the chapter's LAST unit and which unlocks once ≥1 unit
+// of that chapter is mastered — the checkpoint's own chapter-mastery rule, not a
+// per-unit one. DB default is 'proof' so every pre-existing row stays a proof.
+export type ProofUnitKind = "proof" | "workshop";
+
 export interface LrProofUnit {
   proof_id: number;
   parent_unit_id: number;
   code: string;
   title: string | null;
+  kind: ProofUnitKind;
 }
 
 // "locked" is never stored — it is derived client-side from parent-unit
@@ -395,5 +405,48 @@ export interface LrItemFeedback {
   exercise_broken: boolean;
   solution_broken: boolean; // broken or vague
   note: string | null;
+  at?: string;
+}
+
+// --- Lynudfordring — timed challenge (LEARN_PLAN.md "Lynudfordring — timed
+// challenge", pinned 2026-08-10). Mirrors
+// supabase/migrations/20260810220000_learn_challenge.sql. A 15-minute, 3-round
+// arcade session drawn from unit content (not a separate content pool) — see
+// `api.fetchChallengePool` / `ChallengeSession.tsx`. ---------------------------
+
+/** One round's tally, nested inside `lr_challenge_run.rounds` (jsonb). */
+export interface ChallengeRoundSummary {
+  round: number;
+  label: string;
+  score: number;
+  correct: number;
+  total: number;
+}
+
+/**
+ * The full `lr_challenge_run.rounds` jsonb payload. `scope` is a 2026-08-10
+ * pilot addition (chapter checkpoint nodes on the path, piloted at LA 2's end)
+ * — deliberately folded into this existing jsonb column rather than a new
+ * migration/column: `null` for the unscoped Learn-page card's whole-course
+ * session, a chapter label (`"LA 2"`, matching `PathPanel`'s `chapterOf()`
+ * derivation of `lr_unit.code`) for a chapter checkpoint run. `api.
+ * fetchChallengeBest(scope)` filters client-side on this field — see that
+ * function's doc comment for why (no schema change means no indexed jsonb
+ * path to query server-side).
+ */
+export interface ChallengeRoundsPayload {
+  scope: string | null;
+  rounds: ChallengeRoundSummary[];
+}
+
+export interface LrChallengeRun {
+  run_id?: number;
+  user_id: string;
+  score: number;
+  correct: number;
+  total: number;
+  best_streak: number | null;
+  duration_secs: number | null;
+  rounds: ChallengeRoundsPayload | null;
   at?: string;
 }
