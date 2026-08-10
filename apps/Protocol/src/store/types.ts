@@ -423,6 +423,9 @@ export interface Supplement extends NutrientValues {
   name: string;
   brand: string | null;
   dose: string | null;
+  /** Which stack this supplement belongs to. Null only transiently (a stack was
+   *  deleted without reassigning); the UI never leaves a supplement stackless. */
+  stack_id: string | null;
   sort_order: number;
   archived: boolean;
   created_at: string;
@@ -430,6 +433,19 @@ export interface Supplement extends NutrientValues {
 
 export type CreateSupplement = Omit<Supplement, "id" | "user_id" | "archived" | "created_at">;
 export type UpdateSupplement = CreateSupplement & { id: string };
+
+/** A named group of supplements. A user can keep several (e.g. Morning,
+ *  Pre-workout, Travel) and drag supplements between them. Owner-only. */
+export interface SupplementStack {
+  id: string;
+  user_id: string | null;
+  name: string;
+  sort_order: number;
+  created_at: string;
+}
+
+export type CreateSupplementStack = Omit<SupplementStack, "id" | "user_id" | "created_at">;
+export type UpdateSupplementStack = CreateSupplementStack & { id: string };
 
 /** One "taken it today" record — presence means taken, like a habit completion. */
 export interface SupplementLog {

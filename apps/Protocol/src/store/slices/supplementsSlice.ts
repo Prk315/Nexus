@@ -1,8 +1,12 @@
 import { createAsyncThunk, createSlice } from "@reduxjs/toolkit";
-import type { Supplement, CreateSupplement, UpdateSupplement, SupplementLog } from "../types";
+import type {
+  Supplement, CreateSupplement, UpdateSupplement, SupplementLog,
+  SupplementStack, CreateSupplementStack, UpdateSupplementStack,
+} from "../types";
 
 interface SupplementsState {
   items: Supplement[];
+  stacks: SupplementStack[];
   logs: SupplementLog[];
   loading: boolean;
   error: string | null;
@@ -10,6 +14,7 @@ interface SupplementsState {
 
 const initialState: SupplementsState = {
   items: [],
+  stacks: [],
   logs: [],
   loading: false,
   error: null,
@@ -58,6 +63,45 @@ export const untakeSupplement = createAsyncThunk(
   },
 );
 
+// ── Stacks ───────────────────────────────────────────────────────────────────
+
+export const fetchSupplementStacks = createAsyncThunk("supplements/fetchStacks", async () => {
+  const { getSupplementStacks } = await import("../../lib/tauriApi");
+  return getSupplementStacks();
+});
+
+export const addSupplementStack = createAsyncThunk("supplements/addStack", async (stack: CreateSupplementStack) => {
+  const { createSupplementStack } = await import("../../lib/tauriApi");
+  return createSupplementStack(stack);
+});
+
+export const editSupplementStack = createAsyncThunk("supplements/editStack", async (stack: UpdateSupplementStack) => {
+  const { updateSupplementStack } = await import("../../lib/tauriApi");
+  return updateSupplementStack(stack);
+});
+
+/** Delete a stack. If `moveToStackId` is given, its supplements are reassigned
+ *  there first so nothing is orphaned; the reducer mirrors that in state. */
+export const removeSupplementStack = createAsyncThunk(
+  "supplements/removeStack",
+  async ({ id, moveToStackId }: { id: string; moveToStackId: string | null }) => {
+    const { reassignSupplements, deleteSupplementStack } = await import("../../lib/tauriApi");
+    if (moveToStackId) await reassignSupplements(id, moveToStackId);
+    await deleteSupplementStack(id);
+    return { id, moveToStackId };
+  },
+);
+
+/** Persist a batch of (stack_id, sort_order) changes from a drag. */
+export const reorderSupplements = createAsyncThunk(
+  "supplements/reorder",
+  async (updates: { id: string; stack_id: string | null; sort_order: number }[]) => {
+    const { moveSupplements } = await import("../../lib/tauriApi");
+    await moveSupplements(updates);
+    return updates;
+  },
+);
+
 const supplementsSlice = createSlice({
   name: "supplements",
   initialState,
@@ -85,6 +129,26 @@ const supplementsSlice = createSlice({
         state.logs = state.logs.filter(
           (l) => !(l.supplement_id === action.payload.supplementId && l.date === action.payload.date),
         );
+      })
+      // ── Stacks ──
+      .addCase(fetchSupplementStacks.fulfilled, (state, action) => { state.stacks = action.payload; })
+      .addCase(addSupplementStack.fulfilled, (state, action) => { state.stacks.push(action.payload); })
+      .addCase(editSupplementStack.fulfilled, (state, action) => {
+        const i = state.stacks.findIndex((s) => s.id === action.payload.id);
+        if (i >= 0) state.stacks[i] = action.payload;
+      })
+      .addCase(removeSupplementStack.fulfilled, (state, action) => {
+        const { id, moveToStackId } = action.payload;
+        state.stacks = state.stacks.filter((s) => s.id !== id);
+        // Mirror the reassign the thunk performed so the UI updates immediately.
+        for (const s of state.items) if (s.stack_id === id) s.stack_id = moveToStackId;
+      })
+      .addCase(reorderSupplements.fulfilled, (state, action) => {
+        const byId = new Map(action.payload.map((u) => [u.id, u]));
+        for (const s of state.items) {
+          const u = byId.get(s.id);
+          if (u) { s.stack_id = u.stack_id; s.sort_order = u.sort_order; }
+        }
       });
   },
 });
