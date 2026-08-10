@@ -54,14 +54,23 @@ Redirect URLs**. Log in with the same email/password you use for the other apps.
 
 - All `protocol_*` rows with a `user_id` column migrated from `'default'` to
   the account uid.
-- RLS locked down: 14 root tables (with `user_id`) → `owner_all`
-  (`user_id = auth.uid()`); 2 child tables (`protocol_exercises`,
-  `protocol_meal_items` — no `user_id` of their own) → `authenticated`-only
-  (denies anonymous). Single-user, so child tables aren't per-user isolated
-  yet — add `user_id` + `auth.uid()` policies there if Protocol ever goes
-  multi-user. `protocol_foods_dk` (the static Danish food reference table) is
-  intentionally left public-read (`anon_read`, SELECT-only) — it's shared
-  reference data, not user data.
+- RLS is **owner-only (`user_id = auth.uid()`)** on most root tables, with three
+  deliberate exceptions that make Protocol a **shared library**:
+  - `protocol_foods`, `protocol_meals` → **shared read-all / write-own**: every
+    authenticated user *reads* every food & meal (so anyone can log a food or
+    meal another user created), but insert/update/delete are gated to the owner.
+  - `protocol_meal_items` → **shared read**, with writes gated on **parent-meal
+    ownership** (`EXISTS (… protocol_meals m WHERE m.id = meal_id AND m.user_id =
+    auth.uid())`), replacing the old blanket `authenticated_all`.
+  - `protocol_exercises` (a child of `protocol_workout_sessions`, no `user_id` of
+    its own) is still `authenticated_all` — add a parent-ownership policy like
+    `protocol_meal_items` if strict per-user isolation is ever needed.
+- `protocol_foods_dk` (the static Danish food reference table) is intentionally
+  public-read (`anon_read`, SELECT-only) — shared reference data, not user data.
+- Newer config tables — `protocol_data_source_settings` (per-metric Garmin vs
+  Oura routing), `protocol_progress_config` (progress-card tracking), and
+  `protocol_exercise_aliases` (friendly names for imported Garmin exercises) —
+  are owner-only.
 
 ## ⚠️ Desktop Protocol must be rebuilt
 
@@ -72,11 +81,16 @@ uses your account).
 
 ## Known gap: Garmin Connect sync is desktop-only
 
-`GarminSyncPanel` (rendered on Biomarkers, Workouts, Running) calls into a
-Tauri command that shells out to a local Python subprocess — there is no web
-equivalent. It fails gracefully on the web build (shows an inline error if a
-user clicks Sync, not a crash), and is intentionally left unguarded rather
-than hidden behind an `isTauri()` check. Building real server-side sync (a
-Supabase Edge Function + pg_cron, since Python's `garminconnect` library
-doesn't run in Deno) is a separate future backlog item, not part of this
-deploy.
+`GarminSyncPanel` (rendered on Biomarkers, Workouts, Running) needs a local
+Python subprocess (`garminconnect`) to **fetch** from Garmin — there is no web
+equivalent for that step, so it fails gracefully on the web build (inline error
+on Sync, not a crash), left unguarded rather than hidden behind `isTauri()`.
+
+What *has* since been built is the server-side **mapping** layer: the
+`garmin-import` edge function now owns the raw-Garmin-JSON → `protocol_*`
+mapping (idempotent on Garmin's `activityId`, per-metric source gating via
+`protocol_data_source_settings`), so the Nexus Local grid daemon can fetch and
+import without Protocol running. Do **not** re-implement that mapping in any
+client — two drifting copies produce wrong numbers. A fully hands-off web path
+would still need a scheduled fetch (the daemon or a paid Garmin API), which
+remains a backlog item.

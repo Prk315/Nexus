@@ -564,6 +564,7 @@ migration are separate steps.
 | *(none)*   | `nexus_local_nodes`, `nexus_local_commands` (grid queue), `nexus_ble_captures` |
 | `pf_`      | 45 tables — goals, plans, tasks, systems, calendar, pipelines, habits, games, … (PathFinder) |
 | `vault_`   | `vault_nodes`, `vault_edges`, `vault_tag_colors`, `vault_content`, `vault_journals` + Storage bucket `vault-assets` (Vault) |
+| `protocol_`| 28 tables — health/fitness. Body/sleep (`protocol_body_metrics`, `protocol_sleep`), workouts (`protocol_workout_sessions`/`_routines`/`_plans`, `protocol_exercises`, `protocol_exercise_sets`/`_library`/`_aliases`, `protocol_running_sessions`/`_plans`), nutrition (`protocol_foods` + static `protocol_foods_dk`, `protocol_meals`/`_meal_items`/`_meal_plan_entries`/`_nutrition_goals`, `protocol_supplements`/`_logs`), habits, config (`protocol_data_source_settings`, `protocol_progress_config`), Oura auth (`protocol_oura_tokens`, `protocol_oauth_states`). **`protocol_foods`, `protocol_meals`, `protocol_meal_items` are shared read-all / write-own** — any user sees & logs another's foods/meals, edit/delete owner-only; most other tables are owner-only `auth.uid()`; `protocol_foods_dk` is public-read reference data (Protocol) |
 
 **PathFinder data layer** (`apps/PathFinder/src/lib/`):
 - `supabase.ts` — creates the shared client from `VITE_SUPABASE_URL` /
