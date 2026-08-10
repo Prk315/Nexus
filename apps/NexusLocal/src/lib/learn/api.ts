@@ -23,7 +23,10 @@ import type {
   UnitProgressStatus,
 } from "./types";
 
-const USER_ID = "default";
+import { nodeUserId } from "../nodeUser";
+
+// Resolved per call from the node config rather than hardcoded — see
+// `lib/nodeUser.ts`.
 
 // Content status preference when several rows exist for the same unit_id:
 // live beats approved beats draft. The app never renders a plain "draft" as
@@ -52,7 +55,7 @@ function bestContentRow(rows: LrUnitContentRow[]): LrUnitContentRow | null {
 export async function fetchPath(): Promise<PathUnit[]> {
   const [unitsRes, progressRes, contentRes] = await Promise.all([
     supabasePublic.from("lr_unit").select("*").order("idx", { ascending: true }),
-    supabasePublic.from("lr_unit_progress").select("*").eq("user_id", USER_ID),
+    supabasePublic.from("lr_unit_progress").select("*").eq("user_id", await nodeUserId()),
     supabasePublic.from("lr_unit_content").select("unit_id, version, status"),
   ]);
 
@@ -109,7 +112,7 @@ export async function logAttempt(params: {
   grade: Grade;
 }): Promise<void> {
   const { error } = await supabasePublic.from("lr_attempt_log").insert({
-    user_id: USER_ID,
+    user_id: await nodeUserId(),
     item_ref: params.itemRef,
     lens: params.lens,
     grade: params.grade,
@@ -125,7 +128,7 @@ export async function fetchMemoryStates(
   const { data, error } = await supabasePublic
     .from("lr_memory_state")
     .select("*")
-    .eq("user_id", USER_ID)
+    .eq("user_id", await nodeUserId())
     .in("concept_id", conceptIds);
   if (error) throw error;
   const out: Record<string, LrMemoryState> = {};
@@ -139,7 +142,7 @@ export async function fetchMemoryStates(
 export async function upsertMemory(state: LrMemoryState): Promise<void> {
   const { error } = await supabasePublic
     .from("lr_memory_state")
-    .upsert({ ...state, user_id: USER_ID }, { onConflict: "user_id,concept_id" });
+    .upsert({ ...state, user_id: await nodeUserId() }, { onConflict: "user_id,concept_id" });
   if (error) throw error;
 }
 
@@ -151,7 +154,7 @@ export async function setUnitProgress(
 ): Promise<void> {
   const { error } = await supabasePublic.from("lr_unit_progress").upsert(
     {
-      user_id: USER_ID,
+      user_id: await nodeUserId(),
       unit_id: unitId,
       status,
       ...(masteredAt ? { mastered_at: masteredAt } : {}),
@@ -171,7 +174,7 @@ export async function fetchLearnState(): Promise<LrLearnState | null> {
   const { data, error } = await supabasePublic
     .from("lr_learn_state")
     .select("*")
-    .eq("user_id", USER_ID)
+    .eq("user_id", await nodeUserId())
     .maybeSingle();
   if (error) throw error;
   return (data as LrLearnState | null) ?? null;
@@ -183,7 +186,7 @@ async function fetchAttemptCounts(itemRefs: string[]): Promise<Record<string, nu
   const { data, error } = await supabasePublic
     .from("lr_attempt_log")
     .select("item_ref")
-    .eq("user_id", USER_ID)
+    .eq("user_id", await nodeUserId())
     .in("item_ref", itemRefs);
   if (error) throw error;
   const counts: Record<string, number> = {};

@@ -1,6 +1,7 @@
 import { useEffect, useRef } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { supabasePublic } from "./supabase";
+import { nodeUserId } from "./nodeUser";
 
 /// Polls TimeTracker's `active_sessions` and drives the timer Live Activity:
 /// starts it when a running (non-paused) timer appears, ends it when the timer
@@ -16,7 +17,7 @@ export function LiveActivitySync() {
       const { data, error } = await supabasePublic
         .from("active_sessions")
         .select("task_name,project,start_time,paused_at")
-        .eq("user_id", "default")
+        .eq("user_id", await nodeUserId())
         .limit(1);
       if (!alive || error) return;
 

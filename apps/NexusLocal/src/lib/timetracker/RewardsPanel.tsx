@@ -17,6 +17,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { supabasePublic } from "../supabase";
+import { nodeUserId } from "../nodeUser";
 
 type UnlockRule = {
   id?: string | null;
@@ -156,12 +157,12 @@ export function RewardsPanel() {
       supabasePublic
         .from("blocked_apps")
         .select("process_name,display_name")
-        .eq("user_id", "default")
+        .eq("user_id", await nodeUserId())
         .order("display_name"),
       supabasePublic
         .from("blocked_sites")
         .select("domain")
-        .eq("user_id", "default")
+        .eq("user_id", await nodeUserId())
         .order("domain"),
     ]);
     if (!alive.current) return;

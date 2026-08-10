@@ -14,6 +14,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { supabasePublic } from "../supabase";
+import { nodeUserId } from "../nodeUser";
 
 /**
  * Mirrors `timetracker::focus::FocusBlock`. The field names are **snake_case on
@@ -108,7 +109,7 @@ export function SchedulePanel() {
       const { data, error } = await supabasePublic
         .from("blocked_apps")
         .select("display_name,process_name")
-        .eq("user_id", "default")
+        .eq("user_id", await nodeUserId())
         .order("display_name");
       setApps((data as BlockedApp[]) ?? []);
       if (error) setErr(`blocked_apps: ${error.message}`);
@@ -119,7 +120,7 @@ export function SchedulePanel() {
       const { data, error } = await supabasePublic
         .from("blocked_sites")
         .select("domain")
-        .eq("user_id", "default")
+        .eq("user_id", await nodeUserId())
         .order("domain");
       setSites((data ?? []).map((r: { domain: string }) => r.domain));
       if (error) setErr(`blocked_sites: ${error.message}`);
