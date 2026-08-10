@@ -60,24 +60,6 @@ export default function RecoveryCard() {
 
   const num = (n: number | null | undefined, suffix = "") => (n != null ? `${n}${suffix}` : "—");
 
-  const row2 = v ? [
-    v.avg_heart_rate_bpm != null && <StatTile key="avg" label="Avg heart rate" value={num(v.avg_heart_rate_bpm)} sub="bpm" />,
-    v.min_heart_rate_bpm != null && <StatTile key="min" label="Min HR" value={num(v.min_heart_rate_bpm)} sub="bpm" />,
-    v.max_heart_rate_bpm != null && <StatTile key="max" label="Max HR" value={num(v.max_heart_rate_bpm)} sub="bpm" />,
-    v.stress_high_min != null && <StatTile key="sh" label="Stress high" value={formatMinutes(v.stress_high_min)} sub={v.stress_summary ?? undefined} />,
-    v.stress_recovery_min != null && <StatTile key="sr" label="Stress recovery" value={formatMinutes(v.stress_recovery_min)} />,
-  ].filter(Boolean) : [];
-
-  const row3 = v ? [
-    v.resilience_level != null && <StatTile key="res" label="Resilience" value={v.resilience_level} />,
-    v.resilience_sleep_recovery != null && <StatTile key="rsr" label="↳ sleep recovery" value={num(v.resilience_sleep_recovery)} />,
-    v.resilience_daytime_recovery != null && <StatTile key="rdr" label="↳ daytime recovery" value={num(v.resilience_daytime_recovery)} />,
-    v.resilience_stress != null && <StatTile key="rst" label="↳ stress" value={num(v.resilience_stress)} />,
-    v.cardio_age != null && <StatTile key="ca" label="Cardio age" value={num(v.cardio_age)} />,
-    v.pulse_wave_velocity != null && <StatTile key="pwv" label="Pulse-wave velocity" value={v.pulse_wave_velocity.toFixed(1)} sub="m/s" />,
-    v.temperature_deviation != null && <StatTile key="td" label="Temp deviation" value={`${v.temperature_deviation > 0 ? "+" : ""}${v.temperature_deviation.toFixed(2)}°`} />,
-  ].filter(Boolean) : [];
-
   return (
     <div style={{ ...CARD_STYLE, padding: "20px 24px" }}>
       <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 16 }}>
@@ -114,18 +96,26 @@ export default function RecoveryCard() {
                 <StatTile label="Resting HR" value={num(v.resting_hr_bpm)} sub="bpm" />
               </div>
 
-              {/* Only render tiles the account actually has data for — otherwise the
-                  card reads as a wall of dashes. Rows collapse when fully empty. */}
-              {row2.length > 0 && (
-                <div style={{ display: "flex", gap: 20, flexWrap: "wrap", paddingTop: 16, borderTop: "1px solid var(--border-subtle)" }}>
-                  {row2}
-                </div>
-              )}
-              {row3.length > 0 && (
-                <div style={{ display: "flex", gap: 20, flexWrap: "wrap", paddingTop: 16, borderTop: "1px solid var(--border-subtle)" }}>
-                  {row3}
-                </div>
-              )}
+              <div style={{ display: "flex", gap: 20, flexWrap: "wrap", paddingTop: 16, borderTop: "1px solid var(--border-subtle)" }}>
+                <StatTile label="Avg heart rate" value={num(v.avg_heart_rate_bpm)} sub="bpm" />
+                <StatTile label="Min HR" value={num(v.min_heart_rate_bpm)} sub="bpm" />
+                <StatTile label="Max HR" value={num(v.max_heart_rate_bpm)} sub="bpm" />
+                <StatTile label="Stress high" value={v.stress_high_min != null ? formatMinutes(v.stress_high_min) : "—"} sub={v.stress_summary ?? undefined} />
+                <StatTile label="Stress recovery" value={v.stress_recovery_min != null ? formatMinutes(v.stress_recovery_min) : "—"} />
+              </div>
+
+              <div style={{ display: "flex", gap: 20, flexWrap: "wrap", paddingTop: 16, borderTop: "1px solid var(--border-subtle)" }}>
+                <StatTile label="Resilience" value={v.resilience_level ?? "—"} />
+                <StatTile label="↳ sleep recovery" value={num(v.resilience_sleep_recovery)} />
+                <StatTile label="↳ daytime recovery" value={num(v.resilience_daytime_recovery)} />
+                <StatTile label="↳ stress" value={num(v.resilience_stress)} />
+                <StatTile label="Cardio age" value={num(v.cardio_age)} />
+                <StatTile label="Pulse-wave velocity" value={v.pulse_wave_velocity != null ? v.pulse_wave_velocity.toFixed(1) : "—"} sub="m/s" />
+                <StatTile
+                  label="Temp deviation"
+                  value={v.temperature_deviation != null ? `${v.temperature_deviation > 0 ? "+" : ""}${v.temperature_deviation.toFixed(2)}°` : "—"}
+                />
+              </div>
             </>
           )}
         </div>
