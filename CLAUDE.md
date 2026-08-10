@@ -546,6 +546,24 @@ committing `project.yml` needs `git add -f`. `NexusLocalWidgets/Secrets.swift` i
 gitignored and generated in CI — a fresh worktree cannot link the app until you copy
 it in from the main checkout.
 
+## ⚠️ Security: 13 tables are world-writable — read before touching RLS
+
+The repo is public, the anon key is committed in `config.rs`, and 13
+productivity/grid tables carry `USING (true)` for **ALL** commands — so anyone
+can delete your time entries or rewrite your block list. The full audit, the
+ordered migration plan, and the reasons the obvious fixes are wrong live in
+**`SECURITY_RLS_MIGRATION.md`**. Read it before changing any policy.
+
+The two things most likely to be got wrong:
+
+- **A mismatched JWT returns an empty set, not an error.** A half-finished
+  migration does not fail loudly — blocking silently stops on Mac *and* phone and
+  the widget reads "nothing blocked", which looks exactly like success.
+- **Do not make the repo private.** It breaks GitHub Pages (SideStore's
+  `apps.json` source), unauthenticated release-asset downloads, and unlimited
+  Actions minutes. It was only ever mitigation against key scraping, and the key
+  ships inside the IPA anyway.
+
 ## Supabase: Shared Cloud Backend
 
 All apps that need cloud persistence use the single **NEXUS** Supabase project
