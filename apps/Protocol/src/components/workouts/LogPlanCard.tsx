@@ -11,7 +11,7 @@ import {
 } from "../../store/slices/workoutsSlice";
 import { libraryMusclesToGroups, type SetLike } from "../../lib/muscleMap";
 import { CARD_STYLE, INPUT_STYLE, INPUT_SM, SECTION_LABEL, BTN_PRIMARY, BTN_GHOST, ICON_BTN, todayISO, isoDate } from "../../lib/uiHelpers";
-import type { WorkoutSession } from "../../store/types";
+import type { WorkoutSession, ExerciseSet } from "../../store/types";
 import ExerciseNameInput from "./ExerciseNameInput";
 import MuscleMap from "./MuscleMap";
 
@@ -43,17 +43,54 @@ function plannedSets(staged: StagedExercise[], today: string): SetLike[] {
   return out;
 }
 
-/** Read-only exercise list for a saved session (expanded row). */
-function SavedExercises({ sessionId }: { sessionId: string }) {
+/** One imported exercise, collapsed from its individual sets. */
+interface SetGroup { name: string; sets: number; reps: number | null; weight: number | null; }
+
+/** Garmin imports have no protocol_exercises — their detail lives per-set in
+ *  protocol_exercise_sets. Collapse a day's sets into one row per exercise
+ *  (top-set reps/weight), applying the same alias map the progress card uses. */
+function groupSets(sets: ExerciseSet[], aliases: Record<string, string>): SetGroup[] {
+  const map = new Map<string, { count: number; reps: number | null; weight: number | null }>();
+  for (const s of sets) {
+    const key = s.exercise_name ?? s.category;
+    const name = aliases[key] ?? key;
+    const g = map.get(name) ?? { count: 0, reps: null, weight: null };
+    g.count += 1;
+    if (s.reps != null) g.reps = Math.max(g.reps ?? 0, s.reps);
+    if (s.weight_kg != null) g.weight = Math.max(g.weight ?? 0, s.weight_kg);
+    map.set(name, g);
+  }
+  return [...map.entries()].map(([name, g]) => ({ name, sets: g.count, reps: g.reps, weight: g.weight }));
+}
+
+const ROW_STYLE = { marginTop: 10, paddingLeft: 26, display: "flex", flexDirection: "column" as const, gap: 4 };
+
+/** Read-only exercise list for a saved session (expanded row). Manually-logged
+ *  sessions carry protocol_exercises; Garmin imports fall back to the day's sets. */
+function SavedExercises({ session, exerciseSets, aliases }: { session: WorkoutSession; exerciseSets: ExerciseSet[]; aliases: Record<string, string> }) {
   const dispatch = useAppDispatch();
-  const exercises = useAppSelector((s) => s.workouts.exercises.filter((e) => e.session_id === sessionId));
-  useEffect(() => { dispatch(fetchExercises(sessionId)); }, [dispatch, sessionId]);
+  const exercises = useAppSelector((s) => s.workouts.exercises.filter((e) => e.session_id === session.id));
+  useEffect(() => { dispatch(fetchExercises(session.id)); }, [dispatch, session.id]);
 
   if (exercises.length === 0) {
+    const daySets = exerciseSets.filter((s) => s.date === session.scheduled_date);
+    if (daySets.length > 0) {
+      return (
+        <div style={ROW_STYLE}>
+          {groupSets(daySets, aliases).map((g) => (
+            <div key={g.name} style={{ display: "flex", gap: 10, fontSize: 12, color: "var(--text-secondary)" }}>
+              <span style={{ fontWeight: 500, color: "var(--text)" }}>{g.name}</span>
+              <span style={{ color: "var(--text-muted)" }}>{g.sets}×{g.reps ?? "—"}</span>
+              {g.weight != null && <span style={{ color: "var(--text-muted)" }}>{g.weight} kg</span>}
+            </div>
+          ))}
+        </div>
+      );
+    }
     return <p style={{ fontSize: 12, color: "var(--text-muted)", paddingLeft: 26, marginTop: 8 }}>No exercises logged.</p>;
   }
   return (
-    <div style={{ marginTop: 10, paddingLeft: 26, display: "flex", flexDirection: "column", gap: 4 }}>
+    <div style={ROW_STYLE}>
       {exercises.map((ex) => (
         <div key={ex.id} style={{ display: "flex", gap: 10, fontSize: 12, color: "var(--text-secondary)" }}>
           <span style={{ fontWeight: 500, color: "var(--text)" }}>{ex.name}</span>
@@ -65,7 +102,7 @@ function SavedExercises({ sessionId }: { sessionId: string }) {
   );
 }
 
-export default function LogPlanCard() {
+export default function LogPlanCard({ exerciseSets = [], aliases = {} }: { exerciseSets?: ExerciseSet[]; aliases?: Record<string, string> }) {
   const dispatch = useAppDispatch();
   const sessions = useAppSelector((s) => s.workouts.sessions);
   const today = isoDate(new Date());
@@ -232,7 +269,7 @@ export default function LogPlanCard() {
                     </div>
                     <button onClick={() => dispatch(removeWorkoutSession(session.id))} style={{ ...ICON_BTN, flexShrink: 0 }}><Trash2 size={13} /></button>
                   </div>
-                  {isExpanded && <SavedExercises sessionId={session.id} />}
+                  {isExpanded && <SavedExercises session={session} exerciseSets={exerciseSets} aliases={aliases} />}
                 </div>
               );
             })}

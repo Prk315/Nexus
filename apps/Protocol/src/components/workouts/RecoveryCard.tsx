@@ -120,6 +120,13 @@ export default function RecoveryCard() {
           )}
         </div>
       </div>
+
+      {/* Per-muscle fatigue / readiness breakdown */}
+      {exerciseSets.length > 0 && (
+        <div style={{ marginTop: 20, paddingTop: 16, borderTop: "1px solid var(--border-subtle)" }}>
+          <MuscleMap sets={exerciseSets} breakdownOnly />
+        </div>
+      )}
     </div>
   );
 }
