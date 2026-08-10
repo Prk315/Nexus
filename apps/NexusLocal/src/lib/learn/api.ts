@@ -14,6 +14,7 @@ import type {
   Grade,
   Lens,
   LrItemFeedback,
+  LrItemRenderRow,
   LrLearnState,
   LrMemoryState,
   LrUnit,
@@ -371,19 +372,41 @@ export async function fetchReviewQueue(limit: number = REVIEW_QUEUE_SIZE): Promi
 // separate from the unit path. ──────────────────────────────────────────
 
 /**
- * One pool row `ExerciseSession.tsx` shuffles over. Light on purpose — the
- * solution text is fetched lazily per item (`fetchItemSolution`), not
- * carried here, so loading a ~400-item pool stays one small round trip.
+ * One sub-part inside a `ProblemGroup`. `task_md` is the structured,
+ * enrichment-cleaned ask when `lr_item_render` has a row for this item;
+ * otherwise it falls back to `lr_item.prompt` verbatim (`hasRender: false`),
+ * which on the raw path still carries the parent problem's duplicated
+ * introduction and stray PDF-conversion HTML — see the migration's DDL
+ * comment. `solution_md` is populated eagerly here (the render row is
+ * already fetched, so it costs nothing extra) when a render row exists;
+ * `null` otherwise, and `ExerciseSession.tsx` falls back to lazily fetching
+ * `lr_written_item.solution` via `fetchItemSolution` on reveal, exactly like
+ * the pre-grouping flow.
  */
-export interface ExercisePoolItem {
+export interface ProblemPart {
   item_id: number;
   slug: string;
-  title: string | null;
-  year: number | null;
-  source_ref: string | null;
-  prompt: string;
-  /** This user's `lr_attempt_log` row count for this item's slug — the
-   *  shuffle's fewest-attempts-first bucketing signal. */
+  part_label: string | null;
+  task_md: string;
+  solution_md: string | null;
+  hasRender: boolean;
+}
+
+/**
+ * One exam/book problem, possibly multi-part. Fallback (no `lr_item_render`
+ * row) items group as singletons keyed `item:<slug>` — LEARN_PLAN.md's
+ * "Infinite exercises" rebuild spec. `parts` is sorted by `part_label`
+ * ascending (nulls — i.e. singleton groups — sort first).
+ */
+export interface ProblemGroup {
+  group_key: string;
+  source: { title: string | null; year: number | null; source_ref: string | null };
+  intro_md: string | null;
+  context_md: string | null;
+  parts: ProblemPart[];
+  /** Min of each part's `lr_attempt_log` count — the shuffle's
+   *  fewest-attempts-first bucketing signal, now computed across the whole
+   *  group rather than one item. */
   attemptCount: number;
 }
 
@@ -400,26 +423,98 @@ export interface ItemConcept {
 const EXERCISE_SLUG_PREFIX = "la-%";
 
 /**
+ * Groups a flat item list into `ProblemGroup[]` using each item's
+ * `lr_item_render` row (if any). Pure — no I/O — so it's unit-testable and
+ * kept separate from the fetch below.
+ */
+function groupItems(
+  items: Array<{
+    item_id: number;
+    slug: string;
+    title: string | null;
+    year: number | null;
+    source_ref: string | null;
+    prompt: string;
+  }>,
+  renderByItem: Map<number, LrItemRenderRow>,
+  attemptCounts: Record<string, number>
+): ProblemGroup[] {
+  type Item = (typeof items)[number];
+  type Bucket = { items: Item[]; renders: Map<number, LrItemRenderRow> };
+  const buckets = new Map<string, Bucket>();
+  for (const item of items) {
+    const render = renderByItem.get(item.item_id);
+    const key = render ? render.group_key : `item:${item.slug}`;
+    const bucket: Bucket = buckets.get(key) ?? { items: [], renders: new Map() };
+    bucket.items.push(item);
+    if (render) bucket.renders.set(item.item_id, render);
+    buckets.set(key, bucket);
+  }
+
+  const groups: ProblemGroup[] = [];
+  for (const [group_key, bucket] of buckets) {
+    let intro_md: string | null = null;
+    let context_md: string | null = null;
+
+    const parts: ProblemPart[] = bucket.items.map((item) => {
+      const render = bucket.renders.get(item.item_id);
+      if (render?.intro_md && intro_md === null) intro_md = render.intro_md;
+      if (render?.context_md && context_md === null) context_md = render.context_md;
+      return {
+        item_id: item.item_id,
+        slug: item.slug,
+        part_label: render?.part_label ?? null,
+        task_md: render?.task_md ?? item.prompt,
+        solution_md: render?.solution_md ?? null,
+        hasRender: !!render,
+      };
+    });
+    parts.sort((a, b) => (a.part_label ?? "").localeCompare(b.part_label ?? ""));
+
+    const first = bucket.items[0];
+    const attemptCount = Math.min(...bucket.items.map((item) => attemptCounts[item.slug] ?? 0));
+
+    groups.push({
+      group_key,
+      source: { title: first.title, year: first.year, source_ref: first.source_ref },
+      intro_md,
+      context_md,
+      parts,
+      attemptCount,
+    });
+  }
+  return groups;
+}
+
+/**
  * The Infinite-exercises pool: every `format='written'` item whose slug
  * matches the course prefix and has a non-null `lr_written_item.solution`,
  * minus items this user has flagged broken or unclear
- * (`lr_item_feedback.exercise_broken` / `.solution_broken`).
+ * (`lr_item_feedback.exercise_broken` / `.solution_broken`), grouped into
+ * `ProblemGroup[]` via `lr_item_render.group_key` (fallback items — no
+ * render row yet — group as singletons; see `groupItems`).
  *
- * Two independent round trips, not a single query, because PostgREST has no
+ * Three independent round trips, not one query, because PostgREST has no
  * single-request way to express "exists a solution" AND "does not exist a
- * true-flagged feedback row" together:
+ * true-flagged feedback row" together, and the render join is a separate
+ * table keyed by `item_id`:
  *   1. `lr_item` inner-joined to `lr_written_item` (`!inner` join hint) with
  *      `lr_written_item.solution=not.is.null` — the inner join is what turns
  *      "no written_item row at all" into "row excluded", not null-padded.
  *   2. This user's `lr_item_feedback` rows carrying either flag, to build a
  *      client-side exclusion set.
- * A third, best-effort query (`fetchAttemptCounts`, already used by
+ *   3. `lr_item_render` rows for exactly the surviving item ids — an
+ *      enrichment pass fills this table concurrently (LEARN_PLAN.md), so a
+ *      missing row per item is the expected steady state until it completes,
+ *      not an error; those items simply group as singletons on their raw
+ *      prompt (the migration's documented fallback contract).
+ * A fourth, best-effort query (`fetchAttemptCounts`, already used by
  * `fetchReviewQueue`) attaches per-slug attempt counts for the shuffle's
  * ordering signal; its own failure degrades to "0 attempts everywhere" — a
  * valid, if less-informed, ordering — never a thrown error, matching this
  * file's existing best-effort-ranking-signal posture.
  */
-export async function fetchExercisePool(): Promise<ExercisePoolItem[]> {
+export async function fetchExercisePool(): Promise<ProblemGroup[]> {
   const userId = await nodeUserId();
 
   const [poolRes, feedbackRes] = await Promise.all([
@@ -460,6 +555,21 @@ export async function fetchExercisePool(): Promise<ExercisePoolItem[]> {
       prompt: r.prompt as string,
     }));
 
+  const renderByItem = new Map<number, LrItemRenderRow>();
+  if (items.length > 0) {
+    const { data, error } = await supabasePublic
+      .from("lr_item_render")
+      .select("item_id, group_key, part_label, intro_md, task_md, context_md, solution_md")
+      .in(
+        "item_id",
+        items.map((i) => i.item_id)
+      );
+    if (error) throw error;
+    for (const row of (data ?? []) as LrItemRenderRow[]) {
+      renderByItem.set(row.item_id, row);
+    }
+  }
+
   let counts: Record<string, number> = {};
   try {
     counts = await fetchAttemptCounts(items.map((i) => i.slug));
@@ -467,7 +577,8 @@ export async function fetchExercisePool(): Promise<ExercisePoolItem[]> {
     // Best-effort ranking signal only, per this file's existing posture in
     // `fetchReviewQueue` — an all-zero pool still yields a valid ordering.
   }
-  return items.map((i) => ({ ...i, attemptCount: counts[i.slug] ?? 0 }));
+
+  return groupItems(items, renderByItem, counts);
 }
 
 /** Lazily-fetched solution markdown for one item, revealed on "Vis løsning". */

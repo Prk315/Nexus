@@ -309,6 +309,24 @@ export interface LrItem {
   source_ref: string | null;
 }
 
+// Mirrors supabase/migrations/20260810190000_learn_item_render.sql. Written
+// by an offline enrichment pass, one row per `lr_item.item_id`; `lr_item`
+// stays the source of truth and the app falls back to its raw `prompt` when
+// a row is missing for that item (see api.fetchExercisePool's grouping).
+export interface LrItemRenderRow {
+  item_id: number;
+  // Shared by every sub-part of one exam/book problem — the grouping key for
+  // `api.fetchExercisePool`'s ProblemGroup[].
+  group_key: string;
+  // "(b)" · null for single-part problems.
+  part_label: string | null;
+  intro_md: string | null;
+  task_md: string;
+  context_md: string | null;
+  solution_md: string | null;
+  cleaned_at?: string;
+}
+
 // Mirrors supabase/migrations/20260810170000_learn_item_feedback.sql.
 // Append-only: one row per graded item per session, never updated in place.
 // Either broken flag excludes the item from this user's future Infinite

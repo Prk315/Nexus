@@ -108,37 +108,105 @@ function splitRows(raw: string): string[] {
 
 // --- Per-type checks ---------------------------------------------------------
 
-// Prompts often name the unknown ("For hvilken værdi af a …"), and answering
-// "a=6" instead of "6" is a natural response, not a wrong one. Strip a single
-// leading `<identifier> =` (incl. greek letters like λ) before parsing.
-function stripAssignmentPrefix(raw: string): string {
-  return raw.trim().replace(/^[a-zA-Zα-ωΑ-Ω][a-zA-Z0-9_]*\s*=\s*/, "");
+// Learners naturally answer in equation form — "a=6", "A(B+C) = (5 1; 0 8)",
+// or even the full verification "(5 1; 0 8) = (2 0; 1 5) + (3 1;-1 3)". The
+// rule: split on '=', clean each segment, and every segment that PARSES as the
+// expected shape must equal the target (at least one must parse). Segments
+// that don't parse — symbol names, sums of matrices — are ignored, so writing
+// out the confirmation the prompt asked for never costs a correct answer,
+// while "wrong = right" still fails on the readable-but-wrong side.
+
+/** Strip fully-enclosing matched parentheses, repeatedly: "(5 1; 0 8;)" → "5 1; 0 8;". */
+function stripOuterParens(s: string): string {
+  let t = s.trim();
+  while (t.startsWith("(") && t.endsWith(")")) {
+    let depth = 0;
+    let enclosing = true;
+    for (let i = 0; i < t.length; i++) {
+      if (t[i] === "(") depth++;
+      else if (t[i] === ")") {
+        depth--;
+        if (depth === 0 && i < t.length - 1) {
+          enclosing = false;
+          break;
+        }
+      }
+    }
+    if (!enclosing || depth !== 0) break;
+    t = t.slice(1, -1).trim();
+  }
+  return t;
+}
+
+function equationSegments(raw: string): string[] {
+  return raw
+    .split("=")
+    .map((s) => stripOuterParens(s.trim()))
+    .filter((s) => s.length > 0);
+}
+
+function parseVectorSegment(seg: string): Frac[] | null {
+  const parts = splitComponents(seg);
+  if (parts.length === 0) return null;
+  const fracs = parts.map(parseFraction);
+  return fracs.every((f) => f !== null) ? (fracs as Frac[]) : null;
+}
+
+function parseMatrixSegment(seg: string): Frac[][] | null {
+  const rows = splitRows(seg);
+  if (rows.length === 0) return null;
+  const parsed = rows.map(parseVectorSegment);
+  return parsed.every((r) => r !== null) ? (parsed as Frac[][]) : null;
 }
 
 export function checkNumeric(userInput: string, answer: DrillAnswer): boolean {
   if (typeof answer.value !== "number" && typeof answer.value !== "string") return false;
-  return numbersEqual(stripAssignmentPrefix(userInput), answer.value);
+  const target = answer.value;
+  const candidates = equationSegments(userInput).filter((s) => parseFraction(s) !== null);
+  if (candidates.length === 0) {
+    // Fallback: no segment parsed as an exact rational — try the whole input
+    // through the float-tolerant path so odd-but-honest inputs aren't bricked.
+    return numbersEqual(userInput, target);
+  }
+  return candidates.every((s) => numbersEqual(s, target));
 }
 
 export function checkVector(userInput: string, answer: DrillAnswer): boolean {
   if (!Array.isArray(answer.value)) return false;
   const target = answer.value as number[];
-  const parts = splitComponents(stripAssignmentPrefix(userInput));
-  if (parts.length !== target.length) return false;
-  return parts.every((p, i) => numbersEqual(p, target[i]));
+  const candidates = equationSegments(userInput)
+    .map(parseVectorSegment)
+    .filter((v): v is Frac[] => v !== null);
+  if (candidates.length === 0) return false;
+  return candidates.every(
+    (v) =>
+      v.length === target.length &&
+      v.every((f, i) => {
+        const t = fracFromNumber(target[i]);
+        return t !== null && fracEqual(f, t);
+      })
+  );
 }
 
 export function checkMatrix(userInput: string, answer: DrillAnswer): boolean {
   if (!Array.isArray(answer.value)) return false;
   const target = answer.value as number[][];
-  const rows = splitRows(stripAssignmentPrefix(userInput));
-  if (rows.length !== target.length) return false;
-  return rows.every((row, i) => {
-    const targetRow = target[i];
-    const parts = splitComponents(row);
-    if (!Array.isArray(targetRow) || parts.length !== targetRow.length) return false;
-    return parts.every((p, j) => numbersEqual(p, targetRow[j]));
-  });
+  const candidates = equationSegments(userInput)
+    .map(parseMatrixSegment)
+    .filter((m): m is Frac[][] => m !== null);
+  if (candidates.length === 0) return false;
+  return candidates.every(
+    (m) =>
+      m.length === target.length &&
+      m.every((row, i) => {
+        const targetRow = target[i];
+        if (!Array.isArray(targetRow) || row.length !== targetRow.length) return false;
+        return row.every((f, j) => {
+          const t = fracFromNumber(targetRow[j]);
+          return t !== null && fracEqual(f, t);
+        });
+      })
+  );
 }
 
 /**
@@ -209,33 +277,24 @@ export function checkAnswer(
  * routes a `false` result to a neutral inline message instead of the
  * red "wrong" feedback, with no attempt logged.
  *
- * `numeric` → `parseFraction` succeeds on the (assignment-prefix-stripped)
- * whole string. `vector`/`matrix` → every split-out component/cell parses;
- * a *shape* mismatch against the target (wrong component count, wrong row
- * count) is NOT a format error — `checkVector`/`checkMatrix` already grade
- * that as a wrong answer, which is correct, since the learner clearly
- * attempted the right kind of answer. Only unreadable tokens (non-numeric
- * junk) are format errors here. `choice`/`text`/`tiles` have no typed
- * parsing step, so they always parse.
+ * Parseable ⇔ at least ONE '='-separated segment of the input reads as the
+ * expected shape (see `equationSegments` — this is what lets learners answer
+ * in equation form, "A(B+C) = (5 1; 0 8)" or the full verification, without
+ * penalty). A *shape* mismatch against the target (wrong component count,
+ * wrong row count) is NOT a format error — `checkVector`/`checkMatrix`
+ * already grade that as a wrong answer, which is correct, since the learner
+ * clearly attempted the right kind of answer. Only inputs with no readable
+ * segment at all are format errors here. `choice`/`text`/`tiles` have no
+ * typed parsing step, so they always parse.
  */
 export function inputParses(answerType: AnswerType, userInput: string): boolean {
   switch (answerType) {
     case "numeric":
-      return parseFraction(stripAssignmentPrefix(userInput)) !== null;
-    case "vector": {
-      const parts = splitComponents(stripAssignmentPrefix(userInput));
-      if (parts.length === 0) return false;
-      return parts.every((p) => parseFraction(p) !== null);
-    }
-    case "matrix": {
-      const rows = splitRows(stripAssignmentPrefix(userInput));
-      if (rows.length === 0) return false;
-      return rows.every((row) => {
-        const parts = splitComponents(row);
-        if (parts.length === 0) return false;
-        return parts.every((p) => parseFraction(p) !== null);
-      });
-    }
+      return equationSegments(userInput).some((s) => parseFraction(s) !== null);
+    case "vector":
+      return equationSegments(userInput).some((s) => parseVectorSegment(s) !== null);
+    case "matrix":
+      return equationSegments(userInput).some((s) => parseMatrixSegment(s) !== null);
     case "choice":
     case "text":
     case "tiles":
