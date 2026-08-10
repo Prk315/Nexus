@@ -290,3 +290,37 @@ export interface PathUnit {
   // null when hasContent is false.
   contentStatus: ContentStatus | null;
 }
+
+// --- Infinite exercises (LEARN_PLAN.md "Infinite exercises", pinned
+// 2026-08-10) — mirrors the ported problem-bank row and its feedback log. ---
+
+// `lr_item` — the ported exam/book problem bank (authoring grounding +
+// Infinite-exercises pool). Not every column is used by Infinite exercises
+// (`difficulty` here is the *authoring* difficulty, separate from the
+// learner's own self-reported `LrItemFeedback.difficulty`).
+export interface LrItem {
+  item_id: number;
+  slug: string | null;
+  title: string | null;
+  year: number | null;
+  difficulty: number | null;
+  format: string | null; // written | multiple_choice | flashcard | programming | example
+  prompt: string | null;
+  source_ref: string | null;
+}
+
+// Mirrors supabase/migrations/20260810170000_learn_item_feedback.sql.
+// Append-only: one row per graded item per session, never updated in place.
+// Either broken flag excludes the item from this user's future Infinite
+// exercises shuffles (`api.fetchExercisePool`'s exclusion join).
+export interface LrItemFeedback {
+  fb_id?: number;
+  user_id: string;
+  item_id: number;
+  difficulty: number | null; // 1 let | 2 mellem | 3 svær
+  understood: boolean | null;
+  exercise_broken: boolean;
+  solution_broken: boolean; // broken or vague
+  note: string | null;
+  at?: string;
+}

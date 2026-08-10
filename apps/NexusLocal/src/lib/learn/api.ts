@@ -13,6 +13,7 @@ import type {
   Drill,
   Grade,
   Lens,
+  LrItemFeedback,
   LrLearnState,
   LrMemoryState,
   LrUnit,
@@ -363,4 +364,148 @@ export async function fetchReviewQueue(limit: number = REVIEW_QUEUE_SIZE): Promi
   }
 
   return items;
+}
+
+// ── Infinite exercises (LEARN_PLAN.md "Infinite exercises", pinned
+// 2026-08-10) — shuffle-practice over the ported LA exam/book item bank,
+// separate from the unit path. ──────────────────────────────────────────
+
+/**
+ * One pool row `ExerciseSession.tsx` shuffles over. Light on purpose — the
+ * solution text is fetched lazily per item (`fetchItemSolution`), not
+ * carried here, so loading a ~400-item pool stays one small round trip.
+ */
+export interface ExercisePoolItem {
+  item_id: number;
+  slug: string;
+  title: string | null;
+  year: number | null;
+  source_ref: string | null;
+  prompt: string;
+  /** This user's `lr_attempt_log` row count for this item's slug — the
+   *  shuffle's fewest-attempts-first bucketing signal. */
+  attemptCount: number;
+}
+
+/** One `lr_qmatrix` row — the concept(s) an item's grading credits, and how much. */
+export interface ItemConcept {
+  concept_id: string;
+  weight: number;
+}
+
+/** Sampled live 2026-08-10: 401 `format='written'`, `slug like 'la-%'` items
+ * carry a non-null `lr_written_item.solution` (of 656 `lr_written_item` rows
+ * total across every course/format — LEARN_PLAN.md's "~656 items" describes
+ * that unfiltered total, not this pool). */
+const EXERCISE_SLUG_PREFIX = "la-%";
+
+/**
+ * The Infinite-exercises pool: every `format='written'` item whose slug
+ * matches the course prefix and has a non-null `lr_written_item.solution`,
+ * minus items this user has flagged broken or unclear
+ * (`lr_item_feedback.exercise_broken` / `.solution_broken`).
+ *
+ * Two independent round trips, not a single query, because PostgREST has no
+ * single-request way to express "exists a solution" AND "does not exist a
+ * true-flagged feedback row" together:
+ *   1. `lr_item` inner-joined to `lr_written_item` (`!inner` join hint) with
+ *      `lr_written_item.solution=not.is.null` — the inner join is what turns
+ *      "no written_item row at all" into "row excluded", not null-padded.
+ *   2. This user's `lr_item_feedback` rows carrying either flag, to build a
+ *      client-side exclusion set.
+ * A third, best-effort query (`fetchAttemptCounts`, already used by
+ * `fetchReviewQueue`) attaches per-slug attempt counts for the shuffle's
+ * ordering signal; its own failure degrades to "0 attempts everywhere" — a
+ * valid, if less-informed, ordering — never a thrown error, matching this
+ * file's existing best-effort-ranking-signal posture.
+ */
+export async function fetchExercisePool(): Promise<ExercisePoolItem[]> {
+  const userId = await nodeUserId();
+
+  const [poolRes, feedbackRes] = await Promise.all([
+    supabasePublic
+      .from("lr_item")
+      .select("item_id, slug, title, year, source_ref, prompt, lr_written_item!inner(solution)")
+      .eq("format", "written")
+      .like("slug", EXERCISE_SLUG_PREFIX)
+      .not("lr_written_item.solution", "is", null),
+    supabasePublic
+      .from("lr_item_feedback")
+      .select("item_id")
+      .eq("user_id", userId)
+      .or("exercise_broken.eq.true,solution_broken.eq.true"),
+  ]);
+  if (poolRes.error) throw poolRes.error;
+  if (feedbackRes.error) throw feedbackRes.error;
+
+  const excluded = new Set((feedbackRes.data ?? []).map((row: { item_id: number }) => row.item_id));
+
+  type Row = {
+    item_id: number;
+    slug: string | null;
+    title: string | null;
+    year: number | null;
+    source_ref: string | null;
+    prompt: string | null;
+  };
+  const rows = (poolRes.data ?? []) as Row[];
+  const items = rows
+    .filter((r) => r.slug && r.prompt && !excluded.has(r.item_id))
+    .map((r) => ({
+      item_id: r.item_id,
+      slug: r.slug as string,
+      title: r.title,
+      year: r.year,
+      source_ref: r.source_ref,
+      prompt: r.prompt as string,
+    }));
+
+  let counts: Record<string, number> = {};
+  try {
+    counts = await fetchAttemptCounts(items.map((i) => i.slug));
+  } catch {
+    // Best-effort ranking signal only, per this file's existing posture in
+    // `fetchReviewQueue` — an all-zero pool still yields a valid ordering.
+  }
+  return items.map((i) => ({ ...i, attemptCount: counts[i.slug] ?? 0 }));
+}
+
+/** Lazily-fetched solution markdown for one item, revealed on "Vis løsning". */
+export async function fetchItemSolution(itemId: number): Promise<string | null> {
+  const { data, error } = await supabasePublic
+    .from("lr_written_item")
+    .select("solution")
+    .eq("item_id", itemId)
+    .maybeSingle();
+  if (error) throw error;
+  return (data as { solution: string | null } | null)?.solution ?? null;
+}
+
+/** This item's q-matrix rows — the concepts its grading credits, and each one's weight. */
+export async function fetchItemConcepts(itemId: number): Promise<ItemConcept[]> {
+  const { data, error } = await supabasePublic.from("lr_qmatrix").select("concept_id, weight").eq("item_id", itemId);
+  if (error) throw error;
+  return (data ?? []) as ItemConcept[];
+}
+
+/** Append one row to the append-only `lr_item_feedback` log. */
+export async function submitItemFeedback(row: {
+  itemId: number;
+  difficulty: number | null;
+  understood: boolean | null;
+  exerciseBroken: boolean;
+  solutionBroken: boolean;
+  note?: string | null;
+}): Promise<void> {
+  const insert: Omit<LrItemFeedback, "fb_id" | "at"> = {
+    user_id: await nodeUserId(),
+    item_id: row.itemId,
+    difficulty: row.difficulty,
+    understood: row.understood,
+    exercise_broken: row.exerciseBroken,
+    solution_broken: row.solutionBroken,
+    note: row.note ?? null,
+  };
+  const { error } = await supabasePublic.from("lr_item_feedback").insert(insert);
+  if (error) throw error;
 }

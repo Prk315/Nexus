@@ -115,33 +115,46 @@ function incrementLensCount(counts: LensCounts, lens: Lens | null): LensCounts {
 /**
  * Faithful port of `log_attempt` (memory.py lines 172–229), extended with
  * `lens_counts` increment (LEARN_PLAN.md's lens-coverage mastery dimension,
- * not present upstream — Python has no lens concept).
+ * not present upstream — Python has no lens concept) and an optional
+ * `weight` (Infinite-exercises addition, LEARN_PLAN.md's "Infinite
+ * exercises" section: "applies the α/β/heat update to the item's
+ * `lr_qmatrix` concepts, weighted by q-matrix weight — its documented
+ * purpose: spreading practice credit"). Like `lens_counts`, this is not a
+ * Python source concept — `log_attempt` always adds a flat 1.0. `weight`
+ * defaults to `1.0`, which reproduces the original unweighted update
+ * exactly; callers crediting several concepts off one item (Infinite
+ * exercises) pass each concept's own (normalized) q-matrix weight instead.
  *
  * Steps, matching the source 1:1:
  *   1. Lazy-decay heat from `last_decayed` to `now`.
- *   2. Spike heat unconditionally: `heat += (1 - heat) * SPIKE_FACTOR`,
- *      capped at 1.0 (memory.py:200–202).
- *   3. Beta update: correct -> alpha += 1; incorrect -> beta += 1
- *      (memory.py:205–206) — see the grade-mapping note in the file header.
+ *   2. Spike heat unconditionally: `heat += (1 - heat) * SPIKE_FACTOR *
+ *      weight`, capped at 1.0 (memory.py:200–202 scaled by `weight`).
+ *   3. Beta update: correct -> alpha += weight; incorrect -> beta += weight
+ *      (memory.py:205–206 scaled by `weight`) — see the grade-mapping note
+ *      in the file header.
  *   4. Stamp `last_reviewed` / `last_decayed` to `now`.
- *   5. Increment `lens_counts[lens]` (Nexus Local addition).
+ *   5. Increment `lens_counts[lens]` (Nexus Local addition) — a `null` lens
+ *      (Infinite exercises' past-exam items carry no `tre-perspektiver` tag)
+ *      leaves `lens_counts` untouched; `incrementLensCount` already no-ops
+ *      on `null`, this signature just exposes that instead of hiding it.
  *
  * Pure — returns the next state; the caller persists via `api.upsertMemory`.
  */
 export function applyGrade(
   state: LrMemoryState,
   grade: Grade,
-  lens: Lens,
-  now: Date = new Date()
+  lens: Lens | null,
+  now: Date = new Date(),
+  weight: number = 1.0
 ): LrMemoryState {
   const nowIso = now.toISOString();
   const correct = grade > 0; // grade 0 = don't know; 1–3 = correct (see header)
 
   const decayedHeat = decayHeat(state.heat, state.last_decayed, now);
-  const spikedHeat = Math.min(decayedHeat + (1.0 - decayedHeat) * SPIKE_FACTOR, 1.0);
+  const spikedHeat = Math.min(decayedHeat + (1.0 - decayedHeat) * SPIKE_FACTOR * weight, 1.0);
 
-  const nextAlpha = state.value_alpha + (correct ? 1.0 : 0.0);
-  const nextBeta = state.value_beta + (correct ? 0.0 : 1.0);
+  const nextAlpha = state.value_alpha + (correct ? weight : 0.0);
+  const nextBeta = state.value_beta + (correct ? 0.0 : weight);
 
   return {
     ...state,

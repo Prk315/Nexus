@@ -269,6 +269,30 @@ applied to `lr_memory_state` by the same function (`last_decayed` bookkeeping).
 Consumers (ReviewPanel, LearnWidget) treat a missing row as "no verdict yet" and
 a stale `computed_at` as last-known-state — never as "nothing due".
 
+## Infinite exercises (pinned, 2026-08-10)
+
+A shuffle-practice mode over the ported exam/book item bank, separate from the
+unit path. Pool: `lr_item` (course LA, `format='written'`) joined to
+`lr_written_item` where a solution exists (401 LA items live), minus items the user
+has flagged broken.
+
+Session flow (fullscreen, Player-like): item prompt (+ source: title/year/
+source_ref) → learner works it on paper → "Vis løsning" reveal → feedback bar,
+all fields optional except difficulty+understood:
+- difficulty: 1 (let) / 2 (mellem) / 3 (svær)
+- understood: yes/no
+- flags: exercise broken · solution broken/vague (either flag excludes the item
+  from future shuffles for this user)
+→ next item. Shuffle prefers least-attempted, then random.
+
+Memory coupling: completing an item logs `lr_attempt_log` (item_ref = slug) and
+applies the α/β/heat update to the item's `lr_qmatrix` concepts, weighted by
+q-matrix weight (its documented purpose: spreading practice credit). Grade map:
+not understood → 0; understood at svær/mellem/let → 1/2/3.
+
+Feedback lands in `lr_item_feedback` (append-only log; migration
+`20260810*_learn_item_feedback.sql`).
+
 ## Conventions that bite (from CLAUDE.md — enforced)
 
 - camelCase IPC args from JS; snake_case in Rust.

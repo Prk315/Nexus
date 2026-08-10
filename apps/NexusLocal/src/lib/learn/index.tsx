@@ -25,6 +25,7 @@
 
 import { PathPanel } from "./PathPanel";
 import { ReviewPanel } from "./ReviewPanel";
+import { InfinitePanel } from "./InfinitePanel";
 
 export function LearnPage() {
   return (
@@ -32,6 +33,7 @@ export function LearnPage() {
       <div className="mx-auto flex max-w-xl flex-col gap-6 px-4 pb-16 pt-6 sm:px-6 md:max-w-2xl md:gap-10 md:px-8 md:pb-24 md:pt-10">
         <PathPanel />
         <ReviewPanel />
+        <InfinitePanel />
       </div>
     </div>
   );
