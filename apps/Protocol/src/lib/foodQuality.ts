@@ -45,3 +45,52 @@ export function tierCardStyle(tier: FoodTier, surface: "card" | "inset" = "card"
 export function tierMedalColor(tier: FoodTier): string {
   return tier === "normal" ? "var(--text-muted)" : `var(--tier-${tier}-solid)`;
 }
+
+// ── Meal-level rating ────────────────────────────────────────────────────────
+// A meal has no single source; it's rated by the AGGREGATE MEAN of its
+// ingredients' tiers on a 0–3 scale — the three food tiers spaced evenly across
+// it (white 0, silver 1.5, gold 3). The meal card's colour then rides that mean
+// continuously from white → silver → gold, so a meal is exactly as trustworthy
+// as its ingredients on average.
+
+export const TIER_SCORE: Record<FoodTier, number> = { normal: 0, silver: 1.5, gold: 3 };
+
+/** Mean ingredient tier score (0–3); null for a meal with no ingredients. */
+export function mealRating(
+  foods: Array<{ source?: string | null; detailed?: boolean | null }>,
+): number | null {
+  if (foods.length === 0) return null;
+  const sum = foods.reduce((s, f) => s + TIER_SCORE[foodTier(f)], 0);
+  return sum / foods.length;
+}
+
+/** color-mix helper — blend `pctA`% of `a` into `b`, resolved from theme vars. */
+function mix(a: string, b: string, pctA: number): string {
+  return `color-mix(in srgb, ${a} ${Math.round(Math.min(100, Math.max(0, pctA)))}%, ${b})`;
+}
+
+/**
+ * Continuous border + wash for a 0–3 meal rating. Two linear segments meet at
+ * silver (1.5): [0,1.5] neutral→silver, [1.5,3] silver→gold. Returns {} for a
+ * null/zero rating so an unrated (empty) meal keeps its neutral card.
+ */
+export function ratingCardStyle(rating: number | null): CSSProperties {
+  if (rating == null || rating <= 0) return {};
+  const r = Math.min(3, rating);
+  const border = r <= 1.5
+    ? mix("var(--tier-silver-border)", "var(--border)", (r / 1.5) * 100)
+    : mix("var(--tier-gold-border)", "var(--tier-silver-border)", ((r - 1.5) / 1.5) * 100);
+  const wash = r <= 1.5
+    ? mix("var(--tier-silver-wash)", "transparent", (r / 1.5) * 100)
+    : mix("var(--tier-gold-wash)", "var(--tier-silver-wash)", ((r - 1.5) / 1.5) * 100);
+  return { border: `1px solid ${border}`, background: wash };
+}
+
+/** Solid colour matching a 0–3 rating, for the rating badge/number. */
+export function ratingMedalColor(rating: number | null): string {
+  if (rating == null || rating <= 0) return "var(--text-muted)";
+  const r = Math.min(3, rating);
+  return r <= 1.5
+    ? mix("var(--tier-silver-solid)", "var(--text-muted)", (r / 1.5) * 100)
+    : mix("var(--tier-gold-solid)", "var(--tier-silver-solid)", ((r - 1.5) / 1.5) * 100);
+}

@@ -1,10 +1,11 @@
 import { useState } from "react";
-import { ChefHat, Pencil, Trash2, Plus, Users, User as UserIcon } from "lucide-react";
+import { ChefHat, Pencil, Trash2, Plus, Users, User as UserIcon, Star } from "lucide-react";
 import { useNexusAuth } from "@nexus/core";
 import { useAppDispatch } from "../../../store/hooks";
 import { removeMeal } from "../../../store/slices/mealPlannerSlice";
 import { CARD_STYLE } from "../../../lib/uiHelpers";
 import { mealNutrition } from "../../../lib/mealNutrition";
+import { mealRating, ratingCardStyle, ratingMedalColor } from "../../../lib/foodQuality";
 import MealBuilder from "../MealBuilder";
 import type { Food, Meal, MealItem } from "../../../store/types";
 
@@ -62,8 +63,12 @@ export default function MealsPane({
             const items = mealItemsById[meal.id] ?? [];
             const n = mealNutrition(meal.id, foodsById, mealItemsById);
             const mine = myId != null && meal.user_id === myId;
+            const ingredientFoods = items
+              .map((it) => foodsById.get(it.food_id))
+              .filter((f): f is Food => f != null);
+            const rating = mealRating(ingredientFoods);
             return (
-              <div key={meal.id} style={{ ...CARD_STYLE, padding: 16, display: "flex", flexDirection: "column", gap: 10 }}>
+              <div key={meal.id} style={{ ...CARD_STYLE, padding: 16, display: "flex", flexDirection: "column", gap: 10, ...ratingCardStyle(rating) }}>
                 <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 8 }}>
                   <div style={{ minWidth: 0 }}>
                     <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
@@ -73,6 +78,14 @@ export default function MealsPane({
                       <span style={{ display: "inline-flex", alignItems: "center", gap: 3, fontSize: 10, fontWeight: 600, color: mine ? "var(--accent)" : "var(--text-muted)", background: mine ? "var(--accent-tint)" : "var(--bg)", border: "1px solid var(--border)", borderRadius: "var(--radius-sm)", padding: "1px 6px", flexShrink: 0 }}>
                         {mine ? <UserIcon size={9} /> : <Users size={9} />} {mine ? "You" : "Shared"}
                       </span>
+                      {rating != null && (
+                        <span
+                          title={`Data-quality rating ${rating.toFixed(1)} / 3 — mean of ${ingredientFoods.length} ingredient${ingredientFoods.length === 1 ? "" : "s"}`}
+                          style={{ display: "inline-flex", alignItems: "center", gap: 3, fontSize: 10, fontWeight: 700, color: ratingMedalColor(rating), border: `1px solid ${ratingMedalColor(rating)}`, borderRadius: "var(--radius-sm)", padding: "1px 6px", flexShrink: 0 }}
+                        >
+                          <Star size={9} fill={ratingMedalColor(rating)} /> {rating.toFixed(1)}
+                        </span>
+                      )}
                     </div>
                     {meal.description && (
                       <div style={{ fontSize: 12, color: "var(--text-muted)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>

@@ -1,11 +1,11 @@
 import { useState } from "react";
-import { X, Plus, Trash2, ChefHat, Pencil } from "lucide-react";
+import { X, Plus, Trash2, ChefHat, Pencil, Star } from "lucide-react";
 import { useAppDispatch, useAppSelector } from "../../store/hooks";
 import {
   addFood, addMeal, updateMeal, addMealItem, removeMealItem,
 } from "../../store/slices/mealPlannerSlice";
 import { CARD_STYLE, INPUT_STYLE, LABEL_STYLE, FIELD_GROUP } from "../../lib/uiHelpers";
-import { foodTier, tierCardStyle, tierMedalColor } from "../../lib/foodQuality";
+import { foodTier, tierCardStyle, tierMedalColor, mealRating, ratingMedalColor } from "../../lib/foodQuality";
 import FoodPicker from "./FoodPicker";
 import type { CreateFood, Food, Meal, MealItem } from "../../store/types";
 
@@ -64,6 +64,7 @@ export default function MealBuilder({
     const cal = i.food.calories ?? 0;
     return sum + cal * (i.quantity / 100);
   }, 0);
+  const rating = mealRating(items.map((i) => i.food));
 
   /** Resolve a draft food to a food_id, reusing an existing catalog row when the
    *  same (source, external_id) is already present so we never duplicate. */
@@ -155,7 +156,14 @@ export default function MealBuilder({
                   Ingredients
                 </span>
                 {items.length > 0 && (
-                  <span style={{ fontSize: 12, color: "var(--text-muted)" }}>{Math.round(totalCalories)} kcal total</span>
+                  <span style={{ display: "inline-flex", alignItems: "center", gap: 8, fontSize: 12, color: "var(--text-muted)" }}>
+                    {rating != null && (
+                      <span title={`Data-quality rating ${rating.toFixed(1)} / 3 — mean of the ingredients' tiers`} style={{ display: "inline-flex", alignItems: "center", gap: 3, fontWeight: 700, color: ratingMedalColor(rating) }}>
+                        <Star size={11} fill={ratingMedalColor(rating)} /> {rating.toFixed(1)}/3
+                      </span>
+                    )}
+                    {Math.round(totalCalories)} kcal total
+                  </span>
                 )}
               </div>
 
