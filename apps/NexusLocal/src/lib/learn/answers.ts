@@ -108,15 +108,22 @@ function splitRows(raw: string): string[] {
 
 // --- Per-type checks ---------------------------------------------------------
 
+// Prompts often name the unknown ("For hvilken værdi af a …"), and answering
+// "a=6" instead of "6" is a natural response, not a wrong one. Strip a single
+// leading `<identifier> =` (incl. greek letters like λ) before parsing.
+function stripAssignmentPrefix(raw: string): string {
+  return raw.trim().replace(/^[a-zA-Zα-ωΑ-Ω][a-zA-Z0-9_]*\s*=\s*/, "");
+}
+
 export function checkNumeric(userInput: string, answer: DrillAnswer): boolean {
   if (typeof answer.value !== "number" && typeof answer.value !== "string") return false;
-  return numbersEqual(userInput, answer.value);
+  return numbersEqual(stripAssignmentPrefix(userInput), answer.value);
 }
 
 export function checkVector(userInput: string, answer: DrillAnswer): boolean {
   if (!Array.isArray(answer.value)) return false;
   const target = answer.value as number[];
-  const parts = splitComponents(userInput);
+  const parts = splitComponents(stripAssignmentPrefix(userInput));
   if (parts.length !== target.length) return false;
   return parts.every((p, i) => numbersEqual(p, target[i]));
 }
@@ -124,7 +131,7 @@ export function checkVector(userInput: string, answer: DrillAnswer): boolean {
 export function checkMatrix(userInput: string, answer: DrillAnswer): boolean {
   if (!Array.isArray(answer.value)) return false;
   const target = answer.value as number[][];
-  const rows = splitRows(userInput);
+  const rows = splitRows(stripAssignmentPrefix(userInput));
   if (rows.length !== target.length) return false;
   return rows.every((row, i) => {
     const targetRow = target[i];
@@ -191,6 +198,52 @@ export function checkAnswer(
 }
 
 // --- Tile drills (schema v1.1) ----------------------------------------------
+
+/**
+ * A format check, not a grading check: "did this input parse into the shape
+ * `answerType` expects at all" — independent of whether the parsed value is
+ * *correct*. Exists because unparseable input (e.g. answering a numeric
+ * prompt "a=6" after `stripAssignmentPrefix` mis-strips, or a stray letter)
+ * must never be graded as a wrong answer — it's a format event, not a
+ * knowledge event. `DrillCard.tsx` calls this before `checkAnswer` and
+ * routes a `false` result to a neutral inline message instead of the
+ * red "wrong" feedback, with no attempt logged.
+ *
+ * `numeric` → `parseFraction` succeeds on the (assignment-prefix-stripped)
+ * whole string. `vector`/`matrix` → every split-out component/cell parses;
+ * a *shape* mismatch against the target (wrong component count, wrong row
+ * count) is NOT a format error — `checkVector`/`checkMatrix` already grade
+ * that as a wrong answer, which is correct, since the learner clearly
+ * attempted the right kind of answer. Only unreadable tokens (non-numeric
+ * junk) are format errors here. `choice`/`text`/`tiles` have no typed
+ * parsing step, so they always parse.
+ */
+export function inputParses(answerType: AnswerType, userInput: string): boolean {
+  switch (answerType) {
+    case "numeric":
+      return parseFraction(stripAssignmentPrefix(userInput)) !== null;
+    case "vector": {
+      const parts = splitComponents(stripAssignmentPrefix(userInput));
+      if (parts.length === 0) return false;
+      return parts.every((p) => parseFraction(p) !== null);
+    }
+    case "matrix": {
+      const rows = splitRows(stripAssignmentPrefix(userInput));
+      if (rows.length === 0) return false;
+      return rows.every((row) => {
+        const parts = splitComponents(row);
+        if (parts.length === 0) return false;
+        return parts.every((p) => parseFraction(p) !== null);
+      });
+    }
+    case "choice":
+    case "text":
+    case "tiles":
+      return true;
+    default:
+      return true;
+  }
+}
 
 /**
  * `mode: "select"` check. Passes iff the learner selected all-and-only the

@@ -92,6 +92,13 @@ export const FEEDBACK = {
   correct: "bg-emerald-50 text-emerald-700 ring-1 ring-emerald-500/25",
   wrong: "bg-red-50 text-red-700 ring-1 ring-red-500/25",
   draft: "bg-amber-50 text-amber-700 ring-1 ring-amber-500/30",
+  // Unparseable input (answers.ts `inputParses`) is a format event, not a
+  // wrong-answer event — it must never render as `wrong` (red) or reuse
+  // `draft` (amber is already reserved for the DRAFT badge; the §1.2/§7.4
+  // "never means anything but this" rule means status hues don't double up).
+  // Quiet ink-on-recessed-surface instead, matching the muted ladder in
+  // §7.2/§7.1 rather than introducing a fourth reserved status hue.
+  format: "bg-black/[0.03] text-[#1A1A24]/70 ring-1 ring-black/10",
 } as const;
 
 // The six ordered lens pairs a `translate` drill's gradient top-edge can run

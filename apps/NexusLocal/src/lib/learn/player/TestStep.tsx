@@ -61,13 +61,13 @@ function QuestionCard({
                   style={{ animationDelay: `${i * 60}ms` }}
                 >
                   <div className="overflow-hidden">
-                    <p
+                    <div
                       className={`px-3 pb-1 pt-1.5 text-[12px] leading-relaxed ${
                         opt.correct ? "text-emerald-700/80" : isChosen ? "text-red-700/80" : "text-[#6E6E78]/80"
                       }`}
                     >
-                      {opt.why_md}
-                    </p>
+                      <Markdown className="text-[12px] leading-relaxed">{opt.why_md}</Markdown>
+                    </div>
                   </div>
                 </div>
               )}

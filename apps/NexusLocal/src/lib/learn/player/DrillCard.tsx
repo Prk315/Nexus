@@ -17,7 +17,7 @@
 
 import { useEffect, useState } from "react";
 import type { Archetype, Drill, Grade, Lens } from "../types";
-import { checkAnswer, checkTilesBuild, checkTilesSelect } from "../answers";
+import { checkAnswer, checkTilesBuild, checkTilesSelect, inputParses } from "../answers";
 import { Markdown } from "../Markdown";
 import { TileDrill } from "./TileDrill";
 import {
@@ -50,6 +50,15 @@ const GRADE_CLASS = [
 ] as const;
 const GRADE_NUM_CLASS = ["text-[#1A1A24]/35", "text-[#1A1A24]/35", "text-[#1A1A24]/40", "text-white/70"] as const;
 
+// Format-error copy for the three typed-input `answer_type`s that go through
+// `inputParses` (answers.ts). choice/text/tiles never produce a format
+// error — no typed parsing step exists for them, so they're omitted here.
+const FORMAT_ERROR_MESSAGE: Record<"numeric" | "vector" | "matrix", string> = {
+  numeric: "Kunne ikke læses som et tal — skriv fx 6, -2 eller 2/3",
+  vector: "Kunne ikke læses som en vektor — skriv komponenterne adskilt med komma, fx 1, -2, 3",
+  matrix: "Kunne ikke læses som en matrix — adskil rækker med semikolon, fx 1 2; 3 4",
+};
+
 export function DrillCard({
   drill,
   archetype,
@@ -70,6 +79,10 @@ export function DrillCard({
   const [tileSelection, setTileSelection] = useState<string[]>([]);
   const [checked, setChecked] = useState(false);
   const [result, setResult] = useState<boolean | null>(null);
+  // Distinct from `result === false`: unparseable input never reaches
+  // `checkAnswer`, logs no attempt, and leaves the drill unanswered — see
+  // `inputParses` in answers.ts. Cleared on the next keystroke.
+  const [formatError, setFormatError] = useState<string | null>(null);
   const [wrongAttempts, setWrongAttempts] = useState(0);
   const [hintsShown, setHintsShown] = useState(0);
   const [showSolution, setShowSolution] = useState(false);
@@ -107,6 +120,16 @@ export function DrillCard({
         setWrongAttempts((n) => n + 1);
         setShaking(true);
       }
+      return;
+    }
+    // Format gate, ahead of grading: unparseable input for numeric/vector/
+    // matrix is a format event, not a knowledge event — "a=6" or a stray
+    // letter must never fall into `checkAnswer` and come back "wrong". No
+    // attempt is logged and the drill stays unanswered; the message clears
+    // itself the moment the learner edits the input again.
+    if (!inputParses(drill.answer_type, input)) {
+      const key = drill.answer_type as "numeric" | "vector" | "matrix";
+      setFormatError(FORMAT_ERROR_MESSAGE[key] ?? null);
       return;
     }
     const userValue = drill.answer_type === "choice" ? selectedChoice ?? "" : input;
@@ -172,8 +195,11 @@ export function DrillCard({
               <input
                 inputMode="decimal"
                 value={input}
-                onChange={(e) => setInput(e.target.value)}
-                placeholder="7  ·  3/4  ·  -1.5"
+                onChange={(e) => {
+                  setInput(e.target.value);
+                  setFormatError(null);
+                }}
+                placeholder="fx 6 eller 2/3"
                 disabled={result === true}
                 className="w-full rounded-xl border border-black/15 bg-white px-3 py-3 font-mono text-[16px] text-[#1A1A24] outline-none transition-shadow placeholder:text-[#6E6E78]/60 focus:border-indigo-500/50 focus:shadow-[0_0_0_3px_rgba(99,102,241,0.12)]"
               />
@@ -182,14 +208,21 @@ export function DrillCard({
               <>
                 <input
                   value={input}
-                  onChange={(e) => setInput(e.target.value)}
-                  placeholder="1, -2, 3"
+                  onChange={(e) => {
+                    setInput(e.target.value);
+                    setFormatError(null);
+                  }}
+                  placeholder="fx 1, -2, 3"
                   disabled={result === true}
                   className="w-full rounded-xl border border-black/15 bg-white px-3 py-3 font-mono text-[16px] text-[#1A1A24] outline-none transition-shadow placeholder:text-[#6E6E78]/60 focus:border-indigo-500/50 focus:shadow-[0_0_0_3px_rgba(99,102,241,0.12)]"
                 />
-                {input.trim() && (
+                {input.trim() ? (
                   <p className="mt-1 text-[11px] text-[#6E6E78]/80">
                     ⟨{input.trim()}⟩ · {input.split(/[,\s]+/).filter(Boolean).length} entries
+                  </p>
+                ) : (
+                  <p className="mt-1 text-[11px] text-[#6E6E78]/60">
+                    Skriv komponenterne adskilt med komma, fx 1, -2, 3
                   </p>
                 )}
               </>
@@ -199,15 +232,22 @@ export function DrillCard({
                 <textarea
                   rows={3}
                   value={input}
-                  onChange={(e) => setInput(e.target.value)}
-                  placeholder="1 0 2; 0 1 -1"
+                  onChange={(e) => {
+                    setInput(e.target.value);
+                    setFormatError(null);
+                  }}
+                  placeholder="fx 1 2; 3 4"
                   disabled={result === true}
                   className="w-full rounded-xl border border-black/15 bg-white px-3 py-3 font-mono text-[16px] text-[#1A1A24] outline-none transition-shadow placeholder:text-[#6E6E78]/60 focus:border-indigo-500/50 focus:shadow-[0_0_0_3px_rgba(99,102,241,0.12)]"
                 />
-                {input.trim() && (
+                {input.trim() ? (
                   <p className="mt-1 text-[11px] text-[#6E6E78]/80">
                     {input.split(/[;\n]+/).filter((r) => r.trim()).length} ×{" "}
                     {input.split(/[;\n]+/)[0]?.trim().split(/[,\s]+/).filter(Boolean).length ?? 0}
+                  </p>
+                ) : (
+                  <p className="mt-1 text-[11px] text-[#6E6E78]/60">
+                    Adskil rækker med semikolon, fx 1 2; 3 4
                   </p>
                 )}
               </>
@@ -272,14 +312,27 @@ export function DrillCard({
             </div>
           )}
 
+          {/* Format event, not a knowledge event (answers.ts `inputParses`) —
+              neutral tone, never the red `FEEDBACK.wrong` treatment above.
+              Mutually exclusive with it: this path returns out of `runCheck`
+              before `checked`/`result` are ever set. */}
+          {!isText && formatError && (
+            <div
+              className={`mt-3 flex animate-[learn-step-in_.18s_ease-out] items-center gap-2 rounded-xl px-3 py-2.5 text-[13px] md:mt-4 md:max-w-[34rem] ${FEEDBACK.format}`}
+            >
+              <span className="text-[15px]">⚠</span>
+              <span>{formatError}</span>
+            </div>
+          )}
+
           {hintsShown > 0 &&
             hints.slice(0, hintsShown).map((hint, i) => (
               <div
                 key={i}
                 className={`mt-2 animate-[learn-step-in_.2s_ease-out] rounded-r-lg py-2 pl-3 pr-2 text-[13px] text-[#1A1A24]/70 md:mt-3 md:py-3.5 md:pl-6 md:pr-5 md:text-[14.5px] ${LENS[drill.lens].edge} ${LENS[drill.lens].tint}`}
               >
-                <span className="mr-2 text-[10px] uppercase tracking-wide text-[#6E6E78]/70">Hint {i + 1}</span>
-                {hint}
+                <span className="mb-1 block text-[10px] uppercase tracking-wide text-[#6E6E78]/70">Hint {i + 1}</span>
+                <Markdown className="text-[13px] leading-relaxed text-[#1A1A24]/70 md:text-[14.5px]">{hint}</Markdown>
               </div>
             ))}
 

@@ -115,10 +115,10 @@ export function TheoryCard({ box }: { box: TheoryBox }) {
       })}
 
       {box.connect_md && (
-        <p className="mt-2 text-[12px] italic leading-relaxed text-[#6E6E78]/80 md:mt-6 md:border-t md:border-black/[0.06] md:pt-5 md:text-[13.5px]">
-          <span className="mr-1 not-italic text-[#6E6E78]/50">↳</span>
-          {box.connect_md}
-        </p>
+        <div className="mt-2 flex gap-1.5 text-[12px] italic leading-relaxed text-[#6E6E78]/80 md:mt-6 md:border-t md:border-black/[0.06] md:pt-5 md:text-[13.5px]">
+          <span className="not-italic text-[#6E6E78]/50">↳</span>
+          <Markdown className="flex-1 text-[12px] leading-relaxed md:text-[13.5px]">{box.connect_md}</Markdown>
+        </div>
       )}
     </div>
   );
