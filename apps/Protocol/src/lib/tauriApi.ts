@@ -15,6 +15,7 @@ import type {
   Habit, CreateHabit, UpdateHabit, HabitCompletion, HabitStack, CreateHabitStack,
   Food, CreateFood, Meal, CreateMeal, MealItem, CreateMealItem,
   MealPlanEntry, CreateMealPlanEntry, NutritionGoals, UpdateNutritionGoals,
+  NutritionGoalItem, CreateNutritionGoalItem,
   Supplement, CreateSupplement, UpdateSupplement, SupplementLog,
   SupplementStack, CreateSupplementStack, UpdateSupplementStack,
 } from "../store/types";
@@ -41,6 +42,7 @@ import {
   fetchMealItemsFromCloud, pushMealItemToCloud, deleteMealItemFromCloud,
   fetchMealPlanEntriesFromCloud, pushMealPlanEntryToCloud, setMealPlanEntryLoggedInCloud, deleteMealPlanEntryFromCloud,
   fetchNutritionGoalsFromCloud, upsertNutritionGoalsInCloud,
+  fetchNutritionGoalItemsFromCloud, upsertNutritionGoalItemInCloud, deleteNutritionGoalItemInCloud,
   fetchSupplementsFromCloud, pushSupplementToCloud, archiveSupplementInCloud,
   fetchSupplementLogsFromCloud, addSupplementLogToCloud, removeSupplementLogFromCloud,
   fetchSupplementStacksFromCloud, pushSupplementStackToCloud, deleteSupplementStackFromCloud,
@@ -541,3 +543,12 @@ export async function saveNutritionGoals(
     updated_at: new Date().toISOString(),
   };
 }
+
+// Per-nutrient min/max goals (the model the UI now uses).
+export const getNutritionGoalItems = (): Promise<NutritionGoalItem[]> => fetchNutritionGoalItemsFromCloud();
+
+export const saveNutritionGoalItem = (item: CreateNutritionGoalItem): Promise<NutritionGoalItem> =>
+  upsertNutritionGoalItemInCloud(item);
+
+export const deleteNutritionGoalItem = (nutrientKey: string): Promise<void> =>
+  deleteNutritionGoalItemInCloud(nutrientKey);

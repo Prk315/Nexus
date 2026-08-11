@@ -1,7 +1,7 @@
 import { createAsyncThunk, createSlice } from "@reduxjs/toolkit";
 import type {
   CreateFood, Food, CreateMeal, Meal, CreateMealItem, MealItem,
-  CreateMealPlanEntry, MealPlanEntry, UpdateNutritionGoals, NutritionGoals,
+  CreateMealPlanEntry, MealPlanEntry, NutritionGoalItem, CreateNutritionGoalItem,
 } from "../types";
 
 interface MealPlannerState {
@@ -9,7 +9,7 @@ interface MealPlannerState {
   meals: Meal[];
   mealItems: Record<string, MealItem[]>; // by meal_id
   planEntries: MealPlanEntry[];
-  goals: NutritionGoals | null;
+  goalItems: NutritionGoalItem[];
   loading: boolean;
   error: string | null;
 }
@@ -19,7 +19,7 @@ const initialState: MealPlannerState = {
   meals: [],
   mealItems: {},
   planEntries: [],
-  goals: null,
+  goalItems: [],
   loading: false,
   error: null,
 };
@@ -123,16 +123,25 @@ export const removeMealPlanEntry = createAsyncThunk("mealPlanner/removePlanEntry
   return id;
 });
 
-export const fetchNutritionGoals = createAsyncThunk("mealPlanner/fetchGoals", async () => {
-  const { getNutritionGoals } = await import("../../lib/tauriApi");
-  return getNutritionGoals();
+export const fetchNutritionGoalItems = createAsyncThunk("mealPlanner/fetchGoalItems", async () => {
+  const { getNutritionGoalItems } = await import("../../lib/tauriApi");
+  return getNutritionGoalItems();
 });
 
-export const saveNutritionGoals = createAsyncThunk(
-  "mealPlanner/saveGoals",
-  async ({ current, goals }: { current: NutritionGoals | null; goals: UpdateNutritionGoals }) => {
-    const { saveNutritionGoals: save } = await import("../../lib/tauriApi");
-    return save(current, goals);
+export const saveNutritionGoalItem = createAsyncThunk(
+  "mealPlanner/saveGoalItem",
+  async (item: CreateNutritionGoalItem) => {
+    const { saveNutritionGoalItem: save } = await import("../../lib/tauriApi");
+    return save(item);
+  },
+);
+
+export const deleteNutritionGoalItem = createAsyncThunk(
+  "mealPlanner/deleteGoalItem",
+  async (nutrientKey: string) => {
+    const { deleteNutritionGoalItem: del } = await import("../../lib/tauriApi");
+    await del(nutrientKey);
+    return nutrientKey;
   },
 );
 
@@ -185,8 +194,15 @@ const mealPlannerSlice = createSlice({
       .addCase(removeMealPlanEntry.fulfilled, (state, action) => {
         state.planEntries = state.planEntries.filter((e) => e.id !== action.payload);
       })
-      .addCase(fetchNutritionGoals.fulfilled, (state, action) => { state.goals = action.payload; })
-      .addCase(saveNutritionGoals.fulfilled, (state, action) => { state.goals = action.payload; });
+      .addCase(fetchNutritionGoalItems.fulfilled, (state, action) => { state.goalItems = action.payload; })
+      .addCase(saveNutritionGoalItem.fulfilled, (state, action) => {
+        const i = state.goalItems.findIndex((g) => g.nutrient_key === action.payload.nutrient_key);
+        if (i >= 0) state.goalItems[i] = action.payload;
+        else state.goalItems.push(action.payload);
+      })
+      .addCase(deleteNutritionGoalItem.fulfilled, (state, action) => {
+        state.goalItems = state.goalItems.filter((g) => g.nutrient_key !== action.payload);
+      });
   },
 });
 

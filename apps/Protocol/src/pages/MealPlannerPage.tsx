@@ -4,7 +4,8 @@ import { useAppDispatch, useAppSelector } from "../store/hooks";
 import {
   fetchFoods, addFood, fetchMeals, fetchMealItems,
   fetchMealPlanEntries, addMealPlanEntry,
-  toggleMealPlanEntryLogged, removeMealPlanEntry, fetchNutritionGoals, saveNutritionGoals,
+  toggleMealPlanEntryLogged, removeMealPlanEntry,
+  fetchNutritionGoalItems, saveNutritionGoalItem, deleteNutritionGoalItem,
 } from "../store/slices/mealPlannerSlice";
 import { fetchSupplements, fetchSupplementStacks, fetchSupplementLogs } from "../store/slices/supplementsSlice";
 import { CARD_STYLE, isoDate } from "../lib/uiHelpers";
@@ -17,7 +18,7 @@ import PlanPane from "../components/mealplanner/panes/PlanPane";
 import MealsPane from "../components/mealplanner/panes/MealsPane";
 import FoodsPane from "../components/mealplanner/panes/FoodsPane";
 import SupplementPane from "../components/mealplanner/panes/SupplementPane";
-import type { CreateFood, MealPlanEntry, MealSlot, UpdateNutritionGoals } from "../store/types";
+import type { CreateFood, MealPlanEntry, MealSlot, CreateNutritionGoalItem } from "../store/types";
 
 const DAY_LABELS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
 
@@ -59,7 +60,7 @@ export default function MealPlannerPage() {
   const meals = useAppSelector((s) => s.mealPlanner.meals);
   const mealItemsById = useAppSelector((s) => s.mealPlanner.mealItems);
   const planEntries = useAppSelector((s) => s.mealPlanner.planEntries);
-  const goals = useAppSelector((s) => s.mealPlanner.goals);
+  const goalItems = useAppSelector((s) => s.mealPlanner.goalItems);
   const supplements = useAppSelector((s) => s.supplements.items);
   const supplementLogs = useAppSelector((s) => s.supplements.logs);
 
@@ -73,7 +74,7 @@ export default function MealPlannerPage() {
   useEffect(() => {
     dispatch(fetchFoods());
     dispatch(fetchMeals());
-    dispatch(fetchNutritionGoals());
+    dispatch(fetchNutritionGoalItems());
     dispatch(fetchSupplements());
     dispatch(fetchSupplementStacks());
   }, [dispatch]);
@@ -160,8 +161,16 @@ export default function MealPlannerPage() {
     setAddingSlot(null);
   }
 
-  async function handleSaveGoals(newGoals: UpdateNutritionGoals) {
-    await dispatch(saveNutritionGoals({ current: goals, goals: newGoals })).unwrap();
+  /** Reconcile the edited goal set against what's stored: delete removed
+   *  nutrients, upsert the rest. */
+  async function handleSaveGoals(items: CreateNutritionGoalItem[]) {
+    const desired = new Set(items.map((i) => i.nutrient_key));
+    await Promise.all(
+      goalItems
+        .filter((g) => !desired.has(g.nutrient_key))
+        .map((g) => dispatch(deleteNutritionGoalItem(g.nutrient_key)).unwrap()),
+    );
+    await Promise.all(items.map((i) => dispatch(saveNutritionGoalItem(i)).unwrap()));
   }
 
   return (
@@ -173,7 +182,7 @@ export default function MealPlannerPage() {
             Plan your week, log what you actually eat, backed by real nutrition data.
           </p>
         </div>
-        <GoalsWidget todayTotals={todayTotals} goals={goals} onSave={handleSaveGoals} />
+        <GoalsWidget todayTotals={todayTotals} goals={goalItems} onSave={handleSaveGoals} />
       </div>
 
       {/* One dashboard, three full-width rows on Mac (each stacks on iPhone):
@@ -183,7 +192,7 @@ export default function MealPlannerPage() {
       <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
         <DashCard title="Overview" icon={<BarChart3 size={15} />}>
           <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
-            <NutrientOverview perDay={perDayCalories} todayTotals={todayTotals} goals={goals} />
+            <NutrientOverview perDay={perDayCalories} todayTotals={todayTotals} goals={goalItems} />
             <NutrientBreakdown totals={todayTotals} />
           </div>
         </DashCard>
