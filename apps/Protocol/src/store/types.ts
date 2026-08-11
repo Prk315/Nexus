@@ -406,6 +406,10 @@ export interface Food extends NutrientValues {
   brand: string | null;
   serving_qty: number;
   serving_unit: string;
+  /** Owner-toggled "even more detailed than Frida" flag. Drives the gold card
+   *  tier in the Meal Planner. Shared like the rest of the row — everyone sees
+   *  it, only the contributor may flip it. See lib/foodQuality.ts. */
+  detailed: boolean;
   created_at: string;
 }
 

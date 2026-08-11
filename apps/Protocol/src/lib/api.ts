@@ -687,6 +687,7 @@ function rowToFood(row: Record<string, unknown>): Food {
     brand: row.brand as string | null,
     serving_qty: row.serving_qty as number,
     serving_unit: row.serving_unit as string,
+    detailed: (row.detailed as boolean | null) ?? false,
     created_at: row.created_at as string,
     ...readNutrients(row),
   };

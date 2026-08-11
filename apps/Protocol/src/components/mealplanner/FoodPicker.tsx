@@ -3,6 +3,7 @@ import { Search, Plus, ArrowLeft, Loader2 } from "lucide-react";
 import { searchFoods, type FoodSearchResult } from "../../lib/nutritionApi";
 import { CARD_STYLE, INPUT_STYLE, LABEL_STYLE, FIELD_GROUP } from "../../lib/uiHelpers";
 import { EMPTY_NUTRIENTS } from "../../lib/nutrients";
+import { foodTier, tierCardStyle, tierMedalColor, type FoodTier } from "../../lib/foodQuality";
 import NutrientFields from "./NutrientFields";
 import type { CreateFood, Food } from "../../store/types";
 
@@ -15,7 +16,7 @@ const SOURCE_LABEL: Record<FoodSearchResult["source"], string> = {
 const emptyManualFood: CreateFood = {
   ...EMPTY_NUTRIENTS,
   source: "manual", external_id: null, name: "", brand: null,
-  serving_qty: 100, serving_unit: "g",
+  serving_qty: 100, serving_unit: "g", detailed: false,
 };
 
 function toCreateFood(r: FoodSearchResult): CreateFood {
@@ -23,7 +24,7 @@ function toCreateFood(r: FoodSearchResult): CreateFood {
     ...EMPTY_NUTRIENTS,
     ...r.nutrients, // full nutrient profile the source provided (USDA is deepest)
     source: r.source, external_id: r.external_id, name: r.name, brand: r.brand,
-    serving_qty: 100, serving_unit: "g",
+    serving_qty: 100, serving_unit: "g", detailed: false,
   };
 }
 
@@ -172,7 +173,7 @@ export default function FoodPicker({
           </div>
           <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
             {myMatches.slice(0, 5).map((f) => (
-              <FoodRow key={f.id} name={f.name} brand={f.brand} calories={f.calories} sourceLabel={SOURCE_LABEL[f.source as keyof typeof SOURCE_LABEL] ?? "Logged before"} onAdd={() => selectLocal(f)} />
+              <FoodRow key={f.id} name={f.name} brand={f.brand} calories={f.calories} sourceLabel={SOURCE_LABEL[f.source as keyof typeof SOURCE_LABEL] ?? "Logged before"} tier={foodTier(f)} onAdd={() => selectLocal(f)} />
             ))}
           </div>
         </div>
@@ -199,6 +200,7 @@ export default function FoodPicker({
                   calories={r.nutrients.calories ?? null}
                   sourceLabel={SOURCE_LABEL[r.source]}
                   country={r.country}
+                  tier={foodTier({ source: r.source })}
                   onAdd={() => selectResult(r)}
                 />
               ))}
@@ -238,13 +240,14 @@ export default function FoodPicker({
 }
 
 function FoodRow({
-  name, brand, calories, sourceLabel, country, onAdd,
+  name, brand, calories, sourceLabel, country, tier = "normal", onAdd,
 }: {
   name: string;
   brand: string | null;
   calories: number | null;
   sourceLabel: string;
   country?: string | null;
+  tier?: FoodTier;
   onAdd: () => void;
 }) {
   return (
@@ -254,10 +257,14 @@ function FoodRow({
         display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10,
         padding: "8px 10px", background: "var(--bg)", border: "1px solid var(--border)",
         borderRadius: "var(--radius-sm)", cursor: "pointer", textAlign: "left", width: "100%",
+        ...tierCardStyle(tier, "inset"),
       }}
     >
       <div style={{ minWidth: 0 }}>
         <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+          {tier !== "normal" && (
+            <span title={tier === "gold" ? "Detailed" : "Frida"} style={{ width: 7, height: 7, borderRadius: "50%", background: tierMedalColor(tier), flexShrink: 0 }} />
+          )}
           <div style={{ fontSize: 13, fontWeight: 600, color: "var(--text)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
             {name}
           </div>

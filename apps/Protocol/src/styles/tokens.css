@@ -45,6 +45,18 @@
   --accent-tint: #05966922;
   /* Accent at ~27% alpha — tinted borders */
   --accent-border-tint: #05966944;
+
+  /* Meal-planner food-quality tiers (see lib/foodQuality.ts).
+     silver = Frida, gold = curated "detailed". -wash sits over a raised card
+     (--surface); -wash-inset is a touch stronger for rows over --bg. */
+  --tier-silver-border: #A8AEB8;
+  --tier-silver-solid: #8A929E;
+  --tier-silver-wash: #8A929E14;
+  --tier-silver-wash-inset: #8A929E22;
+  --tier-gold-border: #C99A2E;
+  --tier-gold-solid: #B8860B;
+  --tier-gold-wash: #D4AF371F;
+  --tier-gold-wash-inset: #D4AF372E;
 }
 
 :root[data-theme="dark"] {
@@ -94,4 +106,16 @@
   --accent-tint: #10b98122;
   /* Accent at ~27% alpha — tinted borders */
   --accent-border-tint: #10b98144;
+
+  /* Meal-planner food-quality tiers (see lib/foodQuality.ts).
+     silver = Frida, gold = curated "detailed". Brighter metals for the dark
+     surface; washes tuned to read over --surface / --bg without muddying text. */
+  --tier-silver-border: #8B93A1;
+  --tier-silver-solid: #C4CAD4;
+  --tier-silver-wash: #C4CAD414;
+  --tier-silver-wash-inset: #C4CAD422;
+  --tier-gold-border: #C9A93F;
+  --tier-gold-solid: #EAC85E;
+  --tier-gold-wash: #E3C05A1A;
+  --tier-gold-wash-inset: #E3C05A2E;
 }
