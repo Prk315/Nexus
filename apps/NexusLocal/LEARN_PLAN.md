@@ -435,6 +435,28 @@ horizon (built sections only — no ghost units); per-course lens registry as
 above. Challenge/review/exercise pools stay course-scoped by slug/unit
 conventions.
 
+## DAG-v2 review brain (pinned, 2026-08-11)
+
+The prerequisite edges go live (they were dormant since Phase 3):
+
+1. **Importance** = PageRank over the REVERSED edge graph per course, stored in
+   `lr_concept.importance` (migration `20260811130000`), backfilled by script;
+   re-run after graph edits (RC splice included).
+2. **learn-evaluate v2**: priority = (λ·retention-deficit + (1−λ)·competence-
+   deficit) × importance — λ ported EXACTLY from LearnAndRetain selector.py.
+   Prereq-gating: if a due concept has a retained prerequisite that is itself
+   below `stable`, the prerequisite outranks it and the dependent's due entry
+   gains `"blocked_by": ["<concept_id>", …]`. Contract addition to
+   `lr_learn_state.due_concepts` — consumers must tolerate the extra field
+   (they already do: it's additive jsonb).
+3. **Blame propagation** (client): on grade 0/1, `applyGrade`'s path pushes
+   fractional blame (weight 0.3 × the triggering update's weight) onto the
+   graded concept's DIRECT prerequisites whose state is below `stable` —
+   ported from the gated implementation in LearnAndRetain pipeline/memory
+   (cite constants). Never recursive (one hop), never on grades 2/3, and
+   never on tile/challenge half-weight paths' prereqs-of-prereqs.
+   Verified against the Python reference on fixed sample states before wiring.
+
 ## Conventions that bite (from CLAUDE.md — enforced)
 
 - camelCase IPC args from JS; snake_case in Rust.

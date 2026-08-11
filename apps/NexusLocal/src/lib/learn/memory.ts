@@ -54,6 +54,91 @@ export const EVIDENCE_CAP = 8; // selector.py:41 — confidence for full retenti
 // "a just-learned concept starts hot, then decays in retention"
 export const FRESH_HEAT = 1.0; // progress.py:13 FRESH_HEAT
 
+// ── Blame propagation — memory.py lines 38–39, 337–388 ──────────────────────
+// `_propagate_to_dag_neighbors(user_id, concept_id, correct, weight=1.0)`
+// (memory.py:337–388) is the gated blame/Markov-blanket implementation:
+// on FAILURE only, walk the graded concept's DIRECT prereqs (one hop —
+// `concept_prereq.select("prereq_id").eq("concept_id", concept_id)`,
+// memory.py:366–368) and nudge each weak one's `value_beta` up a fraction,
+// "if a student fails on a concept and its prereqs are weak, the failure is
+// partly evidence about the prereq" (memory.py:349–351). Constants ported
+// verbatim:
+//   MAX_CREDIT_PER_ATTEMPT = 1.0   (memory.py:38 — cap per-concept credit
+//                                    from one attempt; reused here as the
+//                                    blame cap per memory.py:383)
+//   BLAME_FRACTION         = 0.3   (memory.py:39 — fractional beta increment
+//                                    for weak prereqs)
+// The Python gate itself (memory.py:376, `if value_mean >= 0.6: continue`)
+// checks ONLY `value_mean` — it does not consult `value_confidence`/
+// `MIN_EVIDENCE` the way `_prereq_stable` (selector.py:55–58) does for DAG
+// eligibility. That is a different, stricter gate used for study-session
+// scheduling (see `isStable` above); blame's own local check is looser and
+// is ported here unchanged as `weak = valueMean(...) < PREREQ_THRESHOLD`
+// (no confidence floor), matching `_propagate_to_dag_neighbors` literally.
+//
+// Exact steps ported (memory.py:369–388), read per-prereq:
+//   1. value_mean = alpha / (alpha + beta)
+//   2. if value_mean >= 0.6 (PREREQ_THRESHOLD): skip — only weak prereqs
+//      are blamed.
+//   3. blame = min(BLAME_FRACTION * weight, MAX_CREDIT_PER_ATTEMPT)
+//   4. new_beta = beta + blame
+//   5. persist: value_beta, last_decayed = now (heat/alpha/last_reviewed
+//      are untouched — memory.py writes only these two fields, lines
+//      384–386).
+//
+// This port's `correct` gate is the LEARN_PLAN.md "DAG-v2 review brain"
+// extension for the 0–3 grade scale (memory.py's own `correct` is a plain
+// boolean): blame fires on grade 0 (don't know) OR grade 1 (hard) — never
+// grade 2/3 — where the Python source, being binary, would only ever see
+// `correct=False` for grade 0. Widening to include grade 1 is a deliberate,
+// pinned product decision (LEARN_PLAN.md §"DAG-v2 review brain", item 3:
+// "on grade 0/1 ... never on grades 2/3"), not a Python-source constant.
+export const MAX_CREDIT_PER_ATTEMPT = 1.0; // memory.py:38
+export const BLAME_FRACTION = 0.3; // memory.py:39
+
+/**
+ * Pure port of `_propagate_to_dag_neighbors`'s per-prereq computation
+ * (memory.py:337–388, see header block above for the full citation).
+ * `prereqStates` are the graded concept(s)' DIRECT prerequisites' current
+ * memory states (one hop — callers must not pass prereqs-of-prereqs; see
+ * `api.fetchDirectPrereqs`). `weight` is the triggering grading update's own
+ * weight (1.0 for a normal Player/Review grade, `CHALLENGE_WEIGHT` for
+ * Lynudfordring, a q-matrix weight for Infinite exercises) — blame composes
+ * multiplicatively with it: `BLAME_FRACTION * weight`, exactly like a
+ * half-weight item attempt scales `log_item_attempt`'s update in the Python
+ * source (memory.py:264–275).
+ *
+ * Returns only the prereq states that were actually blamed (weak ones,
+ * `value_beta` bumped, `last_decayed` restamped) — unweak prereqs and
+ * anything filtered by the grade gate are simply absent from the result, so
+ * callers can upsert the return value directly with no further filtering.
+ */
+export function applyBlame(
+  prereqStates: LrMemoryState[],
+  grade: Grade,
+  weight: number = 1.0,
+  now: Date = new Date()
+): LrMemoryState[] {
+  // memory.py:377 `if correct or not DAG_BLAME_ENABLED: return` — ported as
+  // "fires only on grade 0/1" (see header comment on the correct↔grade gap).
+  if (grade !== 0 && grade !== 1) return [];
+
+  const nowIso = now.toISOString();
+  const blame = Math.min(BLAME_FRACTION * weight, MAX_CREDIT_PER_ATTEMPT); // memory.py:381–383
+
+  const blamed: LrMemoryState[] = [];
+  for (const state of prereqStates) {
+    const mean = valueMean(state.value_alpha, state.value_beta);
+    if (mean >= PREREQ_THRESHOLD) continue; // memory.py:376 — "Only blame weak prereqs"
+    blamed.push({
+      ...state,
+      value_beta: state.value_beta + blame, // memory.py:378
+      last_decayed: nowIso, // memory.py:386 — note: NOT last_reviewed, NOT heat
+    });
+  }
+  return blamed;
+}
+
 /** Bootstrap defaults for a concept never seen before (memory.py bootstrap_memory). */
 export function defaultMemoryState(
   userId: string,

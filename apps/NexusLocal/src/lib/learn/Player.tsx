@@ -82,6 +82,7 @@ import type {
   UnitFlow,
 } from "./types";
 import {
+  applyBlamePropagation,
   approveProofContent,
   approveUnitContent,
   demoteProofContent,
@@ -292,6 +293,11 @@ export function Player(props: PlayerProps) {
     });
     logAttempt({ itemRef: drill.id, lens: drill.lens, grade }).catch((e) =>
       console.error("[learn] logAttempt failed", e)
+    );
+    // DAG-v2 blame propagation (LEARN_PLAN.md) — fire-and-forget, one hop,
+    // full weight (this is a normal, unweighted grading path).
+    applyBlamePropagation(group.concept_ids, grade).catch((e) =>
+      console.error("[learn] blame propagation failed", e)
     );
     setSolvedDrillIds((prev) => {
       const next = new Set(prev);

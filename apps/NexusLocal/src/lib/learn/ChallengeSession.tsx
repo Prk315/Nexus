@@ -70,6 +70,7 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
+  applyBlamePropagation,
   CHALLENGE_MIN_POOL,
   fetchChallengeBest,
   fetchChallengePool,
@@ -237,6 +238,15 @@ function gradeDrill(entry: ChallengePoolDrill, correct: boolean) {
   );
   applyChallengeMemory(entry.conceptIds, entry.drill.lens, grade).catch((e) =>
     console.error("[learn] challenge applyGrade failed", e)
+  );
+  // DAG-v2 blame propagation (LEARN_PLAN.md) — half-weight, composing
+  // multiplicatively with the challenge's own CHALLENGE_WEIGHT (0.3 × 0.5).
+  // Only ever fires on grade 1 here (challenge grades are never 0), and only
+  // walks THIS drill's tagged concepts' direct prereqs — never the prereqs'
+  // own prereqs, per the "never on tile/challenge half-weight paths'
+  // prereqs-of-prereqs" rule.
+  applyBlamePropagation(entry.conceptIds, grade, CHALLENGE_WEIGHT).catch((e) =>
+    console.error("[learn] challenge blame propagation failed", e)
   );
 }
 

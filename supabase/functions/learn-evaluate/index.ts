@@ -1,9 +1,10 @@
-// Supabase Edge Function: learn-evaluate
+// Supabase Edge Function: learn-evaluate (v2 — DAG-v2 review brain)
 //
 // Server-side brain for the Learn (lr_) module — the LearnAndRetain concept-
 // graph learning system embedded in Nexus Local. See
-// apps/NexusLocal/LEARN_PLAN.md, "Phase 3 — lr_learn_state contract" (pinned),
-// for the row shape this function writes.
+// apps/NexusLocal/LEARN_PLAN.md, "Phase 3 — lr_learn_state contract" and
+// "DAG-v2 review brain" (both pinned), for the row shape this function writes
+// and the v2 priority/prereq-gating rules added below.
 //
 // Intended to run on pg_cron (following the `nexus-focus-evaluate` /
 // `protocol-bodyscan-sync` pattern in CLAUDE.md's "Scheduled server-side work"
@@ -15,6 +16,10 @@
 //                       graduated into retention) never decay — the two-space
 //                       model from LearnAndRetain's ARCHITECTURE.md.
 //   2. DUE + PRIORITY — which retained concepts need review, and in what order.
+//                       v2: priority is weighted by `lr_concept.importance`
+//                       (PageRank over the reversed prereq graph, backfilled
+//                       per course) and gated by direct prerequisites that are
+//                       retained-but-unstable — see "DAG-v2" below.
 //   3. FRONTIER       — which unit(s) to work on next.
 //   4. STREAK         — consecutive local (Europe/Copenhagen) days with ≥1
 //                        attempt, ending today or yesterday.
@@ -48,24 +53,53 @@
 //     evidence_factor = clamp((confidence - 2) / EVIDENCE_CAP, 0, 1) [line 121]
 //     retention  = (1 - heat) * value_mean * evidence_factor
 //     competence = 1 - value_mean
-//     priority   = LAMBDA * retention + (1 - LAMBDA) * competence
+//     raw_priority = LAMBDA * retention + (1 - LAMBDA) * competence  [line 130]
 //
-// ── DEVIATIONS FROM THE PYTHON (per LEARN_PLAN.md's Phase 3 task brief) ──────
+//   v2: importance weighting — LEARN_PLAN.md "DAG-v2 review brain" (pinned)
+//     priority = raw_priority * importance
+//     `importance` = lr_concept.importance (PageRank over the REVERSED
+//     prereq graph, per course, max-normalized to 1.0 — migration
+//     20260811130000, backfilled by scripts/backfill_importance.py). A null
+//     importance (concept not yet backfilled) uses the course median
+//     importance instead of 0 — a missing backfill must never zero out a
+//     concept's priority. This is a DIRECT multiply, not selector.py's
+//     `_score_concept` boost form `raw_priority * (1 + gamma * imp)` (line
+//     134, DEFAULT_GAMMA = 0.2, imp = normalized prereq out-degree) — the
+//     charter specifies the multiplicative form with our PageRank-based
+//     importance, so gamma/out-degree importance are not ported.
+//
+//   v2: prereq gating — LEARN_PLAN.md "DAG-v2 review brain" (pinned)
+//     For each due concept, its DIRECT prerequisites (lr_concept_prereq)
+//     that are (a) retained (in lr_retained_concept) AND (b) below stable
+//     (value_mean < PREREQ_STABLE_COMP or confidence < PREREQ_STABLE_EVIDENCE)
+//     outrank the dependent: they are force-included in due_concepts (even if
+//     not otherwise due), and the dependent's entry gains
+//     `blocked_by: [prereq_id, …]`. This is a narrower, review-only gate —
+//     it is NOT selector.py's `get_eligible_concepts` DAG gate (PREREQ_
+//     THRESHOLD=0.6 / MIN_EVIDENCE=4, lines 38-39), which answers "what's
+//     eligible for a NEW session" and remains un-reapplied per the bullet
+//     below. The stable-evidence bar here (1, not 4) is the DAG-v2 task
+//     brief's literal number, not a selector.py constant — it answers "has
+//     this prereq been attempted at all", not "is it session-eligible".
+//     Gating runs on the uncapped due set; DUE_CAP is applied AFTER gating,
+//     so a force-included prereq can still be capped out if it's not the
+//     30 highest-priority entries.
+//
+// ── DEVIATIONS FROM THE PYTHON (per LEARN_PLAN.md's Phase 3/DAG-v2 briefs) ───
 //
 //   - selector.py's PREREQ_THRESHOLD / MIN_EVIDENCE (the DAG eligibility gate
 //     in `get_eligible_concepts`) is NOT reapplied. A concept only reaches
 //     `lr_retained_concept` once its *unit* is mastered, and unit mastery
 //     already implies its concepts passed acquisition — that gate stands in
-//     for selector.py's eligibility filter here.
+//     for selector.py's eligibility filter here. (A separate, narrower
+//     prereq gate for REVIEW RANKING was added in v2 — see above.)
 //   - The due filter ("decayed heat < 0.5 OR comp < 0.6") is the fixed
 //     threshold pinned in LEARN_PLAN.md's Phase 3 contract, not selector.py's
 //     `get_eligible_concepts` gate — that gate answers "what's eligible for a
 //     *new* session", a different question from "what's due for review".
-//   - selector.py's structural-importance boost (`* (1 + gamma * imp)`,
-//     concept-DAG out-degree, DEFAULT_GAMMA = 0.2) is SKIPPED per instruction
-//     ("skip PageRank importance — uniform importance is fine, note it").
-//     Concretely: priority below is the *raw* λ-weighted sum, no importance
-//     multiplier.
+//   - selector.py's `(1 + gamma * imp)` boost form and its out-degree-based
+//     `_compute_importance` are NOT used (see the v2 importance-weighting
+//     note above) — v2 multiplies directly by `lr_concept.importance`.
 //   - `next_item_session`'s greedy weighted set-cover (turning due concepts
 //     into an *item* list via lr_qmatrix) is not ported. lr_item/lr_qmatrix
 //     are authoring-grounding/capstone tables in this migration, not the
@@ -89,6 +123,12 @@ const DUE_COMP_THRESHOLD = 0.6;
 // Selector priority weighting (selector.py:38-41).
 const EVIDENCE_CAP = 8;
 const LAMBDA = 0.5;
+
+// DAG-v2 prereq-gating "below stable" bar — LEARN_PLAN.md "DAG-v2 review
+// brain" task brief, literal numbers (distinct from selector.py's
+// PREREQ_THRESHOLD=0.6/MIN_EVIDENCE=4 session-eligibility gate).
+const PREREQ_STABLE_COMP = DUE_COMP_THRESHOLD; // 0.6, reuse the due-comp bar
+const PREREQ_STABLE_EVIDENCE = 1;
 
 const DUE_CAP = 30;
 const FRONTIER_CAP = 3;
@@ -172,6 +212,22 @@ interface UnitProgressRow {
   status: string;
 }
 
+interface ConceptRow {
+  concept_id: string;
+  t_id: number | null;
+  importance: number | null;
+}
+
+interface TopicRow {
+  t_id: number;
+  c_id: number | null;
+}
+
+interface PrereqEdgeRow {
+  prereq_id: string;
+  concept_id: string;
+}
+
 // ── Step 1: heat decay ────────────────────────────────────────────────────
 
 interface DecayedState extends MemoryStateRow {
@@ -196,6 +252,10 @@ interface DueConcept {
   unit_id: number | null;
   priority: number;
   least_seen_lens: "row" | "matrix" | "column" | null;
+  // v2, additive: direct prerequisites that are retained but below stable —
+  // they outrank this concept. Present only when non-empty; consumers must
+  // tolerate the extra field (it's additive jsonb per the contract note).
+  blocked_by?: string[];
 }
 
 const LENS_KEYS = ["row", "matrix", "column"] as const;
@@ -214,16 +274,85 @@ function leastSeenLens(
 }
 
 /**
- * selector.py's `_score_concept` (lines 111-134), minus the structural-
- * importance boost — see the file-header "Deviations" note.
+ * selector.py's `_score_concept` (lines 111-134) retention/competence combo,
+ * WITHOUT any importance factor — the importance multiply is applied
+ * separately at the call site (v2: direct multiply, not selector.py's
+ * `(1 + gamma * imp)` boost — see the file-header "v2: importance weighting"
+ * note).
  */
-function priorityOf(decayedHeat: number, alpha: number, beta: number): number {
+function rawPriorityOf(decayedHeat: number, alpha: number, beta: number): number {
   const valueMean = alpha / (alpha + beta);
   const confidence = alpha + beta;
   const evidenceFactor = Math.min(1, Math.max(0, (confidence - 2) / EVIDENCE_CAP));
   const retention = (1 - decayedHeat) * valueMean * evidenceFactor;
   const competence = 1 - valueMean;
   return LAMBDA * retention + (1 - LAMBDA) * competence;
+}
+
+/** value_mean < PREREQ_STABLE_COMP OR confidence < PREREQ_STABLE_EVIDENCE. */
+function isBelowStable(alpha: number, beta: number): boolean {
+  const valueMean = alpha / (alpha + beta);
+  const confidence = alpha + beta;
+  return valueMean < PREREQ_STABLE_COMP || confidence < PREREQ_STABLE_EVIDENCE;
+}
+
+/** Ordinary median; null on an empty input. */
+function median(nums: number[]): number | null {
+  if (nums.length === 0) return null;
+  const sorted = [...nums].sort((a, b) => a - b);
+  const mid = Math.floor(sorted.length / 2);
+  return sorted.length % 2 !== 0
+    ? sorted[mid]
+    : (sorted[mid - 1] + sorted[mid]) / 2;
+}
+
+/**
+ * Builds a `concept_id -> importance` resolver from `lr_concept` +
+ * `lr_topic`. A null/missing importance (not yet backfilled) falls back to
+ * the concept's course median importance, then to the global median across
+ * all courses, then to 1.0 (neutral, never 0) if no importance data exists
+ * anywhere yet — a missing backfill must never zero out a concept's
+ * priority (DAG-v2 charter).
+ */
+function buildImportanceResolver(
+  concepts: ConceptRow[],
+  topics: TopicRow[],
+): (conceptId: string) => number {
+  const courseOfTopic = new Map<number, number | null>(topics.map((t) => [t.t_id, t.c_id]));
+
+  const conceptImportance = new Map<string, number | null>();
+  const conceptCourse = new Map<string, number | null>();
+  const importancesByCourse = new Map<number, number[]>();
+  const allImportances: number[] = [];
+
+  for (const c of concepts) {
+    const courseId = c.t_id != null ? courseOfTopic.get(c.t_id) ?? null : null;
+    conceptImportance.set(c.concept_id, c.importance);
+    conceptCourse.set(c.concept_id, courseId);
+    if (c.importance != null) {
+      allImportances.push(c.importance);
+      if (courseId != null) {
+        if (!importancesByCourse.has(courseId)) importancesByCourse.set(courseId, []);
+        importancesByCourse.get(courseId)!.push(c.importance);
+      }
+    }
+  }
+
+  const globalMedian = median(allImportances) ?? 1.0;
+  const medianByCourse = new Map<number, number>();
+  for (const [courseId, vals] of importancesByCourse) {
+    medianByCourse.set(courseId, median(vals) ?? globalMedian);
+  }
+
+  return (conceptId: string): number => {
+    const direct = conceptImportance.get(conceptId);
+    if (direct != null) return direct;
+    const courseId = conceptCourse.get(conceptId) ?? null;
+    if (courseId != null && medianByCourse.has(courseId)) {
+      return medianByCourse.get(courseId)!;
+    }
+    return globalMedian;
+  };
 }
 
 // ── Step 3: frontier ─────────────────────────────────────────────────────
@@ -335,19 +464,81 @@ async function compute(
     if (!unitOfConcept.has(r.concept_id)) unitOfConcept.set(r.concept_id, r.unit_id);
   }
 
-  const due: DueConcept[] = decayed
-    .filter((row) => {
-      const comp = row.value_alpha / (row.value_alpha + row.value_beta);
-      return row.decayedHeat < DUE_HEAT_THRESHOLD || comp < DUE_COMP_THRESHOLD;
+  const decayedByConcept = new Map<string, DecayedState>(decayed.map((r) => [r.concept_id, r]));
+
+  // Due-by-threshold, UNCAPPED — the DAG-v2 prereq gate below can still add
+  // more concept_ids on top of this set before DUE_CAP is applied.
+  const dueThresholdIds = new Set<string>();
+  for (const row of decayed) {
+    const comp = row.value_alpha / (row.value_alpha + row.value_beta);
+    if (row.decayedHeat < DUE_HEAT_THRESHOLD || comp < DUE_COMP_THRESHOLD) {
+      dueThresholdIds.add(row.concept_id);
+    }
+  }
+
+  // Importance resolver (v2). Only worth fetching if there's anything due —
+  // an empty due set needs no importance data.
+  let importanceOf: (conceptId: string) => number = () => 1.0;
+  const blockedByOf = new Map<string, string[]>();
+  const extraDueIds = new Set<string>();
+
+  if (dueThresholdIds.size > 0) {
+    const conceptRows = unwrap<ConceptRow>(
+      "lr_concept",
+      await supabase.from("lr_concept").select("concept_id, t_id, importance"),
+    );
+    const topicRows = unwrap<TopicRow>(
+      "lr_topic",
+      await supabase.from("lr_topic").select("t_id, c_id"),
+    );
+    importanceOf = buildImportanceResolver(conceptRows, topicRows);
+
+    // DAG-v2 prereq gating: direct prereqs of every due-by-threshold concept.
+    const prereqRows = unwrap<PrereqEdgeRow>(
+      "lr_concept_prereq",
+      await supabase
+        .from("lr_concept_prereq")
+        .select("prereq_id, concept_id")
+        .in("concept_id", [...dueThresholdIds]),
+    );
+    const prereqsOf = new Map<string, string[]>();
+    for (const r of prereqRows) {
+      if (!prereqsOf.has(r.concept_id)) prereqsOf.set(r.concept_id, []);
+      prereqsOf.get(r.concept_id)!.push(r.prereq_id);
+    }
+
+    for (const conceptId of dueThresholdIds) {
+      const blockers: string[] = [];
+      for (const prereqId of prereqsOf.get(conceptId) ?? []) {
+        const prereqState = decayedByConcept.get(prereqId); // present iff retained
+        if (!prereqState) continue;
+        if (isBelowStable(prereqState.value_alpha, prereqState.value_beta)) {
+          blockers.push(prereqId);
+          if (!dueThresholdIds.has(prereqId)) extraDueIds.add(prereqId);
+        }
+      }
+      if (blockers.length > 0) blockedByOf.set(conceptId, blockers);
+    }
+  }
+
+  const allDueIds = new Set<string>([...dueThresholdIds, ...extraDueIds]);
+  const due: DueConcept[] = [...allDueIds]
+    .map((conceptId) => {
+      const row = decayedByConcept.get(conceptId)!;
+      const entry: DueConcept = {
+        concept_id: conceptId,
+        unit_id: unitOfConcept.get(conceptId) ?? null,
+        priority:
+          rawPriorityOf(row.decayedHeat, row.value_alpha, row.value_beta) *
+          importanceOf(conceptId),
+        least_seen_lens: leastSeenLens(row.lens_counts),
+      };
+      const blockers = blockedByOf.get(conceptId);
+      if (blockers && blockers.length > 0) entry.blocked_by = blockers;
+      return entry;
     })
-    .map((row) => ({
-      concept_id: row.concept_id,
-      unit_id: unitOfConcept.get(row.concept_id) ?? null,
-      priority: priorityOf(row.decayedHeat, row.value_alpha, row.value_beta),
-      least_seen_lens: leastSeenLens(row.lens_counts),
-    }))
     .sort((a, b) => b.priority - a.priority)
-    .slice(0, DUE_CAP);
+    .slice(0, DUE_CAP); // cap stays 30, applied AFTER gating
 
   // ── Step 3: frontier ──────────────────────────────────────────────────
   const units = unwrap<UnitRow>(

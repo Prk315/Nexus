@@ -68,6 +68,7 @@
 import { useEffect, useState } from "react";
 import type { Grade } from "./types";
 import {
+  applyBlamePropagation,
   fetchExercisePool,
   fetchItemConcepts,
   fetchItemSolution,
@@ -457,6 +458,16 @@ export function ExerciseSession({ onClose }: { onClose: () => void }) {
           return upsertMemory(updated);
         })
       );
+      // DAG-v2 blame propagation (LEARN_PLAN.md) — one call per concept
+      // since each carries its own (normalized) q-matrix weight; composes
+      // multiplicatively with BLAME_FRACTION exactly like a half-weight
+      // challenge attempt does (0.3 × weight). Fire-and-forget, same as
+      // every other side effect in this already-fire-and-forget function.
+      for (const c of normalized) {
+        applyBlamePropagation([c.concept_id], grade, c.weight).catch((e) =>
+          console.error("[learn] exercise blame propagation failed", e)
+        );
+      }
     } catch (e) {
       console.error("[learn] applyWeightedGrade failed", e);
     }

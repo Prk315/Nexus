@@ -25,6 +25,14 @@
  * in `@layer base`, and any unlayered rule beats a layered one regardless of
  * source order — which is exactly what's needed to undo preflight's table and
  * list resets without an `!important` per property.
+ *
+ * v4 (2026-08-11): tables became a reusable component — `LearnTable.tsx`
+ * owns a remark plugin that stamps `data-zebra` / `data-numeric` /
+ * `data-code-heavy` rendering hints onto each table's mdast (see that file
+ * for the heuristics) plus the `table`/`thead`/`tbody`/`tr`/`th`/`td`
+ * `components` entries. The CSS those hints drive still lives here — see
+ * "Tables" below — because this file, not LearnTable.tsx, is the single
+ * injected stylesheet every consumer shares.
  */
 
 import ReactMarkdown, { type Components } from "react-markdown";
@@ -32,6 +40,7 @@ import remarkGfm from "remark-gfm";
 import remarkMath from "remark-math";
 import rehypeKatex from "rehype-katex";
 import "katex/dist/katex.min.css";
+import { remarkLearnTableMeta, learnTableComponents } from "./LearnTable";
 
 const STYLE_ID = "learn-md-style";
 
@@ -83,29 +92,60 @@ const LEARN_MD_CSS = `
 }
 .learn-md pre code { background: none; padding: 0; font-size: 0.86em; }
 
-/* Tables — remark-gfm emits a bare <table>; the wrapper div comes from the
-   \`components\` override below so the scroller exists at every width. */
-.learn-md-table { margin: 1.25em 0; overflow-x: auto; overscroll-behavior-x: contain; }
+/* Tables (LearnTable.tsx) — remark-gfm emits a bare <table>; the card
+   wrapper div and the data-zebra/-numeric/-code-heavy hints come from that
+   file's remark plugin + \`components\` overrides. This block is the only
+   place those hints turn into pixels — LearnTable.tsx stays CSS-free by
+   design, see its docstring. */
+.learn-md-table {
+  margin: 1.25em 0; overflow-x: auto; overscroll-behavior-x: contain;
+  border: 1px solid rgba(0,0,0,0.08); border-radius: 12px;
+  background: rgba(0,0,0,0.015);
+}
 .learn-md-table > table {
   width: 100%; border-collapse: collapse; text-align: left;
   font-size: 0.94em; line-height: 1.55;
 }
 .learn-md-table th {
-  padding: 0.45rem 0.75rem; vertical-align: bottom; white-space: nowrap;
+  padding: 0.5rem 0.9rem; vertical-align: bottom; white-space: nowrap;
   font-size: 0.76em; font-weight: 600; letter-spacing: 0.08em;
   text-transform: uppercase; color: #6E6E78;
   border-bottom: 1px solid rgba(0,0,0,0.16);
 }
 .learn-md-table td {
-  padding: 0.55rem 0.75rem; vertical-align: top;
+  padding: 0.6rem 0.9rem; vertical-align: top;
   border-top: 1px solid rgba(0,0,0,0.07);
 }
 .learn-md-table tbody tr:first-child td { border-top: 0; }
 .learn-md-table td:first-child { font-weight: 600; color: #1A1A24; }
-.learn-md-table th:first-child, .learn-md-table td:first-child { padding-left: 0; }
-.learn-md-table th:last-child, .learn-md-table td:last-child { padding-right: 0; }
 .learn-md-table td p { margin: 0.25em 0; }
 .learn-md-table .katex { white-space: nowrap; }
+
+/* Zebra striping — only once there's ≥ 4 body rows to organise (the
+   heuristic lives in LearnTable.tsx, this is purely the paint). */
+.learn-md-table[data-zebra] tbody tr:nth-child(even) td {
+  background: rgba(0,0,0,0.02);
+}
+
+/* Numeric columns — right-aligned with tabular figures so a column of
+   numbers lines up on its ones place instead of its first digit. Header
+   inherits the same alignment so the label sits over its data. */
+.learn-md-table td[data-numeric], .learn-md-table th[data-numeric] {
+  text-align: right; font-variant-numeric: tabular-nums;
+}
+
+/* Code-heavy tables (relation instances, RA/SQL fragments, lens keys) —
+   body cells go monospace table-wide. Headers keep the small-caps label
+   treatment above; only data cells switch face. Safe even when a cell is
+   dominantly \`$…$\`math (LearnTable.tsx's heuristic can fire on a short
+   symbol/value dictionary): \`font-family\` is inherited, and KaTeX's own
+   stylesheet sets an explicit font-family on every \`.mord\`/\`.katex\`
+   span it renders, which — being a direct rule on that element, not an
+   inherited one — always wins over whatever the ancestor <td> declares. */
+.learn-md-table[data-code-heavy] td {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.88em;
+}
 
 /* Display math: left-aligned, not centred. Centred content wider than an
    \`overflow-x: auto\` box puts its own left edge at negative scroll — i.e.
@@ -143,22 +183,20 @@ function ensureLearnMarkdownStyle() {
 
 ensureLearnMarkdownStyle();
 
+// Table components (card container + zebra/numeric/code-heavy hints) live in
+// LearnTable.tsx — see that file for why. Nothing else needs an override:
+// every other tag renders through react-markdown's default hast→React path.
 const COMPONENTS: Components = {
-  // `node` is react-markdown's hast node — it must be stripped before the
-  // rest is spread onto a real DOM element, or React warns about an unknown
-  // attribute on every table.
-  table: ({ node: _node, ...props }) => (
-    <div className="learn-md-table">
-      <table {...props} />
-    </div>
-  ),
+  ...learnTableComponents,
 };
 
 export function Markdown({ children, className }: { children: string; className?: string }) {
   return (
     <div className={className ? `learn-md ${className}` : "learn-md"}>
       <ReactMarkdown
-        remarkPlugins={[remarkMath, remarkGfm]}
+        // remarkLearnTableMeta must run after remarkMath/remarkGfm — it reads
+        // the `inlineMath`/`table` nodes they produce (LearnTable.tsx).
+        remarkPlugins={[remarkMath, remarkGfm, remarkLearnTableMeta]}
         rehypePlugins={[rehypeKatex]}
         components={COMPONENTS}
       >

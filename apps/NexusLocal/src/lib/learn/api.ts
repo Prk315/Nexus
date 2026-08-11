@@ -34,6 +34,7 @@ import type {
 } from "./types";
 
 import { nodeUserId } from "../nodeUser";
+import { applyBlame } from "./memory";
 
 // Resolved per call from the node config rather than hardcoded — see
 // `lib/nodeUser.ts`.
@@ -306,6 +307,70 @@ export async function upsertMemory(state: LrMemoryState): Promise<void> {
     .from("lr_memory_state")
     .upsert({ ...state, user_id: await nodeUserId() }, { onConflict: "user_id,concept_id" });
   if (error) throw error;
+}
+
+/**
+ * Batched direct-prerequisite lookup — `lr_concept_prereq(prereq_id,
+ * concept_id)`, one row per edge (migration `20260806190000`, mirrors
+ * `concept_prereq` in the LearnAndRetain source 1:1). One hop only: this
+ * returns each input concept's own `prereq_id`s, never walking further up
+ * the DAG — the "blame propagation" pinned charter (LEARN_PLAN.md "DAG-v2
+ * review brain") is explicit that blame is "never recursive (one hop)".
+ * Returns `{ concept_id: prereq_id[] }`; concepts with no prereqs (roots)
+ * are simply absent from the result, not mapped to `[]`.
+ */
+export async function fetchDirectPrereqs(conceptIds: string[]): Promise<Record<string, string[]>> {
+  if (conceptIds.length === 0) return {};
+  const { data, error } = await supabasePublic
+    .from("lr_concept_prereq")
+    .select("concept_id, prereq_id")
+    .in("concept_id", conceptIds);
+  if (error) throw error;
+  const out: Record<string, string[]> = {};
+  for (const row of (data ?? []) as { concept_id: string; prereq_id: string }[]) {
+    (out[row.concept_id] ??= []).push(row.prereq_id);
+  }
+  return out;
+}
+
+/**
+ * Blame-propagation orchestration (LEARN_PLAN.md "DAG-v2 review brain",
+ * item 3) — the fetch→apply→upsert wiring around `memory.applyBlame`'s pure
+ * computation. Called fire-and-forget after a grading path's normal
+ * `applyGrade`/`upsertMemory` updates, same pattern as `logAttempt`
+ * elsewhere in this file: callers do `applyBlamePropagation(...).catch(...)`
+ * and never await it inline.
+ *
+ * `gradedConceptIds` are the concept(s) just graded (a whole practice
+ * group's `concept_ids` for Player/Review, one challenge drill's tagged
+ * concepts, or a single Infinite-exercise concept — callers pass whatever
+ * shares `grade`/`weight`). Skips the network round-trip entirely when
+ * `grade` isn't 0/1 (memory.py:377's gate, mirrored in `applyBlame`) or
+ * there's nothing to grade.
+ *
+ * Mirrors `_propagate_to_dag_neighbors`'s own "skip prereqs with no
+ * existing memory_state row" behavior (memory.py:359–361, `if not
+ * state_resp.data: continue`) — a prereq never attempted has no evidence to
+ * revise, so it is left out of `fetchMemoryStates`' result and never
+ * bootstrapped here.
+ */
+export async function applyBlamePropagation(
+  gradedConceptIds: string[],
+  grade: Grade,
+  weight: number = 1.0
+): Promise<void> {
+  if ((grade !== 0 && grade !== 1) || gradedConceptIds.length === 0) return;
+
+  const prereqMap = await fetchDirectPrereqs(gradedConceptIds);
+  const prereqIds = Array.from(new Set(Object.values(prereqMap).flat()));
+  if (prereqIds.length === 0) return;
+
+  const states = await fetchMemoryStates(prereqIds);
+  const existing = prereqIds.map((id) => states[id]).filter((s): s is LrMemoryState => s != null);
+  if (existing.length === 0) return;
+
+  const blamed = applyBlame(existing, grade, weight);
+  await Promise.all(blamed.map((state) => upsertMemory(state)));
 }
 
 /** Flip a unit's progress status. Pass `masteredAt` when status transitions to "mastered". */

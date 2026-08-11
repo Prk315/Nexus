@@ -24,7 +24,14 @@
 
 import { useEffect, useMemo, useState } from "react";
 import type { Grade, Lens, LrMemoryState } from "./types";
-import { fetchMemoryStates, fetchReviewQueue, logAttempt, upsertMemory, type ReviewQueueItem } from "./api";
+import {
+  applyBlamePropagation,
+  fetchMemoryStates,
+  fetchReviewQueue,
+  logAttempt,
+  upsertMemory,
+  type ReviewQueueItem,
+} from "./api";
 import { applyGrade, defaultMemoryState, isStable, valueMean } from "./memory";
 import { useCourse } from "./CourseContext";
 import { DrillCard } from "./player/DrillCard";
@@ -93,6 +100,11 @@ export function ReviewSession({ onClose }: { onClose: () => void }) {
       return next;
     });
     logAttempt({ itemRef: drill.id, lens, grade }).catch((e) => console.error("[learn] logAttempt failed", e));
+    // DAG-v2 blame propagation (LEARN_PLAN.md) — fire-and-forget, one hop,
+    // full weight (same unweighted grading path as Player.tsx).
+    applyBlamePropagation(group.concept_ids, grade).catch((e) =>
+      console.error("[learn] blame propagation failed", e)
+    );
 
     if (index + 1 < queue.length) {
       setIndex((n) => n + 1);
