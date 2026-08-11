@@ -46,6 +46,8 @@ export default function SupplementPane() {
   const [collapsed, setCollapsed] = useState<Set<string>>(loadCollapsed);
   const [dragId, setDragId] = useState<string | null>(null);
   const [dragOverStack, setDragOverStack] = useState<string | null>(null);
+  const [dragStackId, setDragStackId] = useState<string | null>(null);
+  const [stackDropTarget, setStackDropTarget] = useState<string | null>(null);
 
   const takenToday = useMemo(
     () => new Set(logs.filter((l) => l.date === today).map((l) => l.supplement_id)),
@@ -132,6 +134,24 @@ export default function SupplementPane() {
     setDragOverStack(null);
   }
 
+  /** Reorder whole stacks — the dragged stack (and, since its supplements render
+   *  inside it, all of them) moves to the target's slot; every stack's sort_order
+   *  is renumbered and only the changed ones are persisted. */
+  function reorderStacks(draggedId: string, targetId: string) {
+    if (draggedId === targetId) return;
+    const ordered = [...orderedStacks];
+    const from = ordered.findIndex((s) => s.id === draggedId);
+    const to = ordered.findIndex((s) => s.id === targetId);
+    if (from < 0 || to < 0) return;
+    const [moved] = ordered.splice(from, 1);
+    ordered.splice(to, 0, moved);
+    ordered.forEach((s, i) => {
+      if (s.sort_order !== i) dispatch(editSupplementStack({ id: s.id, name: s.name, sort_order: i }));
+    });
+    setDragStackId(null);
+    setStackDropTarget(null);
+  }
+
   const canDeleteStacks = orderedStacks.length > 1;
 
   return (
@@ -174,22 +194,44 @@ export default function SupplementPane() {
           const isCollapsed = collapsed.has(stack.id);
           const takenCount = list.filter((s) => takenToday.has(s.id)).length;
           const isRenaming = renamingStackId === stack.id;
-          const isDragOver = dragOverStack === stack.id && !!dragId;
+          const isSuppDragOver = dragOverStack === stack.id && !!dragId;
+          const isStackDragOver = stackDropTarget === stack.id && !!dragStackId && dragStackId !== stack.id;
           return (
             <div
               key={stack.id}
-              onDragOver={(e) => { if (dragId) { e.preventDefault(); setDragOverStack(stack.id); } }}
-              onDragLeave={() => setDragOverStack((cur) => (cur === stack.id ? null : cur))}
-              onDrop={(e) => { e.preventDefault(); moveTo(stack.id, null); }}
+              onDragOver={(e) => {
+                if (dragStackId) { e.preventDefault(); setStackDropTarget(stack.id); }
+                else if (dragId) { e.preventDefault(); setDragOverStack(stack.id); }
+              }}
+              onDragLeave={() => {
+                setDragOverStack((cur) => (cur === stack.id ? null : cur));
+                setStackDropTarget((cur) => (cur === stack.id ? null : cur));
+              }}
+              onDrop={(e) => {
+                e.preventDefault();
+                if (dragStackId) reorderStacks(dragStackId, stack.id);
+                else moveTo(stack.id, null);
+              }}
               style={{
                 display: "flex", flexDirection: "column", gap: 6,
-                border: `1px solid ${isDragOver ? "var(--accent)" : "var(--border)"}`,
-                background: isDragOver ? "var(--accent-tint)" : "transparent",
+                border: `1px solid ${isSuppDragOver ? "var(--accent)" : "var(--border)"}`,
+                ...(isStackDragOver ? { borderTop: "2px solid var(--accent)" } : {}),
+                background: isSuppDragOver ? "var(--accent-tint)" : "transparent",
                 borderRadius: "var(--radius-sm)", padding: 8,
+                opacity: dragStackId === stack.id ? 0.5 : 1,
               }}
             >
               {/* Stack header */}
               <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                <span
+                  draggable={!isRenaming}
+                  onDragStart={(e) => { setDragStackId(stack.id); e.dataTransfer.effectAllowed = "move"; }}
+                  onDragEnd={() => { setDragStackId(null); setStackDropTarget(null); }}
+                  title="Drag to reorder stack"
+                  style={{ display: "flex", cursor: isRenaming ? "default" : "grab", color: "var(--text-muted)", flexShrink: 0 }}
+                >
+                  <GripVertical size={14} />
+                </span>
                 <button onClick={() => toggleCollapse(stack.id)} title={isCollapsed ? "Expand" : "Collapse"} style={iconBtn}>
                   {isCollapsed ? <ChevronRight size={14} /> : <ChevronDown size={14} />}
                 </button>
@@ -243,6 +285,7 @@ export default function SupplementPane() {
                         s={s}
                         taken={takenToday.has(s.id)}
                         dragging={dragId === s.id}
+                        suppDragging={!!dragId}
                         onDragStart={() => setDragId(s.id)}
                         onDragEnd={() => { setDragId(null); setDragOverStack(null); }}
                         onDropBefore={() => moveTo(stack.id, s.id)}
@@ -271,6 +314,7 @@ export default function SupplementPane() {
                 s={s}
                 taken={takenToday.has(s.id)}
                 dragging={dragId === s.id}
+                suppDragging={!!dragId}
                 onDragStart={() => setDragId(s.id)}
                 onDragEnd={() => { setDragId(null); setDragOverStack(null); }}
                 onDropBefore={() => { /* no reorder within ungrouped */ }}
@@ -299,12 +343,15 @@ export default function SupplementPane() {
 }
 
 function SupplementRow({
-  s, taken, dragging, onDragStart, onDragEnd, onDropBefore,
+  s, taken, dragging, suppDragging, onDragStart, onDragEnd, onDropBefore,
   onToggle, onEdit, confirmingDelete, onAskDelete, onCancelDelete, onDelete,
 }: {
   s: Supplement;
   taken: boolean;
   dragging: boolean;
+  /** True while some supplement is mid-drag. When false, a drop here is a stack
+   *  drag — don't intercept it, let it bubble to the stack container. */
+  suppDragging: boolean;
   onDragStart: () => void;
   onDragEnd: () => void;
   onDropBefore: () => void;
@@ -317,8 +364,8 @@ function SupplementRow({
 }) {
   return (
     <div
-      onDragOver={(e) => e.preventDefault()}
-      onDrop={(e) => { e.preventDefault(); e.stopPropagation(); onDropBefore(); }}
+      onDragOver={(e) => { if (suppDragging) e.preventDefault(); }}
+      onDrop={(e) => { if (suppDragging) { e.preventDefault(); e.stopPropagation(); onDropBefore(); } }}
       style={{
         display: "flex", alignItems: "center", gap: 6, padding: "8px 8px",
         background: taken ? "var(--accent-tint)" : "var(--bg)",
