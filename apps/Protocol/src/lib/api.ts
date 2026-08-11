@@ -2,6 +2,7 @@ import { getSupabaseClient, getUserId } from "./supabase";
 import { NUTRIENT_KEYS, type NutrientValues } from "./nutrients";
 import type {
   Supplement, CreateSupplement, SupplementLog,
+  SupplementStack, CreateSupplementStack,
   BodyMetric, CreateBodyMetric,
   CreateNutritionEntry, CreateSleepEntry,
   Exercise, CreateExercise, RunningPlan, RunningSession, CreateRunningSession,
@@ -873,6 +874,7 @@ function rowToSupplement(row: Record<string, unknown>): Supplement {
     name: row.name as string,
     brand: row.brand as string | null,
     dose: row.dose as string | null,
+    stack_id: (row.stack_id as string | null) ?? null,
     sort_order: (row.sort_order as number) ?? 0,
     archived: (row.archived as boolean) ?? false,
     created_at: row.created_at as string,
@@ -901,6 +903,7 @@ export async function pushSupplementToCloud(s: CreateSupplement & { id: string }
     name: s.name,
     brand: s.brand ?? null,
     dose: s.dose ?? null,
+    stack_id: s.stack_id ?? null,
     sort_order: s.sort_order ?? 0,
     ...nutrientCols(s),
   });
@@ -949,6 +952,81 @@ export async function removeSupplementLogFromCloud(supplementId: string, date: s
     .eq("date", date)
     .eq("user_id", getUserId());
   if (error) throw new Error(error.message);
+}
+
+// ── Supplement stacks ───────────────────────────────────────────────────────
+// Named groups of supplements (Morning, Pre-workout, …). Owner-only, mirroring
+// protocol_habit_stacks. Supplements carry stack_id; the UI groups by it.
+
+function rowToSupplementStack(row: Record<string, unknown>): SupplementStack {
+  return {
+    id: row.id as string,
+    user_id: (row.user_id as string | null) ?? null,
+    name: row.name as string,
+    sort_order: (row.sort_order as number) ?? 0,
+    created_at: row.created_at as string,
+  };
+}
+
+export async function fetchSupplementStacksFromCloud(): Promise<SupplementStack[]> {
+  const sb = getSupabaseClient();
+  const { data, error } = await sb
+    .from("protocol_supplement_stacks")
+    .select("*")
+    .eq("user_id", getUserId())
+    .order("sort_order", { ascending: true });
+  if (error) throw new Error(error.message);
+  return (data ?? []).map(rowToSupplementStack);
+}
+
+export async function pushSupplementStackToCloud(stack: CreateSupplementStack & { id: string }): Promise<void> {
+  const sb = getSupabaseClient();
+  const { error } = await sb.from("protocol_supplement_stacks").upsert({
+    id: stack.id,
+    user_id: getUserId(),
+    name: stack.name,
+    sort_order: stack.sort_order ?? 0,
+  });
+  if (error) throw new Error(error.message);
+}
+
+export async function deleteSupplementStackFromCloud(id: string): Promise<void> {
+  const sb = getSupabaseClient();
+  const { error } = await sb
+    .from("protocol_supplement_stacks")
+    .delete()
+    .eq("id", id)
+    .eq("user_id", getUserId());
+  if (error) throw new Error(error.message);
+}
+
+/** Move every supplement in one stack to another — used before deleting a stack
+ *  so its supplements (and their logs) are never orphaned. */
+export async function reassignSupplementsStackInCloud(fromStackId: string, toStackId: string): Promise<void> {
+  const sb = getSupabaseClient();
+  const { error } = await sb
+    .from("protocol_supplements")
+    .update({ stack_id: toStackId })
+    .eq("stack_id", fromStackId)
+    .eq("user_id", getUserId());
+  if (error) throw new Error(error.message);
+}
+
+/** Persist a batch of (stack_id, sort_order) changes — one drag can move a
+ *  supplement to another stack and renumber the affected stacks. */
+export async function moveSupplementsInCloud(
+  updates: { id: string; stack_id: string | null; sort_order: number }[],
+): Promise<void> {
+  const sb = getSupabaseClient();
+  const userId = getUserId();
+  for (const u of updates) {
+    const { error } = await sb
+      .from("protocol_supplements")
+      .update({ stack_id: u.stack_id, sort_order: u.sort_order })
+      .eq("id", u.id)
+      .eq("user_id", userId);
+    if (error) throw new Error(error.message);
+  }
 }
 
 // ── Exercise Sets (Garmin) ──────────────────────────────────────────────────

@@ -13,10 +13,12 @@ import type { CreateSupplement, Supplement } from "../../store/types";
  * list. This is the "vast nutrient customisability" surface.
  */
 export default function SupplementEditor({
-  supplement, sortOrder, onClose,
+  supplement, sortOrder, stackId, onClose,
 }: {
   supplement?: Supplement;
   sortOrder?: number;
+  /** Stack a newly created supplement lands in (ignored when editing). */
+  stackId?: string | null;
   onClose: () => void;
 }) {
   const dispatch = useAppDispatch();
@@ -27,7 +29,7 @@ export default function SupplementEditor({
       const { id: _id, user_id: _u, archived: _a, created_at: _c, ...rest } = supplement;
       return rest;
     }
-    return { ...EMPTY_NUTRIENTS, name: "", brand: null, dose: null, sort_order: sortOrder ?? 0 };
+    return { ...EMPTY_NUTRIENTS, name: "", brand: null, dose: null, stack_id: stackId ?? null, sort_order: sortOrder ?? 0 };
   });
   const [saving, setSaving] = useState(false);
 

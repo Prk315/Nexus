@@ -16,6 +16,7 @@ import type {
   Food, CreateFood, Meal, CreateMeal, MealItem, CreateMealItem,
   MealPlanEntry, CreateMealPlanEntry, NutritionGoals, UpdateNutritionGoals,
   Supplement, CreateSupplement, UpdateSupplement, SupplementLog,
+  SupplementStack, CreateSupplementStack, UpdateSupplementStack,
 } from "../store/types";
 import { getUserId } from "./supabase";
 import {
@@ -42,6 +43,8 @@ import {
   fetchNutritionGoalsFromCloud, upsertNutritionGoalsInCloud,
   fetchSupplementsFromCloud, pushSupplementToCloud, archiveSupplementInCloud,
   fetchSupplementLogsFromCloud, addSupplementLogToCloud, removeSupplementLogFromCloud,
+  fetchSupplementStacksFromCloud, pushSupplementStackToCloud, deleteSupplementStackFromCloud,
+  reassignSupplementsStackInCloud, moveSupplementsInCloud,
 } from "./api";
 
 // ── Sleep ─────────────────────────────────────────────────────────────────────
@@ -495,6 +498,29 @@ export const addSupplementLog = (supplementId: string, date: string): Promise<Su
 
 export const removeSupplementLog = (supplementId: string, date: string): Promise<void> =>
   removeSupplementLogFromCloud(supplementId, date);
+
+// ── Supplement stacks ─────────────────────────────────────────────────────────
+
+export const getSupplementStacks = (): Promise<SupplementStack[]> => fetchSupplementStacksFromCloud();
+
+export async function createSupplementStack(stack: CreateSupplementStack): Promise<SupplementStack> {
+  const id = crypto.randomUUID();
+  await pushSupplementStackToCloud({ ...stack, id });
+  return { id, user_id: getUserId(), name: stack.name, sort_order: stack.sort_order ?? 0, created_at: new Date().toISOString() };
+}
+
+export async function updateSupplementStack(stack: UpdateSupplementStack): Promise<SupplementStack> {
+  await pushSupplementStackToCloud(stack); // upsert by id
+  return { id: stack.id, user_id: getUserId(), name: stack.name, sort_order: stack.sort_order, created_at: new Date().toISOString() };
+}
+
+export const deleteSupplementStack = (id: string): Promise<void> => deleteSupplementStackFromCloud(id);
+
+export const reassignSupplements = (fromStackId: string, toStackId: string): Promise<void> =>
+  reassignSupplementsStackInCloud(fromStackId, toStackId);
+
+export const moveSupplements = (updates: { id: string; stack_id: string | null; sort_order: number }[]): Promise<void> =>
+  moveSupplementsInCloud(updates);
 
 // ── Meal planner: Nutrition goals ────────────────────────────────────────────
 

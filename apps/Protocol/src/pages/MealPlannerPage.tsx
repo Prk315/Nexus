@@ -6,7 +6,7 @@ import {
   fetchMealPlanEntries, addMealPlanEntry,
   toggleMealPlanEntryLogged, removeMealPlanEntry, fetchNutritionGoals, saveNutritionGoals,
 } from "../store/slices/mealPlannerSlice";
-import { fetchSupplements, fetchSupplementLogs } from "../store/slices/supplementsSlice";
+import { fetchSupplements, fetchSupplementStacks, fetchSupplementLogs } from "../store/slices/supplementsSlice";
 import { CARD_STYLE, isoDate } from "../lib/uiHelpers";
 import { entryNutrition, sumNutrition, scaleNutrients } from "../lib/mealNutrition";
 import FoodSearchPanel from "../components/mealplanner/FoodSearchPanel";
@@ -75,6 +75,7 @@ export default function MealPlannerPage() {
     dispatch(fetchMeals());
     dispatch(fetchNutritionGoals());
     dispatch(fetchSupplements());
+    dispatch(fetchSupplementStacks());
   }, [dispatch]);
 
   // Meal items are fetched lazily per meal so nutrition totals (grid, overview,
