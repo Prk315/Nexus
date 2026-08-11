@@ -12,6 +12,7 @@ import type {
   HabitStack, CreateHabitStack,
   Food, CreateFood, Meal, CreateMeal, MealItem, CreateMealItem,
   MealPlanEntry, CreateMealPlanEntry, NutritionGoals, UpdateNutritionGoals,
+  NutritionGoalItem, CreateNutritionGoalItem,
   ExerciseSet, CreateExerciseSet,
   DataSourceSettings,
 } from "../store/types";
@@ -862,6 +863,45 @@ export async function upsertNutritionGoalsInCloud(id: string, goals: UpdateNutri
     ...goals,
     updated_at: new Date().toISOString(),
   });
+  if (error) throw new Error(error.message);
+}
+
+// ── Nutrition goal items (per-nutrient min/max) ─────────────────────────────
+// One row per (user, nutrient); each goal is a floor and/or ceiling. Owner-only.
+
+export async function fetchNutritionGoalItemsFromCloud(): Promise<NutritionGoalItem[]> {
+  const sb = getSupabaseClient();
+  const { data, error } = await sb
+    .from("protocol_nutrition_goal_items")
+    .select("*")
+    .eq("user_id", getUserId());
+  if (error) throw new Error(error.message);
+  return (data ?? []) as NutritionGoalItem[];
+}
+
+/** Upsert a goal by (user_id, nutrient_key) so re-setting a nutrient updates in
+ *  place rather than duplicating. Returns the stored row. */
+export async function upsertNutritionGoalItemInCloud(item: CreateNutritionGoalItem): Promise<NutritionGoalItem> {
+  const sb = getSupabaseClient();
+  const { data, error } = await sb
+    .from("protocol_nutrition_goal_items")
+    .upsert(
+      { user_id: getUserId(), nutrient_key: item.nutrient_key, min_value: item.min_value, max_value: item.max_value },
+      { onConflict: "user_id,nutrient_key" },
+    )
+    .select("*")
+    .single();
+  if (error) throw new Error(error.message);
+  return data as NutritionGoalItem;
+}
+
+export async function deleteNutritionGoalItemInCloud(nutrientKey: string): Promise<void> {
+  const sb = getSupabaseClient();
+  const { error } = await sb
+    .from("protocol_nutrition_goal_items")
+    .delete()
+    .eq("user_id", getUserId())
+    .eq("nutrient_key", nutrientKey);
   if (error) throw new Error(error.message);
 }
 

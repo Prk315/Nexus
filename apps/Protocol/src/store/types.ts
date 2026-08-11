@@ -525,6 +525,20 @@ export interface NutritionGoals {
 
 export type UpdateNutritionGoals = Partial<Omit<NutritionGoals, "id" | "updated_at">>;
 
+/** A single nutrition goal: one nutrient with an optional floor and/or ceiling.
+ *  min only = "at least", max only = "at most", both = a range (e.g. 2000–2800
+ *  kcal). Replaces the old wide NutritionGoals row. See lib/nutritionScore.ts. */
+export interface NutritionGoalItem {
+  id: string;
+  user_id: string | null;
+  nutrient_key: string;
+  min_value: number | null;
+  max_value: number | null;
+  created_at: string;
+}
+
+export type CreateNutritionGoalItem = Pick<NutritionGoalItem, "nutrient_key" | "min_value" | "max_value">;
+
 export type GarminSyncStatus = "idle" | "syncing" | "success" | "error";
 
 export interface GarminSyncState {

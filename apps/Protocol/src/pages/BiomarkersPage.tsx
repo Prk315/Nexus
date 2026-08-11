@@ -3,9 +3,10 @@ import { Moon, Apple, Activity, ChevronDown, ChevronUp } from "lucide-react";
 import { useAppDispatch, useAppSelector } from "../store/hooks";
 import { fetchSleep, fetchBodyMetrics } from "../store/slices/biomarkersSlice";
 import {
-  fetchFoods, fetchMeals, fetchMealItems, fetchMealPlanEntries, fetchNutritionGoals,
+  fetchFoods, fetchMeals, fetchMealItems, fetchMealPlanEntries, fetchNutritionGoalItems,
 } from "../store/slices/mealPlannerSlice";
 import { entryNutrition } from "../lib/mealNutrition";
+import { goalTarget } from "../lib/nutritionScore";
 import SleepLogger from "../components/biomarkers/SleepLogger";
 import BodyMetricsLogger from "../components/biomarkers/BodyMetricsLogger";
 import OuraImportPanel from "../components/biomarkers/OuraImportPanel";
@@ -150,12 +151,13 @@ function NutritionModule() {
   const meals = useAppSelector((s) => s.mealPlanner.meals);
   const mealItemsById = useAppSelector((s) => s.mealPlanner.mealItems);
   const planEntries = useAppSelector((s) => s.mealPlanner.planEntries);
-  const goals = useAppSelector((s) => s.mealPlanner.goals);
+  const goalItems = useAppSelector((s) => s.mealPlanner.goalItems);
+  const targetFor = (key: string) => goalTarget(goalItems.find((g) => g.nutrient_key === key));
 
   useEffect(() => {
     dispatch(fetchFoods());
     dispatch(fetchMeals());
-    dispatch(fetchNutritionGoals());
+    dispatch(fetchNutritionGoalItems());
     dispatch(fetchMealPlanEntries({ start: subDays(NUTRITION_HISTORY_DAYS - 1), end: isoDate(new Date()) }));
   }, [dispatch]);
 
@@ -196,8 +198,8 @@ function NutritionModule() {
   return (
     <div style={MODULE_STYLE}>
       <ModuleHeader icon={<Apple size={16} />} title="Nutrition" color="var(--series-nutrition)" tint="var(--series-nutrition-track)">
-        <StatTile label="Calories today" value={todayEntries.length ? String(Math.round(caloriesToday)) : "—"} sub={goals?.calories ? `/ ${goals.calories}` : undefined} />
-        <StatTile label="Protein today" value={todayEntries.length ? `${Math.round(proteinToday)}g` : "—"} sub={goals?.protein_g ? `/ ${goals.protein_g}g` : undefined} />
+        <StatTile label="Calories today" value={todayEntries.length ? String(Math.round(caloriesToday)) : "—"} sub={targetFor("calories") ? `/ ${targetFor("calories")}` : undefined} />
+        <StatTile label="Protein today" value={todayEntries.length ? `${Math.round(proteinToday)}g` : "—"} sub={targetFor("protein_g") ? `/ ${targetFor("protein_g")}g` : undefined} />
         <StatTile label="Avg calories (7d)" value={avgCalories != null ? String(Math.round(avgCalories)) : "—"} sub="per day" />
       </ModuleHeader>
 

@@ -13,8 +13,10 @@ import {
   RadialBar,
   PolarAngleAxis,
 } from "recharts";
-import type { BodyMetric, RunningSession, SleepEntry, WorkoutSession } from "../../store/types";
+import type { BodyMetric, RunningSession, SleepEntry, WorkoutSession, NutritionGoalItem } from "../../store/types";
+import type { NutrientTotals } from "../../lib/mealNutrition";
 import { isoDate } from "../../lib/uiHelpers";
+import { nutritionScore } from "../../lib/nutritionScore";
 
 type Range = "7D" | "4W" | "6M";
 type Domain = "sleep" | "nutrition" | "body" | "workout" | "running";
@@ -98,12 +100,17 @@ function scoreSleep(entries: SleepEntry[]): number {
   return Math.round(scores.reduce((a, b) => a + b, 0) / scores.length);
 }
 
-/** Calories logged that day (from the Meal Planner) vs. the daily calorie goal, if set. */
-function scoreNutrition(calories: number, calorieGoal: number | null): number {
+/**
+ * How well the day's logged intake met the nutrition goals — the average
+ * closeness across every goal (see lib/nutritionScore). Falls back to a plain
+ * calorie proxy when no goals are set, and is 0 on a day with no food logged.
+ */
+function scoreNutrition(totals: NutrientTotals | undefined, goals: NutritionGoalItem[]): number {
+  const calories = Number(totals?.calories ?? 0);
   if (calories <= 0) return 0;
-  if (!calorieGoal) return Math.min(100, Math.round((calories / 2000) * 100));
-  const deviation = Math.abs(calories - calorieGoal) / calorieGoal;
-  return Math.max(0, Math.round(100 - deviation * 100));
+  const s = nutritionScore(totals as unknown as Record<string, number | null>, goals);
+  if (s == null) return Math.min(100, Math.round((calories / 2000) * 100));
+  return s;
 }
 
 function scoreBody(entries: BodyMetric[]): number {
@@ -150,9 +157,9 @@ function daysBetween(start: string, end: string): string[] {
 
 interface Props {
   sleep: SleepEntry[];
-  /** Calories logged per date (Meal Planner, logged entries only). */
-  nutritionByDate: Map<string, number>;
-  calorieGoal: number | null;
+  /** Full nutrient totals per date (Meal Planner, logged entries only). */
+  nutritionTotalsByDate: Map<string, NutrientTotals>;
+  nutritionGoals: NutritionGoalItem[];
   bodyMetrics: BodyMetric[];
   workoutSessions: WorkoutSession[];
   runningSessions: RunningSession[];
@@ -169,7 +176,7 @@ interface Point {
 }
 
 export default function ProtocolChargeChart({
-  sleep, nutritionByDate, calorieGoal, bodyMetrics, workoutSessions, runningSessions,
+  sleep, nutritionTotalsByDate, nutritionGoals, bodyMetrics, workoutSessions, runningSessions,
 }: Props) {
   const [range, setRange] = useState<Range>("7D");
 
@@ -193,7 +200,7 @@ export default function ProtocolChargeChart({
     function dayScore(date: string) {
       return {
         sleep:    scoreSleep(sleepMap.get(date) ?? []),
-        nutrition: scoreNutrition(nutritionByDate.get(date) ?? 0, calorieGoal),
+        nutrition: scoreNutrition(nutritionTotalsByDate.get(date), nutritionGoals),
         body:     scoreBody(bodyMap.get(date) ?? []),
         workout:  scoreWorkout(workoutMap.get(date) ?? []),
         running:  scoreRunning(runningMap.get(date) ?? []),
@@ -243,7 +250,7 @@ export default function ProtocolChargeChart({
       const label = d.toLocaleDateString("en-US", { month: "short" });
       return bucket(daysBetween(isoDate(d), isoDate(end)), label);
     });
-  }, [range, sleep, nutritionByDate, calorieGoal, bodyMetrics, workoutSessions, runningSessions]);
+  }, [range, sleep, nutritionTotalsByDate, nutritionGoals, bodyMetrics, workoutSessions, runningSessions]);
 
   const TOOLTIP_STYLE = {
     background: "var(--surface)",

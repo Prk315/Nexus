@@ -15,10 +15,10 @@ import { fetchWorkoutSessions } from "../store/slices/workoutsSlice";
 import { fetchRunningSessions } from "../store/slices/runningSlice";
 import { fetchHabits, fetchHabitCompletions } from "../store/slices/habitsSlice";
 import {
-  fetchFoods, fetchMeals, fetchMealItems, fetchMealPlanEntries, fetchNutritionGoals,
+  fetchFoods, fetchMeals, fetchMealItems, fetchMealPlanEntries, fetchNutritionGoalItems,
 } from "../store/slices/mealPlannerSlice";
 import { formatMinutes, CARD_STYLE, isoDate } from "../lib/uiHelpers";
-import { entryNutrition } from "../lib/mealNutrition";
+import { entryNutrition, sumNutrition, type NutrientTotals } from "../lib/mealNutrition";
 import { StatTile } from "../components/shared/StatTile";
 import MuscleMap from "../components/workouts/MuscleMap";
 import RingGauge from "../components/mealplanner/RingGauge";
@@ -77,7 +77,7 @@ export default function DashboardPage() {
   const meals = useAppSelector((s) => s.mealPlanner.meals);
   const mealItemsById = useAppSelector((s) => s.mealPlanner.mealItems);
   const planEntries = useAppSelector((s) => s.mealPlanner.planEntries);
-  const nutritionGoals = useAppSelector((s) => s.mealPlanner.goals);
+  const goalItems = useAppSelector((s) => s.mealPlanner.goalItems);
   const { exerciseSets } = useExerciseSets();
 
   useEffect(() => {
@@ -89,7 +89,7 @@ export default function DashboardPage() {
     dispatch(fetchHabitCompletions(subDays(HABITS_HISTORY_DAYS)));
     dispatch(fetchFoods());
     dispatch(fetchMeals());
-    dispatch(fetchNutritionGoals());
+    dispatch(fetchNutritionGoalItems());
     dispatch(fetchMealPlanEntries({ start: subDays(NUTRITION_HISTORY_DAYS), end: isoDate(new Date()) }));
   }, [dispatch]);
 
@@ -108,12 +108,15 @@ export default function DashboardPage() {
 
   const foodsById = new Map(foods.map((f) => [f.id, f]));
   const mealsById = new Map(meals.map((m) => [m.id, m]));
-  const nutritionByDate = new Map<string, number>();
+  // Full nutrient totals per date (logged entries) so the nutrition score can be
+  // measured against goals on any nutrient, not just calories.
+  const nutritionTotalsByDate = new Map<string, NutrientTotals>();
   for (const entry of planEntries) {
     if (!entry.logged) continue;
     const n = entryNutrition(entry, foodsById, mealsById, mealItemsById);
     if (!n) continue;
-    nutritionByDate.set(entry.date, (nutritionByDate.get(entry.date) ?? 0) + n.calories);
+    const prev = nutritionTotalsByDate.get(entry.date);
+    nutritionTotalsByDate.set(entry.date, prev ? sumNutrition([prev, n]) : n);
   }
 
   // Last night's sleep now lives inside the SleepChart card (ring column).
@@ -144,8 +147,8 @@ export default function DashboardPage() {
     <div style={{ display: "flex", flexDirection: "column" }}>
       <ProtocolChargeChart
         sleep={sleep}
-        nutritionByDate={nutritionByDate}
-        calorieGoal={nutritionGoals?.calories ?? null}
+        nutritionTotalsByDate={nutritionTotalsByDate}
+        nutritionGoals={goalItems}
         bodyMetrics={bodyMetrics}
         workoutSessions={workoutSessions}
         runningSessions={runningSessions}
