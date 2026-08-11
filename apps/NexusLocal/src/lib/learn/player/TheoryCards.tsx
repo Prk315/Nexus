@@ -17,9 +17,10 @@
 import { useState } from "react";
 import type { Lens, TheoryBox, UnitContent } from "../types";
 import { Markdown } from "../Markdown";
-import { CARD, LENS } from "./tokens";
+import { CARD, useLensOrder, useLensTokens } from "./tokens";
 
 export function LensChip({ lens, on }: { lens: Lens; on?: boolean }) {
+  const LENS = useLensTokens();
   const t = LENS[lens];
   return (
     <span
@@ -40,6 +41,7 @@ const KIND_LABEL: Record<TheoryBox["kind"], string> = {
 };
 
 export function TheoryCard({ box }: { box: TheoryBox }) {
+  const LENS = useLensTokens();
   const [openLens, setOpenLens] = useState<Lens | null>(null);
   const translationKeys = (Object.keys(box.translations ?? {}) as Lens[]).filter(
     (l) => box.translations?.[l]
@@ -130,6 +132,7 @@ export function TheoryCard({ box }: { box: TheoryBox }) {
  * top of layer 1 — it introduces the *unit*, not the layer.
  */
 export function UnitOpening({ content }: { content: UnitContent }) {
+  const lensOrder = useLensOrder();
   const perspectives = Array.from(
     new Set(content.theory.map((t) => t.perspective).filter((l): l is Lens => l !== null))
   );
@@ -180,7 +183,7 @@ export function UnitOpening({ content }: { content: UnitContent }) {
           The three perspectives
         </h3>
         <div className="mt-2 flex flex-wrap gap-1.5 md:mt-3">
-          {(["row", "matrix", "column"] as Lens[]).map((l) => (
+          {lensOrder.map((l) => (
             <LensChip key={l} lens={l} />
           ))}
         </div>

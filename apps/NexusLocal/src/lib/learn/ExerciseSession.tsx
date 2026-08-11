@@ -81,6 +81,7 @@ import {
 } from "./api";
 import { applyGrade, defaultMemoryState } from "./memory";
 import { Markdown } from "./Markdown";
+import { useCourse } from "./CourseContext";
 import { CARD, DOCK_SHELL, DOCK_STACK, MAIN_SHELL, PLAYER_STYLE, READING_COL } from "./player/tokens";
 
 /** One item's grading credit is capped so it can never out-weigh a whole
@@ -361,6 +362,7 @@ function ProblemPartCard({
 }
 
 export function ExerciseSession({ onClose }: { onClose: () => void }) {
+  const { course } = useCourse();
   // undefined = loading, null = the pool fetch failed outright.
   const [pool, setPool] = useState<ProblemGroup[] | null | undefined>(undefined);
   const [excludedIds, setExcludedIds] = useState<Set<number>>(new Set());
@@ -372,7 +374,7 @@ export function ExerciseSession({ onClose }: { onClose: () => void }) {
 
   useEffect(() => {
     let alive = true;
-    fetchExercisePool()
+    fetchExercisePool(course.itemSlugPrefix)
       .then((groups) => {
         if (alive) setPool(groups);
       })
@@ -383,7 +385,7 @@ export function ExerciseSession({ onClose }: { onClose: () => void }) {
     return () => {
       alive = false;
     };
-  }, []);
+  }, [course.itemSlugPrefix]);
 
   const current = queueIndex < queue.length ? queue[queueIndex] : null;
 

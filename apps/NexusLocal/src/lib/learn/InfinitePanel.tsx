@@ -17,6 +17,7 @@
 
 import { useEffect, useState } from "react";
 import { fetchExercisePool } from "./api";
+import { useCourse } from "./CourseContext";
 import { ExerciseSession } from "./ExerciseSession";
 
 interface PoolCounts {
@@ -25,6 +26,7 @@ interface PoolCounts {
 }
 
 export function InfinitePanel() {
+  const { course } = useCourse();
   // undefined = loading, null = the pool fetch failed.
   const [counts, setCounts] = useState<PoolCounts | null | undefined>(undefined);
   const [error, setError] = useState<string | null>(null);
@@ -34,7 +36,8 @@ export function InfinitePanel() {
     if (sessionOpen) return;
     let cancelled = false;
     setError(null);
-    fetchExercisePool()
+    setCounts(undefined);
+    fetchExercisePool(course.itemSlugPrefix)
       .then((pool) => {
         if (!cancelled) {
           setCounts({ problems: pool.length, parts: pool.reduce((n, g) => n + g.parts.length, 0) });
@@ -49,7 +52,7 @@ export function InfinitePanel() {
     return () => {
       cancelled = true;
     };
-  }, [sessionOpen]);
+  }, [sessionOpen, course.itemSlugPrefix]);
 
   return (
     <section className="flex flex-col gap-2 md:gap-3">

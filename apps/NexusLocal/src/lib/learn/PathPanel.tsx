@@ -71,6 +71,8 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { fetchPath, fetchProofContent, fetchProofUnits, fetchUnitContent, setProofProgress, setUnitProgress } from "./api";
 import type { PathUnit, ProofUnitEntry, ProofUnitKind, UnitContent } from "./types";
+import { useCourse } from "./CourseContext";
+import { CourseSwitcher } from "./CourseSwitcher";
 import { Player } from "./Player";
 import { ChallengeSession } from "./ChallengeSession";
 
@@ -114,6 +116,7 @@ function chapterOf(code: string): string {
 }
 
 export function PathPanel() {
+  const { course } = useCourse();
   const [path, setPath] = useState<PathUnit[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [contentByUnit, setContentByUnit] = useState<Map<number, UnitContent>>(new Map());
@@ -144,10 +147,15 @@ export function PathPanel() {
   // which applies identically to proof content.
   useEffect(() => {
     let cancelled = false;
+    // Reset to the loading state immediately on a course switch — otherwise
+    // the previous course's units stay on screen (and tappable) until the
+    // new course's fetch resolves.
+    setPath(null);
+    setContentByUnit(new Map());
     (async () => {
       try {
         setError(null);
-        const [p, proofs] = await Promise.all([fetchPath(), fetchProofUnits()]);
+        const [p, proofs] = await Promise.all([fetchPath(course.courseId), fetchProofUnits()]);
         if (cancelled) return;
         setPath(p);
         setProofEntries(proofs);
@@ -183,7 +191,7 @@ export function PathPanel() {
     return () => {
       cancelled = true;
     };
-  }, [reloadNonce]);
+  }, [reloadNonce, course.courseId]);
 
   // proof_id[] per parent unit — a unit renders every proof branching off it
   // once mastered (pilot data is 1:1, the join doesn't assume it). Workshop
@@ -348,22 +356,25 @@ export function PathPanel() {
         </defs>
       </svg>
 
-      <div className="flex items-center justify-between">
-        <h2 className="text-xs uppercase tracking-[0.14em] text-[#6E6E78] md:text-[13px]">
-          Learn · Lineær Algebra
+      <div className="flex items-center justify-between gap-2">
+        <h2 className="min-w-0 truncate text-xs uppercase tracking-[0.14em] text-[#6E6E78] md:text-[13px]">
+          Learn · {course.title}
         </h2>
-        <button
-          type="button"
-          onClick={() => setReloadNonce((n) => n + 1)}
-          aria-label="Refresh"
-          // Visual glyph stays a subtle 28px icon (unchanged), but the tap
-          // target itself is expanded to 44px via an invisible pseudo-element
-          // rather than growing the icon — DESIGN.md's "phone floor" without
-          // making a quiet header affordance visually loud.
-          className="relative grid h-7 w-7 place-items-center rounded-lg text-[#6E6E78] before:absolute before:-inset-2 before:content-[''] active:bg-black/[0.05] active:text-[#1A1A24]/80"
-        >
-          ⟳
-        </button>
+        <div className="flex shrink-0 items-center gap-1.5">
+          <CourseSwitcher />
+          <button
+            type="button"
+            onClick={() => setReloadNonce((n) => n + 1)}
+            aria-label="Refresh"
+            // Visual glyph stays a subtle 28px icon (unchanged), but the tap
+            // target itself is expanded to 44px via an invisible pseudo-element
+            // rather than growing the icon — DESIGN.md's "phone floor" without
+            // making a quiet header affordance visually loud.
+            className="relative grid h-7 w-7 place-items-center rounded-lg text-[#6E6E78] before:absolute before:-inset-2 before:content-[''] active:bg-black/[0.05] active:text-[#1A1A24]/80"
+          >
+            ⟳
+          </button>
+        </div>
       </div>
 
       {error && (
@@ -468,6 +479,26 @@ export function PathPanel() {
                 </div>
               );
             })}
+
+            {/* Partial-path horizon — LEARN_PLAN.md "App course support":
+                "the DBMS path ends in a 'more to come' horizon (built
+                sections only — no ghost units)". A course being built
+                incrementally (`!course.complete`) never pretends its last
+                authored chapter is the end of the course; it also never
+                invents placeholder rows for sections that don't exist in
+                `lr_unit` yet — this is the only thing that renders past the
+                last real unit. Quiet by design: no glyph on the rail, no
+                gradient, just muted ink. */}
+            {!course.complete && (
+              <div className="relative flex items-center gap-3 pl-1 pt-4 pb-2 md:pt-7">
+                <span className="relative z-10 grid h-7 w-7 shrink-0 place-items-center rounded-full bg-black/[0.03] text-[12px] text-[#6E6E78]/45 ring-1 ring-dashed ring-black/10">
+                  ⋯
+                </span>
+                <span className="text-[11px] italic text-[#6E6E78]/60 md:text-[12px]">
+                  More sections on the way
+                </span>
+              </div>
+            )}
           </div>
         </>
       )}

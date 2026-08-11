@@ -18,6 +18,7 @@
 
 import { useState } from "react";
 import type { Drill, Grade, PracticeGroup, UnitContent, UnitLayer } from "../types";
+import { useCourse } from "../CourseContext";
 import { DrillCard } from "./DrillCard";
 import { MasterDemoView } from "./MasterDemo";
 import { TheoryCard, UnitOpening } from "./TheoryCards";
@@ -57,6 +58,7 @@ export function LayerStep({
   onGrade: (drill: Drill, group: PracticeGroup, grade: Grade) => void;
   onAdvance: () => void;
 }) {
+  const { course } = useCourse();
   const drills = layer.drills;
   const demo = layer.group?.master_demo;
   const hasDemo = !!demo && demo.steps.length > 0;
@@ -152,7 +154,7 @@ export function LayerStep({
   if (phase === "drill" && drills.length > 0) {
     const drill = drills[Math.min(drillIdx, drills.length - 1)];
     const archetype = layer.group?.archetype ?? "computational";
-    const translateFrom = archetype === "translate" ? detectSourceLens(drill.prompt_md) : null;
+    const translateFrom = archetype === "translate" ? detectSourceLens(drill.prompt_md, course) : null;
     return (
       <DrillCard
         key={drill.id}

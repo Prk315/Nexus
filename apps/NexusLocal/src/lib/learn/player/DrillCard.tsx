@@ -26,11 +26,11 @@ import {
   DOCK_SHELL,
   DOCK_STACK,
   FEEDBACK,
-  LENS,
   MAIN_SHELL,
   READING_COL,
-  SOLID_BAR,
-  TRANSLATE_BAR,
+  useLensTokens,
+  useSolidBar,
+  useTranslateBar,
 } from "./tokens";
 
 const ARCHETYPE_LABEL: Record<Archetype, string> = {
@@ -72,6 +72,9 @@ export function DrillCard({
   translateFrom?: Lens | null;
   onGraded: (grade: Grade) => void;
 }) {
+  const LENS = useLensTokens();
+  const SOLID_BAR = useSolidBar();
+  const TRANSLATE_BAR = useTranslateBar();
   const [input, setInput] = useState("");
   const [selectedChoice, setSelectedChoice] = useState<string | null>(null);
   // Doubles as both tile modes' state: an unordered selected-id set for

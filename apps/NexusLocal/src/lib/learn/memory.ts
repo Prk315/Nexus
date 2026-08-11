@@ -182,8 +182,15 @@ export function seedGraduationHeat(state: LrMemoryState, now: Date = new Date())
   };
 }
 
-/** Least-seen lens for a concept, for the review selector (LEARN_PLAN.md's lens-coverage rule). */
-export function leastSeenLens(counts: LensCounts): Lens {
-  const lenses: Lens[] = ["row", "matrix", "column"];
-  return lenses.reduce((least, lens) => ((counts[lens] ?? 0) < (counts[least] ?? 0) ? lens : least));
+/**
+ * Least-seen lens for a concept, for the review selector (LEARN_PLAN.md's
+ * lens-coverage rule). `lensOrder` is the active course's lens set
+ * (`courses.ts`'s `CourseDef.lensOrder` — `["row","matrix","column"]` for LA,
+ * `["nl","rc","ra","sql"]` for DBMS); it used to be hardcoded to LA's three
+ * here, which would have silently misjudged coverage for any other course's
+ * lens vocabulary. Defaults to LA's order only for backward compatibility —
+ * every real caller should pass the course's own `lensOrder`.
+ */
+export function leastSeenLens(counts: LensCounts, lensOrder: Lens[] = ["row", "matrix", "column"]): Lens {
+  return lensOrder.reduce((least, lens) => ((counts[lens] ?? 0) < (counts[least] ?? 0) ? lens : least));
 }

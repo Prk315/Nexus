@@ -61,13 +61,21 @@ function bestContentRow<T extends { status: ContentStatus; version: number }>(ro
 }
 
 /**
- * The path spine: every unit, this user's progress on it (defaulting to
- * "locked"), and whether it has any content to show — one round trip per
- * table, joined client-side.
+ * The path spine: every unit IN THE GIVEN COURSE, this user's progress on it
+ * (defaulting to "locked"), and whether it has any content to show — one
+ * round trip per table, joined client-side.
+ *
+ * `courseId` (`lr_unit.course_id`, `courses.ts`'s `CourseDef.courseId`) is
+ * required and filters `lr_unit` — LEARN_PLAN.md "App course support": "the
+ * critical fix, today it selects all units" (pre-multi-course, this function
+ * had no course filter at all and returned every course's units mixed
+ * together on one spine). Every caller now resolves its course via
+ * `CourseContext.useCourse()` and passes `course.courseId` — there is no
+ * "give me everything" mode.
  */
-export async function fetchPath(): Promise<PathUnit[]> {
+export async function fetchPath(courseId: number): Promise<PathUnit[]> {
   const [unitsRes, progressRes, contentRes] = await Promise.all([
-    supabasePublic.from("lr_unit").select("*").order("idx", { ascending: true }),
+    supabasePublic.from("lr_unit").select("*").eq("course_id", courseId).order("idx", { ascending: true }),
     supabasePublic.from("lr_unit_progress").select("*").eq("user_id", await nodeUserId()),
     supabasePublic.from("lr_unit_content").select("unit_id, version, status"),
   ]);
@@ -536,12 +544,6 @@ export interface ItemConcept {
   weight: number;
 }
 
-/** Sampled live 2026-08-10: 401 `format='written'`, `slug like 'la-%'` items
- * carry a non-null `lr_written_item.solution` (of 656 `lr_written_item` rows
- * total across every course/format — LEARN_PLAN.md's "~656 items" describes
- * that unfiltered total, not this pool). */
-const EXERCISE_SLUG_PREFIX = "la-%";
-
 /**
  * Groups a flat item list into `ProblemGroup[]` using each item's
  * `lr_item_render` row (if any). Pure — no I/O — so it's unit-testable and
@@ -633,8 +635,17 @@ function groupItems(
  * ordering signal; its own failure degrades to "0 attempts everywhere" — a
  * valid, if less-informed, ordering — never a thrown error, matching this
  * file's existing best-effort-ranking-signal posture.
+ *
+ * `slugPrefix` (`courses.ts`'s `CourseDef.itemSlugPrefix`, e.g. `"la-"` /
+ * `"dbms-"`) scopes the pool to one course's items — LEARN_PLAN.md "App
+ * course support": "Challenge/review/exercise pools stay course-scoped by
+ * slug/unit conventions". Sampled live 2026-08-10 for the LA pool: 401
+ * `format='written'`, `slug like 'la-%'` items carry a non-null
+ * `lr_written_item.solution` (of 656 `lr_written_item` rows total across
+ * every course/format — LEARN_PLAN.md's "~656 items" describes that
+ * unfiltered total, not this pool).
  */
-export async function fetchExercisePool(): Promise<ProblemGroup[]> {
+export async function fetchExercisePool(slugPrefix: string): Promise<ProblemGroup[]> {
   const userId = await nodeUserId();
 
   const [poolRes, feedbackRes] = await Promise.all([
@@ -642,7 +653,7 @@ export async function fetchExercisePool(): Promise<ProblemGroup[]> {
       .from("lr_item")
       .select("item_id, slug, title, year, source_ref, prompt, lr_written_item!inner(solution)")
       .eq("format", "written")
-      .like("slug", EXERCISE_SLUG_PREFIX)
+      .like("slug", `${slugPrefix}%`)
       .not("lr_written_item.solution", "is", null),
     supabasePublic
       .from("lr_item_feedback")
@@ -788,7 +799,10 @@ function classifyChallengeRound(archetype: Archetype, answerType: AnswerType): 1
 }
 
 const CHALLENGE_MAX_DIFFICULTY = 2;
-const CHALLENGE_MIN_POOL = 24;
+/** Exported so `ChallengeSession.tsx` can shrink its per-round queue size
+ * proportionally off the same threshold rather than duplicating the number
+ * (LEARN_PLAN.md's "shrink the session instead" rule, pinned 2026-08-11). */
+export const CHALLENGE_MIN_POOL = 24;
 
 export interface ChallengePoolDrill {
   drill: Drill;
@@ -805,11 +819,14 @@ export interface ChallengePool {
   r1: ChallengePoolDrill[];
   r2: ChallengePoolDrill[];
   r3: ChallengePoolDrill[];
-  /** True when the primary pool (unlocked region, or — for a chapter-scoped
-   * checkpoint — the whole chapter) fell under `CHALLENGE_MIN_POOL` and the
-   * fallback widened to every unit with content in the whole course, per
-   * LEARN_PLAN.md's pool rule. Exposed so the session/panel can be
-   * transparent about it rather than silently pulling in unrelated units. */
+  /** True when the primary pool fell under `CHALLENGE_MIN_POOL` and the
+   * fallback widened it. Unscoped: widened to every unit with content in the
+   * whole course. Chapter-scoped: widened BACKWARDS only — earlier chapters
+   * (by `lr_unit.idx` path order) were prepended one at a time; a later
+   * chapter is never reached, even if the pool stays thin after exhausting
+   * every earlier chapter (LEARN_PLAN.md's pool rule, pinned 2026-08-11).
+   * Exposed so the session/panel can be transparent about it rather than
+   * silently pulling in extra units. */
   widened: boolean;
 }
 
@@ -823,21 +840,31 @@ export interface ChallengePool {
  * `locked`/`in_progress`/`mastered` and "available" is a client-side read of
  * "previous unit mastered, or this one already has progress"). Falls back to
  * every unit with content in the whole course when that pool has fewer than
- * `CHALLENGE_MIN_POOL` eligible drills total.
+ * `CHALLENGE_MIN_POOL` eligible drills total. Unchanged by the 2026-08-11
+ * chapter-scoping fix below.
  *
  * Chapter-scoped (`opts.chapter` set, e.g. `"LA 2"` — a `PathPanel`
  * checkpoint node): the unlocked-region rule does NOT apply — a checkpoint
  * draws from every unit in that chapter (`chapterOf(unit.code) === chapter`)
  * regardless of lock status, since the checkpoint itself is what determines
  * reachability (rendered only once ≥1 unit in the chapter is mastered — see
- * `PathPanel.tsx`), not `lr_unit_progress`. Same `< CHALLENGE_MIN_POOL`
- * fallback, but widening always goes to *every* unit in the whole course
- * (not just the rest of the chapter) — a thin chapter still owes the learner
- * a full 3-round session.
+ * `PathPanel.tsx`), not `lr_unit_progress`.
+ *
+ * **Backwards-only widening (fixed 2026-08-11 — was pulling in later,
+ * unseen chapters).** A chapter checkpoint must never serve material the
+ * learner hasn't reached yet. When the scoped chapter alone yields fewer
+ * than `CHALLENGE_MIN_POOL` drills, the nearest EARLIER chapter (by
+ * `lr_unit.idx` path order — chapters occur in contiguous idx blocks, same
+ * assumption `PathPanel.tsx`'s own chapter grouping makes) is prepended, one
+ * chapter at a time, until the threshold is met or the start of the course
+ * is reached. A later chapter is never included, no matter how thin the
+ * pool stays — see `ChallengeSession.tsx` for how a still-thin pool degrades
+ * the session (smaller round queues, or a round skipped entirely) instead of
+ * ever widening forward.
  */
-export async function fetchChallengePool(opts?: { chapter?: string }): Promise<ChallengePool> {
-  const chapter = opts?.chapter;
-  const path = await fetchPath();
+export async function fetchChallengePool(opts: { courseId: number; chapter?: string }): Promise<ChallengePool> {
+  const chapter = opts.chapter;
+  const path = await fetchPath(opts.courseId);
   const sorted = [...path].sort((a, b) => a.unit.idx - b.unit.idx);
 
   const unlockedUnitIds = new Set<number>();
@@ -880,15 +907,35 @@ export async function fetchChallengePool(opts?: { chapter?: string }): Promise<C
     return out;
   }
 
-  const primaryFilter = chapter
-    ? (pu: PathUnit) => chapterOf(pu.unit.code) === chapter
-    : (pu: PathUnit) => unlockedUnitIds.has(pu.unit.unit_id);
-
-  let pool = collect(primaryFilter);
+  let pool: ChallengePoolDrill[];
   let widened = false;
-  if (pool.length < CHALLENGE_MIN_POOL) {
-    pool = collect(() => true);
-    widened = true;
+
+  if (chapter) {
+    // Distinct chapters in path order — first-seen while walking the full
+    // idx-sorted spine (not just units with content), so "the nearest
+    // earlier chapter" is well-defined even when that chapter's content
+    // isn't authored yet (it will simply contribute zero drills).
+    const chapterOrder: string[] = [];
+    for (const pu of sorted) {
+      const c = chapterOf(pu.unit.code);
+      if (chapterOrder[chapterOrder.length - 1] !== c) chapterOrder.push(c);
+    }
+    const targetIdx = chapterOrder.indexOf(chapter);
+    const included = new Set<string>([chapter]);
+    let lo = targetIdx; // widening cutoff: chapterOrder[lo..targetIdx] are included
+    pool = collect((pu) => included.has(chapterOf(pu.unit.code)));
+    while (pool.length < CHALLENGE_MIN_POOL && targetIdx !== -1 && lo > 0) {
+      lo -= 1;
+      included.add(chapterOrder[lo]);
+      widened = true;
+      pool = collect((pu) => included.has(chapterOf(pu.unit.code)));
+    }
+  } else {
+    pool = collect((pu) => unlockedUnitIds.has(pu.unit.unit_id));
+    if (pool.length < CHALLENGE_MIN_POOL) {
+      pool = collect(() => true);
+      widened = true;
+    }
   }
 
   return {

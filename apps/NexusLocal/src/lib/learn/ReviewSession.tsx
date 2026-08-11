@@ -26,10 +26,12 @@ import { useEffect, useMemo, useState } from "react";
 import type { Grade, Lens, LrMemoryState } from "./types";
 import { fetchMemoryStates, fetchReviewQueue, logAttempt, upsertMemory, type ReviewQueueItem } from "./api";
 import { applyGrade, defaultMemoryState, isStable, valueMean } from "./memory";
+import { useCourse } from "./CourseContext";
 import { DrillCard } from "./player/DrillCard";
 import { detectSourceLens, DOCK_SHELL, DOCK_STACK, PLAYER_STYLE, READING_COL } from "./player/tokens";
 
 export function ReviewSession({ onClose }: { onClose: () => void }) {
+  const { course } = useCourse();
   // undefined = loading, null = lr_learn_state has no row at all ("ingen dom
   // endnu" — never treated as "nothing due"), [] = row exists, nothing to
   // drill right now (a real, different state from null).
@@ -167,7 +169,7 @@ export function ReviewSession({ onClose }: { onClose: () => void }) {
           archetype={current.archetype}
           indexLabel={`Review ${index + 1} / ${total}`}
           translateFrom={
-            current.archetype === "translate" ? detectSourceLens(current.drill.prompt_md) : null
+            current.archetype === "translate" ? detectSourceLens(current.drill.prompt_md, course) : null
           }
           onGraded={handleGraded}
         />

@@ -10,9 +10,16 @@
 import { useEffect, useState } from "react";
 import { fetchChallengeBest } from "./api";
 import type { LrChallengeRun } from "./types";
+import { useCourse } from "./CourseContext";
 import { ChallengeSession } from "./ChallengeSession";
 
 export function ChallengePanel() {
+  const { course } = useCourse();
+  // Mirrors `ChallengeSession.tsx`'s own scope derivation exactly — LA keeps
+  // its pre-multi-course `null` scope (so existing personal bests still
+  // match), a non-LA course gets its own `"<key>:all"` bucket so a DBMS
+  // record never masquerades as (or gets shadowed by) an LA one.
+  const scope = course.key === "la" ? null : `${course.key}:all`;
   // undefined = loading, null = no record yet (or the fetch failed — either
   // way there is nothing to show but the un-decorated "start" state).
   const [best, setBest] = useState<LrChallengeRun | null | undefined>(undefined);
@@ -21,7 +28,8 @@ export function ChallengePanel() {
   useEffect(() => {
     if (sessionOpen) return;
     let cancelled = false;
-    fetchChallengeBest(null)
+    setBest(undefined);
+    fetchChallengeBest(scope)
       .then((b) => {
         if (!cancelled) setBest(b);
       })
@@ -32,7 +40,7 @@ export function ChallengePanel() {
     return () => {
       cancelled = true;
     };
-  }, [sessionOpen]);
+  }, [sessionOpen, scope]);
 
   return (
     <section className="flex flex-col gap-2 md:gap-3">

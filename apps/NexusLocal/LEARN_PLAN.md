@@ -331,11 +331,30 @@ R2 "Byg & saml" = tiles only · R3 "Dom" = truefalse/conceptual choice.
 No `text` drills. No hints/solutions during rounds; the end screen lists every
 drill with correctness, the correct answer, and full solution_md for review.
 
-Pool: difficulty ≤ 2 drills from units whose progress is mastered/in_progress/
-available (the unlocked region); if that yields < 24 eligible drills, widen to
-all units with content. Per round: shuffled queue of up to 10 drills, round
-ends at 0:00 or queue exhaustion; 15 s breather screen between rounds with the
-round score.
+Pool (unscoped, Learn-page card): difficulty ≤ 2 drills from units whose
+progress is mastered/in_progress/available (the unlocked region); if that
+yields < 24 eligible drills, widen to all units with content — unchanged.
+
+Pool (chapter-scoped checkpoint — fixed 2026-08-11, was leaking later-chapter
+material): starts as the scoped chapter's own drills only. A chapter-scoped
+pool must NEVER contain drills from a chapter LATER in path order
+(`lr_unit.idx`) than the scoped one — a checkpoint cannot quiz unseen
+material. If the chapter alone yields < 24 eligible drills, widen BACKWARDS
+only: prepend the nearest EARLIER chapter's drills, one chapter at a time,
+until the threshold is met or the start of the course is reached. Never widen
+forward, even if the pool stays under 24 after exhausting every earlier
+chapter (e.g. LA 1, whose only earlier chapter LA 0 has no content yet, stays
+at its own ~12 drills). If the pool is still thin after backward widening,
+shrink the session instead of forward-widening: each round's queue caps at
+`min(10, max(3, floor(totalPoolSize / 3)))` rather than a flat 10. If a round
+TYPE (R1/R2/R3) has zero eligible drills after scoping, that round is dropped
+entirely — not started-then-skipped — so a 2-round or 1-round challenge is
+correct behaviour; round numbering and the breather/end screens reflect the
+reduced round count, never a hardcoded "/3" or an empty round summary.
+
+Per round: shuffled queue of up to 10 drills (fewer when the pool triggered
+the shrink above), round ends at 0:00 or queue exhaustion; 15 s breather
+screen between rounds with the round score.
 
 Scoring: base = 100 × difficulty; speed bonus up to +50 by remaining fraction
 of a 30 s per-drill par; streak multiplier +10 % per consecutive correct,
@@ -376,6 +395,45 @@ Content conventions:
   the computational cores, choice drills on "hvilken formulering scorer
   højest". solution_md cites the item slug it came from.
 - test: 2-4 MCQ on presentation strategy.
+
+## DBMS course (pinned, 2026-08-11 — Section 1 approved)
+
+Second course (`lr_course.c_id = 3`, DIS), built INCREMENTALLY: linearize
+globally, materialize + author one section at a time. Full recon + proposal in
+the session files; user approved: Section 1 as proposed · four lenses · English
+content · parallel graph fixes.
+
+**Four lenses (frozen — authored by us, the course's choices outrank the
+textbook's):** `nl` (natural language) · `rc` (relational calculus — the
+course chose RC over the book's Datalog) · `ra` (relational algebra) · `sql`.
+The exams are a translation chain (RC→RA→SQL forward, "describe in NL"
+backward, both separately scored). EVERY query-oriented unit must fabricate
+exercises across the lenses it has introduced: ≥1 forward AND ≥1 backward
+translate drill. Lens keys are per-course data — the app resolves lens
+label/colour via a course-aware registry, `Lens` is no longer a hardcoded LA
+union. LA keeps `row·matrix·column` untouched.
+
+**Section 1 (`dbms_s1`, 5 units, ~385 min, Garcia-Molina ch. 2):** relational
+model → SQL DDL → RA I (σ, π, ρ, set ops) → RA II (products, joins,
+composition; RC preview via ex2-e6) → constraints-as-algebra. Unit rows:
+course_id 3, unit_id 101–105, idx 0–4, codes "DIS 2 · U1"…"DIS 2 · U5"
+(chapter prefix "DIS 2" must parse via chapterOf). Concept lists per
+proposal.json. Content: English, schema v1.1, exam-grounded (each unit's
+named grounding problems from the dbms-* item bank), SQL/RA/RC in fenced code
+blocks (NOT KaTeX — matches the ingested corpus convention), SQL drill answers
+verified by EXECUTION against sqlite where applicable.
+
+**Parallel graph fixes:** retitle the 46 space-split titles (audit.json list);
+flip the 7 reversed §5.4 edges; author a new RC topic under c_id 3 (~8–10
+concepts: TRC/DRC, free/bound variables, quantifiers, safety, RANF, RC↔RA
+equivalence) spliced after ch. 2 — Section 1 is unaffected; RC unit content
+itself arrives with Section 2.
+
+**App course support:** fetchPath and all path surfaces filter by course; a
+course switcher on the Learn page; the DBMS path ends in a "more to come"
+horizon (built sections only — no ghost units); per-course lens registry as
+above. Challenge/review/exercise pools stay course-scoped by slug/unit
+conventions.
 
 ## Conventions that bite (from CLAUDE.md — enforced)
 

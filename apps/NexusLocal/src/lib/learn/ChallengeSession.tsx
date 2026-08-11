@@ -22,11 +22,26 @@
  *
  * ── Round → screen flow ──────────────────────────────────────────────────
  * preround(R1) -> playing(R1) -> breather -> preround(R2) -> playing(R2) ->
- * breather -> preround(R3) -> playing(R3) -> end. A round with an empty
- * queue (R2 "Byg & saml" is empty in live data today — no tiles-archetype
- * content has been authored yet, see `TileDrill.tsx`'s own fixture note)
- * auto-skips straight through rather than stranding the learner on a Start
- * button that can never be pressed.
+ * breather -> preround(R3) -> playing(R3) -> end — but ONLY over
+ * `activeRounds`, the subset of the three round types that actually have
+ * ≥1 drill after scoping. A round type with zero drills (R2 "Byg & saml" is
+ * empty for a chapter with no tiles-archetype content yet, see
+ * `TileDrill.tsx`'s own fixture note) is dropped entirely, not merely
+ * skipped mid-flow — round numbering ("Runde N/M") reflects `M =
+ * activeRounds.length`, never a hardcoded 3, and the breather/end screens
+ * never render for a round that didn't happen. If every round type is empty
+ * (only possible for a very thin, very early chapter), a dedicated empty
+ * state renders instead of an unplayable preround screen — see the
+ * `activeRounds.length === 0` branch below.
+ *
+ * ── Round sizing when the pool is thin (LEARN_PLAN.md, pinned 2026-08-11) ──
+ * `fetchChallengePool` widens a chapter-scoped pool BACKWARDS only (earlier
+ * chapters, never later ones) — so a pool can legitimately stay under
+ * `CHALLENGE_MIN_POOL` (e.g. a checkpoint at the very first chapter, nothing
+ * earlier to borrow from). Rather than ever reaching forward, the session
+ * shrinks instead: each round's queue is capped at
+ * `min(MAX_DRILLS_PER_ROUND, max(3, floor(totalPoolSize / 3)))` instead of
+ * the usual flat 10, so three rounds still divide up whatever the pool has.
  *
  * ── Timing ───────────────────────────────────────────────────────────────
  * Every countdown (round timer, breather) is a `setInterval` tick that
@@ -53,8 +68,9 @@
  * timer — the one hard rule this file cannot violate.
  */
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
+  CHALLENGE_MIN_POOL,
   fetchChallengeBest,
   fetchChallengePool,
   fetchMemoryStates,
@@ -68,6 +84,7 @@ import { applyGrade, defaultMemoryState } from "./memory";
 import { checkAnswer, checkTilesBuild, checkTilesSelect, inputParses } from "./answers";
 import type { ChallengeRoundSummary, Drill, DrillAnswer, Grade, Lens, LrChallengeRun } from "./types";
 import { Markdown } from "./Markdown";
+import { useCourse } from "./CourseContext";
 import { TileDrill } from "./player/TileDrill";
 import {
   ANSWER_COL,
@@ -75,11 +92,11 @@ import {
   DOCK_SHELL,
   DOCK_STACK,
   FEEDBACK,
-  LENS,
   MAIN_SHELL,
   PLAYER_STYLE,
   READING_COL,
-  SOLID_BAR,
+  useLensTokens,
+  useSolidBar,
 } from "./player/tokens";
 
 // ── Round definitions (LEARN_PLAN.md, pinned) ────────────────────────────
@@ -230,7 +247,14 @@ const FORMAT_ERROR_MESSAGE: Record<"numeric" | "vector" | "matrix", string> = {
 };
 
 export function ChallengeSession({ chapter, onClose }: { chapter?: string; onClose: () => void }) {
-  const scope = chapter ?? null;
+  const { course } = useCourse();
+  // LA keeps its pre-multi-course scope format exactly (`chapter ?? null`) so
+  // existing `lr_challenge_run` rows still match on `fetchChallengeBest` —
+  // DESIGN.md's "verify no LA surface changes" bar applies to stored data
+  // too, not just pixels. A non-LA course prefixes its own key so runs never
+  // collide with (or get outscored by) LA's under the same `chapter` label —
+  // LEARN_PLAN.md's "Challenge/review/exercise pools stay course-scoped".
+  const scope = course.key === "la" ? (chapter ?? null) : `${course.key}:${chapter ?? "all"}`;
 
   // undefined = loading, null = the pool/best fetch failed outright.
   const [pool, setPool] = useState<ChallengePool | null | undefined>(undefined);
@@ -259,15 +283,24 @@ export function ChallengeSession({ chapter, onClose }: { chapter?: string; onClo
 
   useEffect(() => {
     let alive = true;
-    Promise.all([fetchChallengePool({ chapter }), fetchChallengeBest(scope).catch(() => null)])
+    Promise.all([fetchChallengePool({ courseId: course.courseId, chapter }), fetchChallengeBest(scope).catch(() => null)])
       .then(([p, b]) => {
         if (!alive) return;
         setPool(p);
         setBest(b);
+        // Shrink instead of forward-widening (see file header): a thin,
+        // backwards-only-widened pool gets proportionally smaller round
+        // queues rather than a flat 10, so all three round types still get a
+        // fair share of whatever is available.
+        const totalPoolSize = p.r1.length + p.r2.length + p.r3.length;
+        const perRoundCap =
+          totalPoolSize < CHALLENGE_MIN_POOL
+            ? Math.max(3, Math.min(MAX_DRILLS_PER_ROUND, Math.floor(totalPoolSize / 3)))
+            : MAX_DRILLS_PER_ROUND;
         setQueues([
-          shuffle(p.r1).slice(0, MAX_DRILLS_PER_ROUND),
-          shuffle(p.r2).slice(0, MAX_DRILLS_PER_ROUND),
-          shuffle(p.r3).slice(0, MAX_DRILLS_PER_ROUND),
+          shuffle(p.r1).slice(0, perRoundCap),
+          shuffle(p.r2).slice(0, perRoundCap),
+          shuffle(p.r3).slice(0, perRoundCap),
         ]);
       })
       .catch((e) => {
@@ -292,7 +325,16 @@ export function ChallengeSession({ chapter, onClose }: { chapter?: string; onClo
     drillStartAtRef.current = Date.now();
   }, [phaseKind, roundIndex, drillIndex]);
 
-  const currentQueue = queues[roundIndex] ?? [];
+  // Only the round types that survived scoping with ≥1 drill — a round type
+  // scoped to zero drills (e.g. no tiles content yet) never enters the flow
+  // at all, rather than being started-then-immediately-skipped. Recomputed
+  // whenever `queues` changes (i.e. once, on pool load).
+  const activeRounds = useMemo(
+    () => ROUND_DEFS.map((def, i) => ({ def, queue: queues[i] ?? [] })).filter((r) => r.queue.length > 0),
+    [queues]
+  );
+
+  const currentQueue = activeRounds[roundIndex]?.queue ?? [];
   const currentEntry = phaseKind === "playing" && drillIndex < currentQueue.length ? currentQueue[drillIndex] : null;
 
   const remainingRoundSecs =
@@ -306,7 +348,7 @@ export function ChallengeSession({ chapter, onClose }: { chapter?: string; onClo
       : BREATHER_SECS;
 
   function endRound() {
-    const isLast = roundIndex === ROUND_DEFS.length - 1;
+    const isLast = roundIndex >= activeRounds.length - 1;
     if (isLast) {
       setPhaseKind("end");
     } else {
@@ -316,7 +358,7 @@ export function ChallengeSession({ chapter, onClose }: { chapter?: string; onClo
   }
 
   function advanceFromBreather() {
-    if (roundIndex + 1 < ROUND_DEFS.length) {
+    if (roundIndex + 1 < activeRounds.length) {
       setRoundIndex((r) => r + 1);
       setPhaseKind("preround");
     } else {
@@ -354,16 +396,6 @@ export function ChallengeSession({ chapter, onClose }: { chapter?: string; onClo
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [phaseKind, remainingBreatherSecs]);
 
-  // A round with an empty queue (R2 today, live data) can never be "started"
-  // — skip straight through rather than stranding the learner on a disabled
-  // button. Fires once per preround entry (queues only changes on load).
-  useEffect(() => {
-    if (phaseKind !== "preround" || queues.length === 0) return;
-    if ((queues[roundIndex]?.length ?? 0) > 0) return;
-    endRound();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [phaseKind, roundIndex, queues]);
-
   const totalCorrectAll = roundResults.reduce((n, r) => n + r.correct, 0);
   const totalAttemptedAll = roundResults.reduce((n, r) => n + r.total, 0);
 
@@ -378,9 +410,12 @@ export function ChallengeSession({ chapter, onClose }: { chapter?: string; onClo
       total: totalAttemptedAll,
       bestStreak,
       durationSecs,
-      rounds: ROUND_DEFS.map((r, i): ChallengeRoundSummary => ({
-        round: r.round,
-        label: r.label,
+      // Over `activeRounds`, not the fixed `ROUND_DEFS` — a round type that
+      // never entered the flow (zero drills after scoping) has no place in
+      // the persisted run summary either.
+      rounds: activeRounds.map(({ def }, i): ChallengeRoundSummary => ({
+        round: def.round,
+        label: def.label,
         score: roundResults[i].score,
         correct: roundResults[i].correct,
         total: roundResults[i].total,
@@ -443,7 +478,7 @@ export function ChallengeSession({ chapter, onClose }: { chapter?: string; onClo
   }
 
   const newRecord = phaseKind === "end" && (best === null || totalScore > best.score);
-  const activeRoundDef = ROUND_DEFS[Math.min(roundIndex, ROUND_DEFS.length - 1)];
+  const activeRoundDef = activeRounds[Math.min(roundIndex, Math.max(activeRounds.length - 1, 0))]?.def ?? ROUND_DEFS[0];
 
   return (
     <div className="fixed inset-0 z-50 flex flex-col animate-[learn-overlay_.22s_ease-out] bg-[#F6F5F1]/97 backdrop-blur-xl text-[#1A1A24]">
@@ -472,7 +507,7 @@ export function ChallengeSession({ chapter, onClose }: { chapter?: string; onClo
           {phaseKind === "playing" && currentQueue.length > 0 && (
             <div className="mt-2 flex items-center justify-between text-[11px] text-[#6E6E78]">
               <span>
-                Runde {roundIndex + 1}/3 · Opgave {Math.min(drillIndex + 1, currentQueue.length)}/{currentQueue.length}
+                Runde {roundIndex + 1}/{activeRounds.length} · Opgave {Math.min(drillIndex + 1, currentQueue.length)}/{currentQueue.length}
               </span>
               <span className="flex items-center gap-2">
                 <span className="font-mono tabular-nums text-[#1A1A24]/80">{totalScore} pt</span>
@@ -502,25 +537,48 @@ export function ChallengeSession({ chapter, onClose }: { chapter?: string; onClo
         </main>
       )}
 
-      {pool && phaseKind === "preround" && (
+      {/* No round type survived scoping with ≥1 drill — a genuinely thin
+          chapter (e.g. the very first one, nothing earlier to widen into).
+          Renders instead of a preround screen whose Start button could never
+          be pressed (LEARN_PLAN.md: "skip that round entirely ... no empty
+          round screens"). */}
+      {pool && activeRounds.length === 0 && (
         <main className="flex min-h-0 flex-1 flex-col items-center justify-center gap-3 px-4 text-center">
-          <span className="text-[11px] uppercase tracking-[0.14em] text-[#6E6E78]">Runde {roundIndex + 1} / 3</span>
+          <h2 className="text-xl font-semibold text-[#1A1A24]">Ingen opgaver tilgængelige endnu</h2>
+          <p className="max-w-[280px] text-[13px] leading-relaxed text-[#6E6E78]">
+            {chapter
+              ? `Der er ikke nok korte opgaver i ${chapter} (eller de foregående kapitler) til en lynudfordring endnu.`
+              : "Der er ikke nok korte opgaver i det ulåste område til en lynudfordring endnu."}
+          </p>
+          <button
+            type="button"
+            onClick={onClose}
+            className="mt-2 rounded-xl bg-black/[0.05] px-6 py-3 text-[14px] font-medium text-[#1A1A24]/80 active:bg-black/[0.08]"
+          >
+            Luk
+          </button>
+        </main>
+      )}
+
+      {pool && activeRounds.length > 0 && phaseKind === "preround" && (
+        <main className="flex min-h-0 flex-1 flex-col items-center justify-center gap-3 px-4 text-center">
+          <span className="text-[11px] uppercase tracking-[0.14em] text-[#6E6E78]">
+            Runde {roundIndex + 1} / {activeRounds.length}
+          </span>
           <h2 className="text-2xl font-semibold text-[#1A1A24] md:text-3xl">{activeRoundDef.label}</h2>
           <p className="max-w-[300px] text-[13px] leading-relaxed text-[#6E6E78]">{activeRoundDef.description}</p>
-          <p className="text-[11px] text-[#6E6E78]/70">
-            {currentQueue.length === 0 && queues[roundIndex] !== undefined
-              ? "Ingen opgaver i denne runde — springer videre."
-              : `Op til ${queues[roundIndex]?.length ?? MAX_DRILLS_PER_ROUND} opgaver · 5:00`}
-          </p>
+          <p className="text-[11px] text-[#6E6E78]/70">Op til {currentQueue.length} opgaver · 5:00</p>
           {roundIndex === 0 && pool.widened && (
             <p className="max-w-[280px] text-[10px] text-[#6E6E78]/60">
-              Puljen inkluderer alle enheder med indhold ({chapter ? "for få opgaver i kapitlet" : "under 24 opgaver i det ulåste område"}).
+              {chapter
+                ? `Puljen inkluderer tidligere kapitler (for få opgaver i ${chapter} alene).`
+                : "Puljen inkluderer alle enheder med indhold (under 24 opgaver i det ulåste område)."}
             </p>
           )}
           <button
             type="button"
             onClick={startRound}
-            disabled={(queues[roundIndex]?.length ?? 0) === 0}
+            disabled={currentQueue.length === 0}
             className="mt-2 rounded-xl bg-gradient-to-r from-indigo-500 to-fuchsia-600 px-6 py-3 text-[15px] font-semibold text-white transition-transform active:scale-[0.985] disabled:opacity-40"
           >
             Start runde →
@@ -588,12 +646,15 @@ export function ChallengeSession({ chapter, onClose }: { chapter?: string; onClo
               </div>
 
               <div className="mt-6 flex flex-col gap-2 md:mt-8">
-                {ROUND_DEFS.map((r, i) => (
+                {/* Over `activeRounds`, not the fixed `ROUND_DEFS` — a round
+                    type that never entered the flow has no row here (no
+                    empty "0/0" round summary). */}
+                {activeRounds.map(({ def }, i) => (
                   <div
-                    key={r.round}
+                    key={def.round}
                     className="flex items-center justify-between rounded-xl border border-black/[0.06] bg-white px-3 py-2.5 shadow-[0_1px_8px_rgba(0,0,0,0.05)]"
                   >
-                    <span className="text-[13px] text-[#1A1A24]/80">{r.label}</span>
+                    <span className="text-[13px] text-[#1A1A24]/80">{def.label}</span>
                     <span className="font-mono text-[13px] text-[#1A1A24]/70">
                       {roundResults[i].correct}/{roundResults[i].total} · {roundResults[i].score} pt
                     </span>
@@ -655,6 +716,8 @@ function ChallengeDrillCard({
   const [formatError, setFormatError] = useState<string | null>(null);
   const [checked, setChecked] = useState(false);
   const [result, setResult] = useState<boolean | null>(null);
+  const LENS = useLensTokens();
+  const SOLID_BAR = useSolidBar();
 
   function tilesGivenText(): string {
     const byId = new Map((drill.tiles ?? []).map((t) => [t.id, t.md]));

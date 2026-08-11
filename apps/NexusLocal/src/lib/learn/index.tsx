@@ -21,8 +21,16 @@
  * window. The spine is the hero and the review card is its footer stat; a
  * two-column split at 2000px would leave both floating in the middle of
  * nowhere. Wide windows buy margin, not more columns.
+ *
+ * v4 (2026-08-11): multi-course — LEARN_PLAN.md "App course support".
+ * `CourseProvider` wraps the whole page so every panel below (and every
+ * `player/` primitive `PathPanel`'s `Player` mounts) resolves the active
+ * course via `CourseContext.useCourse()` with zero prop-drilling — the
+ * course switcher itself lives in `PathPanel`'s header (the page's one
+ * course-scoped spine), not as a second control here.
  */
 
+import { CourseProvider } from "./CourseContext";
 import { PathPanel } from "./PathPanel";
 import { ReviewPanel } from "./ReviewPanel";
 import { InfinitePanel } from "./InfinitePanel";
@@ -30,13 +38,15 @@ import { ChallengePanel } from "./ChallengePanel";
 
 export function LearnPage() {
   return (
-    <div className="-mx-6 -mb-6 flex-1 overflow-y-auto bg-[#F6F5F1] text-[#1A1A24]">
-      <div className="mx-auto flex max-w-xl flex-col gap-6 px-4 pb-16 pt-6 sm:px-6 md:max-w-2xl md:gap-10 md:px-8 md:pb-24 md:pt-10">
-        <PathPanel />
-        <ReviewPanel />
-        <ChallengePanel />
-        <InfinitePanel />
+    <CourseProvider>
+      <div className="-mx-6 -mb-6 flex-1 overflow-y-auto bg-[#F6F5F1] text-[#1A1A24]">
+        <div className="mx-auto flex max-w-xl flex-col gap-6 px-4 pb-16 pt-6 sm:px-6 md:max-w-2xl md:gap-10 md:px-8 md:pb-24 md:pt-10">
+          <PathPanel />
+          <ReviewPanel />
+          <ChallengePanel />
+          <InfinitePanel />
+        </div>
       </div>
-    </div>
+    </CourseProvider>
   );
 }

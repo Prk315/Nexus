@@ -12,7 +12,7 @@
 import { useState } from "react";
 import type { TestQuestion, TestSection } from "../types";
 import { Markdown } from "../Markdown";
-import { ANSWER_COL, CARD, DOCK_SHELL, DOCK_STACK, FEEDBACK, LENS, MAIN_SHELL, READING_COL } from "./tokens";
+import { ANSWER_COL, CARD, DOCK_SHELL, DOCK_STACK, FEEDBACK, MAIN_SHELL, READING_COL, useLensTokens } from "./tokens";
 
 function QuestionCard({
   question,
@@ -23,6 +23,7 @@ function QuestionCard({
   selected: number | null;
   onSelect: (i: number) => void;
 }) {
+  const LENS = useLensTokens();
   return (
     <div className={`${CARD} p-3 md:p-8`}>
       <div className="mb-2 flex items-center gap-2 md:mb-3">

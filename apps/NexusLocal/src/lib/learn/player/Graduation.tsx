@@ -20,11 +20,7 @@
  * invariant.
  */
 
-import type { Lens } from "../types";
-import { DOCK_SHELL, DOCK_STACK, LENS } from "./tokens";
-
-const LENS_HEX: Record<Lens, string> = { row: "#22d3ee", matrix: "#818cf8", column: "#e879f9" };
-const SHARD_LENSES: Lens[] = ["row", "matrix", "column"];
+import { DOCK_SHELL, DOCK_STACK, useLensOrder, useLensTokens } from "./tokens";
 
 export function Graduation({
   title,
@@ -42,12 +38,14 @@ export function Graduation({
   testScore: number;
   testTotal: number;
   estMinutes: number;
-  exercisedLenses: Set<Lens>;
+  exercisedLenses: Set<string>;
   conceptIds: string[];
   /** Eyebrow text — "MASTERED" (default, unit) or "PROOF COMPLETE" (proof). */
   label?: string;
   onContinue: () => void;
 }) {
+  const LENS = useLensTokens();
+  const lensOrder = useLensOrder();
   return (
     <>
       <main
@@ -70,7 +68,7 @@ export function Graduation({
                   {
                     "--a": `${i * 30}deg`,
                     "--i": i,
-                    backgroundColor: LENS_HEX[SHARD_LENSES[i % 3]],
+                    backgroundColor: LENS[lensOrder[i % lensOrder.length]].hex,
                     transform: `translate(-50%, -50%) rotate(${i * 30}deg) translateY(-52px)`,
                   } as React.CSSProperties
                 }
@@ -95,7 +93,7 @@ export function Graduation({
         </p>
 
         <div className="mt-3 flex animate-[learn-step-in_.3s_ease-out_both] gap-3 [animation-delay:600ms]">
-          {(["row", "matrix", "column"] as Lens[]).map((l) => {
+          {lensOrder.map((l) => {
             const on = exercisedLenses.has(l);
             return (
               <span
@@ -104,7 +102,7 @@ export function Graduation({
               >
                 <span
                   className="h-1.5 w-1.5 rounded-full"
-                  style={{ backgroundColor: on ? LENS_HEX[l] : "rgba(0,0,0,0.12)" }}
+                  style={{ backgroundColor: on ? LENS[l].hex : "rgba(0,0,0,0.12)" }}
                 />
                 {LENS[l].label}
               </span>

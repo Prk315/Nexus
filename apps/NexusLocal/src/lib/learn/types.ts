@@ -23,9 +23,18 @@
  * handles both shapes; see its header comment.
  */
 
-// --- The three perspectives (tre-perspektiver.md) --------------------------
-
-export type Lens = "row" | "matrix" | "column";
+// --- Lenses ("perspectives" for LA, tre-perspektiver.md) -------------------
+//
+// A lens key is per-course data, not a hardcoded LA union — LEARN_PLAN.md
+// "DBMS course (pinned)": "Lens keys are per-course data — the app resolves
+// lens label/colour via a course-aware registry, `Lens` is no longer a
+// hardcoded LA union." LA's own three lenses are "row" | "matrix" | "column";
+// DBMS's four are "nl" | "rc" | "ra" | "sql". Label/colour/order for whichever
+// set is active live in `courses.ts`'s `CourseDef.lenses`, resolved through
+// `CourseContext.useCourse()` — never a `Record<Lens, …>` literal keyed off
+// this type again (that was the pre-multi-course shape; see `courses.ts`'s
+// header comment for why).
+export type Lens = string;
 
 // Attempt grade, 0–3. Matches `lr_attempt_log.grade`'s comment:
 // 0 don't-know | 1 hard | 2 normal | 3 easy.

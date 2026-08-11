@@ -9,12 +9,25 @@
  * substrings that appear somewhere in source text, so nothing is assembled
  * via `text-${lens}-700`-style interpolation (DESIGN.md §1.1).
  *
+ * v3 (2026-08-11): multi-course — LEARN_PLAN.md "App course support". `LENS`
+ * / `SOLID_BAR` / `TRANSLATE_BAR` used to be flat `Record<Lens, …>` constants
+ * keyed off LA's hardcoded three-lens union. They are now course-scoped data
+ * living in `courses.ts`, reached via the `useLensTokens()` / `useSolidBar()`
+ * / `useTranslateBar()` hooks below — every call site that used to write
+ * `LENS[lens].chip` now calls the hook once per render (`const LENS =
+ * useLensTokens();`) and keeps the exact same `LENS[lens].chip` shape
+ * afterwards, so this is a resolution-mechanism change, not a call-site
+ * rewrite. LA's own tokens (hex/chip/chipOn/dot/edge/tint, `row`/`matrix`/
+ * `column`) are byte-identical to the pre-multi-course constants — see
+ * `courses.ts`'s `LA_LENSES`/`LA_SOLID_BAR`/`LA_TRANSLATE_BAR`.
+ *
  * Scoped to `Player.tsx` only. `PathPanel.tsx` / `ReviewPanel.tsx` define
  * their own inline light-theme classes — this file is not a shared export
  * surface outside `player/`.
  */
 
-import type { Lens } from "../types";
+import { useCourse } from "../CourseContext";
+import type { CourseDef, LensToken } from "../courses";
 
 // --- Desktop reading layout (DESIGN.md §8) ----------------------------------
 //
@@ -47,46 +60,33 @@ export const CARD =
 /** Interactive answer surfaces (inputs, MCQ options, tiles) stay hand-sized. */
 export const ANSWER_COL = "md:max-w-[34rem]";
 
-export const LENS: Record<
-  Lens,
-  {
-    label: string;
-    long: string;
-    chip: string;
-    chipOn: string;
-    dot: string;
-    edge: string;
-    tint: string;
-  }
-> = {
-  row: {
-    label: "Række",
-    long: "Rækkebilledet",
-    chip: "bg-cyan-50 text-cyan-700 ring-1 ring-cyan-600/25",
-    chipOn: "bg-cyan-100 text-cyan-800 ring-1 ring-cyan-600/40",
-    dot: "bg-cyan-500",
-    edge: "border-l-2 border-cyan-500/60",
-    tint: "bg-cyan-50",
-  },
-  matrix: {
-    label: "Matrix",
-    long: "Matrixformen",
-    chip: "bg-indigo-50 text-indigo-700 ring-1 ring-indigo-600/25",
-    chipOn: "bg-indigo-100 text-indigo-800 ring-1 ring-indigo-600/40",
-    dot: "bg-indigo-500",
-    edge: "border-l-2 border-indigo-500/60",
-    tint: "bg-indigo-50",
-  },
-  column: {
-    label: "Søjle",
-    long: "Søjlebilledet",
-    chip: "bg-fuchsia-50 text-fuchsia-700 ring-1 ring-fuchsia-600/25",
-    chipOn: "bg-fuchsia-100 text-fuchsia-800 ring-1 ring-fuchsia-600/40",
-    dot: "bg-fuchsia-500",
-    edge: "border-l-2 border-fuchsia-500/60",
-    tint: "bg-fuchsia-50",
-  },
-};
+/**
+ * This course's lens tokens, keyed by lens key ("row"/"matrix"/"column" for
+ * LA, "nl"/"rc"/"ra"/"sql" for DBMS) — read via `useCourse()`, so callers
+ * inside the `CourseProvider` tree (everything under `LearnPage`) get the
+ * active course's colours with zero prop-drilling. Call once per component
+ * render (`const LENS = useLensTokens();`), then index exactly like the old
+ * static constant: `LENS[lens].chip`.
+ */
+export function useLensTokens(): Record<string, LensToken> {
+  return useCourse().course.lenses;
+}
+
+/** This course's lens keys, in display order — drives chip order (theory
+ * cards, `UnitOpening`, the graduation lens-payoff row). */
+export function useLensOrder(): string[] {
+  return useCourse().course.lensOrder;
+}
+
+/** Drill-card top-edge colour for a single-lens (non-translate) drill. */
+export function useSolidBar(): Record<string, string> {
+  return useCourse().course.solidBar;
+}
+
+/** Drill-card top-edge gradient for a `translate` drill, keyed `"from-to"`. */
+export function useTranslateBar(): Record<string, string> {
+  return useCourse().course.translateBar;
+}
 
 export const FEEDBACK = {
   correct: "bg-emerald-50 text-emerald-700 ring-1 ring-emerald-500/25",
@@ -101,50 +101,23 @@ export const FEEDBACK = {
   format: "bg-black/[0.03] text-[#1A1A24]/70 ring-1 ring-black/10",
 } as const;
 
-// The six ordered lens pairs a `translate` drill's gradient top-edge can run
-// between (DESIGN.md §1.1's "translate framing"). Written out in full rather
-// than composed from `LENS[from]...` / `LENS[to]...` — belt-and-suspenders
-// against the interpolation trap, and easier to eyeball for correctness.
-// Plain single-lens top edge for non-translate drills (every drill card gets
-// a 2px top bar per DESIGN.md §3.5's anatomy diagram; `translate` drills use
-// `TRANSLATE_BAR` instead when a source lens was detected). Solid -500
-// shades at full opacity — the softer -400/60% mix from the dark theme reads
-// as barely-there on white.
-export const SOLID_BAR: Record<Lens, string> = {
-  row: "bg-cyan-500",
-  matrix: "bg-indigo-500",
-  column: "bg-fuchsia-500",
-};
-
-export const TRANSLATE_BAR: Record<string, string> = {
-  "row-matrix": "bg-gradient-to-r from-cyan-500 to-indigo-500",
-  "row-column": "bg-gradient-to-r from-cyan-500 to-fuchsia-500",
-  "matrix-row": "bg-gradient-to-r from-indigo-500 to-cyan-500",
-  "matrix-column": "bg-gradient-to-r from-indigo-500 to-fuchsia-500",
-  "column-row": "bg-gradient-to-r from-fuchsia-500 to-cyan-500",
-  "column-matrix": "bg-gradient-to-r from-fuchsia-500 to-indigo-500",
-};
-
 /**
  * Best-effort detection of a `translate` drill's *source* lens from its own
- * `prompt_md`. Real authored content (sampled unit_id 17, 28) opens these
- * drills with a bolded `**Givet i <ord>linsen:**` / `**Givet i
- * <ord>billedet:**` preface naming the lens the fact is *given* in — the
- * drill's own `lens` field is always the *target* (what the answer must be
- * expressed in). Not every translate drill carries this preface (sampled
- * unit_id 2 doesn't), so this degrades to `null` — callers fall back to
- * single-lens framing rather than guessing. Not a general content parser:
- * scoped to the four words the course's own vocabulary actually uses.
+ * `prompt_md`, against the active course's `sourceLensPatterns` (`courses.ts`
+ * — the course's own vocabulary: Danish "Givet i …" for LA, English "Given
+ * in …" for DBMS). Real authored LA content (sampled unit_id 17, 28) opens
+ * these drills with a bolded `**Givet i <ord>linsen:**` preface naming the
+ * lens the fact is *given* in — the drill's own `lens` field is always the
+ * *target* (what the answer must be expressed in). Not every translate drill
+ * carries this preface (sampled LA unit_id 2 doesn't), so this degrades to
+ * `null` — callers fall back to single-lens framing rather than guessing.
+ * Not a general content parser: scoped to each course's own fixed phrasing.
  */
-export function detectSourceLens(promptMd: string): Lens | null {
-  const m = promptMd.match(/Givet i (række|søjle|matrix|koordinat)\w*(?:linsen|billedet|form)/i);
-  if (!m) return null;
-  const word = m[1].toLowerCase();
-  if (word === "række") return "row";
-  if (word === "søjle") return "column";
-  // "matrix" and "koordinat" (coordinates are read off via the matrix) both
-  // name the matrix/computational lens.
-  return "matrix";
+export function detectSourceLens(promptMd: string, course: CourseDef): string | null {
+  for (const { re, lens } of course.sourceLensPatterns) {
+    if (re.test(promptMd)) return lens;
+  }
+  return null;
 }
 
 // --- Motion + KaTeX phone-width CSS -----------------------------------------
