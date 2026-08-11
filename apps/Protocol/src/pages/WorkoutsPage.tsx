@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { Dumbbell, Flame } from "lucide-react";
 import { useAppDispatch, useAppSelector } from "../store/hooks";
-import { fetchWorkoutSessions, fetchExerciseHistory, fetchWorkoutPlans, fetchRoutineExercises, startSessionFromRoutine } from "../store/slices/workoutsSlice";
+import { fetchWorkoutSessions, fetchExerciseHistory, fetchWorkoutPlans, fetchRoutineExercises, startSessionFromRoutine, fetchActivityGoals } from "../store/slices/workoutsSlice";
 import { fetchRunningSessions } from "../store/slices/runningSlice";
 import { fetchBodyMetrics } from "../store/slices/biomarkersSlice";
 import { fetchExerciseSetsFromCloud, fetchExerciseAliases, upsertExerciseAlias } from "../lib/api";
@@ -15,6 +15,7 @@ import RoutinesDesigner from "../components/workouts/RoutinesDesigner";
 import ExerciseAliasEditor from "../components/workouts/ExerciseAliasEditor";
 import LogPlanCard from "../components/workouts/LogPlanCard";
 import RunsCard from "../components/workouts/RunsCard";
+import WeeklyGoalsCard from "../components/workouts/WeeklyGoalsCard";
 import ProgressionView from "../components/workouts/ProgressionView";
 import ActivityModule from "../components/biomarkers/ActivityModule";
 import StravaImportPanel from "../components/shared/StravaImportPanel";
@@ -82,6 +83,7 @@ export default function WorkoutsPage() {
     refresh();
     dispatch(fetchBodyMetrics());
     dispatch(fetchWorkoutPlans());
+    dispatch(fetchActivityGoals());
     // Garmin strength lands in protocol_exercise_sets (per-set), not
     // protocol_exercises — pull a wide window so strength progress populates too.
     fetchExerciseSetsFromCloud(isoDate(new Date(Date.now() - 730 * 86400000))).then(setStrengthSets);
@@ -134,6 +136,9 @@ export default function WorkoutsPage() {
           </p>
         </div>
       </div>
+
+      {/* Weekly training targets — drive the dashboard Workout & Running scores */}
+      <WeeklyGoalsCard />
 
       {/* Progress overview — running & strength side by side */}
       <div style={{ display: "flex", gap: 16, flexWrap: "wrap", alignItems: "stretch" }}>

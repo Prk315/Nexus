@@ -7,6 +7,7 @@ import type {
   CreateNutritionEntry, CreateSleepEntry,
   Exercise, CreateExercise, RunningPlan, RunningSession, CreateRunningSession,
   SleepEntry, WorkoutPlan, WorkoutSession, CreateWorkoutSession,
+  ActivityGoals, UpdateActivityGoals,
   WorkoutRoutine, CreateWorkoutRoutine, RoutineExercise, CreateRoutineExercise, ExerciseHistory,
   NutritionEntry, Habit, CreateHabit, UpdateHabit, HabitCompletion,
   HabitStack, CreateHabitStack,
@@ -234,6 +235,38 @@ export async function pushWorkoutPlanToCloud(plan: WorkoutPlan): Promise<void> {
   const sb = getSupabaseClient();
   const { error } = await sb.from("protocol_workout_plans").upsert({ ...plan, user_id: getUserId() });
   if (error) throw new Error(error.message);
+}
+
+// ── Weekly activity goals (dashboard Workout & Running scoring) ──────────────
+
+export async function fetchActivityGoalsFromCloud(): Promise<ActivityGoals | null> {
+  const sb = getSupabaseClient();
+  const { data, error } = await sb
+    .from("protocol_activity_goals")
+    .select("*")
+    .eq("user_id", getUserId())
+    .maybeSingle();
+  if (error) throw new Error(error.message);
+  return data as ActivityGoals | null;
+}
+
+export async function upsertActivityGoalsInCloud(goals: UpdateActivityGoals): Promise<ActivityGoals> {
+  const sb = getSupabaseClient();
+  const { data, error } = await sb
+    .from("protocol_activity_goals")
+    .upsert(
+      {
+        user_id: getUserId(),
+        strength_sessions_per_week: goals.strength_sessions_per_week,
+        running_km_per_week: goals.running_km_per_week,
+        updated_at: new Date().toISOString(),
+      },
+      { onConflict: "user_id" },
+    )
+    .select("*")
+    .single();
+  if (error) throw new Error(error.message);
+  return data as ActivityGoals;
 }
 
 // ── Workout Sessions ──────────────────────────────────────────────────────────

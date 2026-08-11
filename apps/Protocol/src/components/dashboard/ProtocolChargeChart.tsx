@@ -120,23 +120,50 @@ function scoreBody(entries: BodyMetric[]): number {
   return Math.min(100, 25 + fields * 19);
 }
 
-function scoreWorkout(sessions: WorkoutSession[]): number {
-  if (!sessions.length) return 0;
-  const completed = sessions.filter((s) => s.completed).length;
-  if (completed === 0) return 20;
-  return Math.min(100, completed * 100);
+/** ISO date `delta` days from `dateStr` (delta may be negative). */
+function addDaysISO(dateStr: string, delta: number): string {
+  const d = new Date(dateStr + "T00:00:00");
+  d.setDate(d.getDate() + delta);
+  return isoDate(d);
 }
 
-function scoreRunning(sessions: RunningSession[]): number {
-  if (!sessions.length) return 0;
-  const completed = sessions.filter((s) => s.completed);
+/**
+ * Strength score: completed workout sessions over the trailing 7 days ending at
+ * `date`, vs the weekly-sessions goal (100 when the goal is met). With no goal
+ * set it falls back to the old per-day heuristic.
+ */
+function scoreWorkout(date: string, sessions: WorkoutSession[], goalPerWeek: number | null): number {
+  if (goalPerWeek && goalPerWeek > 0) {
+    const start = addDaysISO(date, -6);
+    const count = sessions.filter((s) => s.completed && s.scheduled_date >= start && s.scheduled_date <= date).length;
+    return Math.min(100, Math.round((count / goalPerWeek) * 100));
+  }
+  const today = sessions.filter((s) => s.scheduled_date === date);
+  if (!today.length) return 0;
+  const completed = today.filter((s) => s.completed).length;
+  return completed === 0 ? 20 : Math.min(100, completed * 100);
+}
+
+/**
+ * Running score: completed km over the trailing 7 days ending at `date`, vs the
+ * weekly-km goal (100 when the goal is met). With no goal set it falls back to
+ * the old per-day actual-vs-planned heuristic.
+ */
+function scoreRunning(date: string, sessions: RunningSession[], goalKmPerWeek: number | null): number {
+  if (goalKmPerWeek && goalKmPerWeek > 0) {
+    const start = addDaysISO(date, -6);
+    const km = sessions
+      .filter((s) => s.completed && s.date >= start && s.date <= date)
+      .reduce((sum, s) => sum + (s.actual_km ?? 0), 0);
+    return Math.min(100, Math.round((km / goalKmPerWeek) * 100));
+  }
+  const today = sessions.filter((s) => s.date === date);
+  if (!today.length) return 0;
+  const completed = today.filter((s) => s.completed);
   if (!completed.length) return 15;
-  const scores = completed.map((s) => {
-    if (s.actual_km && s.planned_km && s.planned_km > 0) {
-      return Math.min(100, (s.actual_km / s.planned_km) * 100);
-    }
-    return 100;
-  });
+  const scores = completed.map((s) =>
+    s.actual_km && s.planned_km && s.planned_km > 0 ? Math.min(100, (s.actual_km / s.planned_km) * 100) : 100,
+  );
   return Math.round(scores.reduce((a, b) => a + b, 0) / scores.length);
 }
 
@@ -163,6 +190,9 @@ interface Props {
   bodyMetrics: BodyMetric[];
   workoutSessions: WorkoutSession[];
   runningSessions: RunningSession[];
+  /** Weekly targets driving the Workout & Running scores (null = old heuristic). */
+  workoutGoalPerWeek: number | null;
+  runningGoalKmPerWeek: number | null;
 }
 
 interface Point {
@@ -177,6 +207,7 @@ interface Point {
 
 export default function ProtocolChargeChart({
   sleep, nutritionTotalsByDate, nutritionGoals, bodyMetrics, workoutSessions, runningSessions,
+  workoutGoalPerWeek, runningGoalKmPerWeek,
 }: Props) {
   const [range, setRange] = useState<Range>("7D");
 
@@ -194,16 +225,14 @@ export default function ProtocolChargeChart({
 
     const sleepMap    = byDate(sleep, (e) => e.date);
     const bodyMap     = byDate(bodyMetrics, (e) => e.date);
-    const workoutMap  = byDate(workoutSessions, (s) => s.scheduled_date);
-    const runningMap  = byDate(runningSessions, (s) => s.date);
 
     function dayScore(date: string) {
       return {
         sleep:    scoreSleep(sleepMap.get(date) ?? []),
         nutrition: scoreNutrition(nutritionTotalsByDate.get(date), nutritionGoals),
         body:     scoreBody(bodyMap.get(date) ?? []),
-        workout:  scoreWorkout(workoutMap.get(date) ?? []),
-        running:  scoreRunning(runningMap.get(date) ?? []),
+        workout:  scoreWorkout(date, workoutSessions, workoutGoalPerWeek),
+        running:  scoreRunning(date, runningSessions, runningGoalKmPerWeek),
       };
     }
 
@@ -250,7 +279,7 @@ export default function ProtocolChargeChart({
       const label = d.toLocaleDateString("en-US", { month: "short" });
       return bucket(daysBetween(isoDate(d), isoDate(end)), label);
     });
-  }, [range, sleep, nutritionTotalsByDate, nutritionGoals, bodyMetrics, workoutSessions, runningSessions]);
+  }, [range, sleep, nutritionTotalsByDate, nutritionGoals, bodyMetrics, workoutSessions, runningSessions, workoutGoalPerWeek, runningGoalKmPerWeek]);
 
   const TOOLTIP_STYLE = {
     background: "var(--surface)",

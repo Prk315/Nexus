@@ -13,6 +13,8 @@ import type {
   CreateRoutineExercise,
   UpdateRoutineExercise,
   ExerciseHistory,
+  ActivityGoals,
+  UpdateActivityGoals,
 } from "../types";
 
 interface WorkoutsState {
@@ -22,6 +24,7 @@ interface WorkoutsState {
   routines: WorkoutRoutine[];
   routineExercises: Record<string, RoutineExercise[]>; // by routine_id
   exerciseHistory: ExerciseHistory[];
+  activityGoals: ActivityGoals | null;
   loading: boolean;
   error: string | null;
 }
@@ -33,9 +36,23 @@ const initialState: WorkoutsState = {
   routines: [],
   routineExercises: {},
   exerciseHistory: [],
+  activityGoals: null,
   loading: false,
   error: null,
 };
+
+export const fetchActivityGoals = createAsyncThunk("workouts/fetchActivityGoals", async () => {
+  const { getActivityGoals } = await import("../../lib/tauriApi");
+  return getActivityGoals();
+});
+
+export const saveActivityGoals = createAsyncThunk(
+  "workouts/saveActivityGoals",
+  async (goals: UpdateActivityGoals) => {
+    const { saveActivityGoals: save } = await import("../../lib/tauriApi");
+    return save(goals);
+  },
+);
 
 export const fetchWorkoutPlans = createAsyncThunk("workouts/fetchPlans", async () => {
   const { getWorkoutPlans } = await import("../../lib/tauriApi");
@@ -215,6 +232,8 @@ const workoutsSlice = createSlice({
   reducers: {},
   extraReducers: (builder) => {
     builder
+      .addCase(fetchActivityGoals.fulfilled, (state, action) => { state.activityGoals = action.payload; })
+      .addCase(saveActivityGoals.fulfilled, (state, action) => { state.activityGoals = action.payload; })
       .addCase(fetchWorkoutPlans.pending, (state) => {
         state.loading = true;
         state.error = null;

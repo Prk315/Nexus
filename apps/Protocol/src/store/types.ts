@@ -149,6 +149,18 @@ export interface CreateWorkoutPlan {
   days_per_week: number;
 }
 
+/** Weekly activity targets that drive the dashboard's Workout & Running scores.
+ *  One row per user; either goal may be null (leaves that domain on its old
+ *  heuristic). See lib/nutritionScore-style scoring in ProtocolChargeChart. */
+export interface ActivityGoals {
+  user_id: string | null;
+  strength_sessions_per_week: number | null;
+  running_km_per_week: number | null;
+  updated_at: string;
+}
+
+export type UpdateActivityGoals = Pick<ActivityGoals, "strength_sessions_per_week" | "running_km_per_week">;
+
 export interface WorkoutSession {
   id: string;
   plan_id: string | null;
