@@ -1,10 +1,9 @@
 import { useMemo } from "react";
 import {
-  ComposedChart, Bar, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer,
-  RadialBarChart, RadialBar, PolarAngleAxis, ReferenceLine, Cell,
+  ComposedChart, Bar, Area, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer,
+  RadialBarChart, RadialBar, PolarAngleAxis, ReferenceLine, LabelList, Cell,
 } from "recharts";
 import { CARD_STYLE } from "../../lib/uiHelpers";
-import RingGauge from "./RingGauge";
 import { goalTarget } from "../../lib/nutritionScore";
 import { NUTRIENT_META } from "../../lib/nutrients";
 import type { NutrientTotals } from "../../lib/mealNutrition";
@@ -31,6 +30,9 @@ const GROUP_COLOR: Record<string, string> = {
 };
 
 const META = new Map<string, (typeof NUTRIENT_META)[number]>(NUTRIENT_META.map((m) => [m.key, m]));
+
+/** The micronutrients shown as weekly progress bars. */
+const MICRO_KEYS = ["sodium_mg", "potassium_mg", "calcium_mg", "iron_mg", "vitamin_c_mg", "vitamin_d_mcg", "fiber_g", "sugar_g"];
 
 const TOOLTIP_STYLE = {
   background: "var(--surface)",
@@ -66,7 +68,6 @@ export default function NutrientOverview({
 }) {
   // Nutrient goals are weekly — the micronutrient rings show this week's total
   // against the weekly goal.
-  const weeklyGoal = (key: string) => goalTarget(goals.find((g) => g.nutrient_key === key));
   const calorieGoal = dailyCalorieTarget;
   const macroData = useMemo(() => {
     const proteinKcal = todayTotals.protein_g * 4;
@@ -87,10 +88,13 @@ export default function NutrientOverview({
     const total = kP + kC + kF;
     const pc = (x: number) => (total > 0 ? Math.round((x / total) * 100) : 0);
     return [
-      { label: "Protein", grams: todayTotals.protein_g, pct: pc(kP), color: MACRO_COLORS.protein, desc: "builds & repairs muscle" },
-      { label: "Carbs",   grams: todayTotals.carbs_g,   pct: pc(kC), color: MACRO_COLORS.carbs,   desc: "primary energy" },
-      { label: "Fat",     grams: todayTotals.fat_g,     pct: pc(kF), color: MACRO_COLORS.fat,     desc: "hormones & vitamin uptake" },
-    ];
+      { label: "Protein", grams: todayTotals.protein_g, energy: kP, color: MACRO_COLORS.protein, desc: "builds & repairs muscle" },
+      { label: "Carbs",   grams: todayTotals.carbs_g,   energy: kC, color: MACRO_COLORS.carbs,   desc: "primary energy" },
+      { label: "Fat",     grams: todayTotals.fat_g,     energy: kF, color: MACRO_COLORS.fat,     desc: "hormones & vitamin uptake" },
+    ].map((r) => {
+      const pct = pc(r.energy);
+      return { ...r, pct, pctLabel: pct >= 8 ? `${pct}%` : "" };
+    });
   }, [todayTotals]);
 
   // Every logged nutrient with a reference daily value, normalised to % DV so
@@ -110,6 +114,19 @@ export default function NutrientOverview({
       .sort((a, b) => (a.group === b.group ? b.pct - a.pct : a.group.localeCompare(b.group)));
   }, [todayTotals]);
 
+  // Micronutrients as weekly progress bars — this week's total vs the weekly
+  // goal (or 7× the reference daily value when no goal is set).
+  const micros = useMemo(() => {
+    const t = weekTotals as unknown as Record<string, number>;
+    return MICRO_KEYS.map((key) => {
+      const meta = META.get(key);
+      const value = Number(t[key] ?? 0);
+      const goal = goalTarget(goals.find((g) => g.nutrient_key === key)) ?? (RDV[key] != null ? RDV[key] * 7 : null);
+      const pct = goal ? Math.min(100, Math.round((value / goal) * 100)) : null;
+      return { key, label: meta?.label ?? key, unit: meta?.unit ?? "", value, goal, pct };
+    });
+  }, [weekTotals, goals]);
+
   return (
     <div style={{ ...CARD_STYLE, padding: "20px 24px", display: "flex", flexDirection: "column", gap: 20 }}>
       <div style={{ display: "flex", gap: 24, flexWrap: "wrap" }}>
@@ -120,6 +137,12 @@ export default function NutrientOverview({
           </div>
           <ResponsiveContainer width="100%" height={200}>
             <ComposedChart data={perDay} margin={{ top: 4, right: 8, bottom: 0, left: -20 }}>
+              <defs>
+                <linearGradient id="calFill" x1="0" y1="0" x2="0" y2="1">
+                  <stop offset="0%" stopColor="var(--series-nutrition)" stopOpacity={0.35} />
+                  <stop offset="100%" stopColor="var(--series-nutrition)" stopOpacity={0.02} />
+                </linearGradient>
+              </defs>
               <CartesianGrid stroke="var(--border-subtle)" strokeWidth={1} vertical={false} />
               <XAxis dataKey="label" tick={{ fontSize: 11, fill: "var(--text-muted)" }} axisLine={false} tickLine={false} />
               <YAxis
@@ -130,9 +153,9 @@ export default function NutrientOverview({
               />
               <Tooltip contentStyle={TOOLTIP_STYLE} formatter={(v: number, name: string) => [`${Math.round(v)} kcal`, name === "target" ? "Goal" : "Logged"]} />
               <Legend wrapperStyle={{ fontSize: 11, paddingTop: 4 }} formatter={(v) => (v === "target" ? "Goal" : "Logged")} />
-              <Bar dataKey="calories" name="calories" fill="var(--series-nutrition)" radius={[3, 3, 0, 0]} />
-              {/* Per-day dynamic calorie target (base + that day's active + offset). */}
-              <Line type="monotone" dataKey="target" name="target" stroke="var(--text-secondary)" strokeWidth={2} strokeDasharray="5 4" dot={{ r: 2 }} isAnimationActive={false} />
+              {/* Logged calories as a smooth filled area; goal as a dashed line. */}
+              <Area type="monotone" dataKey="calories" name="calories" stroke="var(--series-nutrition)" strokeWidth={2.5} fill="url(#calFill)" dot={{ r: 3, fill: "var(--series-nutrition)", strokeWidth: 0 }} activeDot={{ r: 5 }} connectNulls isAnimationActive={false} />
+              <Line type="monotone" dataKey="target" name="target" stroke="var(--text-secondary)" strokeWidth={2} strokeDasharray="5 4" dot={false} isAnimationActive={false} />
             </ComposedChart>
           </ResponsiveContainer>
         </div>
@@ -146,10 +169,11 @@ export default function NutrientOverview({
             <div style={{ display: "flex", alignItems: "center", gap: 16 }}>
               <div style={{ position: "relative", width: 150, height: 150, flexShrink: 0 }}>
                 <ResponsiveContainer width="100%" height="100%">
-                  <RadialBarChart data={macroRadial} innerRadius="30%" outerRadius="100%" startAngle={90} endAngle={-270} barCategoryGap={2}>
+                  <RadialBarChart data={macroRadial} innerRadius="34%" outerRadius="100%" startAngle={90} endAngle={-270} barCategoryGap={3}>
                     <PolarAngleAxis type="number" domain={[0, 100]} tick={false} axisLine={false} />
-                    <RadialBar dataKey="pct" cornerRadius={5} background={{ fill: "var(--progress-bg)" }} isAnimationActive={false}>
+                    <RadialBar dataKey="pct" cornerRadius={7} background={{ fill: "var(--progress-bg)" }} isAnimationActive={false}>
                       {macroRadial.map((m) => <Cell key={m.label} fill={m.color} />)}
+                      <LabelList dataKey="pctLabel" position="insideStart" offset={9} fill="#ffffff" fontSize={10} fontWeight={700} />
                     </RadialBar>
                   </RadialBarChart>
                 </ResponsiveContainer>
@@ -178,20 +202,29 @@ export default function NutrientOverview({
         </div>
       </div>
 
-      {/* Micronutrients */}
+      {/* Micronutrients — weekly progress bars */}
       <div>
         <div style={{ fontSize: 13, fontWeight: 700, color: "var(--text)", marginBottom: 12 }}>
           Micronutrients this week
         </div>
-        <div style={{ display: "flex", gap: 18, flexWrap: "wrap" }}>
-          <RingGauge label="Sodium" value={weekTotals.sodium_mg} goal={weeklyGoal("sodium_mg")} unit="mg" color="var(--series-nutrition)" track="var(--series-nutrition-track)" />
-          <RingGauge label="Potassium" value={weekTotals.potassium_mg} goal={weeklyGoal("potassium_mg")} unit="mg" color="var(--series-nutrition)" track="var(--series-nutrition-track)" />
-          <RingGauge label="Calcium" value={weekTotals.calcium_mg} goal={weeklyGoal("calcium_mg")} unit="mg" color="var(--series-nutrition)" track="var(--series-nutrition-track)" />
-          <RingGauge label="Iron" value={weekTotals.iron_mg} goal={weeklyGoal("iron_mg")} unit="mg" color="var(--series-nutrition)" track="var(--series-nutrition-track)" />
-          <RingGauge label="Vitamin C" value={weekTotals.vitamin_c_mg} goal={weeklyGoal("vitamin_c_mg")} unit="mg" color="var(--series-nutrition)" track="var(--series-nutrition-track)" />
-          <RingGauge label="Vitamin D" value={weekTotals.vitamin_d_mcg} goal={weeklyGoal("vitamin_d_mcg")} unit="mcg" color="var(--series-nutrition)" track="var(--series-nutrition-track)" />
-          <RingGauge label="Fiber" value={weekTotals.fiber_g} goal={weeklyGoal("fiber_g")} unit="g" color="var(--series-nutrition)" track="var(--series-nutrition-track)" />
-          <RingGauge label="Sugar" value={weekTotals.sugar_g} goal={weeklyGoal("sugar_g")} unit="g" color="var(--series-nutrition)" track="var(--series-nutrition-track)" />
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(230px, 1fr))", gap: "12px 28px" }}>
+          {micros.map((m) => {
+            const full = m.pct != null && m.pct >= 100;
+            return (
+              <div key={m.key}>
+                <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", gap: 8, marginBottom: 4 }}>
+                  <span style={{ fontSize: 12, fontWeight: 600, color: "var(--text)" }}>{m.label}</span>
+                  <span style={{ fontSize: 11, color: "var(--text-muted)", whiteSpace: "nowrap" }}>
+                    {Math.round(m.value)}{m.unit}{m.goal ? ` / ${Math.round(m.goal)}${m.unit}` : ""}
+                    {m.pct != null ? <strong style={{ color: full ? "var(--success)" : "var(--text-secondary)", marginLeft: 5 }}>{m.pct}%</strong> : null}
+                  </span>
+                </div>
+                <div style={{ height: 6, borderRadius: 3, background: "var(--progress-bg)", overflow: "hidden" }}>
+                  <div style={{ height: "100%", width: `${m.pct ?? 0}%`, background: full ? "var(--success)" : "var(--series-nutrition)", borderRadius: 3, transition: "width .3s" }} />
+                </div>
+              </div>
+            );
+          })}
         </div>
       </div>
 
