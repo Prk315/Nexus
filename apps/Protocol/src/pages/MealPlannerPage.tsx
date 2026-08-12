@@ -142,6 +142,15 @@ export default function MealPlannerPage() {
     });
   }, [days, planEntries, foodsById, mealsById, mealItemsById, supplementTotalsOn]);
 
+  // This week's total intake (meals + supplements), for the weekly goal readouts.
+  const weekTotals = useMemo(() => {
+    const meal = planEntries
+      .filter((e) => e.logged && e.date >= days[0] && e.date <= days[6])
+      .map((e) => entryNutrition(e, foodsById, mealsById, mealItemsById));
+    const supp = days.flatMap((d) => supplementTotalsOn(d));
+    return sumNutrition([...meal, ...supp]);
+  }, [planEntries, foodsById, mealsById, mealItemsById, days, supplementTotalsOn]);
+
   async function handlePick(food: CreateFood, grams: number) {
     if (!addingSlot) return;
     let foodId: string;
@@ -190,6 +199,10 @@ export default function MealPlannerPage() {
   const calorieCfg = calorieConfigFrom(activityGoals);
   const todayActive = bodyMetrics.find((b) => b.date === today)?.active_calories ?? 0;
   const dailyCalorieTarget = Math.round(calorieCfg.base_bmr + Number(todayActive) + calorieCfg.offset);
+  // Weekly calorie target = Σ each day's dynamic maintenance (base + active + offset).
+  const weekCalorieTarget = Math.round(
+    days.reduce((sum, d) => sum + calorieCfg.base_bmr + Number(bodyMetrics.find((b) => b.date === d)?.active_calories ?? 0) + calorieCfg.offset, 0),
+  );
 
   return (
     <div style={{ padding: 28, display: "flex", flexDirection: "column", gap: 20 }}>
@@ -200,7 +213,7 @@ export default function MealPlannerPage() {
             Plan your week, log what you actually eat, backed by real nutrition data.
           </p>
         </div>
-        <GoalsWidget todayTotals={todayTotals} goals={goalItems} calorie={calorieStrategy} calorieDailyTarget={dailyCalorieTarget} onSave={handleSaveGoals} />
+        <GoalsWidget weekTotals={weekTotals} goals={goalItems} calorie={calorieStrategy} weekCalorieTarget={weekCalorieTarget} onSave={handleSaveGoals} />
       </div>
 
       {/* One dashboard, three full-width rows on Mac (each stacks on iPhone):
@@ -210,7 +223,7 @@ export default function MealPlannerPage() {
       <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
         <DashCard title="Overview" icon={<BarChart3 size={15} />}>
           <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
-            <NutrientOverview perDay={perDayCalories} todayTotals={todayTotals} goals={goalItems} dailyCalorieTarget={dailyCalorieTarget} />
+            <NutrientOverview perDay={perDayCalories} todayTotals={todayTotals} weekTotals={weekTotals} goals={goalItems} dailyCalorieTarget={dailyCalorieTarget} />
             <NutrientBreakdown totals={todayTotals} />
           </div>
         </DashCard>
