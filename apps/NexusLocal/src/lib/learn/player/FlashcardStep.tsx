@@ -1,8 +1,14 @@
 /**
  * A flashcard deck (schema v1.2, LEARN_PLAN.md "Flashcard decks"): entry
- * (before layer 1 — "Kend sætningerne") or exit (after the rapid round,
- * before the test — "Sig og anvend dem"). One card at a time, full attention,
- * the same rhythm `DrillCard.tsx` uses for a drill.
+ * ("Kend sætningerne") or exit ("Sig og anvend dem"). One card at a time,
+ * full attention, the same rhythm `DrillCard.tsx` uses for a drill.
+ *
+ * Placement (corrected 2026-08-12): decks are no longer steps inside the
+ * unit flow (they briefly were — first/last step, before layer 1 / after the
+ * rapid round). They are now separate path nodes on `PathPanel`'s spine,
+ * each opening `Player.tsx`'s lightweight `deckSession` mode with exactly
+ * one deck. This component itself is unchanged either way — it has always
+ * rendered just the one deck array it's handed; only its *caller* changed.
  *
  * Per-card lifecycle, owned by the inner `FlashcardCardView` (remounted per
  * card via `key={card.id}`, exactly like `DrillCard`'s own doc comment

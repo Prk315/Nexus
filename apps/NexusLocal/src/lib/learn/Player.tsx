@@ -28,9 +28,32 @@
  * layer that still owes drills instead of restarting at layer 1.
  *
  * Public contract is `{ unitId, onClose }` (unit mode — unchanged, every
- * existing caller keeps working with no edits) OR `{ proofId, onClose }`
- * (proof mode — LEARN_PLAN.md "Proof side-paths"). No other props, no
- * default export.
+ * existing caller keeps working with no edits), `{ proofId, onClose }`
+ * (proof mode — LEARN_PLAN.md "Proof side-paths"), or `{ deckSession: {
+ * unitId, deck }, onClose }` (deck mode — LEARN_PLAN.md "Flashcard decks",
+ * corrected placement, see below). No other props, no default export.
+ *
+ * ── Deck mode (corrected placement, 2026-08-12) ──────────────────────────
+ * Flashcard decks were built yesterday as the unit flow's first/last STEPS
+ * (`entryDeck`/`exitDeck` in `Step`). Per explicit correction, they are no
+ * longer part of the unit flow at all — the unit-mode step sequence is back
+ * to `layers → rapid round → test`, byte-identical to before flashcards
+ * existed. Decks are now their own path nodes on the spine, bracketing the
+ * unit row (`PathPanel.tsx`'s `DeckNode`, rendered before/after `UnitRow`),
+ * and open a THIRD, lightweight `Player` mode: `deckSession`. It shares this
+ * component (content loading, the KLADDE draft badge, `handleCardGrade`'s
+ * exact grading path — `applyGrade`/`upsertMemory`/`logAttempt`/one-hop
+ * blame propagation, weights 0.7 entry / 1.0 exit, unchanged) but skips
+ * everything layer/test-shaped: no `deriveLayers`, no `Stepper`, no
+ * graduation ceremony, no `lr_unit_progress` write. It renders the unit
+ * title + KLADDE badge in the same header, then `FlashcardStep` for just
+ * that one deck; `FlashcardStep`'s own built-in "N/M cards graded" screen
+ * *is* the "small done-moment" — its advance button is wired straight to
+ * `onClose` instead of a next step. `PathPanel` owns the unlock rules (entry
+ * available whenever the unit itself is available/in_progress/mastered; exit
+ * only once mastered) and the per-card "attempted" completion badge (via
+ * `fetchSolvedDrillIds` over every deck's card ids, batched once) — this
+ * file only renders whatever deck it's told to open.
  *
  * ── Proof mode (2026-08-10) ──────────────────────────────────────────────
  * A proof unit's content is `UnitContent`-shaped, so it derives layers,
@@ -74,7 +97,6 @@ import type {
   ContentStatus,
   Drill,
   Flashcard,
-  FlashcardDecks,
   Grade,
   Lens,
   LrMemoryState,
@@ -108,55 +130,37 @@ import { Graduation } from "./player/Graduation";
 import { Stepper, type StepSegment } from "./player/Stepper";
 import { FEEDBACK, PLAYER_STYLE, READING_COL } from "./player/tokens";
 
-type Step =
-  | { kind: "entryDeck" }
-  | { kind: "layer"; layerIdx: number }
-  | { kind: "final" }
-  | { kind: "exitDeck" }
-  | { kind: "test" };
+// Unit-mode step sequence — back to `layers → rapid round → test`, exactly
+// as it was before flashcard decks existed. Decks are no longer steps here
+// at all (see the file header's "Deck mode" note); `deckSession` mode below
+// renders a single deck outside this sequence entirely.
+type Step = { kind: "layer"; layerIdx: number } | { kind: "final" } | { kind: "test" };
 
 // Flashcard grading weights — LEARN_PLAN.md "Flashcard decks": "entry decks
 // at weight 0.7, exit decks at weight 1.0 (recall-from-memory is the
-// strongest evidence)".
+// strongest evidence)". Used by both unit-mode's (removed) old flow history
+// and deck-mode's `handleCardGrade` calls below — still the one source of
+// truth for the two constants.
 const ENTRY_DECK_WEIGHT = 0.7;
 const EXIT_DECK_WEIGHT = 1.0;
 
-/**
- * [entry deck (if any), layer 1 … layer N, rapid round (if any),
- *  exit deck (if any), test].
- *
- * A unit with no `content.flashcards` (or an empty entry/exit array) never
- * pushes the corresponding deck step — the sequence is then byte-identical
- * to the pre-flashcard flow, per LEARN_PLAN.md: "Units without `flashcards`
- * flow exactly as before".
- */
-function buildSteps(flow: UnitFlow, flashcards: FlashcardDecks | undefined): Step[] {
+/** [layer 1 … layer N, rapid round (if any), test]. */
+function buildSteps(flow: UnitFlow): Step[] {
   const steps: Step[] = [];
-  if (flashcards && flashcards.entry.length > 0) steps.push({ kind: "entryDeck" });
   flow.layers.forEach((_, layerIdx) => steps.push({ kind: "layer", layerIdx }));
   if (flow.finalDrills.length > 0) steps.push({ kind: "final" });
-  if (flashcards && flashcards.exit.length > 0) steps.push({ kind: "exitDeck" });
   steps.push({ kind: "test" });
   return steps;
 }
 
-/** First step that still owes work: earliest layer/deck with an unsolved item. */
-function resumeIndex(
-  steps: Step[],
-  flow: UnitFlow,
-  flashcards: FlashcardDecks | undefined,
-  solved: Set<string>
-): number {
+/** First step that still owes work: earliest layer with an unsolved drill. */
+function resumeIndex(steps: Step[], flow: UnitFlow, solved: Set<string>): number {
   for (let i = 0; i < steps.length; i++) {
     const s = steps[i];
-    if (s.kind === "entryDeck") {
-      if ((flashcards?.entry ?? []).some((c) => !solved.has(c.id))) return i;
-    } else if (s.kind === "layer") {
+    if (s.kind === "layer") {
       if (flow.layers[s.layerIdx].drills.some((d) => !solved.has(d.id))) return i;
     } else if (s.kind === "final") {
       if (flow.finalDrills.some((d) => !solved.has(d.id))) return i;
-    } else if (s.kind === "exitDeck") {
-      if ((flashcards?.exit ?? []).some((c) => !solved.has(c.id))) return i;
     }
   }
   // Everything solved — land on the test.
@@ -164,10 +168,8 @@ function resumeIndex(
 }
 
 function stepLabel(step: Step): string {
-  if (step.kind === "entryDeck") return "Entry cards";
   if (step.kind === "layer") return `Layer ${step.layerIdx + 1}`;
   if (step.kind === "final") return "Rapid round";
-  if (step.kind === "exitDeck") return "Exit cards";
   return "Test";
 }
 
@@ -194,15 +196,20 @@ type PlayerProps =
   // every current caller of proof mode is `PathPanel`, which always has the
   // entry's `kind` in hand and passes it explicitly; the default only
   // matters for future/incidental callers.
-  | { proofId: number; kind?: ProofUnitKind; onClose: () => void };
+  | { proofId: number; kind?: ProofUnitKind; onClose: () => void }
+  // Deck mode — LEARN_PLAN.md "Flashcard decks", corrected placement. Opened
+  // by `PathPanel`'s `DeckNode`; `unitId` is always a unit (decks never
+  // exist on proof/workshop content).
+  | { deckSession: { unitId: number; deck: "entry" | "exit" }; onClose: () => void };
 
 export function Player(props: PlayerProps) {
-  const mode: "unit" | "proof" = "unitId" in props ? "unit" : "proof";
+  const mode: "unit" | "proof" | "deck" = "unitId" in props ? "unit" : "proofId" in props ? "proof" : "deck";
   // The one entity id this Player instance is loading — a unit_id in unit
-  // mode, a proof_id in proof mode. Every table read/write below branches on
-  // `mode` to pick the right table, but shares this single id.
-  const id = "unitId" in props ? props.unitId : props.proofId;
+  // and deck mode, a proof_id in proof mode. Every table read/write below
+  // branches on `mode` to pick the right table, but shares this single id.
+  const id = "unitId" in props ? props.unitId : "proofId" in props ? props.proofId : props.deckSession.unitId;
   const sideKind: ProofUnitKind = "proofId" in props ? (props.kind ?? "proof") : "proof";
+  const deckKind: "entry" | "exit" | null = "deckSession" in props ? props.deckSession.deck : null;
   const { onClose } = props;
 
   const [row, setRow] = useState<ContentRow | null | undefined>(undefined); // undefined = loading
@@ -230,12 +237,16 @@ export function Player(props: PlayerProps) {
 
   const content = row?.content ?? null;
   // Absent on every unit authored before schema v1.2 — every consumer below
-  // treats `undefined` and `{entry:[],exit:[]}` identically (no deck step,
-  // no card ids), which is what keeps a pre-flashcard unit's flow untouched.
+  // treats `undefined` and `{entry:[],exit:[]}` identically (no deck node,
+  // no card ids).
   const flashcards = content?.flashcards;
 
-  const flow = useMemo(() => (content ? deriveLayers(content) : null), [content]);
-  const steps = useMemo(() => (flow ? buildSteps(flow, flashcards) : []), [flow, flashcards]);
+  // Layers/steps are a unit-mode-and-proof-mode-only concept — deck mode
+  // never walks them (no `Stepper`, no test, no graduation), so this stays
+  // `null`/`[]` there, which is what keeps the deck render "lightweight"
+  // (`layers.ts`'s `deriveLayers` never runs for a deck session).
+  const flow = useMemo(() => (content && mode !== "deck" ? deriveLayers(content) : null), [content, mode]);
+  const steps = useMemo(() => (flow ? buildSteps(flow) : []), [flow]);
 
   const allConceptIds = useMemo(() => {
     if (!content) return [];
@@ -252,21 +263,32 @@ export function Player(props: PlayerProps) {
 
   // Flashcard ids, separate from `allDrillIds` on purpose: the test's
   // `unlock_ratio` gate (`solvedCount`/`totalDrills` below) must stay
-  // drill-only — LEARN_PLAN.md "Exit-deck completion counts toward nothing
-  // test-gating related". Used only for continuity (resuming into the right
+  // drill-only. Used only for continuity (resuming into the right
   // deck/card) and the Stepper's per-deck solved counts.
   const allCardIds = useMemo(() => {
     if (!flashcards) return [];
     return [...flashcards.entry.map((c) => c.id), ...flashcards.exit.map((c) => c.id)];
   }, [flashcards]);
 
-  // The union `fetchSolvedDrillIds`/continuity resume over — drills AND
-  // flashcards share one `lr_attempt_log`-backed "solved" set.
-  const continuityIds = useMemo(() => [...allDrillIds, ...allCardIds], [allDrillIds, allCardIds]);
+  // The union `fetchSolvedDrillIds`/continuity resume over. Unit/proof mode:
+  // every drill AND flashcard id (unit mode only ever has flashcards on its
+  // own content; proof content never carries a `flashcards` key, so
+  // `allCardIds` is always `[]` there). Deck mode: just the ONE deck's own
+  // card ids — `FlashcardStep`'s own `firstUnsolved` resumes forward from
+  // whatever this resolves to.
+  const continuityIds = useMemo(() => {
+    if (mode === "deck") {
+      if (!flashcards || !deckKind) return [];
+      return (deckKind === "entry" ? flashcards.entry : flashcards.exit).map((c) => c.id);
+    }
+    return [...allDrillIds, ...allCardIds];
+  }, [mode, flashcards, deckKind, allDrillIds, allCardIds]);
 
   useEffect(() => {
     let alive = true;
-    const load = mode === "unit" ? fetchUnitContent(id) : fetchProofContent(id);
+    // Deck mode always loads unit content — decks never exist on proof
+    // content.
+    const load = mode === "proof" ? fetchProofContent(id) : fetchUnitContent(id);
     load
       .then((r) => {
         if (!alive) return;
@@ -298,12 +320,12 @@ export function Player(props: PlayerProps) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [allConceptIds.join(",")]);
 
-  // Continuity: recover which drills this user has already graded, then jump
-  // to the first layer that still owes work. Runs once per mounted unit; a
-  // failed lookup resolves as "nothing solved", which keeps the test gate shut
-  // rather than opening it.
+  // Continuity (unit/proof mode only): recover which drills this user has
+  // already graded, then jump to the first layer that still owes work. Runs
+  // once per mounted unit; a failed lookup resolves as "nothing solved",
+  // which keeps the test gate shut rather than opening it.
   useEffect(() => {
-    if (!flow || steps.length === 0 || resumedRef.current) return;
+    if (mode === "deck" || !flow || steps.length === 0 || resumedRef.current) return;
     if (continuityIds.length === 0) {
       resumedRef.current = true;
       return;
@@ -318,13 +340,32 @@ export function Player(props: PlayerProps) {
       .then((solved) => {
         if (solved.size === 0) return;
         setSolvedDrillIds((prev) => new Set([...prev, ...solved]));
-        const idx = resumeIndex(steps, flow, flashcards, solved);
+        const idx = resumeIndex(steps, flow, solved);
         setStepIdx(idx);
         setMaxVisited((m) => Math.max(m, idx));
       })
       .catch((e) => console.error("[learn] fetchSolvedDrillIds failed", e));
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [flow, steps.length, continuityIds.join(","), flashcards]);
+  }, [mode, flow, steps.length, continuityIds.join(",")]);
+
+  // Continuity (deck mode only): same "recover solved ids" job as above, but
+  // there's no step sequence to navigate — `FlashcardStep`'s own
+  // `firstUnsolved` reads `solvedDrillIds` directly to resume forward inside
+  // the deck.
+  useEffect(() => {
+    if (mode !== "deck" || resumedRef.current) return;
+    if (continuityIds.length === 0) {
+      resumedRef.current = true;
+      return;
+    }
+    resumedRef.current = true;
+    fetchSolvedDrillIds(continuityIds)
+      .then((solved) => {
+        if (solved.size > 0) setSolvedDrillIds((prev) => new Set([...prev, ...solved]));
+      })
+      .catch((e) => console.error("[learn] fetchSolvedDrillIds failed", e));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [mode, continuityIds.join(",")]);
 
   const totalDrills = flow?.totalDrills ?? 0;
   const solvedCount = allDrillIds.filter((id) => solvedDrillIds.has(id)).length;
@@ -432,7 +473,7 @@ export function Player(props: PlayerProps) {
 
   function handleTestFail() {
     // Back to the earliest step that still owes drills, not blindly to step 0.
-    if (flow) goToStep(resumeIndex(steps, flow, flashcards, solvedDrillIds));
+    if (flow) goToStep(resumeIndex(steps, flow, solvedDrillIds));
     else goToStep(0);
   }
 
@@ -440,8 +481,10 @@ export function Player(props: PlayerProps) {
     if (!row) return;
     setApproveUi("busy");
     try {
-      if (mode === "unit") await approveUnitContent(id, row.version);
-      else await approveProofContent(id, row.version);
+      // Deck mode's content row lives in the same `lr_unit_content` table as
+      // unit mode — only proof mode addresses a different table.
+      if (mode === "proof") await approveProofContent(id, row.version);
+      else await approveUnitContent(id, row.version);
       setApproveUi("approved");
       if (approveUndoTimerRef.current !== null) window.clearTimeout(approveUndoTimerRef.current);
       // ~5s undo window, then the control disappears entirely — a live unit
@@ -462,8 +505,8 @@ export function Player(props: PlayerProps) {
     }
     setApproveUi("busy");
     try {
-      if (mode === "unit") await demoteUnitContent(id, row.version);
-      else await demoteProofContent(id, row.version);
+      if (mode === "proof") await demoteProofContent(id, row.version);
+      else await demoteUnitContent(id, row.version);
       setApproveUi("idle");
     } catch (e) {
       console.error("[learn] demoteUnitContent failed", e);
@@ -510,25 +553,6 @@ export function Player(props: PlayerProps) {
           locked: !testUnlocked,
         };
       }
-      if (s.kind === "entryDeck" || s.kind === "exitDeck") {
-        const deck = s.kind === "entryDeck" ? flashcards?.entry ?? [] : flashcards?.exit ?? [];
-        const solved = deck.filter((c) => solvedDrillIds.has(c.id)).length;
-        const fillPct =
-          deck.length > 0
-            ? Math.round((solved / deck.length) * 100)
-            : i < stepIdx
-              ? 100
-              : i === stepIdx
-                ? 60
-                : 0;
-        return {
-          kind: s.kind,
-          label: stepLabel(s),
-          fillPct,
-          reachable: i <= maxVisited + 1,
-          solved: [solved, deck.length],
-        };
-      }
       const drills = s.kind === "layer" ? flow.layers[s.layerIdx].drills : flow.finalDrills;
       const solved = drills.filter((d) => solvedDrillIds.has(d.id)).length;
       const fillPct =
@@ -549,25 +573,21 @@ export function Player(props: PlayerProps) {
         solved: [solved, drills.length],
       };
     });
-  }, [flow, steps, stepIdx, maxVisited, solvedDrillIds, testUnlocked, graduation, flashcards]);
+  }, [flow, steps, stepIdx, maxVisited, solvedDrillIds, testUnlocked, graduation]);
 
   // The DB row's own status — never mutated locally. `approveUi` layers the
   // in-flight/just-approved UI on top without waiting on a refetch.
   const contentIsDraft = row?.status === "draft";
-  const title = content?.title || content?.unit_code || (mode === "unit" ? `Unit ${id}` : `Proof ${id}`);
+  const title = content?.title || content?.unit_code || (mode === "proof" ? `Proof ${id}` : `Unit ${id}`);
   const step: Step | undefined = steps[stepIdx];
   const nextStep: Step | undefined = steps[stepIdx + 1];
   const nextIsLockedTest = nextStep?.kind === "test" && !testUnlocked;
   const advanceLabel = nextStep
-    ? nextStep.kind === "entryDeck"
-      ? "Entry cards →"
-      : nextStep.kind === "layer"
-        ? `Layer ${nextStep.layerIdx + 1} →`
-        : nextStep.kind === "final"
-          ? "Rapid round →"
-          : nextStep.kind === "exitDeck"
-            ? "Exit cards →"
-            : "Take the test →"
+    ? nextStep.kind === "layer"
+      ? `Layer ${nextStep.layerIdx + 1} →`
+      : nextStep.kind === "final"
+        ? "Rapid round →"
+        : "Take the test →"
     : "Take the test →";
   const advanceHint = nextIsLockedTest
     ? `Solve ${remainingToUnlock} more drill${remainingToUnlock === 1 ? "" : "s"} to unlock the test.`
@@ -599,6 +619,15 @@ export function Player(props: PlayerProps) {
             {mode === "proof" && (
               <span className="shrink-0 rounded px-1.5 py-0.5 text-[9px] font-semibold tracking-[0.12em] bg-black/[0.05] text-[#6E6E78]">
                 {sideKind === "workshop" ? "VÆRKSTED" : "BEVIS"}
+              </span>
+            )}
+
+            {/* Deck mode marker — same chip language as BEVIS/VÆRKSTED above,
+                distinguishing a standalone deck session from the full unit
+                Player it shares this component with. */}
+            {mode === "deck" && (
+              <span className="shrink-0 rounded px-1.5 py-0.5 text-[9px] font-semibold tracking-[0.12em] bg-black/[0.05] text-[#6E6E78]">
+                KORT
               </span>
             )}
 
@@ -701,7 +730,7 @@ export function Player(props: PlayerProps) {
         </main>
       )}
 
-      {row === null && (loadError || mode === "unit") && (
+      {row === null && (loadError || mode !== "proof") && (
         <main className="flex min-h-0 flex-1 flex-col items-center justify-center gap-2 px-4 text-center">
           <p className="text-[13px] text-[#1A1A24]/70">
             {loadError ? "Could not load this unit." : "No content yet for this unit."}
@@ -728,20 +757,38 @@ export function Player(props: PlayerProps) {
         />
       )}
 
-      {content && flow && !graduation && step?.kind === "entryDeck" && flashcards && (
+      {/* Deck mode — LEARN_PLAN.md "Flashcard decks", corrected placement.
+          One deck, no stepper, no graduation. `FlashcardStep`'s own built-in
+          "N/M cards graded" completion screen is the "small done-moment" —
+          its advance button (`onAdvance`) closes the Player directly instead
+          of moving to a next step. */}
+      {mode === "deck" && content && flashcards && deckKind === "entry" && (
         <FlashcardStep
-          key="entry-deck"
+          key="deck-entry"
           content={content}
           cards={flashcards.entry}
           deckKind="entry"
           header="Kend sætningerne"
           solvedCardIds={solvedDrillIds}
-          advanceLabel={advanceLabel}
-          advanceDisabled={nextIsLockedTest}
-          advanceHint={advanceHint}
+          advanceLabel="Færdig →"
           onGrade={(card, grade) => handleCardGrade(card, grade, ENTRY_DECK_WEIGHT)}
           onCheckAnswered={(card, correct) => handleCardCheckAnswered(card, correct, ENTRY_DECK_WEIGHT)}
-          onAdvance={() => goToStep(stepIdx + 1)}
+          onAdvance={onClose}
+        />
+      )}
+
+      {mode === "deck" && content && flashcards && deckKind === "exit" && (
+        <FlashcardStep
+          key="deck-exit"
+          content={content}
+          cards={flashcards.exit}
+          deckKind="exit"
+          header="Sig og anvend dem"
+          solvedCardIds={solvedDrillIds}
+          advanceLabel="Færdig →"
+          onGrade={(card, grade) => handleCardGrade(card, grade, EXIT_DECK_WEIGHT)}
+          onCheckAnswered={(card, correct) => handleCardCheckAnswered(card, correct, EXIT_DECK_WEIGHT)}
+          onAdvance={onClose}
         />
       )}
 
@@ -772,23 +819,6 @@ export function Player(props: PlayerProps) {
           unlockRatio={unlockRatio}
           onGrade={handleGrade}
           onGoToTest={() => goToStep(stepIdx + 1)}
-        />
-      )}
-
-      {content && flow && !graduation && step?.kind === "exitDeck" && flashcards && (
-        <FlashcardStep
-          key="exit-deck"
-          content={content}
-          cards={flashcards.exit}
-          deckKind="exit"
-          header="Sig og anvend dem"
-          solvedCardIds={solvedDrillIds}
-          advanceLabel={advanceLabel}
-          advanceDisabled={nextIsLockedTest}
-          advanceHint={advanceHint}
-          onGrade={(card, grade) => handleCardGrade(card, grade, EXIT_DECK_WEIGHT)}
-          onCheckAnswered={(card, correct) => handleCardCheckAnswered(card, correct, EXIT_DECK_WEIGHT)}
-          onAdvance={() => goToStep(stepIdx + 1)}
         />
       )}
 

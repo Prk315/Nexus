@@ -171,12 +171,39 @@ groups whose drills are all tiles use `archetype: "tiles"` and may omit
 ### Flashcard decks (schema v1.2 addition)
 
 A unit may carry `flashcards`: two decks of formal-statement cards, anchored
-1:1 to the unit's theory boxes. Placement in the Player flow: `entry` deck =
-the module's FIRST step (before layer 1 — understand: statement shown +
-explained, flip, self-grade, then an understanding-check MCQ); `exit` deck =
-after the rapid round, before the Test (recall + apply: front shows only the
-name, the learner states it from memory and self-grades against the full
-statement; apply cards ask which statement justifies a given step).
+1:1 to the unit's theory boxes.
+
+**Placement (corrected 2026-08-12) — separate path nodes, not Player steps.**
+Decks were first built as steps inside the unit Player (`entry` as the FIRST
+step before layer 1, `exit` after the rapid round before the Test); that
+placement was wrong and has been removed — the unit-mode Player flow is back
+to `layers → rapid round → test`, byte-identical to before flashcards
+existed. Decks are now their own compact path nodes on `PathPanel`'s spine,
+bracketing the unit's row: the **entry** node ("Kend sætningerne") renders
+immediately BEFORE the unit row, the **exit** node ("Sig og anvend dem")
+immediately AFTER it — see `PathPanel.tsx`'s `DeckNode`. Unlock rules live on
+the node, not the unit flow: entry is tappable whenever the unit itself is
+available/in_progress/mastered (same threshold `UnitRow` uses to open the
+Player at all); exit is tappable only once the unit is **mastered** — it
+tests application AFTER the module. Both nodes still render before that
+threshold (dim, non-tappable), previewing what's ahead the way a locked
+future unit row does, rather than staying hidden like a proof reward. A unit
+whose newest content has no `flashcards` key (or an empty entry/exit array)
+gets no deck node at all, independently per deck.
+
+Tapping a deck node opens `Player.tsx`'s lightweight `deckSession` mode — a
+single deck (understand: statement shown + explained, flip, self-grade, then
+an understanding-check MCQ for entry; recall + apply for exit — front shows
+only the name, the learner states it from memory and self-grades against the
+full statement, apply cards ask which statement justifies a given step),
+rendered fullscreen with the unit title + KLADDE badge but no Stepper, no
+test, no graduation ceremony. `FlashcardStep`'s own "N/M cards graded"
+completion screen is the whole "done" moment — its advance button closes the
+Player directly. Grading is unchanged: `applyGrade` + `logAttempt` +
+one-hop blame propagation, exactly as below, weights 0.7 entry / 1.0 exit.
+Node completion (the ✓ swap) reads the same `lr_attempt_log`-backed
+continuity signal (`fetchSolvedDrillIds`) the deck session itself resumes
+from, fetched once per `PathPanel` load across every deck in the course.
 
 ```jsonc
 "flashcards": {

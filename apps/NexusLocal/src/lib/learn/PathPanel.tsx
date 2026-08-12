@@ -66,10 +66,52 @@
  * "§" glyph (never ∴, that reads as proof-specific) with its own amber→fuchsia
  * gradient accent once completed. `proofsByParentUnit` (below) is filtered to
  * `kind: "proof"` so workshop rows never also render as a ∴ side node.
+ *
+ * ── Flashcard deck nodes (LEARN_PLAN.md "Flashcard decks", corrected
+ * placement 2026-08-12) ──────────────────────────────────────────────────
+ *
+ * Decks were built yesterday as steps *inside* the unit Player
+ * (`entryDeck`/`exitDeck`, first/last in the flow). Per explicit correction
+ * they are now their own compact path nodes bracketing a unit's row: the
+ * entry deck ("Kend sætningerne") directly above `UnitRow`, the exit deck
+ * ("Sig og anvend dem") directly below it — see `DeckNode` below. Both open
+ * `Player`'s new `deckSession` mode rather than the full unit Player.
+ *
+ * Presence needs no extra query: `contentByUnit` (populated below, same
+ * `fetchUnitContent` pass §1 already does for the meta line) already carries
+ * the full `UnitContent`, `flashcards` included — a unit whose newest
+ * content has no `flashcards` key, or empty entry/exit arrays, renders no
+ * deck node at all, independently per deck (a unit can have an entry deck
+ * with no exit deck or vice versa, though authoring practice is 1:1 today).
+ *
+ * Unlock rule (mirrors each deck's own gate in `Player.tsx`'s old in-flow
+ * placement, just re-homed to the node's tap target): entry is tappable
+ * whenever the unit itself is available/in_progress/mastered — same
+ * threshold as `UnitRow`'s own `opensPlayer`; exit is tappable only once the
+ * unit is `mastered` (it tests application AFTER the module, not alongside
+ * it). Both nodes still RENDER earlier than that (dashed/dim, not tappable)
+ * so the spine previews what's coming, matching how a locked future unit row
+ * is visible-but-inert rather than hidden — unlike `ProofNode`, which is a
+ * reward and stays absent until earned.
+ *
+ * Completion ("visually complete when every entry/exit card has an
+ * attempt"): one batched `fetchSolvedDrillIds` call over every deck card id
+ * across every unit in the course (`deckSolvedIds` below) — the exact same
+ * continuity signal `Player`'s deckSession/unit modes resume from, just read
+ * here for the checkmark instead of a resume index. One extra round trip for
+ * the whole panel, not one per node.
  */
 
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import { fetchPath, fetchProofContent, fetchProofUnits, fetchUnitContent, setProofProgress, setUnitProgress } from "./api";
+import {
+  fetchPath,
+  fetchProofContent,
+  fetchProofUnits,
+  fetchSolvedDrillIds,
+  fetchUnitContent,
+  setProofProgress,
+  setUnitProgress,
+} from "./api";
 import type { PathUnit, ProofUnitEntry, ProofUnitKind, UnitContent } from "./types";
 import { useCourse } from "./CourseContext";
 import { CourseSwitcher } from "./CourseSwitcher";
@@ -135,6 +177,14 @@ export function PathPanel() {
   // node after a chapter's last unit row, opening `ChallengeSession` scoped
   // to that chapter's code prefix (e.g. "LA 2"). See `ChapterChallengeNode`.
   const [selectedChallengeChapter, setSelectedChallengeChapter] = useState<string | null>(null);
+  // Flashcard-deck node state (see the file-header note above). `deckSession`
+  // mirrors `Player`'s own prop shape so it can be spread straight in.
+  const [selectedDeckSession, setSelectedDeckSession] = useState<{ unitId: number; deck: "entry" | "exit" } | null>(
+    null
+  );
+  // Every deck card id this user has ≥1 `lr_attempt_log` row for, across
+  // every unit in the course — one batched query per load, not per node.
+  const [deckSolvedIds, setDeckSolvedIds] = useState<Set<string>>(new Set());
   const [reloadNonce, setReloadNonce] = useState(0);
   const [railHeightPx, setRailHeightPx] = useState(0);
 
@@ -152,6 +202,7 @@ export function PathPanel() {
     // new course's fetch resolves.
     setPath(null);
     setContentByUnit(new Map());
+    setDeckSolvedIds(new Set());
     (async () => {
       try {
         setError(null);
@@ -184,6 +235,19 @@ export function PathPanel() {
         const proofMap = new Map<number, UnitContent>();
         for (const [id, content] of proofPairs) if (content) proofMap.set(id, content);
         setProofContentByProof(proofMap);
+
+        // Deck-node completion: every entry+exit flashcard id across every
+        // unit just loaded, resolved in one batched `fetchSolvedDrillIds`
+        // call — see the file-header note. Skipped entirely when nothing in
+        // this course has any deck yet.
+        const deckCardIds = Array.from(map.values()).flatMap((c) => [
+          ...(c.flashcards?.entry.map((fc) => fc.id) ?? []),
+          ...(c.flashcards?.exit.map((fc) => fc.id) ?? []),
+        ]);
+        if (deckCardIds.length > 0) {
+          const solved = await fetchSolvedDrillIds(deckCardIds).catch(() => new Set<string>());
+          if (!cancelled) setDeckSolvedIds(solved);
+        }
       } catch (e) {
         if (!cancelled) setError(String(e));
       }
@@ -420,8 +484,23 @@ export function PathPanel() {
                     // mastered — "locked" is absence here, not a visible
                     // state (see the file-header note above).
                     const proofs = status === "mastered" ? (proofsByParentUnit.get(pu.unit.unit_id) ?? []) : [];
+                    // Flashcard-deck nodes — see the file-header note. Entry
+                    // brackets the row above, exit below; either is simply
+                    // absent when its array is empty/missing.
+                    const entryCards = content?.flashcards?.entry ?? [];
+                    const exitCards = content?.flashcards?.exit ?? [];
+                    const unitUnlocked = status === "available" || status === "in_progress" || status === "mastered";
                     return (
                       <div key={pu.unit.unit_id}>
+                        {entryCards.length > 0 && (
+                          <DeckNode
+                            label="Kend sætningerne"
+                            cardCount={entryCards.length}
+                            solvedCount={entryCards.filter((c) => deckSolvedIds.has(c.id)).length}
+                            available={unitUnlocked}
+                            onOpen={() => setSelectedDeckSession({ unitId: pu.unit.unit_id, deck: "entry" })}
+                          />
+                        )}
                         <UnitRow
                           pu={pu}
                           status={status}
@@ -439,6 +518,15 @@ export function PathPanel() {
                             else rowRefs.current.delete(pu.unit.unit_id);
                           }}
                         />
+                        {exitCards.length > 0 && (
+                          <DeckNode
+                            label="Sig og anvend dem"
+                            cardCount={exitCards.length}
+                            solvedCount={exitCards.filter((c) => deckSolvedIds.has(c.id)).length}
+                            available={status === "mastered"}
+                            onOpen={() => setSelectedDeckSession({ unitId: pu.unit.unit_id, deck: "exit" })}
+                          />
+                        )}
                         {proofs.map((entry) => (
                           <ProofNode
                             key={entry.proofUnit.proof_id}
@@ -526,6 +614,16 @@ export function PathPanel() {
 
       {selectedChallengeChapter !== null && (
         <ChallengeSession chapter={selectedChallengeChapter} onClose={() => setSelectedChallengeChapter(null)} />
+      )}
+
+      {selectedDeckSession !== null && (
+        <Player
+          deckSession={selectedDeckSession}
+          onClose={() => {
+            setSelectedDeckSession(null);
+            setReloadNonce((n) => n + 1);
+          }}
+        />
       )}
     </section>
   );
@@ -679,6 +777,88 @@ function UnitRow({
         </div>
       )}
     </div>
+  );
+}
+
+// Deck node visual states — deliberately restrained relative to `STATUS_NODE`
+// above: the disc is smaller (20px vs. 28px) and every tone here is either a
+// dashed outline or a soft tint, never `STATUS_NODE.mastered`'s solid
+// gradient+glow. A deck is a satellite of its unit, not a peer stop on the
+// spine, and the node has to read that way even before you notice the size
+// difference.
+const DECK_NODE_TONE: Record<"locked" | "available" | "complete", { disc: string; text: string; glyph: string }> = {
+  locked: {
+    disc: "bg-transparent ring-1 ring-dashed ring-black/[0.14] text-[#6E6E78]/30",
+    text: "text-[#6E6E78]/35",
+    glyph: "▤",
+  },
+  available: {
+    disc: "bg-white ring-1 ring-black/[0.14] text-[#6E6E78]/70 shadow-[0_1px_3px_rgba(0,0,0,0.04)]",
+    text: "text-[#6E6E78]/80",
+    glyph: "▤",
+  },
+  complete: {
+    disc: "bg-gradient-to-br from-indigo-500/20 to-fuchsia-600/20 ring-1 ring-black/[0.08] text-[#1A1A24]/70",
+    text: "text-[#1A1A24]/70",
+    glyph: "✓",
+  },
+};
+
+/**
+ * A flashcard-deck path node — LEARN_PLAN.md "Flashcard decks", corrected
+ * placement (2026-08-12): decks are their own satellite stops on the spine,
+ * NOT steps inside the unit Player. The entry deck brackets its unit row on
+ * top, the exit deck brackets it on the bottom (see the call site in the
+ * main render loop). Deliberately lighter than `UnitRow` — a 20px disc vs.
+ * 28px, 11px type vs. 14/15px, muted tone even once tappable — these are
+ * satellites of the unit, not another peer stop like a proof/checkpoint/
+ * workshop node. The "▤" glyph is unique in the node vocabulary (◆/◇/✓ =
+ * unit, ∴ = proof, ⚡ = checkpoint, § = workshop) so a deck reads as "a stack
+ * of cards" at a glance, swapping to the shared "✓" done language once every
+ * card in the deck has an attempt. `available` (and therefore tappable) is
+ * resolved by the caller: entry whenever the unit itself is
+ * available/in_progress/mastered, exit only once the unit is mastered — both
+ * still RENDER before that (dim, inert), previewing what's ahead rather than
+ * hiding like a proof reward does.
+ */
+function DeckNode({
+  label,
+  cardCount,
+  solvedCount,
+  available,
+  onOpen,
+}: {
+  label: string;
+  cardCount: number;
+  solvedCount: number;
+  available: boolean;
+  onOpen: () => void;
+}) {
+  const complete = cardCount > 0 && solvedCount >= cardCount;
+  const state = complete ? "complete" : available ? "available" : "locked";
+  const tone = DECK_NODE_TONE[state];
+  const clickable = available;
+  return (
+    <button
+      type="button"
+      disabled={!clickable}
+      onClick={clickable ? onOpen : undefined}
+      className={`group flex w-full items-center gap-2.5 rounded-lg px-1 py-1 text-left transition-colors ${
+        clickable ? "active:bg-black/[0.03] md:hover:bg-black/[0.02]" : "cursor-default"
+      }`}
+    >
+      <span
+        className={`relative z-10 grid h-5 w-5 shrink-0 place-items-center rounded-full text-[9px] ${tone.disc}`}
+      >
+        {tone.glyph}
+      </span>
+      <span className={`min-w-0 flex-1 truncate text-[11px] ${tone.text}`}>{label}</span>
+      {cardCount > 0 && (
+        <span className="shrink-0 text-[9px] tabular-nums text-[#6E6E78]/40">
+          {solvedCount}/{cardCount}
+        </span>
+      )}
+    </button>
   );
 }
 
