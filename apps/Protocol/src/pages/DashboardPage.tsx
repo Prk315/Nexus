@@ -17,8 +17,9 @@ import { fetchHabits, fetchHabitCompletions } from "../store/slices/habitsSlice"
 import {
   fetchFoods, fetchMeals, fetchMealItems, fetchMealPlanEntries, fetchNutritionGoalItems,
 } from "../store/slices/mealPlannerSlice";
+import { fetchSupplements, fetchSupplementLogs } from "../store/slices/supplementsSlice";
 import { formatMinutes, CARD_STYLE, isoDate } from "../lib/uiHelpers";
-import { entryNutrition, sumNutrition, type NutrientTotals } from "../lib/mealNutrition";
+import { entryNutrition, sumNutrition, scaleNutrients, type NutrientTotals } from "../lib/mealNutrition";
 import { calorieConfigFrom } from "../lib/nutritionScore";
 import { StatTile } from "../components/shared/StatTile";
 import MuscleMap from "../components/workouts/MuscleMap";
@@ -80,6 +81,8 @@ export default function DashboardPage() {
   const mealItemsById = useAppSelector((s) => s.mealPlanner.mealItems);
   const planEntries = useAppSelector((s) => s.mealPlanner.planEntries);
   const goalItems = useAppSelector((s) => s.mealPlanner.goalItems);
+  const supplements = useAppSelector((s) => s.supplements.items);
+  const supplementLogs = useAppSelector((s) => s.supplements.logs);
   const { exerciseSets } = useExerciseSets();
 
   useEffect(() => {
@@ -93,6 +96,8 @@ export default function DashboardPage() {
     dispatch(fetchFoods());
     dispatch(fetchMeals());
     dispatch(fetchNutritionGoalItems());
+    dispatch(fetchSupplements());
+    dispatch(fetchSupplementLogs(subDays(NUTRITION_HISTORY_DAYS)));
     dispatch(fetchMealPlanEntries({ start: subDays(NUTRITION_HISTORY_DAYS), end: isoDate(new Date()) }));
   }, [dispatch]);
 
@@ -120,6 +125,17 @@ export default function DashboardPage() {
     if (!n) continue;
     const prev = nutritionTotalsByDate.get(entry.date);
     nutritionTotalsByDate.set(entry.date, prev ? sumNutrition([prev, n]) : n);
+  }
+
+  // Supplements taken on a date add their absolute per-dose nutrients to that
+  // day's totals, so they count toward the weekly nutrition score too.
+  const supplementsById = new Map(supplements.map((s) => [s.id, s]));
+  for (const log of supplementLogs) {
+    const supp = supplementsById.get(log.supplement_id);
+    if (!supp) continue;
+    const suppN = scaleNutrients(supp, 1);
+    const prev = nutritionTotalsByDate.get(log.date);
+    nutritionTotalsByDate.set(log.date, prev ? sumNutrition([prev, suppN]) : suppN);
   }
 
   // Oura active calories per date feed the dynamic calorie target.
