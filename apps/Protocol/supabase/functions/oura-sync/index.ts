@@ -263,7 +263,7 @@ async function syncUser(
   start.setDate(end.getDate() - windowDays);
   const params = { start_date: isoDate(start), end_date: isoDate(end) };
 
-  const [dailySleep, sleepPeriods, dailyReadiness, dailySpo2, dailyStress, heartRateSamples, dailyResilience, dailyCardioAge, dailyActivity, workouts] = await Promise.all([
+  const [dailySleep, sleepPeriods, dailyReadiness, dailySpo2, dailyStress, heartRateSamples, dailyResilience, dailyCardioAge, dailyActivity, sleepTimeRows, workouts] = await Promise.all([
     ouraGet(accessToken, "daily_sleep", params),
     ouraGet(accessToken, "sleep", params),
     ouraGet(accessToken, "daily_readiness", params),
@@ -273,6 +273,7 @@ async function syncUser(
     ouraGet(accessToken, "daily_resilience", params),
     ouraGet(accessToken, "daily_cardiovascular_age", params),
     ouraGet(accessToken, "daily_activity", params),
+    ouraGet(accessToken, "sleep_time", params),
     ouraGet(accessToken, "workout", params),
   ]);
 
@@ -287,6 +288,7 @@ async function syncUser(
   const resilienceByDay = new Map(dailyResilience.map((d) => [d.day as string, d]));
   const cardioAgeByDay = new Map(dailyCardioAge.map((d) => [d.day as string, d]));
   const activityByDay = new Map(dailyActivity.map((d) => [d.day as string, d]));
+  const sleepTimeByDay = new Map(sleepTimeRows.map((d) => [d.day as string, d]));
 
   const days = new Set([
     ...sleepByDay.keys(), ...periodByDay.keys(), ...readinessByDay.keys(), ...spo2ByDay.keys(),
@@ -307,6 +309,7 @@ async function syncUser(
     const resilience = resilienceByDay.get(day) as Record<string, any> | undefined;
     const cardioAge = cardioAgeByDay.get(day) as Record<string, any> | undefined;
     const activity = activityByDay.get(day) as Record<string, any> | undefined;
+    const st = sleepTimeByDay.get(day) as Record<string, any> | undefined;
 
     if ((ds || period) && settings.sleep_source === "oura") {
       const durationMin = period?.total_sleep_duration != null
@@ -328,6 +331,19 @@ async function syncUser(
           temperature_deviation: readiness?.temperature_deviation ?? null,
           bedtime_start: period?.bedtime_start ?? null,
           bedtime_end: period?.bedtime_end ?? null,
+          // daily_sleep contributors (Oura's own 0–100 subscores).
+          contributor_deep_sleep: ds?.contributors?.deep_sleep ?? null,
+          contributor_efficiency: ds?.contributors?.efficiency ?? null,
+          contributor_latency: ds?.contributors?.latency ?? null,
+          contributor_rem_sleep: ds?.contributors?.rem_sleep ?? null,
+          contributor_restfulness: ds?.contributors?.restfulness ?? null,
+          contributor_timing: ds?.contributors?.timing ?? null,
+          contributor_total_sleep: ds?.contributors?.total_sleep ?? null,
+          // sleep_time endpoint — ideal bedtime window (seconds from midnight) + advice.
+          optimal_bedtime_start: st?.optimal_bedtime?.start_offset ?? null,
+          optimal_bedtime_end: st?.optimal_bedtime?.end_offset ?? null,
+          bedtime_recommendation: st?.recommendation ?? null,
+          sleep_time_status: st?.status ?? null,
           notes: "Synced from Oura",
         });
         sleepDays++;

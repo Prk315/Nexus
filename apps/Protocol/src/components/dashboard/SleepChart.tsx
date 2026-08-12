@@ -219,6 +219,25 @@ export default function SleepChart({
       ].filter(Boolean).join("  →  ")
     : null;
 
+  // Oura sleep_time — ideal bedtime window (seconds from midnight) + advice.
+  const fmtOffset = (sec: number) => {
+    const s = ((Math.round(sec) % 86400) + 86400) % 86400;
+    return `${String(Math.floor(s / 3600)).padStart(2, "0")}:${String(Math.floor((s % 3600) / 60)).padStart(2, "0")}`;
+  };
+  const idealBedtime = ls?.optimal_bedtime_start != null
+    ? `Ideal bedtime ${fmtOffset(ls.optimal_bedtime_start)}${ls.optimal_bedtime_end != null ? `–${fmtOffset(ls.optimal_bedtime_end)}` : ""}${ls.bedtime_recommendation && ls.bedtime_recommendation !== "ideal_bedtime_available" ? ` · ${ls.bedtime_recommendation.replace(/_/g, " ")}` : ""}`
+    : null;
+
+  // Oura's own daily_sleep contributors (0–100) — an authoritative breakdown.
+  const contributors = ls
+    ? ([
+        ["Efficiency", ls.contributor_efficiency],
+        ["Restfulness", ls.contributor_restfulness],
+        ["Timing", ls.contributor_timing],
+        ["Latency", ls.contributor_latency],
+      ] as const).filter(([, v]) => v != null) as [string, number][]
+    : [];
+
   const stageRing = (key: "deep" | "rem" | "light") => (
     <RingStat key={key} label={METRIC[key].label} value={latest.byKey[key]?.value ?? "—"} pct={latest.byKey[key]?.pct ?? null} color={METRIC[key].color} />
   );
@@ -307,6 +326,14 @@ export default function SleepChart({
           {extras.length > 0 && (
             <div style={{ textAlign: "center", fontSize: 11, color: "var(--text-muted)", marginTop: 6 }}>{extras.join(" · ")}</div>
           )}
+          {idealBedtime && (
+            <div style={{ textAlign: "center", fontSize: 11, color: "var(--accent)", marginTop: 6, fontWeight: 600 }}>{idealBedtime}</div>
+          )}
+          {contributors.length > 0 && (
+            <div style={{ display: "flex", flexWrap: "wrap", gap: 10, justifyContent: "center", marginTop: 6 }}>
+              {contributors.map(([label, v]) => <ContributorPill key={label} label={label} value={v} />)}
+            </div>
+          )}
         </>
       ) : (
         <div style={{ display: "flex", gap: 24, alignItems: "stretch" }}>
@@ -318,6 +345,14 @@ export default function SleepChart({
             )}
             {extras.length > 0 && (
               <div style={{ fontSize: 11, color: "var(--text-muted)", lineHeight: 1.6, marginTop: 2 }}>{extras.join(" · ")}</div>
+            )}
+            {idealBedtime && (
+              <div style={{ fontSize: 11, color: "var(--accent)", lineHeight: 1.5, marginTop: 4, fontWeight: 600 }}>{idealBedtime}</div>
+            )}
+            {contributors.length > 0 && (
+              <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginTop: 4 }}>
+                {contributors.map(([label, v]) => <ContributorPill key={label} label={label} value={v} />)}
+              </div>
             )}
           </div>
         </div>
@@ -376,6 +411,17 @@ function RingMini({ label, pct, color }: { label: string; pct: number | null; co
       <Ring pct={pct} color={color} size={36} stroke={4} />
       <span style={{ fontSize: 9, color: "var(--text-muted)" }}>{label}</span>
     </div>
+  );
+}
+
+/** A small pill for an Oura daily_sleep contributor (0–100), coloured by band. */
+function ContributorPill({ label, value }: { label: string; value: number }) {
+  const color = value >= 70 ? "var(--success)" : value >= 40 ? "var(--warning)" : "var(--danger)";
+  return (
+    <span style={{ display: "inline-flex", alignItems: "center", gap: 4, fontSize: 10, color: "var(--text-muted)" }}>
+      <span style={{ width: 6, height: 6, borderRadius: "50%", background: color, flexShrink: 0 }} />
+      {label} {value}
+    </span>
   );
 }
 

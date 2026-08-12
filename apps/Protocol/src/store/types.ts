@@ -18,6 +18,20 @@ export interface SleepEntry {
   temperature_deviation: number | null;
   bedtime_start: string | null;
   bedtime_end: string | null;
+  /** Oura daily_sleep contributors — its own 0–100 subscores. */
+  contributor_deep_sleep: number | null;
+  contributor_efficiency: number | null;
+  contributor_latency: number | null;
+  contributor_rem_sleep: number | null;
+  contributor_restfulness: number | null;
+  contributor_timing: number | null;
+  contributor_total_sleep: number | null;
+  /** Oura sleep_time endpoint — ideal bedtime window (seconds from midnight; may
+   *  be negative = before midnight) + recommendation/status enums. */
+  optimal_bedtime_start: number | null;
+  optimal_bedtime_end: number | null;
+  bedtime_recommendation: string | null;
+  sleep_time_status: string | null;
   notes: string | null;
   created_at: string;
 }
