@@ -223,6 +223,10 @@ interface Props {
 interface Point {
   label: string;
   overall: number;
+  /** Same value as `overall`, under a distinct key so the fill Area and the
+   *  overall Line don't share a dataKey — recharts collapses same-key
+   *  graphical series, which was hiding the overall line. */
+  overallArea: number;
   sleep: number;
   nutrition: number;
   body: number;
@@ -259,8 +263,8 @@ export default function ProtocolChargeChart({
       const b = avg("body");
       const w = avg("workout");
       const r = avg("running");
-      return { label, sleep: s, nutrition: n, body: b, workout: w, running: r,
-               overall: Math.round((s + n + b + w + r) / 5) };
+      const overall = Math.round((s + n + b + w + r) / 5);
+      return { label, sleep: s, nutrition: n, body: b, workout: w, running: r, overall, overallArea: overall };
     }
 
     const today = new Date();
@@ -408,7 +412,7 @@ export default function ProtocolChargeChart({
                   color: COLORS[key],
                 }))}
               />
-              <Area type="monotone" dataKey="overall" name="overall" stroke="none" fill="url(#overallGrad)" isAnimationActive={false} legendType="none" />
+              <Area type="monotone" dataKey="overallArea" name="overallArea" stroke="none" fill="url(#overallGrad)" isAnimationActive={false} legendType="none" tooltipType="none" />
               <Line type="monotone" dataKey="sleep"     name="sleep"     stroke={COLORS.sleep}     strokeWidth={2} dot={false} />
               <Line type="monotone" dataKey="nutrition" name="nutrition" stroke={COLORS.nutrition} strokeWidth={2} dot={false} />
               <Line type="monotone" dataKey="body"      name="body"      stroke={COLORS.body}      strokeWidth={2} dot={false} />
