@@ -18,6 +18,7 @@ import { GraphFilterPanel, GraphFilters, DEFAULT_GRAPH_FILTERS } from "./compone
 import { drawNode, resolveNodeColor } from "./canvas/drawNode";
 import { TagsPanel } from "./components/TagsPanel";
 import { EditorPane, EditorPaneHandle } from "./components/EditorPane";
+import { useConfirm } from "./components/ConfirmDialog";
 import "./App.css";
 
 // Some WebViews / browsers (hardware accel off, sandboxed GPU) can't create a
@@ -59,6 +60,8 @@ function App() {
   useNexusRegistration("Vault");
   const { user, signOut } = useNexusAuth();
   const { graph, graphData, savePositions, loadGraph, createNode, deleteNode, addEdge, removeEdge, addTag, removeTag, setTagColor, createTag, renameTag, deleteTagGlobal } = useGraph();
+
+  const { confirm, dialog: confirmDialog } = useConfirm();
 
   const [newName, setNewName] = useState("");
   const [newKind, setNewKind] = useState("Note");
@@ -481,9 +484,49 @@ function App() {
     }
   }
 
-  async function handleDeleteNode(id: string) {
+  // Every node deletion in the app funnels through here — the tree row ×, the
+  // sidebar/folder graph Delete button, the full-graph Delete button, and
+  // EditorPane (which receives this as its `deleteNode` prop). Gating it here
+  // means there is exactly one place a delete can start without a confirmation.
+  async function handleDeleteNode(id: string): Promise<boolean> {
+    const node = graph.nodes[id];
+    if (!node) return false;
+    const childCount  = (graph.edges[id] ?? []).length;
+    const parentCount = (graph.back_edges[id] ?? []).length;
+
+    const details = [
+      `Kind: ${node.kind.type}`,
+      "Its content — notes, annotations, highlights, journal pages — is deleted with it.",
+      ...(childCount  ? [`${childCount} child node${childCount === 1 ? "" : "s"} will be kept, but unlinked from this node.`] : []),
+      ...(parentCount ? [`${parentCount} link${parentCount === 1 ? "" : "s"} from parent node${parentCount === 1 ? "" : "s"} will be removed.`] : []),
+      "This cannot be undone.",
+    ];
+
+    const ok = await confirm({
+      title: `Delete "${node.name}"?`,
+      details,
+      confirmLabel: "Delete node",
+    });
+    if (!ok) return false;
+
     await deleteNode(id);
     Object.values(paneRefs.current).forEach(ref => ref.current?.closeTabIfOpen(id));
+    return true;
+  }
+
+  async function handleDeleteTagGlobal(tag: string) {
+    const used = Object.values(graph.nodes).filter(n => n.tags.includes(tag)).length;
+    const ok = await confirm({
+      title: `Delete tag "${tag}"?`,
+      details: [
+        used ? `Removed from ${used} node${used === 1 ? "" : "s"}.` : "Not currently on any node.",
+        "The nodes themselves are kept.",
+        "This cannot be undone.",
+      ],
+      confirmLabel: "Delete tag",
+    });
+    if (!ok) return;
+    await deleteTagGlobal(tag);
   }
 
   async function handleGraphNodeClick(id: string) {
@@ -948,7 +991,7 @@ function App() {
             graph={graph}
             onCreateTag={createTag}
             onRenameTag={renameTag}
-            onDeleteTag={deleteTagGlobal}
+            onDeleteTag={handleDeleteTagGlobal}
             onSetTagColor={setTagColor}
           />
         ) : (
@@ -1042,6 +1085,7 @@ function App() {
         onSaved={() => { setCalEditor(null); void refreshCalendar(); }}
       />
     )}
+    {confirmDialog}
     </div>
   );
 }

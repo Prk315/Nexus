@@ -1703,7 +1703,7 @@ export function CanvasEditor({ content, onChange, nodeId }: Props) {
   } | null>(null);
   const dragDrawShape    = useRef<{
     id: string; mx: number; my: number; ox: number; oy: number;
-    // for polygon: original points snapshot
+    // for polygon / ink stroke: original points snapshot
     opts?: { x: number; y: number }[];
   } | null>(null);
   const preDrawSnapshot  = useRef<CanvasData | null>(null);
@@ -2211,6 +2211,12 @@ export function CanvasEditor({ content, onChange, nodeId }: Props) {
     e.stopPropagation();
     preDrawSnapshot.current = snapshotData();
     setSelectedId(ib.id); setSelectedIds(new Set([ib.id])); setSelectedArrowId(null);
+    // Strokes no longer carry a block wrapper with a drag header, so the stroke
+    // itself is the drag handle — same path polygons use.
+    dragDrawShape.current = {
+      id: ib.id, mx: e.clientX, my: e.clientY, ox: ib.x, oy: ib.y,
+      opts: ib.points.map(p => ({ ...p })),
+    };
   }
   function onDrawShapePointerDown(e: React.PointerEvent, b: DrawEllipseBlock | DrawPolygonBlock) {
     e.stopPropagation();
@@ -2364,7 +2370,7 @@ export function CanvasEditor({ content, onChange, nodeId }: Props) {
         ...d,
         blocks: d.blocks.map(b => {
           if (b.id !== id) return b;
-          if (b.type === "draw_polygon" && opts) {
+          if ((b.type === "draw_polygon" || b.type === "ink_stroke") && opts) {
             return { ...b, x: ox + dx, y: oy + dy, points: opts.map(p => ({ x: p.x + dx, y: p.y + dy })) } as CanvasBlock;
           }
           return { ...b, x: ox + dx, y: oy + dy } as CanvasBlock;
@@ -2873,6 +2879,23 @@ export function CanvasEditor({ content, onChange, nodeId }: Props) {
   const drawPolygonBlocks = useMemo(() => data.blocks.filter((b): b is DrawPolygonBlock => b.type === "draw_polygon"), [data.blocks]);
   const inkStrokeBlocks   = useMemo(() => data.blocks.filter((b): b is InkStrokeBlock   => b.type === "ink_stroke"),   [data.blocks]);
 
+  // Smoothing every stroke's path is O(all points). While a pen stroke is in
+  // flight the live preview sets state on each pointermove, so without this
+  // cache the whole page's ink is re-smoothed dozens of times a second — which
+  // is what makes drawing feel sticky on iPad once a canvas has real ink on it.
+  const inkPathCache = useRef(new Map<string, { points: InkStrokeBlock["points"]; d: string }>());
+  const inkStrokePaths = useMemo(() => {
+    const next = new Map<string, { points: InkStrokeBlock["points"]; d: string }>();
+    const out = inkStrokeBlocks.map(ib => {
+      const prev = inkPathCache.current.get(ib.id);
+      const entry = prev && prev.points === ib.points ? prev : { points: ib.points, d: pointsToSmoothPath(ib.points) };
+      next.set(ib.id, entry);
+      return { block: ib, d: entry.d };
+    });
+    inkPathCache.current = next;
+    return out;
+  }, [inkStrokeBlocks]);
+
   // ── Memoized arrow JSX — avoids bezier recompute on snap-guide / hover changes ─
   const arrowElements = useMemo(() => data.arrows.map(arrow => {
     const fb = data.blocks.find(b => b.id === arrow.fromId);
@@ -2940,7 +2963,13 @@ export function CanvasEditor({ content, onChange, nodeId }: Props) {
 
   // ── Memoized block JSX — viewport.x/y excluded so panning skips reconciliation ─
   const blockElements = useMemo(() => data.blocks.map(block => {
-    if (block.type === "divider" || block.type === "draw_arrow" || block.type === "draw_ellipse" || block.type === "draw_polygon") return null;
+    // Vector-ish blocks draw themselves in the SVG layer below. They must NOT
+    // also get a .canvas-block wrapper: that is an opaque box the size of the
+    // shape's bounding rect with a ≥32px header on top of it, which sits at
+    // z-index 2 and hides the very stroke it belongs to. ink_stroke was missing
+    // from this list, so every pen stroke came out buried under a white card.
+    if (block.type === "divider" || block.type === "draw_arrow" || block.type === "draw_ellipse"
+      || block.type === "draw_polygon" || block.type === "ink_stroke") return null;
     const selected   = selectedId === block.id || (selectedIds.has(block.id) && selectedIds.size === 1);
     const inMultiSel = selectedIds.has(block.id) && selectedIds.size > 1;
 
@@ -3488,15 +3517,16 @@ export function CanvasEditor({ content, onChange, nodeId }: Props) {
           })}
 
           {/* ── Ink strokes ──────────────────────────────────────────── */}
-          {inkStrokeBlocks.map(ib => {
+          {inkStrokePaths.map(({ block: ib, d }) => {
             const sel = selectedId === ib.id || selectedIds.has(ib.id);
-            const d = pointsToSmoothPath(ib.points);
             if (!d) return null;
             return (
               <g key={ib.id}>
+                {/* Hit area is sized in screen pixels (divided by zoom) so a
+                    finger can still grab a thin stroke at low zoom on iPad. */}
                 <path d={d} fill="none" stroke="transparent"
-                  strokeWidth={Math.max(ib.strokeWidth + 8, 12)}
-                  pointerEvents="stroke" style={{ cursor: "default" }}
+                  strokeWidth={Math.max(ib.strokeWidth + 8, 22 / zoom)}
+                  pointerEvents="stroke" style={{ cursor: "move" }}
                   onPointerDown={e => onInkStrokePointerDown(e, ib)} />
                 <path d={d} fill="none" stroke={ib.color}
                   strokeWidth={sel ? ib.strokeWidth + 1 : ib.strokeWidth}
