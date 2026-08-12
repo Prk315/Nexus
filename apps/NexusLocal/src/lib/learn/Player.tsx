@@ -73,6 +73,8 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import type {
   ContentStatus,
   Drill,
+  Flashcard,
+  FlashcardDecks,
   Grade,
   Lens,
   LrMemoryState,
@@ -100,32 +102,61 @@ import { deriveLayers } from "./layers";
 import { applyGrade, defaultMemoryState, seedGraduationHeat } from "./memory";
 import { LayerStep } from "./player/LayerStep";
 import { FinalRound } from "./player/FinalRound";
+import { FlashcardStep } from "./player/FlashcardStep";
 import { TestStep } from "./player/TestStep";
 import { Graduation } from "./player/Graduation";
 import { Stepper, type StepSegment } from "./player/Stepper";
 import { FEEDBACK, PLAYER_STYLE, READING_COL } from "./player/tokens";
 
 type Step =
+  | { kind: "entryDeck" }
   | { kind: "layer"; layerIdx: number }
   | { kind: "final" }
+  | { kind: "exitDeck" }
   | { kind: "test" };
 
-/** [layer 1 … layer N, rapid round (if any), test]. */
-function buildSteps(flow: UnitFlow): Step[] {
-  const steps: Step[] = flow.layers.map((_, layerIdx) => ({ kind: "layer" as const, layerIdx }));
+// Flashcard grading weights — LEARN_PLAN.md "Flashcard decks": "entry decks
+// at weight 0.7, exit decks at weight 1.0 (recall-from-memory is the
+// strongest evidence)".
+const ENTRY_DECK_WEIGHT = 0.7;
+const EXIT_DECK_WEIGHT = 1.0;
+
+/**
+ * [entry deck (if any), layer 1 … layer N, rapid round (if any),
+ *  exit deck (if any), test].
+ *
+ * A unit with no `content.flashcards` (or an empty entry/exit array) never
+ * pushes the corresponding deck step — the sequence is then byte-identical
+ * to the pre-flashcard flow, per LEARN_PLAN.md: "Units without `flashcards`
+ * flow exactly as before".
+ */
+function buildSteps(flow: UnitFlow, flashcards: FlashcardDecks | undefined): Step[] {
+  const steps: Step[] = [];
+  if (flashcards && flashcards.entry.length > 0) steps.push({ kind: "entryDeck" });
+  flow.layers.forEach((_, layerIdx) => steps.push({ kind: "layer", layerIdx }));
   if (flow.finalDrills.length > 0) steps.push({ kind: "final" });
+  if (flashcards && flashcards.exit.length > 0) steps.push({ kind: "exitDeck" });
   steps.push({ kind: "test" });
   return steps;
 }
 
-/** First step that still owes work: earliest layer with an unsolved drill. */
-function resumeIndex(steps: Step[], flow: UnitFlow, solved: Set<string>): number {
+/** First step that still owes work: earliest layer/deck with an unsolved item. */
+function resumeIndex(
+  steps: Step[],
+  flow: UnitFlow,
+  flashcards: FlashcardDecks | undefined,
+  solved: Set<string>
+): number {
   for (let i = 0; i < steps.length; i++) {
     const s = steps[i];
-    if (s.kind === "layer") {
+    if (s.kind === "entryDeck") {
+      if ((flashcards?.entry ?? []).some((c) => !solved.has(c.id))) return i;
+    } else if (s.kind === "layer") {
       if (flow.layers[s.layerIdx].drills.some((d) => !solved.has(d.id))) return i;
     } else if (s.kind === "final") {
       if (flow.finalDrills.some((d) => !solved.has(d.id))) return i;
+    } else if (s.kind === "exitDeck") {
+      if ((flashcards?.exit ?? []).some((c) => !solved.has(c.id))) return i;
     }
   }
   // Everything solved — land on the test.
@@ -133,9 +164,19 @@ function resumeIndex(steps: Step[], flow: UnitFlow, solved: Set<string>): number
 }
 
 function stepLabel(step: Step): string {
+  if (step.kind === "entryDeck") return "Entry cards";
   if (step.kind === "layer") return `Layer ${step.layerIdx + 1}`;
   if (step.kind === "final") return "Rapid round";
+  if (step.kind === "exitDeck") return "Exit cards";
   return "Test";
+}
+
+/** Resolves a flashcard's lens, inheriting the anchored theory box's own
+ * `perspective` when the card carries `lens: null` (LEARN_PLAN.md's schema
+ * comment). Shared by grading (`handleCardGrade`) and the graduation
+ * ceremony's lens payoff (`exercisedLenses`) so both agree on the same lens. */
+function resolveCardLens(content: UnitContent, card: Flashcard): Lens | null {
+  return card.lens ?? content.theory.find((t) => t.concept_id === card.concept_id)?.perspective ?? null;
 }
 
 // Normalized shape both `LrUnitContentRow` and `LrProofContentRow` satisfy —
@@ -188,9 +229,13 @@ export function Player(props: PlayerProps) {
   }, []);
 
   const content = row?.content ?? null;
+  // Absent on every unit authored before schema v1.2 — every consumer below
+  // treats `undefined` and `{entry:[],exit:[]}` identically (no deck step,
+  // no card ids), which is what keeps a pre-flashcard unit's flow untouched.
+  const flashcards = content?.flashcards;
 
   const flow = useMemo(() => (content ? deriveLayers(content) : null), [content]);
-  const steps = useMemo(() => (flow ? buildSteps(flow) : []), [flow]);
+  const steps = useMemo(() => (flow ? buildSteps(flow, flashcards) : []), [flow, flashcards]);
 
   const allConceptIds = useMemo(() => {
     if (!content) return [];
@@ -204,6 +249,20 @@ export function Player(props: PlayerProps) {
     if (!content) return [];
     return content.practice.flatMap((g) => g.drills.map((d) => d.id));
   }, [content]);
+
+  // Flashcard ids, separate from `allDrillIds` on purpose: the test's
+  // `unlock_ratio` gate (`solvedCount`/`totalDrills` below) must stay
+  // drill-only — LEARN_PLAN.md "Exit-deck completion counts toward nothing
+  // test-gating related". Used only for continuity (resuming into the right
+  // deck/card) and the Stepper's per-deck solved counts.
+  const allCardIds = useMemo(() => {
+    if (!flashcards) return [];
+    return [...flashcards.entry.map((c) => c.id), ...flashcards.exit.map((c) => c.id)];
+  }, [flashcards]);
+
+  // The union `fetchSolvedDrillIds`/continuity resume over — drills AND
+  // flashcards share one `lr_attempt_log`-backed "solved" set.
+  const continuityIds = useMemo(() => [...allDrillIds, ...allCardIds], [allDrillIds, allCardIds]);
 
   useEffect(() => {
     let alive = true;
@@ -245,7 +304,7 @@ export function Player(props: PlayerProps) {
   // rather than opening it.
   useEffect(() => {
     if (!flow || steps.length === 0 || resumedRef.current) return;
-    if (allDrillIds.length === 0) {
+    if (continuityIds.length === 0) {
       resumedRef.current = true;
       return;
     }
@@ -255,17 +314,17 @@ export function Player(props: PlayerProps) {
     // the ref blocks the retry — i.e. resume would silently never happen in
     // dev. A late `setState` after unmount is a harmless no-op in React 18.
     resumedRef.current = true;
-    fetchSolvedDrillIds(allDrillIds)
+    fetchSolvedDrillIds(continuityIds)
       .then((solved) => {
         if (solved.size === 0) return;
         setSolvedDrillIds((prev) => new Set([...prev, ...solved]));
-        const idx = resumeIndex(steps, flow, solved);
+        const idx = resumeIndex(steps, flow, flashcards, solved);
         setStepIdx(idx);
         setMaxVisited((m) => Math.max(m, idx));
       })
       .catch((e) => console.error("[learn] fetchSolvedDrillIds failed", e));
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [flow, steps.length, allDrillIds.join(",")]);
+  }, [flow, steps.length, continuityIds.join(","), flashcards]);
 
   const totalDrills = flow?.totalDrills ?? 0;
   const solvedCount = allDrillIds.filter((id) => solvedDrillIds.has(id)).length;
@@ -306,6 +365,46 @@ export function Player(props: PlayerProps) {
     });
   }
 
+  /**
+   * Flashcard grading (LEARN_PLAN.md "Flashcard decks"): identical
+   * mechanics to `handleGrade` above — `applyGrade` + `upsertMemory` +
+   * `logAttempt` + one-hop blame propagation, fire-and-forget — but for a
+   * single concept (a card is anchored to exactly one theory box) at the
+   * deck's own weight, and with the lens resolved from the card itself
+   * (inheriting the theory box's perspective when the card carries none).
+   * `FlashcardStep`'s understanding/apply-check MCQ reuses this same path:
+   * "MCQ correctness ALSO logs an attempt at the same weight, grade 2
+   * correct / 1 wrong" — `handleCardCheckAnswered` below just maps
+   * correctness to that grade and calls straight through.
+   */
+  function handleCardGrade(card: Flashcard, grade: Grade, weight: number) {
+    if (!content) return;
+    const lens = resolveCardLens(content, card);
+    setMemoryCache((prev) => {
+      const next = { ...prev };
+      const existing = prev[card.concept_id] ?? defaultMemoryState("default", card.concept_id);
+      const updated = applyGrade(existing, grade, lens, new Date(), weight);
+      next[card.concept_id] = updated;
+      upsertMemory(updated).catch((e) => console.error("[learn] upsertMemory failed", e));
+      return next;
+    });
+    logAttempt({ itemRef: card.id, lens, grade }).catch((e) =>
+      console.error("[learn] logAttempt failed", e)
+    );
+    applyBlamePropagation([card.concept_id], grade, weight).catch((e) =>
+      console.error("[learn] blame propagation failed", e)
+    );
+    setSolvedDrillIds((prev) => {
+      const next = new Set(prev);
+      next.add(card.id);
+      return next;
+    });
+  }
+
+  function handleCardCheckAnswered(card: Flashcard, correct: boolean, weight: number) {
+    handleCardGrade(card, correct ? 2 : 1, weight);
+  }
+
   async function handleTestPass(score: number, total: number) {
     try {
       if (mode === "unit") {
@@ -333,7 +432,7 @@ export function Player(props: PlayerProps) {
 
   function handleTestFail() {
     // Back to the earliest step that still owes drills, not blindly to step 0.
-    if (flow) goToStep(resumeIndex(steps, flow, solvedDrillIds));
+    if (flow) goToStep(resumeIndex(steps, flow, flashcards, solvedDrillIds));
     else goToStep(0);
   }
 
@@ -381,6 +480,20 @@ export function Player(props: PlayerProps) {
       content.theory.forEach((t) => t.perspective && set.add(t.perspective));
       content.practice.forEach((g) => g.drills.forEach((d) => set.add(d.lens)));
       content.test.questions.forEach((q) => set.add(q.lens));
+      // Flashcards contribute real lens exposure too (a card's own lens, or
+      // the theory box it inherits from) — the graduation ceremony's "which
+      // perspectives did this unit actually exercise" payoff should count
+      // them, not just drills/theory/test.
+      if (content.flashcards) {
+        content.flashcards.entry.forEach((c) => {
+          const l = resolveCardLens(content, c);
+          if (l) set.add(l);
+        });
+        content.flashcards.exit.forEach((c) => {
+          const l = resolveCardLens(content, c);
+          if (l) set.add(l);
+        });
+      }
     }
     return set;
   }, [content]);
@@ -395,6 +508,25 @@ export function Player(props: PlayerProps) {
           fillPct: graduation ? 100 : i === stepIdx ? 50 : 0,
           reachable: testUnlocked,
           locked: !testUnlocked,
+        };
+      }
+      if (s.kind === "entryDeck" || s.kind === "exitDeck") {
+        const deck = s.kind === "entryDeck" ? flashcards?.entry ?? [] : flashcards?.exit ?? [];
+        const solved = deck.filter((c) => solvedDrillIds.has(c.id)).length;
+        const fillPct =
+          deck.length > 0
+            ? Math.round((solved / deck.length) * 100)
+            : i < stepIdx
+              ? 100
+              : i === stepIdx
+                ? 60
+                : 0;
+        return {
+          kind: s.kind,
+          label: stepLabel(s),
+          fillPct,
+          reachable: i <= maxVisited + 1,
+          solved: [solved, deck.length],
         };
       }
       const drills = s.kind === "layer" ? flow.layers[s.layerIdx].drills : flow.finalDrills;
@@ -417,7 +549,7 @@ export function Player(props: PlayerProps) {
         solved: [solved, drills.length],
       };
     });
-  }, [flow, steps, stepIdx, maxVisited, solvedDrillIds, testUnlocked, graduation]);
+  }, [flow, steps, stepIdx, maxVisited, solvedDrillIds, testUnlocked, graduation, flashcards]);
 
   // The DB row's own status — never mutated locally. `approveUi` layers the
   // in-flight/just-approved UI on top without waiting on a refetch.
@@ -427,11 +559,15 @@ export function Player(props: PlayerProps) {
   const nextStep: Step | undefined = steps[stepIdx + 1];
   const nextIsLockedTest = nextStep?.kind === "test" && !testUnlocked;
   const advanceLabel = nextStep
-    ? nextStep.kind === "layer"
-      ? `Layer ${nextStep.layerIdx + 1} →`
-      : nextStep.kind === "final"
-        ? "Rapid round →"
-        : "Take the test →"
+    ? nextStep.kind === "entryDeck"
+      ? "Entry cards →"
+      : nextStep.kind === "layer"
+        ? `Layer ${nextStep.layerIdx + 1} →`
+        : nextStep.kind === "final"
+          ? "Rapid round →"
+          : nextStep.kind === "exitDeck"
+            ? "Exit cards →"
+            : "Take the test →"
     : "Take the test →";
   const advanceHint = nextIsLockedTest
     ? `Solve ${remainingToUnlock} more drill${remainingToUnlock === 1 ? "" : "s"} to unlock the test.`
@@ -592,6 +728,23 @@ export function Player(props: PlayerProps) {
         />
       )}
 
+      {content && flow && !graduation && step?.kind === "entryDeck" && flashcards && (
+        <FlashcardStep
+          key="entry-deck"
+          content={content}
+          cards={flashcards.entry}
+          deckKind="entry"
+          header="Kend sætningerne"
+          solvedCardIds={solvedDrillIds}
+          advanceLabel={advanceLabel}
+          advanceDisabled={nextIsLockedTest}
+          advanceHint={advanceHint}
+          onGrade={(card, grade) => handleCardGrade(card, grade, ENTRY_DECK_WEIGHT)}
+          onCheckAnswered={(card, correct) => handleCardCheckAnswered(card, correct, ENTRY_DECK_WEIGHT)}
+          onAdvance={() => goToStep(stepIdx + 1)}
+        />
+      )}
+
       {content && flow && !graduation && step?.kind === "layer" && (
         <LayerStep
           key={`layer-${step.layerIdx}`}
@@ -619,6 +772,23 @@ export function Player(props: PlayerProps) {
           unlockRatio={unlockRatio}
           onGrade={handleGrade}
           onGoToTest={() => goToStep(stepIdx + 1)}
+        />
+      )}
+
+      {content && flow && !graduation && step?.kind === "exitDeck" && flashcards && (
+        <FlashcardStep
+          key="exit-deck"
+          content={content}
+          cards={flashcards.exit}
+          deckKind="exit"
+          header="Sig og anvend dem"
+          solvedCardIds={solvedDrillIds}
+          advanceLabel={advanceLabel}
+          advanceDisabled={nextIsLockedTest}
+          advanceHint={advanceHint}
+          onGrade={(card, grade) => handleCardGrade(card, grade, EXIT_DECK_WEIGHT)}
+          onCheckAnswered={(card, correct) => handleCardCheckAnswered(card, correct, EXIT_DECK_WEIGHT)}
+          onAdvance={() => goToStep(stepIdx + 1)}
         />
       )}
 

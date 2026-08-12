@@ -168,6 +168,46 @@ tile `md` is markdown+KaTeX, kept SHORT (fits a thumb-sized chip). Practice
 groups whose drills are all tiles use `archetype: "tiles"` and may omit
 `master_demo`. Tile drills count toward the test `unlock_ratio` like any drill.
 
+### Flashcard decks (schema v1.2 addition)
+
+A unit may carry `flashcards`: two decks of formal-statement cards, anchored
+1:1 to the unit's theory boxes. Placement in the Player flow: `entry` deck =
+the module's FIRST step (before layer 1 — understand: statement shown +
+explained, flip, self-grade, then an understanding-check MCQ); `exit` deck =
+after the rapid round, before the Test (recall + apply: front shows only the
+name, the learner states it from memory and self-grades against the full
+statement; apply cards ask which statement justifies a given step).
+
+```jsonc
+"flashcards": {
+  "entry": [ {
+    "id": "la_1_u1-fc-e1", "concept_id": "la-…",
+    "lens": "matrix" | null,               // inherit the theory box's perspective
+    "front_md": "Sætning 2.1.10 — regneregler for matrixprodukt",
+    "back_md": "…the FULL formal statement, quoted faithfully from the box…",
+    "note_md": "one-line 'why this matters / how to remember it'",
+    "check": {                              // entry: understanding-check MCQ
+      "prompt_md": "…", "options": [{ "body_md": "…", "correct": true, "why_md": "…" }]
+    }
+  } ],
+  "exit": [ {
+    "id": "la_1_u1-fc-x1", "concept_id": "…", "lens": …,
+    "kind": "recall" | "apply",
+    "front_md": "recall: the NAME only · apply: a concrete situation/step",
+    "back_md": "recall: the full statement · apply: the answer + which statement and why",
+    "check": { … }                          // apply cards: the application MCQ
+  } ]
+}
+```
+
+Rules: every entry card's `back_md` statement must match its theory box's
+`statement_md` in substance (verifier compares); one entry card per formal
+statement (definition/theorem — remarks only if load-bearing); exit deck =
+one recall card per entry card + 1–3 apply cards per unit; ids stable; grading
+feeds the memory model — entry decks at weight 0.7, exit decks at weight 1.0
+(recall-from-memory is the strongest evidence), lens from the card. Units
+without `flashcards` flow exactly as before (fully backward compatible).
+
 **Invariants (enforced by the review gate, inherited from LearnAndRetain):**
 1. Every concept in the unit appears in ≥ 1 theory box AND ≥ 1 drill/test item.
 2. Every computational answer is machine-verified (sympy) before a draft is stored.

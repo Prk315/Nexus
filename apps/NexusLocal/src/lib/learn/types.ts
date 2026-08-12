@@ -160,6 +160,76 @@ export interface UnitContent {
   test: TestSection;
   // Present (as `[]`) on sampled content; absent from LEARN_PLAN.md's sample.
   excluded_concepts?: string[];
+  // Optional (schema v1.2 addition, LEARN_PLAN.md "Flashcard decks") — absent
+  // entirely on every unit authored before this addition, so a unit without
+  // it must flow exactly as before (Player.tsx's step-sequence derivation
+  // checks `content.flashcards?.entry.length` / `.exit.length`, never assumes
+  // the key exists).
+  flashcards?: FlashcardDecks;
+}
+
+// --- Flashcard decks (schema v1.2 addition, LEARN_PLAN.md "Flashcard decks
+// (schema v1.2 addition)") -----------------------------------------------
+//
+// Two decks of formal-statement cards, anchored 1:1 to the unit's theory
+// boxes. Placement in the Player flow (`Player.tsx`'s `buildSteps`, not this
+// file): `entry` deck = the module's FIRST step, before layer 1 (statement
+// shown + explained, flip, self-grade, then an understanding-check MCQ);
+// `exit` deck = after the rapid round, before the Test (recall + apply: front
+// shows only the name, the learner states it from memory and self-grades
+// against the full statement; apply cards ask which statement justifies a
+// given step). Grading feeds the memory model at deck-specific weights
+// (entry 0.7, exit 1.0 — recall-from-memory is the strongest evidence), lens
+// resolved from the card (`lens` itself, or — when null — the anchored
+// theory box's own `perspective`, per the LEARN_PLAN.md sample's comment).
+
+/** A flashcard's understanding/application check — structurally identical to
+ * `TestQuestion`'s own `{prompt_md, options}` shape (LEARN_PLAN.md's sample),
+ * so it reuses `TestOption` rather than inventing a parallel option type. */
+export interface FlashcardCheck {
+  prompt_md: string;
+  options: TestOption[];
+}
+
+export interface EntryFlashcard {
+  id: string;
+  concept_id: string;
+  /** Inherits the anchored theory box's `perspective` when null — resolved by
+   * the Player (`resolveCardLens` in Player.tsx), never duplicated here. */
+  lens: Lens | null;
+  front_md: string;
+  /** The FULL formal statement, quoted faithfully from the theory box. */
+  back_md: string;
+  /** One-line "why this matters / how to remember it". */
+  note_md?: string;
+  /** Understanding-check MCQ — appears after the learner self-grades. */
+  check?: FlashcardCheck;
+}
+
+export type FlashcardKind = "recall" | "apply";
+
+export interface ExitFlashcard {
+  id: string;
+  concept_id: string;
+  lens: Lens | null;
+  kind: FlashcardKind;
+  /** recall: the statement's NAME only · apply: a concrete situation/step. */
+  front_md: string;
+  /** recall: the full statement · apply: the answer + which statement and why. */
+  back_md: string;
+  /** The application MCQ — present mainly on `apply` cards. */
+  check?: FlashcardCheck;
+}
+
+/** Either deck's card shape — both carry `{id, concept_id, lens, front_md,
+ * back_md, check?}`; `player/FlashcardStep.tsx` is generic over this union
+ * and narrows on `deckKind`/`"kind" in card` only where the two differ
+ * (`note_md` vs. `kind`). */
+export type Flashcard = EntryFlashcard | ExitFlashcard;
+
+export interface FlashcardDecks {
+  entry: EntryFlashcard[];
+  exit: ExitFlashcard[];
 }
 
 // --- Derived layered flow (LEARN_PLAN.md "Layered unit flow", 2026-08-10) ----

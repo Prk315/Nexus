@@ -6,6 +6,13 @@
  * it N: one numbered segment per layer, one distinct segment for the rapid
  * round (identified by a tap/tile glyph, not a word), and the test.
  *
+ * Flashcard decks (schema v1.2, LEARN_PLAN.md "Flashcard decks") add up to
+ * two more segments — `entryDeck` before layer 1, `exitDeck` between the
+ * rapid round and the test — identified by their own stacked-card glyph
+ * (`CardGlyph`), distinct from both the layer number and the rapid round's
+ * tap-dot glyph. Absent entirely (no segment rendered) for a unit with no
+ * `content.flashcards`.
+ *
  * Reading at phone width with ~6 segments is the constraint that shapes it:
  * inactive segments carry a **glyph or a number**, never a word, plus their
  * solved count in tabular numerals; only the active segment spends horizontal
@@ -22,7 +29,7 @@
  */
 
 export interface StepSegment {
-  kind: "layer" | "final" | "test";
+  kind: "entryDeck" | "layer" | "final" | "exitDeck" | "test";
   /** Shown only while this segment is active. */
   label: string;
   /** Layer number, for the compact inactive glyph. */
@@ -42,6 +49,18 @@ function TileGlyph() {
       <span className="block h-[3px] w-[3px] rounded-[1px] bg-current" />
       <span className="block h-[3px] w-[3px] rounded-[1px] bg-current" />
       <span className="block h-[3px] w-[3px] rounded-[1px] bg-current" />
+    </span>
+  );
+}
+
+/** Two overlapping stacked cards — the flashcard-deck segment's inactive
+ * glyph. Deliberately not `TileGlyph`'s dot grid (that reads as "tap round");
+ * this reads as "a deck of cards", matching the deck's own card visual. */
+function CardGlyph() {
+  return (
+    <span className="relative block h-[10px] w-[12px]" aria-hidden="true">
+      <span className="absolute left-0 top-[3px] h-[7px] w-[9px] rounded-[1.5px] bg-current opacity-35" />
+      <span className="absolute left-[3px] top-0 h-[7px] w-[9px] rounded-[1.5px] border border-current" />
     </span>
   );
 }
@@ -99,6 +118,8 @@ export function Stepper({
                 <span className="truncate">{s.label}</span>
               ) : s.kind === "final" ? (
                 <TileGlyph />
+              ) : s.kind === "entryDeck" || s.kind === "exitDeck" ? (
+                <CardGlyph />
               ) : (
                 <span className="font-medium tabular-nums">{s.kind === "test" ? "T" : s.number}</span>
               )}
