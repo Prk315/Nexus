@@ -240,6 +240,41 @@ export async function pushWorkoutPlanToCloud(plan: WorkoutPlan): Promise<void> {
 
 // ── Weekly activity goals (dashboard Workout & Running scoring) ──────────────
 
+// ── Body-composition time-series (Vellafit scan history) ────────────────────
+// Direct query: the store's BodyMetric type only carries weight among the
+// body-comp fields, and these are Postgres numerics (arrive as strings).
+
+export interface BodyCompPoint {
+  date: string;
+  weight_kg: number | null;
+  fat_mass_kg: number | null;
+  fat_pct: number | null;
+  muscle_mass_kg: number | null;
+  muscle_pct: number | null;
+  estimated: boolean;
+}
+
+export async function fetchBodyCompositionSeriesFromCloud(): Promise<BodyCompPoint[]> {
+  const sb = getSupabaseClient();
+  const { data, error } = await sb
+    .from("protocol_body_metrics")
+    .select("date, weight_kg, fat_mass_kg, body_fat_pct, muscle_mass_kg, muscle_pct, body_comp_estimated")
+    .eq("user_id", getUserId())
+    .not("fat_mass_kg", "is", null)
+    .order("date", { ascending: true });
+  if (error) throw new Error(error.message);
+  const num = (v: unknown) => (v == null ? null : Number(v));
+  return (data ?? []).map((r: Record<string, unknown>) => ({
+    date: r.date as string,
+    weight_kg: num(r.weight_kg),
+    fat_mass_kg: num(r.fat_mass_kg),
+    fat_pct: num(r.body_fat_pct),
+    muscle_mass_kg: num(r.muscle_mass_kg),
+    muscle_pct: num(r.muscle_pct),
+    estimated: !!r.body_comp_estimated,
+  }));
+}
+
 export async function fetchActivityGoalsFromCloud(): Promise<ActivityGoals | null> {
   const sb = getSupabaseClient();
   const { data, error } = await sb
