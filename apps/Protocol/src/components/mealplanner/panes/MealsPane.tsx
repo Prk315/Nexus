@@ -5,7 +5,7 @@ import { useAppDispatch } from "../../../store/hooks";
 import { removeMeal } from "../../../store/slices/mealPlannerSlice";
 import { CARD_STYLE } from "../../../lib/uiHelpers";
 import { mealNutrition } from "../../../lib/mealNutrition";
-import { mealRating, ratingCardStyle, ratingMedalColor } from "../../../lib/foodQuality";
+import { foodTier, tierCardStyle, mealRating, ratingMedalColor, type FoodTier } from "../../../lib/foodQuality";
 import MealBuilder from "../MealBuilder";
 import type { Food, Meal, MealItem } from "../../../store/types";
 
@@ -67,8 +67,16 @@ export default function MealsPane({
               .map((it) => foodsById.get(it.food_id))
               .filter((f): f is Food => f != null);
             const rating = mealRating(ingredientFoods);
+            // The card's tier is the WEAKEST ingredient — a meal's nutrition data
+            // is only as complete as its least-covered food. The ★ badge still
+            // shows the mean for nuance.
+            const tiers = ingredientFoods.map(foodTier);
+            const mealTier: FoodTier = ingredientFoods.length === 0
+              ? "normal"
+              : tiers.includes("normal") ? "normal"
+              : tiers.includes("silver") ? "silver" : "gold";
             return (
-              <div key={meal.id} style={{ ...CARD_STYLE, padding: 16, display: "flex", flexDirection: "column", gap: 10, ...ratingCardStyle(rating) }}>
+              <div key={meal.id} style={{ ...CARD_STYLE, padding: 16, display: "flex", flexDirection: "column", gap: 10, ...tierCardStyle(mealTier) }}>
                 <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 8 }}>
                   <div style={{ minWidth: 0 }}>
                     <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
