@@ -13,6 +13,8 @@ import type {
   CreateRoutineExercise,
   UpdateRoutineExercise,
   ExerciseHistory,
+  ActivityGoals,
+  UpdateActivityGoals,
 } from "../types";
 
 interface WorkoutsState {
@@ -22,6 +24,7 @@ interface WorkoutsState {
   routines: WorkoutRoutine[];
   routineExercises: Record<string, RoutineExercise[]>; // by routine_id
   exerciseHistory: ExerciseHistory[];
+  activityGoals: ActivityGoals | null;
   loading: boolean;
   error: string | null;
 }
@@ -33,9 +36,44 @@ const initialState: WorkoutsState = {
   routines: [],
   routineExercises: {},
   exerciseHistory: [],
+  activityGoals: null,
   loading: false,
   error: null,
 };
+
+export const fetchActivityGoals = createAsyncThunk("workouts/fetchActivityGoals", async () => {
+  const { getActivityGoals } = await import("../../lib/tauriApi");
+  return getActivityGoals();
+});
+
+const ACTIVITY_GOAL_DEFAULTS: UpdateActivityGoals = {
+  strength_sessions_per_week: null, running_km_per_week: null,
+  base_bmr: null, calorie_offset: null, calorie_tolerance: null,
+};
+
+/** Accepts a PARTIAL patch and merges it over the current row before upserting,
+ *  so the Workouts "Weekly Goals" card (strength/km) and the Meal Planner
+ *  calorie strategy can each save their own fields without clobbering the
+ *  other's — it's one shared row. */
+export const saveActivityGoals = createAsyncThunk(
+  "workouts/saveActivityGoals",
+  async (patch: Partial<UpdateActivityGoals>, { getState }) => {
+    const current = (getState() as { workouts: { activityGoals: ActivityGoals | null } }).workouts.activityGoals;
+    const merged: UpdateActivityGoals = {
+      ...ACTIVITY_GOAL_DEFAULTS,
+      ...(current && {
+        strength_sessions_per_week: current.strength_sessions_per_week,
+        running_km_per_week: current.running_km_per_week,
+        base_bmr: current.base_bmr,
+        calorie_offset: current.calorie_offset,
+        calorie_tolerance: current.calorie_tolerance,
+      }),
+      ...patch,
+    };
+    const { saveActivityGoals: save } = await import("../../lib/tauriApi");
+    return save(merged);
+  },
+);
 
 export const fetchWorkoutPlans = createAsyncThunk("workouts/fetchPlans", async () => {
   const { getWorkoutPlans } = await import("../../lib/tauriApi");
@@ -215,6 +253,8 @@ const workoutsSlice = createSlice({
   reducers: {},
   extraReducers: (builder) => {
     builder
+      .addCase(fetchActivityGoals.fulfilled, (state, action) => { state.activityGoals = action.payload; })
+      .addCase(saveActivityGoals.fulfilled, (state, action) => { state.activityGoals = action.payload; })
       .addCase(fetchWorkoutPlans.pending, (state) => {
         state.loading = true;
         state.error = null;

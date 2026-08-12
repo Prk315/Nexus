@@ -11,7 +11,7 @@ import {
 import { Activity, TrendingUp, Flame } from "lucide-react";
 import { useAppDispatch, useAppSelector } from "../store/hooks";
 import { fetchSleep, fetchBodyMetrics } from "../store/slices/biomarkersSlice";
-import { fetchWorkoutSessions } from "../store/slices/workoutsSlice";
+import { fetchWorkoutSessions, fetchActivityGoals } from "../store/slices/workoutsSlice";
 import { fetchRunningSessions } from "../store/slices/runningSlice";
 import { fetchHabits, fetchHabitCompletions } from "../store/slices/habitsSlice";
 import {
@@ -70,6 +70,7 @@ export default function DashboardPage() {
   const sleep = useAppSelector((s) => s.biomarkers.sleep);
   const bodyMetrics = useAppSelector((s) => s.biomarkers.bodyMetrics);
   const workoutSessions = useAppSelector((s) => s.workouts.sessions);
+  const activityGoals = useAppSelector((s) => s.workouts.activityGoals);
   const runningSessions = useAppSelector((s) => s.running.sessions);
   const habits = useAppSelector((s) => s.habits.habits);
   const habitCompletions = useAppSelector((s) => s.habits.completions);
@@ -84,6 +85,7 @@ export default function DashboardPage() {
     dispatch(fetchSleep());
     dispatch(fetchBodyMetrics());
     dispatch(fetchWorkoutSessions());
+    dispatch(fetchActivityGoals());
     dispatch(fetchRunningSessions());
     dispatch(fetchHabits());
     dispatch(fetchHabitCompletions(subDays(HABITS_HISTORY_DAYS)));
@@ -119,6 +121,19 @@ export default function DashboardPage() {
     nutritionTotalsByDate.set(entry.date, prev ? sumNutrition([prev, n]) : n);
   }
 
+  // Oura active calories per date feed the dynamic calorie target.
+  const activeCaloriesByDate = new Map<string, number>();
+  for (const b of bodyMetrics) {
+    if (b.active_calories != null) activeCaloriesByDate.set(b.date, Number(b.active_calories));
+  }
+  const calorieConfig = activityGoals?.base_bmr != null
+    ? {
+        base_bmr: Number(activityGoals.base_bmr),
+        offset: Number(activityGoals.calorie_offset ?? 0),
+        tolerance: Number(activityGoals.calorie_tolerance ?? 200),
+      }
+    : null;
+
   // Last night's sleep now lives inside the SleepChart card (ring column).
 
   // Single-pass: find the entry with the most-recent date that has a weight reading
@@ -149,9 +164,13 @@ export default function DashboardPage() {
         sleep={sleep}
         nutritionTotalsByDate={nutritionTotalsByDate}
         nutritionGoals={goalItems}
+        activeCaloriesByDate={activeCaloriesByDate}
+        calorieConfig={calorieConfig}
         bodyMetrics={bodyMetrics}
         workoutSessions={workoutSessions}
         runningSessions={runningSessions}
+        workoutGoalPerWeek={activityGoals?.strength_sessions_per_week ?? null}
+        runningGoalKmPerWeek={activityGoals?.running_km_per_week ?? null}
       />
 
       <div style={{ padding: "24px 40px", display: "flex", flexDirection: "column", gap: 24 }}>

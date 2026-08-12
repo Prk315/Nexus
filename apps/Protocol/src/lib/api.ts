@@ -7,6 +7,7 @@ import type {
   CreateNutritionEntry, CreateSleepEntry,
   Exercise, CreateExercise, RunningPlan, RunningSession, CreateRunningSession,
   SleepEntry, WorkoutPlan, WorkoutSession, CreateWorkoutSession,
+  ActivityGoals, UpdateActivityGoals,
   WorkoutRoutine, CreateWorkoutRoutine, RoutineExercise, CreateRoutineExercise, ExerciseHistory,
   NutritionEntry, Habit, CreateHabit, UpdateHabit, HabitCompletion,
   HabitStack, CreateHabitStack,
@@ -212,6 +213,7 @@ function rowToBodyMetric(row: Record<string, unknown>): BodyMetric {
     resilience_stress: row.resilience_stress as number | null,
     cardio_age: row.cardio_age as number | null,
     pulse_wave_velocity: row.pulse_wave_velocity as number | null,
+    active_calories: (row.active_calories as number | null) ?? null,
     notes: row.notes as string | null,
     created_at: row.created_at as string,
   };
@@ -234,6 +236,41 @@ export async function pushWorkoutPlanToCloud(plan: WorkoutPlan): Promise<void> {
   const sb = getSupabaseClient();
   const { error } = await sb.from("protocol_workout_plans").upsert({ ...plan, user_id: getUserId() });
   if (error) throw new Error(error.message);
+}
+
+// ── Weekly activity goals (dashboard Workout & Running scoring) ──────────────
+
+export async function fetchActivityGoalsFromCloud(): Promise<ActivityGoals | null> {
+  const sb = getSupabaseClient();
+  const { data, error } = await sb
+    .from("protocol_activity_goals")
+    .select("*")
+    .eq("user_id", getUserId())
+    .maybeSingle();
+  if (error) throw new Error(error.message);
+  return data as ActivityGoals | null;
+}
+
+export async function upsertActivityGoalsInCloud(goals: UpdateActivityGoals): Promise<ActivityGoals> {
+  const sb = getSupabaseClient();
+  const { data, error } = await sb
+    .from("protocol_activity_goals")
+    .upsert(
+      {
+        user_id: getUserId(),
+        strength_sessions_per_week: goals.strength_sessions_per_week,
+        running_km_per_week: goals.running_km_per_week,
+        base_bmr: goals.base_bmr,
+        calorie_offset: goals.calorie_offset,
+        calorie_tolerance: goals.calorie_tolerance,
+        updated_at: new Date().toISOString(),
+      },
+      { onConflict: "user_id" },
+    )
+    .select("*")
+    .single();
+  if (error) throw new Error(error.message);
+  return data as ActivityGoals;
 }
 
 // ── Workout Sessions ──────────────────────────────────────────────────────────

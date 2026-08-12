@@ -9,7 +9,7 @@ import type {
   CreateWorkoutPlan, CreateWorkoutSession, CreateExercise,
   CreateRunningPlan, CreateRunningSession,
   Exercise, NutritionEntry, RunningPlan, RunningSession,
-  SleepEntry, WorkoutPlan, WorkoutSession,
+  SleepEntry, WorkoutPlan, WorkoutSession, ActivityGoals, UpdateActivityGoals,
   WorkoutRoutine, CreateWorkoutRoutine, UpdateWorkoutRoutine,
   RoutineExercise, CreateRoutineExercise, UpdateRoutineExercise, ExerciseHistory,
   Habit, CreateHabit, UpdateHabit, HabitCompletion, HabitStack, CreateHabitStack,
@@ -25,6 +25,7 @@ import {
   fetchNutritionFromCloud, pushNutritionToCloud, deleteNutritionFromCloud,
   fetchBodyMetricsFromCloud, pushBodyMetricToCloud, deleteBodyMetricFromCloud,
   fetchWorkoutPlansFromCloud, pushWorkoutPlanToCloud, deleteWorkoutPlanFromCloud,
+  fetchActivityGoalsFromCloud, upsertActivityGoalsInCloud,
   fetchWorkoutSessionsFromCloud, pushWorkoutSessionToCloud,
   completeWorkoutSessionInCloud, deleteWorkoutSessionFromCloud,
   fetchExercisesFromCloud, pushExerciseToCloud, deleteExerciseFromCloud,
@@ -108,6 +109,7 @@ export async function createBodyMetric(entry: CreateBodyMetric): Promise<BodyMet
   await pushBodyMetricToCloud({ ...entry, id });
   return {
     id, ...entry,
+    active_calories: null, // manual body-metric entries don't carry Oura activity
     weight_kg: entry.weight_kg ?? null,
     hrv_ms: entry.hrv_ms ?? null,
     resting_hr_bpm: entry.resting_hr_bpm ?? null,
@@ -150,6 +152,11 @@ export async function createWorkoutPlan(plan: CreateWorkoutPlan): Promise<Workou
 }
 
 export const deleteWorkoutPlan = (id: string): Promise<void> => deleteWorkoutPlanFromCloud(id);
+
+// Weekly activity goals (dashboard Workout & Running scoring).
+export const getActivityGoals = (): Promise<ActivityGoals | null> => fetchActivityGoalsFromCloud();
+export const saveActivityGoals = (goals: UpdateActivityGoals): Promise<ActivityGoals> =>
+  upsertActivityGoalsInCloud(goals);
 
 // ── Workout Sessions ──────────────────────────────────────────────────────────
 

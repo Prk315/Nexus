@@ -16,7 +16,7 @@ import {
 import type { BodyMetric, RunningSession, SleepEntry, WorkoutSession, NutritionGoalItem } from "../../store/types";
 import type { NutrientTotals } from "../../lib/mealNutrition";
 import { isoDate } from "../../lib/uiHelpers";
-import { nutritionScore } from "../../lib/nutritionScore";
+import { weeklyNutritionScore, type CalorieConfig } from "../../lib/nutritionScore";
 
 type Range = "7D" | "4W" | "6M";
 type Domain = "sleep" | "nutrition" | "body" | "workout" | "running";
@@ -101,16 +101,26 @@ function scoreSleep(entries: SleepEntry[]): number {
 }
 
 /**
- * How well the day's logged intake met the nutrition goals — the average
- * closeness across every goal (see lib/nutritionScore). Falls back to a plain
- * calorie proxy when no goals are set, and is 0 on a day with no food logged.
+ * Weekly nutrition score at `date`: how well the trailing 7 days' intake met
+ * the weekly nutrient goals and the dynamic calorie target (base + active ±
+ * offset). See lib/nutritionScore. 0 on a week with nothing logged.
  */
-function scoreNutrition(totals: NutrientTotals | undefined, goals: NutritionGoalItem[]): number {
-  const calories = Number(totals?.calories ?? 0);
-  if (calories <= 0) return 0;
-  const s = nutritionScore(totals as unknown as Record<string, number | null>, goals);
-  if (s == null) return Math.min(100, Math.round((calories / 2000) * 100));
-  return s;
+function scoreNutrition(
+  date: string,
+  totalsByDate: Map<string, NutrientTotals>,
+  activeCaloriesByDate: Map<string, number>,
+  goals: NutritionGoalItem[],
+  calorie: CalorieConfig | null,
+): number {
+  const dates: string[] = [];
+  for (let i = 6; i >= 0; i--) dates.push(addDaysISO(date, -i));
+  return weeklyNutritionScore(
+    dates,
+    totalsByDate as unknown as Map<string, Record<string, number | null>>,
+    activeCaloriesByDate,
+    goals,
+    calorie,
+  );
 }
 
 function scoreBody(entries: BodyMetric[]): number {
@@ -120,23 +130,50 @@ function scoreBody(entries: BodyMetric[]): number {
   return Math.min(100, 25 + fields * 19);
 }
 
-function scoreWorkout(sessions: WorkoutSession[]): number {
-  if (!sessions.length) return 0;
-  const completed = sessions.filter((s) => s.completed).length;
-  if (completed === 0) return 20;
-  return Math.min(100, completed * 100);
+/** ISO date `delta` days from `dateStr` (delta may be negative). */
+function addDaysISO(dateStr: string, delta: number): string {
+  const d = new Date(dateStr + "T00:00:00");
+  d.setDate(d.getDate() + delta);
+  return isoDate(d);
 }
 
-function scoreRunning(sessions: RunningSession[]): number {
-  if (!sessions.length) return 0;
-  const completed = sessions.filter((s) => s.completed);
+/**
+ * Strength score: completed workout sessions over the trailing 7 days ending at
+ * `date`, vs the weekly-sessions goal (100 when the goal is met). With no goal
+ * set it falls back to the old per-day heuristic.
+ */
+function scoreWorkout(date: string, sessions: WorkoutSession[], goalPerWeek: number | null): number {
+  if (goalPerWeek && goalPerWeek > 0) {
+    const start = addDaysISO(date, -6);
+    const count = sessions.filter((s) => s.completed && s.scheduled_date >= start && s.scheduled_date <= date).length;
+    return Math.min(100, Math.round((count / goalPerWeek) * 100));
+  }
+  const today = sessions.filter((s) => s.scheduled_date === date);
+  if (!today.length) return 0;
+  const completed = today.filter((s) => s.completed).length;
+  return completed === 0 ? 20 : Math.min(100, completed * 100);
+}
+
+/**
+ * Running score: completed km over the trailing 7 days ending at `date`, vs the
+ * weekly-km goal (100 when the goal is met). With no goal set it falls back to
+ * the old per-day actual-vs-planned heuristic.
+ */
+function scoreRunning(date: string, sessions: RunningSession[], goalKmPerWeek: number | null): number {
+  if (goalKmPerWeek && goalKmPerWeek > 0) {
+    const start = addDaysISO(date, -6);
+    const km = sessions
+      .filter((s) => s.completed && s.date >= start && s.date <= date)
+      .reduce((sum, s) => sum + (s.actual_km ?? 0), 0);
+    return Math.min(100, Math.round((km / goalKmPerWeek) * 100));
+  }
+  const today = sessions.filter((s) => s.date === date);
+  if (!today.length) return 0;
+  const completed = today.filter((s) => s.completed);
   if (!completed.length) return 15;
-  const scores = completed.map((s) => {
-    if (s.actual_km && s.planned_km && s.planned_km > 0) {
-      return Math.min(100, (s.actual_km / s.planned_km) * 100);
-    }
-    return 100;
-  });
+  const scores = completed.map((s) =>
+    s.actual_km && s.planned_km && s.planned_km > 0 ? Math.min(100, (s.actual_km / s.planned_km) * 100) : 100,
+  );
   return Math.round(scores.reduce((a, b) => a + b, 0) / scores.length);
 }
 
@@ -160,9 +197,15 @@ interface Props {
   /** Full nutrient totals per date (Meal Planner, logged entries only). */
   nutritionTotalsByDate: Map<string, NutrientTotals>;
   nutritionGoals: NutritionGoalItem[];
+  /** Oura active calories per date — feeds the dynamic calorie target. */
+  activeCaloriesByDate: Map<string, number>;
+  calorieConfig: CalorieConfig | null;
   bodyMetrics: BodyMetric[];
   workoutSessions: WorkoutSession[];
   runningSessions: RunningSession[];
+  /** Weekly targets driving the Workout & Running scores (null = old heuristic). */
+  workoutGoalPerWeek: number | null;
+  runningGoalKmPerWeek: number | null;
 }
 
 interface Point {
@@ -176,7 +219,9 @@ interface Point {
 }
 
 export default function ProtocolChargeChart({
-  sleep, nutritionTotalsByDate, nutritionGoals, bodyMetrics, workoutSessions, runningSessions,
+  sleep, nutritionTotalsByDate, nutritionGoals, activeCaloriesByDate, calorieConfig,
+  bodyMetrics, workoutSessions, runningSessions,
+  workoutGoalPerWeek, runningGoalKmPerWeek,
 }: Props) {
   const [range, setRange] = useState<Range>("7D");
 
@@ -194,16 +239,14 @@ export default function ProtocolChargeChart({
 
     const sleepMap    = byDate(sleep, (e) => e.date);
     const bodyMap     = byDate(bodyMetrics, (e) => e.date);
-    const workoutMap  = byDate(workoutSessions, (s) => s.scheduled_date);
-    const runningMap  = byDate(runningSessions, (s) => s.date);
 
     function dayScore(date: string) {
       return {
         sleep:    scoreSleep(sleepMap.get(date) ?? []),
-        nutrition: scoreNutrition(nutritionTotalsByDate.get(date), nutritionGoals),
+        nutrition: scoreNutrition(date, nutritionTotalsByDate, activeCaloriesByDate, nutritionGoals, calorieConfig),
         body:     scoreBody(bodyMap.get(date) ?? []),
-        workout:  scoreWorkout(workoutMap.get(date) ?? []),
-        running:  scoreRunning(runningMap.get(date) ?? []),
+        workout:  scoreWorkout(date, workoutSessions, workoutGoalPerWeek),
+        running:  scoreRunning(date, runningSessions, runningGoalKmPerWeek),
       };
     }
 
@@ -250,7 +293,7 @@ export default function ProtocolChargeChart({
       const label = d.toLocaleDateString("en-US", { month: "short" });
       return bucket(daysBetween(isoDate(d), isoDate(end)), label);
     });
-  }, [range, sleep, nutritionTotalsByDate, nutritionGoals, bodyMetrics, workoutSessions, runningSessions]);
+  }, [range, sleep, nutritionTotalsByDate, nutritionGoals, activeCaloriesByDate, calorieConfig, bodyMetrics, workoutSessions, runningSessions, workoutGoalPerWeek, runningGoalKmPerWeek]);
 
   const TOOLTIP_STYLE = {
     background: "var(--surface)",

@@ -44,3 +44,64 @@ export function nutritionScore(
   );
   return Math.round(sum / active.length);
 }
+
+// ── Weekly, dynamic-calorie scoring ─────────────────────────────────────────
+
+/** Dynamic calorie target config. Each day's maintenance = base_bmr + that day's
+ *  Oura active calories; the goal is (maintenance + offset), scored 100 within
+ *  ±tolerance. All values are per-day kcal. */
+export interface CalorieConfig {
+  base_bmr: number;
+  offset: number;
+  tolerance: number;
+}
+
+/** 100 inside [lo, hi]; linear taper to 0 one tolerance-width outside. */
+function bandCloseness(x: number, lo: number, hi: number, tol: number): number {
+  if (x >= lo && x <= hi) return 100;
+  const dist = x < lo ? lo - x : x - hi;
+  return clamp(tol > 0 ? 100 - (dist / tol) * 100 : 0);
+}
+
+/**
+ * Weekly nutrition score (0–100) over a set of dates — the average closeness
+ * across the dynamic calorie goal and each weekly nutrient goal:
+ *  - calories: the week's intake vs Σ(base + active + offset), within ±tol·days
+ *  - other nutrients: the week's summed intake vs the goal's weekly min/max
+ * Returns 0 if nothing was logged in the window, and (when no goals at all are
+ * set) a plain calorie proxy so the ring isn't blank.
+ */
+export function weeklyNutritionScore(
+  dates: string[],
+  totalsByDate: Map<string, Record<string, number | null>>,
+  activeCaloriesByDate: Map<string, number>,
+  goals: NutritionGoalItem[],
+  calorie: CalorieConfig | null,
+): number {
+  const weekTotals: Record<string, number> = {};
+  let loggedCalories = 0;
+  for (const d of dates) {
+    const t = totalsByDate.get(d);
+    if (!t) continue;
+    for (const k of Object.keys(t)) weekTotals[k] = (weekTotals[k] ?? 0) + Number(t[k] ?? 0);
+    loggedCalories += Number(t.calories ?? 0);
+  }
+  if (loggedCalories <= 0) return 0;
+
+  const subs: number[] = [];
+  if (calorie && calorie.base_bmr > 0) {
+    let target = 0;
+    for (const d of dates) target += calorie.base_bmr + Number(activeCaloriesByDate.get(d) ?? 0) + calorie.offset;
+    const tolWeek = calorie.tolerance * dates.length;
+    subs.push(bandCloseness(weekTotals.calories ?? 0, target - tolWeek, target + tolWeek, tolWeek));
+  }
+  for (const g of goals.filter(isActiveGoal)) {
+    if (g.nutrient_key === "calories") continue; // calories is dynamic, handled above
+    subs.push(goalCloseness(weekTotals[g.nutrient_key] ?? 0, g.min_value, g.max_value));
+  }
+
+  if (subs.length === 0) {
+    return Math.min(100, Math.round(((weekTotals.calories ?? 0) / (2000 * dates.length)) * 100));
+  }
+  return Math.round(subs.reduce((a, b) => a + b, 0) / subs.length);
+}

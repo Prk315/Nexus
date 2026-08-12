@@ -1,29 +1,37 @@
 import { useMemo, useState } from "react";
-import { X, Check, Plus, Trash2 } from "lucide-react";
+import { X, Check, Plus, Trash2, Flame } from "lucide-react";
 import { CARD_STYLE, INPUT_SM, LABEL_STYLE } from "../../lib/uiHelpers";
 import { NUTRIENT_META, type NutrientMeta } from "../../lib/nutrients";
 import type { NutritionGoalItem, CreateNutritionGoalItem } from "../../store/types";
 
 const META_BY_KEY = new Map<string, NutrientMeta>(NUTRIENT_META.map((m) => [m.key, m]));
 
+export interface CalorieStrategy {
+  base_bmr: number | null;
+  calorie_offset: number | null;
+  calorie_tolerance: number | null;
+}
+
 interface Row { nutrient_key: string; min: string; max: string }
 
 /**
- * Edit nutrition goals: a row per nutrient with an optional floor (min) and
- * ceiling (max). Add a goal on ANY nutrient from the grouped picker; leave a
- * side blank for a one-sided goal ("at least" / "at most"), or fill both for a
- * range. Saving reconciles the whole set — the parent upserts what's set and
- * deletes what was removed.
+ * Edit nutrition goals. Calories is a DYNAMIC daily target — base burn + that
+ * day's active calories + a bulk/cut offset, scored within a ± tolerance — set
+ * in the top section. Every other nutrient is a WEEKLY min/max (at least / at
+ * most / range). Saving reconciles the nutrient set and stores the calorie
+ * strategy.
  */
 export default function GoalsModal({
-  goals, onSave, onClose,
+  goals, calorie, onSave, onClose,
 }: {
   goals: NutritionGoalItem[];
-  onSave: (items: CreateNutritionGoalItem[]) => Promise<void>;
+  calorie: CalorieStrategy | null;
+  onSave: (items: CreateNutritionGoalItem[], calorie: CalorieStrategy) => Promise<void>;
   onClose: () => void;
 }) {
   const [rows, setRows] = useState<Row[]>(() =>
     goals
+      .filter((g) => g.nutrient_key !== "calories")
       .map((g) => ({
         nutrient_key: g.nutrient_key,
         min: g.min_value != null ? String(g.min_value) : "",
@@ -31,11 +39,17 @@ export default function GoalsModal({
       }))
       .sort(byMetaOrder),
   );
+  const [baseBmr, setBaseBmr] = useState(calorie?.base_bmr != null ? String(calorie.base_bmr) : "1800");
+  const [offset, setOffset] = useState(calorie?.calorie_offset != null ? String(calorie.calorie_offset) : "0");
+  const [tolerance, setTolerance] = useState(calorie?.calorie_tolerance != null ? String(calorie.calorie_tolerance) : "200");
   const [adding, setAdding] = useState("");
   const [saving, setSaving] = useState(false);
 
   const used = useMemo(() => new Set(rows.map((r) => r.nutrient_key)), [rows]);
-  const available = useMemo(() => NUTRIENT_META.filter((m) => !used.has(m.key)), [used]);
+  const available = useMemo(
+    () => NUTRIENT_META.filter((m) => m.key !== "calories" && !used.has(m.key)),
+    [used],
+  );
 
   function addNutrient(key: string) {
     if (!key || used.has(key)) return;
@@ -60,7 +74,12 @@ export default function GoalsModal({
           max_value: r.max.trim() !== "" ? Number(r.max) : null,
         }))
         .filter((i) => i.min_value != null || i.max_value != null);
-      await onSave(items);
+      const cal: CalorieStrategy = {
+        base_bmr: baseBmr.trim() !== "" ? Number(baseBmr) : null,
+        calorie_offset: offset.trim() !== "" ? Number(offset) : 0,
+        calorie_tolerance: tolerance.trim() !== "" ? Number(tolerance) : 200,
+      };
+      await onSave(items, cal);
       onClose();
     } finally {
       setSaving(false);
@@ -73,26 +92,52 @@ export default function GoalsModal({
       onClick={onClose}
     >
       <div
-        style={{ ...CARD_STYLE, width: 500, maxHeight: "82vh", overflowY: "auto", padding: 20, display: "flex", flexDirection: "column", gap: 14 }}
+        style={{ ...CARD_STYLE, width: 520, maxHeight: "84vh", overflowY: "auto", padding: 20, display: "flex", flexDirection: "column", gap: 14 }}
         onClick={(e) => e.stopPropagation()}
       >
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-          <span style={{ fontWeight: 700, fontSize: 15, color: "var(--text)" }}>Daily nutrition goals</span>
+          <span style={{ fontWeight: 700, fontSize: 15, color: "var(--text)" }}>Nutrition goals</span>
           <button onClick={onClose} style={{ background: "none", border: "none", color: "var(--text-muted)", cursor: "pointer" }}>
             <X size={16} />
           </button>
         </div>
-        <div style={{ fontSize: 12, color: "var(--text-muted)", marginTop: -6 }}>
-          Set a minimum ("at least"), a maximum ("at most"), or both for a range — e.g. calories between 2000 and 2800.
-        </div>
 
-        <form onSubmit={submit} style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-          {/* Column headers */}
+        <form onSubmit={submit} style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+          {/* Dynamic calorie strategy */}
+          <div style={{ background: "var(--bg)", border: "1px solid var(--border)", borderRadius: "var(--radius-sm)", padding: 14, display: "flex", flexDirection: "column", gap: 10 }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 7 }}>
+              <Flame size={14} color="var(--series-nutrition)" />
+              <span style={{ fontSize: 13, fontWeight: 700, color: "var(--text)" }}>Calorie target (dynamic)</span>
+            </div>
+            <div style={{ fontSize: 12, color: "var(--text-muted)", marginTop: -4 }}>
+              Each day: <strong>base burn + active calories + offset</strong>. Positive offset = bulk, negative = cut. The score rewards staying within ± tolerance.
+            </div>
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 10 }}>
+              <label style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+                <span style={LABEL_STYLE}>Base burn (kcal)</span>
+                <input type="number" value={baseBmr} onChange={(e) => setBaseBmr(e.target.value)} placeholder="1800" style={INPUT_SM} />
+              </label>
+              <label style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+                <span style={LABEL_STYLE}>Offset (± kcal)</span>
+                <input type="number" value={offset} onChange={(e) => setOffset(e.target.value)} placeholder="0" style={INPUT_SM} />
+              </label>
+              <label style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+                <span style={LABEL_STYLE}>Tolerance (± kcal)</span>
+                <input type="number" value={tolerance} onChange={(e) => setTolerance(e.target.value)} placeholder="200" style={INPUT_SM} />
+              </label>
+            </div>
+          </div>
+
+          {/* Weekly nutrient goals */}
+          <div style={{ fontSize: 12, color: "var(--text-muted)" }}>
+            Nutrient goals are <strong>weekly</strong> — a minimum ("at least"), a maximum ("at most"), or both for a range. Scored on the last 7 days.
+          </div>
+
           {rows.length > 0 && (
             <div style={{ display: "grid", gridTemplateColumns: "1fr 90px 90px 28px", gap: 8, alignItems: "center" }}>
               <span style={LABEL_STYLE}>Nutrient</span>
-              <span style={LABEL_STYLE}>Min</span>
-              <span style={LABEL_STYLE}>Max</span>
+              <span style={LABEL_STYLE}>Min / wk</span>
+              <span style={LABEL_STYLE}>Max / wk</span>
               <span />
             </div>
           )}
@@ -113,21 +158,10 @@ export default function GoalsModal({
             );
           })}
 
-          {rows.length === 0 && (
-            <div style={{ fontSize: 13, color: "var(--text-muted)", padding: "8px 0" }}>
-              No goals yet — add one below.
-            </div>
-          )}
-
-          {/* Add-nutrient picker */}
           <div style={{ display: "flex", alignItems: "center", gap: 8, borderTop: "1px solid var(--border)", paddingTop: 10 }}>
             <Plus size={14} color="var(--text-muted)" />
-            <select
-              value={adding}
-              onChange={(e) => addNutrient(e.target.value)}
-              style={{ ...INPUT_SM, flex: 1, cursor: "pointer" }}
-            >
-              <option value="">Add a goal…</option>
+            <select value={adding} onChange={(e) => addNutrient(e.target.value)} style={{ ...INPUT_SM, flex: 1, cursor: "pointer" }}>
+              <option value="">Add a weekly goal…</option>
               {groupOptions(available)}
             </select>
           </div>
@@ -156,7 +190,6 @@ function byMetaOrder(a: { nutrient_key: string }, b: { nutrient_key: string }): 
   return (ia < 0 ? 999 : ia) - (ib < 0 ? 999 : ib);
 }
 
-/** Grouped <optgroup> options from the nutrient catalog. */
 function groupOptions(metas: NutrientMeta[]) {
   const groups = new Map<string, NutrientMeta[]>();
   for (const m of metas) (groups.get(m.group) ?? groups.set(m.group, []).get(m.group)!).push(m);
