@@ -1,6 +1,6 @@
 import { useMemo } from "react";
 import {
-  BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ReferenceLine, ResponsiveContainer,
+  ComposedChart, Bar, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer,
   PieChart, Pie, Cell,
 } from "recharts";
 import { CARD_STYLE } from "../../lib/uiHelpers";
@@ -28,6 +28,8 @@ interface DayCalories {
   date: string;
   label: string;
   calories: number;
+  /** That day's dynamic calorie target (base + active + offset). */
+  target: number;
 }
 
 export default function NutrientOverview({
@@ -66,7 +68,7 @@ export default function NutrientOverview({
             Calories logged this week
           </div>
           <ResponsiveContainer width="100%" height={200}>
-            <BarChart data={perDay} margin={{ top: 4, right: 8, bottom: 0, left: -20 }}>
+            <ComposedChart data={perDay} margin={{ top: 4, right: 8, bottom: 0, left: -20 }}>
               <CartesianGrid stroke="var(--border-subtle)" strokeWidth={1} vertical={false} />
               <XAxis dataKey="label" tick={{ fontSize: 11, fill: "var(--text-muted)" }} axisLine={false} tickLine={false} />
               <YAxis
@@ -75,17 +77,12 @@ export default function NutrientOverview({
                 tickLine={false}
                 domain={[0, (dataMax: number) => Math.ceil(Math.max(dataMax, calorieGoal ?? 0) * 1.1)]}
               />
-              <Tooltip contentStyle={TOOLTIP_STYLE} formatter={(v: number) => [`${Math.round(v)} kcal`, "Calories"]} />
-              {calorieGoal && (
-                <ReferenceLine
-                  y={calorieGoal}
-                  stroke="var(--text-muted)"
-                  strokeDasharray="4 4"
-                  label={{ value: "Goal", position: "insideTopRight", fontSize: 10, fill: "var(--text-muted)" }}
-                />
-              )}
-              <Bar dataKey="calories" fill="var(--series-nutrition)" radius={[3, 3, 0, 0]} />
-            </BarChart>
+              <Tooltip contentStyle={TOOLTIP_STYLE} formatter={(v: number, name: string) => [`${Math.round(v)} kcal`, name === "target" ? "Goal" : "Logged"]} />
+              <Legend wrapperStyle={{ fontSize: 11, paddingTop: 4 }} formatter={(v) => (v === "target" ? "Goal" : "Logged")} />
+              <Bar dataKey="calories" name="calories" fill="var(--series-nutrition)" radius={[3, 3, 0, 0]} />
+              {/* Per-day dynamic calorie target (base + that day's active + offset). */}
+              <Line type="monotone" dataKey="target" name="target" stroke="var(--text-secondary)" strokeWidth={2} strokeDasharray="5 4" dot={{ r: 2 }} isAnimationActive={false} />
+            </ComposedChart>
           </ResponsiveContainer>
         </div>
 

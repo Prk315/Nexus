@@ -132,15 +132,18 @@ export default function MealPlannerPage() {
   }, [planEntries, foodsById, mealsById, mealItemsById, today, supplementTotalsOn]);
 
   const perDayCalories = useMemo(() => {
+    const cfg = calorieConfigFrom(activityGoals);
     return days.map((d, i) => {
       const dayEntries = planEntries.filter((e) => e.date === d && e.logged);
       const totals = sumNutrition([
         ...dayEntries.map((e) => entryNutrition(e, foodsById, mealsById, mealItemsById)),
         ...supplementTotalsOn(d),
       ]);
-      return { date: d, label: DAY_LABELS[i], calories: totals.calories };
+      // Each day's dynamic calorie target = base + that day's active + offset.
+      const target = Math.round(cfg.base_bmr + Number(bodyMetrics.find((b) => b.date === d)?.active_calories ?? 0) + cfg.offset);
+      return { date: d, label: DAY_LABELS[i], calories: totals.calories, target };
     });
-  }, [days, planEntries, foodsById, mealsById, mealItemsById, supplementTotalsOn]);
+  }, [days, planEntries, foodsById, mealsById, mealItemsById, supplementTotalsOn, activityGoals, bodyMetrics]);
 
   // This week's total intake (meals + supplements), for the weekly goal readouts.
   const weekTotals = useMemo(() => {
