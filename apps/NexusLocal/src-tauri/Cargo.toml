@@ -1,6 +1,6 @@
 [package]
 name = "nexus-local"
-version = "0.23.1"
+version = "0.23.2"
 description = "Nexus Local — the ecosystem's local grid of background service modules"
 authors = []
 edition = "2021"

@@ -312,6 +312,11 @@ export function PathPanel() {
       statusMap.set(pu.unit.unit_id, status);
       prevLabelMap.set(pu.unit.unit_id, prevLabel || pu.unit.code);
       if (pu.progress === "mastered") mastered += 1;
+      // Content-less units are deliberate off-pensum scaffold: they can never
+      // be opened, so they must be transparent to the unlock chain — the gate
+      // walks back to the nearest preceding unit WITH content. Otherwise a
+      // scaffold unit (LA 2 · U6) deadlocks every chapter after it.
+      if (!pu.hasContent) continue;
       prevMastered = pu.progress === "mastered";
       prevLabel = contentByUnit.get(pu.unit.unit_id)?.title || pu.unit.code;
     }
