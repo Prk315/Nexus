@@ -12,6 +12,7 @@ import { fetchActivityGoals, saveActivityGoals } from "../store/slices/workoutsS
 import { fetchBodyMetrics } from "../store/slices/biomarkersSlice";
 import { CARD_STYLE, isoDate } from "../lib/uiHelpers";
 import { entryNutrition, sumNutrition, scaleNutrients } from "../lib/mealNutrition";
+import { calorieConfigFrom } from "../lib/nutritionScore";
 import FoodSearchPanel from "../components/mealplanner/FoodSearchPanel";
 import NutrientOverview from "../components/mealplanner/NutrientOverview";
 import NutrientBreakdown from "../components/mealplanner/NutrientBreakdown";
@@ -131,15 +132,27 @@ export default function MealPlannerPage() {
   }, [planEntries, foodsById, mealsById, mealItemsById, today, supplementTotalsOn]);
 
   const perDayCalories = useMemo(() => {
+    const cfg = calorieConfigFrom(activityGoals);
     return days.map((d, i) => {
       const dayEntries = planEntries.filter((e) => e.date === d && e.logged);
       const totals = sumNutrition([
         ...dayEntries.map((e) => entryNutrition(e, foodsById, mealsById, mealItemsById)),
         ...supplementTotalsOn(d),
       ]);
-      return { date: d, label: DAY_LABELS[i], calories: totals.calories };
+      // Each day's dynamic calorie target = base + that day's active + offset.
+      const target = Math.round(cfg.base_bmr + Number(bodyMetrics.find((b) => b.date === d)?.active_calories ?? 0) + cfg.offset);
+      return { date: d, label: DAY_LABELS[i], calories: totals.calories, target };
     });
-  }, [days, planEntries, foodsById, mealsById, mealItemsById, supplementTotalsOn]);
+  }, [days, planEntries, foodsById, mealsById, mealItemsById, supplementTotalsOn, activityGoals, bodyMetrics]);
+
+  // This week's total intake (meals + supplements), for the weekly goal readouts.
+  const weekTotals = useMemo(() => {
+    const meal = planEntries
+      .filter((e) => e.logged && e.date >= days[0] && e.date <= days[6])
+      .map((e) => entryNutrition(e, foodsById, mealsById, mealItemsById));
+    const supp = days.flatMap((d) => supplementTotalsOn(d));
+    return sumNutrition([...meal, ...supp]);
+  }, [planEntries, foodsById, mealsById, mealItemsById, days, supplementTotalsOn]);
 
   async function handlePick(food: CreateFood, grams: number) {
     if (!addingSlot) return;
@@ -186,10 +199,13 @@ export default function MealPlannerPage() {
   const calorieStrategy = activityGoals
     ? { base_bmr: activityGoals.base_bmr, calorie_offset: activityGoals.calorie_offset, calorie_tolerance: activityGoals.calorie_tolerance }
     : null;
+  const calorieCfg = calorieConfigFrom(activityGoals);
   const todayActive = bodyMetrics.find((b) => b.date === today)?.active_calories ?? 0;
-  const dailyCalorieTarget = activityGoals?.base_bmr != null
-    ? Math.round(Number(activityGoals.base_bmr) + Number(todayActive) + Number(activityGoals.calorie_offset ?? 0))
-    : null;
+  const dailyCalorieTarget = Math.round(calorieCfg.base_bmr + Number(todayActive) + calorieCfg.offset);
+  // Weekly calorie target = Σ each day's dynamic maintenance (base + active + offset).
+  const weekCalorieTarget = Math.round(
+    days.reduce((sum, d) => sum + calorieCfg.base_bmr + Number(bodyMetrics.find((b) => b.date === d)?.active_calories ?? 0) + calorieCfg.offset, 0),
+  );
 
   return (
     <div style={{ padding: 28, display: "flex", flexDirection: "column", gap: 20 }}>
@@ -200,7 +216,7 @@ export default function MealPlannerPage() {
             Plan your week, log what you actually eat, backed by real nutrition data.
           </p>
         </div>
-        <GoalsWidget todayTotals={todayTotals} goals={goalItems} calorie={calorieStrategy} calorieDailyTarget={dailyCalorieTarget} onSave={handleSaveGoals} />
+        <GoalsWidget weekTotals={weekTotals} goals={goalItems} calorie={calorieStrategy} weekCalorieTarget={weekCalorieTarget} onSave={handleSaveGoals} />
       </div>
 
       {/* One dashboard, three full-width rows on Mac (each stacks on iPhone):
@@ -210,7 +226,7 @@ export default function MealPlannerPage() {
       <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
         <DashCard title="Overview" icon={<BarChart3 size={15} />}>
           <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
-            <NutrientOverview perDay={perDayCalories} todayTotals={todayTotals} goals={goalItems} dailyCalorieTarget={dailyCalorieTarget} />
+            <NutrientOverview perDay={perDayCalories} todayTotals={todayTotals} weekTotals={weekTotals} goals={goalItems} dailyCalorieTarget={dailyCalorieTarget} />
             <NutrientBreakdown totals={todayTotals} />
           </div>
         </DashCard>

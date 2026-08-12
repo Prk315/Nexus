@@ -27,28 +27,26 @@ function Stat({ label, value, goal, unit }: { label: string; value: number; goal
 }
 
 export default function GoalsWidget({
-  todayTotals, goals, calorie, calorieDailyTarget, onSave,
+  weekTotals, goals, calorie, weekCalorieTarget, onSave,
 }: {
-  todayTotals: NutrientTotals;
+  weekTotals: NutrientTotals;
   goals: NutritionGoalItem[];
   calorie: CalorieStrategy | null;
-  /** Today's dynamic calorie target (base + today's active + offset). */
-  calorieDailyTarget: number | null;
+  /** This week's dynamic calorie target (Σ daily base + active + offset). */
+  weekCalorieTarget: number;
   onSave: (items: CreateNutritionGoalItem[], calorie: CalorieStrategy) => Promise<void>;
 }) {
   const [editing, setEditing] = useState(false);
-  // Nutrient goals are weekly; show a daily-pace target (÷7) in this at-a-glance strip.
-  const dailyTarget = (key: string) => {
-    const wk = goalTarget(goals.find((g) => g.nutrient_key === key));
-    return wk != null ? Math.round(wk / 7) : null;
-  };
+  // Goals are weekly, so compare this week's totals directly to the weekly goal.
+  const weeklyGoal = (key: string) => goalTarget(goals.find((g) => g.nutrient_key === key));
 
   return (
     <>
       <div style={{ ...CARD_STYLE, padding: "12px 16px", display: "flex", alignItems: "center", gap: 16 }}>
-        <Stat label="Calories" value={todayTotals.calories} goal={calorieDailyTarget} unit="" />
-        <Stat label="Protein" value={todayTotals.protein_g} goal={dailyTarget("protein_g")} unit="g" />
-        <Stat label="Carbs" value={todayTotals.carbs_g} goal={dailyTarget("carbs_g")} unit="g" />
+        <span style={{ fontSize: 10, fontWeight: 700, color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: "0.04em" }}>This&nbsp;week</span>
+        <Stat label="Calories" value={weekTotals.calories} goal={weekCalorieTarget} unit="" />
+        <Stat label="Protein" value={weekTotals.protein_g} goal={weeklyGoal("protein_g")} unit="g" />
+        <Stat label="Carbs" value={weekTotals.carbs_g} goal={weeklyGoal("carbs_g")} unit="g" />
         <button
           onClick={() => setEditing(true)}
           title={goals.length ? "Edit goals" : "Set goals"}

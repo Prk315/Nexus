@@ -7,7 +7,7 @@ import {
   fetchFoods, fetchMeals, fetchMealItems, fetchMealPlanEntries, fetchNutritionGoalItems,
 } from "../store/slices/mealPlannerSlice";
 import { entryNutrition } from "../lib/mealNutrition";
-import { goalTarget } from "../lib/nutritionScore";
+import { goalTarget, calorieConfigFrom } from "../lib/nutritionScore";
 import SleepLogger from "../components/biomarkers/SleepLogger";
 import BodyMetricsLogger from "../components/biomarkers/BodyMetricsLogger";
 import OuraImportPanel from "../components/biomarkers/OuraImportPanel";
@@ -160,9 +160,8 @@ function NutritionModule() {
     const wk = goalTarget(goalItems.find((g) => g.nutrient_key === key));
     return wk != null ? Math.round(wk / 7) : null;
   };
-  const calorieDaily = activityGoals?.base_bmr != null
-    ? Math.round(Number(activityGoals.base_bmr) + Number(activityGoals.calorie_offset ?? 0))
-    : null;
+  const calCfg = calorieConfigFrom(activityGoals);
+  const calorieDaily = Math.round(calCfg.base_bmr + calCfg.offset);
 
   useEffect(() => {
     dispatch(fetchFoods());
@@ -201,6 +200,17 @@ function NutritionModule() {
   const recentCalorieDays = [...caloriesByDate.entries()].filter(([date]) => date >= cutoff7).map(([, cal]) => cal);
   const avgCalories = avg(recentCalorieDays);
 
+  // Weekly (trailing 7 days) totals for the goal tiles — goals are weekly now.
+  const weekCalories = recentCalorieDays.reduce((s, c) => s + c, 0);
+  const proteinByDate = new Map<string, number>();
+  for (const e of loggedEntries) {
+    const n = entryNutrition(e, foodsById, mealsById, mealItemsById);
+    if (n) proteinByDate.set(e.date, (proteinByDate.get(e.date) ?? 0) + (n.protein_g ?? 0));
+  }
+  const weekProtein = [...proteinByDate.entries()].filter(([d]) => d >= cutoff7).reduce((s, [, p]) => s + p, 0);
+  const weekProteinGoal = goalTarget(goalItems.find((g) => g.nutrient_key === "protein_g"));
+  const weekCalorieTarget = calorieDaily * 7;
+
   const chartData = lastNDates(NUTRITION_HISTORY_DAYS).map((date) => ({
     date: date.slice(5),
     value: caloriesByDate.get(date) ?? null,
@@ -209,8 +219,8 @@ function NutritionModule() {
   return (
     <div style={MODULE_STYLE}>
       <ModuleHeader icon={<Apple size={16} />} title="Nutrition" color="var(--series-nutrition)" tint="var(--series-nutrition-track)">
-        <StatTile label="Calories today" value={todayEntries.length ? String(Math.round(caloriesToday)) : "—"} sub={calorieDaily ? `/ ${calorieDaily}` : undefined} />
-        <StatTile label="Protein today" value={todayEntries.length ? `${Math.round(proteinToday)}g` : "—"} sub={dailyTarget("protein_g") ? `/ ${dailyTarget("protein_g")}g` : undefined} />
+        <StatTile label="Calories (7d)" value={weekCalories > 0 ? String(Math.round(weekCalories)) : "—"} sub={`/ ${weekCalorieTarget}`} />
+        <StatTile label="Protein (7d)" value={weekProtein > 0 ? `${Math.round(weekProtein)}g` : "—"} sub={weekProteinGoal ? `/ ${weekProteinGoal}g` : undefined} />
         <StatTile label="Avg calories (7d)" value={avgCalories != null ? String(Math.round(avgCalories)) : "—"} sub="per day" />
       </ModuleHeader>
 

@@ -1,6 +1,6 @@
 import { useMemo } from "react";
 import {
-  BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ReferenceLine, ResponsiveContainer,
+  ComposedChart, Bar, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer,
   PieChart, Pie, Cell,
 } from "recharts";
 import { CARD_STYLE } from "../../lib/uiHelpers";
@@ -28,22 +28,23 @@ interface DayCalories {
   date: string;
   label: string;
   calories: number;
+  /** That day's dynamic calorie target (base + active + offset). */
+  target: number;
 }
 
 export default function NutrientOverview({
-  perDay, todayTotals, goals, dailyCalorieTarget,
+  perDay, todayTotals, weekTotals, goals, dailyCalorieTarget,
 }: {
   perDay: DayCalories[];
   todayTotals: NutrientTotals;
+  weekTotals: NutrientTotals;
   goals: NutritionGoalItem[];
   /** Rough daily calorie target (base + offset) for the reference line. */
   dailyCalorieTarget: number | null;
 }) {
-  // Nutrient goals are weekly; the daily rings show a ÷7 pace target.
-  const dailyTarget = (key: string) => {
-    const wk = goalTarget(goals.find((g) => g.nutrient_key === key));
-    return wk != null ? Math.round(wk / 7) : null;
-  };
+  // Nutrient goals are weekly — the micronutrient rings show this week's total
+  // against the weekly goal.
+  const weeklyGoal = (key: string) => goalTarget(goals.find((g) => g.nutrient_key === key));
   const calorieGoal = dailyCalorieTarget;
   const macroData = useMemo(() => {
     const proteinKcal = todayTotals.protein_g * 4;
@@ -67,7 +68,7 @@ export default function NutrientOverview({
             Calories logged this week
           </div>
           <ResponsiveContainer width="100%" height={200}>
-            <BarChart data={perDay} margin={{ top: 4, right: 8, bottom: 0, left: -20 }}>
+            <ComposedChart data={perDay} margin={{ top: 4, right: 8, bottom: 0, left: -20 }}>
               <CartesianGrid stroke="var(--border-subtle)" strokeWidth={1} vertical={false} />
               <XAxis dataKey="label" tick={{ fontSize: 11, fill: "var(--text-muted)" }} axisLine={false} tickLine={false} />
               <YAxis
@@ -76,17 +77,12 @@ export default function NutrientOverview({
                 tickLine={false}
                 domain={[0, (dataMax: number) => Math.ceil(Math.max(dataMax, calorieGoal ?? 0) * 1.1)]}
               />
-              <Tooltip contentStyle={TOOLTIP_STYLE} formatter={(v: number) => [`${Math.round(v)} kcal`, "Calories"]} />
-              {calorieGoal && (
-                <ReferenceLine
-                  y={calorieGoal}
-                  stroke="var(--text-muted)"
-                  strokeDasharray="4 4"
-                  label={{ value: "Goal", position: "insideTopRight", fontSize: 10, fill: "var(--text-muted)" }}
-                />
-              )}
-              <Bar dataKey="calories" fill="var(--series-nutrition)" radius={[3, 3, 0, 0]} />
-            </BarChart>
+              <Tooltip contentStyle={TOOLTIP_STYLE} formatter={(v: number, name: string) => [`${Math.round(v)} kcal`, name === "target" ? "Goal" : "Logged"]} />
+              <Legend wrapperStyle={{ fontSize: 11, paddingTop: 4 }} formatter={(v) => (v === "target" ? "Goal" : "Logged")} />
+              <Bar dataKey="calories" name="calories" fill="var(--series-nutrition)" radius={[3, 3, 0, 0]} />
+              {/* Per-day dynamic calorie target (base + that day's active + offset). */}
+              <Line type="monotone" dataKey="target" name="target" stroke="var(--text-secondary)" strokeWidth={2} strokeDasharray="5 4" dot={{ r: 2 }} isAnimationActive={false} />
+            </ComposedChart>
           </ResponsiveContainer>
         </div>
 
@@ -151,17 +147,17 @@ export default function NutrientOverview({
       {/* Micronutrients */}
       <div>
         <div style={{ fontSize: 13, fontWeight: 700, color: "var(--text)", marginBottom: 12 }}>
-          Micronutrients today
+          Micronutrients this week
         </div>
         <div style={{ display: "flex", gap: 18, flexWrap: "wrap" }}>
-          <RingGauge label="Sodium" value={todayTotals.sodium_mg} goal={dailyTarget("sodium_mg")} unit="mg" color="var(--series-nutrition)" track="var(--series-nutrition-track)" />
-          <RingGauge label="Potassium" value={todayTotals.potassium_mg} goal={dailyTarget("potassium_mg")} unit="mg" color="var(--series-nutrition)" track="var(--series-nutrition-track)" />
-          <RingGauge label="Calcium" value={todayTotals.calcium_mg} goal={dailyTarget("calcium_mg")} unit="mg" color="var(--series-nutrition)" track="var(--series-nutrition-track)" />
-          <RingGauge label="Iron" value={todayTotals.iron_mg} goal={dailyTarget("iron_mg")} unit="mg" color="var(--series-nutrition)" track="var(--series-nutrition-track)" />
-          <RingGauge label="Vitamin C" value={todayTotals.vitamin_c_mg} goal={dailyTarget("vitamin_c_mg")} unit="mg" color="var(--series-nutrition)" track="var(--series-nutrition-track)" />
-          <RingGauge label="Vitamin D" value={todayTotals.vitamin_d_mcg} goal={dailyTarget("vitamin_d_mcg")} unit="mcg" color="var(--series-nutrition)" track="var(--series-nutrition-track)" />
-          <RingGauge label="Fiber" value={todayTotals.fiber_g} goal={dailyTarget("fiber_g")} unit="g" color="var(--series-nutrition)" track="var(--series-nutrition-track)" />
-          <RingGauge label="Sugar" value={todayTotals.sugar_g} goal={dailyTarget("sugar_g")} unit="g" color="var(--series-nutrition)" track="var(--series-nutrition-track)" />
+          <RingGauge label="Sodium" value={weekTotals.sodium_mg} goal={weeklyGoal("sodium_mg")} unit="mg" color="var(--series-nutrition)" track="var(--series-nutrition-track)" />
+          <RingGauge label="Potassium" value={weekTotals.potassium_mg} goal={weeklyGoal("potassium_mg")} unit="mg" color="var(--series-nutrition)" track="var(--series-nutrition-track)" />
+          <RingGauge label="Calcium" value={weekTotals.calcium_mg} goal={weeklyGoal("calcium_mg")} unit="mg" color="var(--series-nutrition)" track="var(--series-nutrition-track)" />
+          <RingGauge label="Iron" value={weekTotals.iron_mg} goal={weeklyGoal("iron_mg")} unit="mg" color="var(--series-nutrition)" track="var(--series-nutrition-track)" />
+          <RingGauge label="Vitamin C" value={weekTotals.vitamin_c_mg} goal={weeklyGoal("vitamin_c_mg")} unit="mg" color="var(--series-nutrition)" track="var(--series-nutrition-track)" />
+          <RingGauge label="Vitamin D" value={weekTotals.vitamin_d_mcg} goal={weeklyGoal("vitamin_d_mcg")} unit="mcg" color="var(--series-nutrition)" track="var(--series-nutrition-track)" />
+          <RingGauge label="Fiber" value={weekTotals.fiber_g} goal={weeklyGoal("fiber_g")} unit="g" color="var(--series-nutrition)" track="var(--series-nutrition-track)" />
+          <RingGauge label="Sugar" value={weekTotals.sugar_g} goal={weeklyGoal("sugar_g")} unit="g" color="var(--series-nutrition)" track="var(--series-nutrition-track)" />
         </div>
       </div>
     </div>

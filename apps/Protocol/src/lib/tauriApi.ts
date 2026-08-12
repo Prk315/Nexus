@@ -68,6 +68,12 @@ export async function createSleepEntry(entry: CreateSleepEntry): Promise<SleepEn
     temperature_deviation: entry.temperature_deviation ?? null,
     bedtime_start: entry.bedtime_start ?? null,
     bedtime_end: entry.bedtime_end ?? null,
+    // Oura-only enrichment — manual sleep entries don't carry these.
+    contributor_deep_sleep: null, contributor_efficiency: null, contributor_latency: null,
+    contributor_rem_sleep: null, contributor_restfulness: null, contributor_timing: null,
+    contributor_total_sleep: null,
+    optimal_bedtime_start: null, optimal_bedtime_end: null,
+    bedtime_recommendation: null, sleep_time_status: null,
     notes: entry.notes ?? null,
     created_at: new Date().toISOString(),
   };

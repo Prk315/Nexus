@@ -16,6 +16,7 @@ import ExerciseAliasEditor from "../components/workouts/ExerciseAliasEditor";
 import LogPlanCard from "../components/workouts/LogPlanCard";
 import RunsCard from "../components/workouts/RunsCard";
 import WeeklyGoalsCard from "../components/workouts/WeeklyGoalsCard";
+import BodyCompositionChart from "../components/workouts/BodyCompositionChart";
 import ProgressionView from "../components/workouts/ProgressionView";
 import ActivityModule from "../components/biomarkers/ActivityModule";
 import StravaImportPanel from "../components/shared/StravaImportPanel";
@@ -173,6 +174,9 @@ export default function WorkoutsPage() {
           )}
         </div>
       </div>
+
+      {/* Body-composition progress over time */}
+      <BodyCompositionChart />
 
       {/* Recovery: muscle map + readiness/vitals */}
       <RecoveryCard />

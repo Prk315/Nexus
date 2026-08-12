@@ -90,9 +90,14 @@ function DomainRing({ label, value, color, track }: { label: string; value: numb
 
 // ── Scoring (0–100 per day) ─────────────────────────────────────────────────
 
-function scoreSleep(entries: SleepEntry[]): number {
-  if (!entries.length) return 0;
-  const scores = entries.map((e) => {
+/** Sleep score over the trailing 7 days ending at `date` — the average nightly
+ *  quality/duration score across the week, so one good night can't offset a bad
+ *  week. 0 if nothing was tracked in the window. */
+function scoreSleep(date: string, entries: SleepEntry[]): number {
+  const start = addDaysISO(date, -6);
+  const week = entries.filter((e) => e.date >= start && e.date <= date);
+  if (!week.length) return 0;
+  const scores = week.map((e) => {
     const q = (e.quality_score / 10) * 65;
     const d = Math.max(0, 35 * (1 - Math.abs(e.duration_min - 480) / 300));
     return Math.min(100, q + d);
@@ -123,9 +128,16 @@ function scoreNutrition(
   );
 }
 
-function scoreBody(entries: BodyMetric[]): number {
-  if (!entries.length) return 0;
-  const e = entries[entries.length - 1];
+/** Body score over the trailing 7 days ending at `date` — vitals coverage of
+ *  the most recent reading in the week. 0 if nothing was measured in the window,
+ *  so a week with no body data reads as a gap rather than a stale old score. */
+function scoreBody(date: string, entries: BodyMetric[]): number {
+  const start = addDaysISO(date, -6);
+  const week = entries
+    .filter((e) => e.date >= start && e.date <= date)
+    .sort((a, b) => a.date.localeCompare(b.date));
+  if (!week.length) return 0;
+  const e = week[week.length - 1];
   const fields = [e.weight_kg, e.hrv_ms, e.resting_hr_bpm, e.spo2_pct].filter((v) => v != null).length;
   return Math.min(100, 25 + fields * 19);
 }
@@ -226,25 +238,13 @@ export default function ProtocolChargeChart({
   const [range, setRange] = useState<Range>("7D");
 
   const data = useMemo<Point[]>(() => {
-    // Index all data by date for O(1) lookup
-    const byDate = <T,>(items: T[], key: (t: T) => string) => {
-      const m = new Map<string, T[]>();
-      items.forEach((item) => {
-        const d = key(item);
-        if (!m.has(d)) m.set(d, []);
-        m.get(d)!.push(item);
-      });
-      return m;
-    };
-
-    const sleepMap    = byDate(sleep, (e) => e.date);
-    const bodyMap     = byDate(bodyMetrics, (e) => e.date);
-
+    // Every domain scores over the trailing 7 days ending at `date`, so each
+    // point reads as "how's the last week" rather than a single day.
     function dayScore(date: string) {
       return {
-        sleep:    scoreSleep(sleepMap.get(date) ?? []),
+        sleep:    scoreSleep(date, sleep),
         nutrition: scoreNutrition(date, nutritionTotalsByDate, activeCaloriesByDate, nutritionGoals, calorieConfig),
-        body:     scoreBody(bodyMap.get(date) ?? []),
+        body:     scoreBody(date, bodyMetrics),
         workout:  scoreWorkout(date, workoutSessions, workoutGoalPerWeek),
         running:  scoreRunning(date, runningSessions, runningGoalKmPerWeek),
       };
