@@ -1732,8 +1732,8 @@ export function CanvasEditor({ content, onChange, nodeId }: Props) {
   const [inkMode,        setInkMode]        = useState(false);
   const inkModeRef       = useRef(inkMode);
   inkModeRef.current     = inkMode;
-  const [inkColor]       = useState(DRAW_COLORS[0]);
-  const [inkWidth]       = useState(2.5);
+  const [inkColor,       setInkColor]       = useState(DRAW_COLORS[0]);
+  const [inkWidth,       setInkWidth]       = useState(2.5);
   const inkActive        = useRef<{ x: number; y: number }[] | null>(null);
   const [inkPreview,     setInkPreview]     = useState<string | null>(null);
   const dataRef          = useRef(data);
@@ -2059,6 +2059,10 @@ export function CanvasEditor({ content, onChange, nodeId }: Props) {
     if (inkModeRef.current) {
       if (e.pointerType === "touch") return; // suppress single-finger touch
       if (e.pointerType === "pen") {
+        // Backstop to the ink capture layer: kills the compatibility mouse
+        // events, so the Pencil can never drop a caret or start a text
+        // selection even if it lands on something interactive.
+        e.preventDefault();
         const rect = containerRef.current!.getBoundingClientRect();
         const vp = viewportRef.current;
         const cx = (e.clientX - rect.left - vp.x) / vp.zoom;
@@ -2094,6 +2098,7 @@ export function CanvasEditor({ content, onChange, nodeId }: Props) {
   }
 
   function onBgClick(e: React.MouseEvent) {
+    if (inkModeRef.current) return; // drawing mode does one thing: draw
     if (e.detail !== 1) return; // only single clicks
     if (buildModeRef.current) {
       const rect = containerRef.current!.getBoundingClientRect();
@@ -2109,6 +2114,9 @@ export function CanvasEditor({ content, onChange, nodeId }: Props) {
   }
 
   function onBgDblClick(e: React.MouseEvent) {
+    // A double tap while drawing is two quick pen dots, not a request for a
+    // text block. Two strokes in the same spot used to spawn one every time.
+    if (inkModeRef.current) return;
     if (buildModeRef.current) return;
     if (tool === "draw_polygon") {
       // finish polygon on double-click (remove the duplicate point added by the two single-click events)
@@ -3181,10 +3189,27 @@ export function CanvasEditor({ content, onChange, nodeId }: Props) {
       onTouchMove={onTouchMove}
       onTouchEnd={onTouchEnd}
     >
+      {/* ── Ink capture layer ──────────────────────────────────────────────
+          In ink mode this transparent sheet is the topmost hit target over the
+          whole canvas, so a Pencil stroke can never land *in* a text block —
+          no caret, no text selection, no double-click reaching a block. It
+          carries no handlers of its own: pointer and touch events bubble to
+          the container below, which already routes pen → ink, two fingers →
+          pan/zoom, mouse → pan. */}
+      {inkMode && <div className="canvas-ink-layer" />}
+
       {/* ── Toolbar trigger strip (indicator shown when toolbar is hidden) ── */}
       <div
         className={`canvas-toolbar-trigger${showToolbar ? "" : " show-indicator"}`}
         onMouseEnter={() => { if (toolbarHideTimer.current) clearTimeout(toolbarHideTimer.current); setShowToolbar(true); }}
+        // Touch has no hover, so on iPad the strip is a tap toggle instead —
+        // otherwise the toolbar (and with it Ink mode) is unreachable there.
+        onPointerDown={e => {
+          if (e.pointerType === "mouse") return;
+          e.stopPropagation();
+          if (toolbarHideTimer.current) clearTimeout(toolbarHideTimer.current);
+          setShowToolbar(v => !v);
+        }}
       />
 
       {/* ── Toolbar ── */}
@@ -3221,11 +3246,39 @@ export function CanvasEditor({ content, onChange, nodeId }: Props) {
               setPolygonPts([]);
               drawStart.current = null; setDrawCurrent(null);
               setOpenMenu(null);
+              // Nothing is editable through the capture layer, so leaving a
+              // block selected would only strand its toolbar under the sheet.
+              setSelectedId(null); setSelectedIds(new Set()); setSelectedArrowId(null);
             }
             inkActive.current = null;
             setInkPreview(null);
           }}
         >✏ Ink</button>
+
+        {/* Pen settings — the only way to change colour or nib; without them
+            every stroke on every canvas is 2.5px slate. */}
+        {inkMode && (
+          <>
+            <div className="canvas-toolbar-sep" />
+            <div className="ink-palette">
+              {DRAW_COLORS.map(c => (
+                <button key={c} className={`ink-color-btn${inkColor === c ? " active" : ""}`}
+                  style={{ background: c, outlineColor: c }}
+                  title={`Pen colour ${c}`}
+                  onClick={() => setInkColor(c)} />
+              ))}
+              <div className="canvas-divider-float-sep" />
+              {[1.5, 2.5, 4, 7].map(w => (
+                <button key={w} className={`ink-width-btn${inkWidth === w ? " active" : ""}`}
+                  title={`${w}px nib`} onClick={() => setInkWidth(w)}>
+                  {/* Ringed so a white pen is still visible on the toolbar. */}
+                  <span style={{ display: "block", width: w * 2 + 4, height: w * 2 + 4, borderRadius: "50%",
+                    background: inkColor, boxShadow: "0 0 0 1px var(--border-base)" }} />
+                </button>
+              ))}
+            </div>
+          </>
+        )}
         <div className="canvas-toolbar-sep" />
 
         {/* Text group */}

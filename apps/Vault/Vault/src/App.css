@@ -2227,6 +2227,75 @@ body {
   cursor: crosshair;
 }
 
+/* Transparent sheet over the whole canvas while ink mode is on. It sits above
+   blocks (z-index 2) and below the toolbar (40), so the Pencil always hits it
+   instead of a textarea — no caret, no text selection, no stray double-click
+   node. Events bubble through to the container's handlers. */
+.canvas-ink-layer {
+  position: absolute;
+  inset: 0;
+  z-index: 5;
+  cursor: crosshair;
+  touch-action: none;
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-touch-callout: none;
+}
+
+/* Pen settings, shown in the toolbar only while ink mode is on. */
+.ink-palette {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.ink-color-btn {
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  border: 1px solid var(--border-base);
+  cursor: pointer;
+  padding: 0;
+  transition: transform var(--duration) var(--ease);
+}
+
+.ink-color-btn:hover { transform: scale(1.15); }
+
+.ink-color-btn.active {
+  outline: 2px solid currentColor;
+  outline-offset: 2px;
+  transform: scale(1.15);
+}
+
+.ink-width-btn {
+  width: 26px;
+  height: 26px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: transparent;
+  cursor: pointer;
+  padding: 0;
+}
+
+.ink-width-btn.active {
+  background: var(--bg-raised);
+  border-color: var(--border-base);
+}
+
+/* Touch has no hover: the hairline trigger strip is a tap target on iPad, so
+   give it a finger-sized height there. */
+@media (pointer: coarse) {
+  .canvas-toolbar-trigger {
+    height: 34px;
+  }
+  .canvas-toolbar-trigger::after {
+    opacity: 0.55;
+  }
+}
+
 .canvas-tool-active {
   background: var(--bg-raised) !important;
   color: var(--fg-primary) !important;
