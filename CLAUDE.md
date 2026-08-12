@@ -653,6 +653,27 @@ These are non-obvious requirements that broke the 3D graph and PDF viewer once a
 
 **PDF page wrappers must use block layout, not inline-block in a flex column.** `.pdf-scroll-area` cannot be `display: flex; flex-direction: column; align-items: center` if its children are inline-block: WebView2 (Chromium) collapses them to height 0 inside the `overflow: auto` container, and pages render correctly into invisible boxes. Use plain block layout on the scroll area and `display: block; width: max-content; margin: 0 auto` on the wrapper.
 
+**CanvasEditor renders in two layers, and a block must pick exactly one.** Vector
+blocks (`divider`, `draw_arrow`, `draw_ellipse`, `draw_polygon`, `ink_stroke`) draw
+themselves in the SVG layer at `z-index: 1`; everything else gets a `.canvas-block`
+wrapper at `z-index: 2`. That wrapper is an **opaque** card the size of the block's
+bounding rect with a ≥32px header — so a vector block that is missing from the
+early-return list in `blockElements` renders *twice*, with the card hiding the very
+stroke it belongs to. `ink_stroke` was missing from that list, which is why every pen
+stroke came out buried under a white edit box. Add new vector types to both the
+early-return and the SVG layer. The corollary: with no wrapper there is no drag
+header, so the shape's own hit path must arm the drag (`onInkStrokePointerDown`), and
+its `strokeWidth` should be divided by `zoom` to stay finger-sized on iPad.
+
+**Destructive actions use `useConfirm()` from `components/ConfirmDialog.tsx`, never
+`window.confirm()`** — the latter is a silent no-op in iOS WKWebView, so a confirm
+that "returns false" would just make deletes stop working on the iPad. Node deletion
+has exactly one gate: `App.handleDeleteNode`. The tree row ×, both graph Delete
+buttons and EditorPane's folder graph all route through it (EditorPane receives it as
+its `deleteNode` prop), and it resolves `false` on cancel so callers skip their
+post-delete cleanup. Wire new delete entry points to that function rather than to
+`useGraph().deleteNode`.
+
 ## Scheduled server-side work (pg_cron)
 
 Three jobs run in the database, and this is the pattern for anything that must happen

@@ -6236,3 +6236,102 @@ body {
   .parsed-content .pv-env { background: rgba(255,255,255,0.03); }
   .parsed-content img, .parsed-content img.parsed-figure { background: #f4f4f6; }
 }
+
+/* ── Confirmation dialog ────────────────────────────────────────────────────
+   Used for every destructive action (node delete, tag delete). window.confirm()
+   is a silent no-op in iOS WKWebView, so this is the only confirmation path. */
+.confirm-backdrop {
+  position: fixed;
+  inset: 0;
+  /* Above everything, including .tag-dropdown (9999) — a confirmation that can
+     be rendered behind another layer is worse than none. */
+  z-index: 10000;
+  background: oklch(0 0 0 / 32%);
+  backdrop-filter: blur(6px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+}
+
+.confirm-dialog {
+  background: var(--bg-base);
+  border: 1px solid var(--border-base);
+  border-radius: calc(var(--radius) * 1.5);
+  box-shadow: var(--shadow-lg);
+  width: 420px;
+  max-width: 100%;
+  padding: 22px 22px 18px;
+  animation: confirm-pop var(--duration) var(--ease);
+}
+
+@keyframes confirm-pop {
+  from { opacity: 0; transform: scale(0.97) translateY(6px); }
+  to   { opacity: 1; transform: none; }
+}
+
+.confirm-title {
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--fg-main);
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+
+.confirm-message {
+  margin-top: 8px;
+  font-size: 13.5px;
+  color: var(--fg-secondary);
+  line-height: 1.5;
+}
+
+.confirm-details {
+  margin: 12px 0 0;
+  padding: 10px 12px 10px 26px;
+  list-style: disc;
+  background: var(--destructive-bg);
+  border: 1px solid var(--destructive-border);
+  border-radius: var(--radius);
+  font-size: 12.5px;
+  line-height: 1.55;
+  color: var(--fg-secondary);
+}
+
+.confirm-details li + li { margin-top: 3px; }
+
+.confirm-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  margin-top: 18px;
+}
+
+/* Generous hit targets — this dialog is used on iPad with a finger. */
+.confirm-btn {
+  min-height: 42px;
+  min-width: 104px;
+  padding: 0 18px;
+  border-radius: var(--radius);
+  font-size: 14px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background var(--duration) var(--ease), border-color var(--duration) var(--ease);
+}
+
+.confirm-btn-cancel {
+  background: var(--bg-raised);
+  border: 1px solid var(--border-base);
+  color: var(--fg-main);
+}
+
+.confirm-btn-cancel:hover { background: var(--bg-muted); }
+.confirm-btn-cancel:focus-visible { outline: 2px solid var(--fg-muted); outline-offset: 2px; }
+
+.confirm-btn-danger {
+  background: var(--destructive);
+  border: 1px solid var(--destructive);
+  color: #fff;
+}
+
+.confirm-btn-danger:hover { filter: brightness(1.06); }
+.confirm-btn-danger:focus-visible { outline: 2px solid var(--destructive); outline-offset: 2px; }

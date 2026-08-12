@@ -82,7 +82,8 @@ interface EditorPaneProps {
   removeEdge: (a: string, b: string) => Promise<void>;
   addEdge: (a: string, b: string) => Promise<void>;
   createNode: (name: string, kind: string) => Promise<VaultGraph>;
-  deleteNode: (id: string) => Promise<void>;
+  /** Resolves false when the user cancels the confirmation, so callers can skip cleanup. */
+  deleteNode: (id: string) => Promise<boolean>;
   addTag: (id: string, tag: string) => Promise<void>;
   removeTag: (id: string, tag: string) => Promise<void>;
   setTagColor: (tag: string, color: string) => void;
@@ -288,8 +289,9 @@ export const EditorPane = forwardRef<EditorPaneHandle, EditorPaneProps>(
     }
 
     async function handleFolderDeleteNode(id: string) {
-      await deleteNode(id);
-      setGraphSelId(null);
+      // deleteNode is App's confirmation-gated handler; keep the selection when
+      // the user backs out of the dialog.
+      if (await deleteNode(id)) setGraphSelId(null);
     }
 
     async function selectNode(id: string) {
