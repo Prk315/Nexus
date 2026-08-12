@@ -16,7 +16,7 @@ import {
 import type { BodyMetric, RunningSession, SleepEntry, WorkoutSession, NutritionGoalItem } from "../../store/types";
 import type { NutrientTotals } from "../../lib/mealNutrition";
 import { isoDate } from "../../lib/uiHelpers";
-import { nutritionScore } from "../../lib/nutritionScore";
+import { weeklyNutritionScore, type CalorieConfig } from "../../lib/nutritionScore";
 
 type Range = "7D" | "4W" | "6M";
 type Domain = "sleep" | "nutrition" | "body" | "workout" | "running";
@@ -101,16 +101,26 @@ function scoreSleep(entries: SleepEntry[]): number {
 }
 
 /**
- * How well the day's logged intake met the nutrition goals — the average
- * closeness across every goal (see lib/nutritionScore). Falls back to a plain
- * calorie proxy when no goals are set, and is 0 on a day with no food logged.
+ * Weekly nutrition score at `date`: how well the trailing 7 days' intake met
+ * the weekly nutrient goals and the dynamic calorie target (base + active ±
+ * offset). See lib/nutritionScore. 0 on a week with nothing logged.
  */
-function scoreNutrition(totals: NutrientTotals | undefined, goals: NutritionGoalItem[]): number {
-  const calories = Number(totals?.calories ?? 0);
-  if (calories <= 0) return 0;
-  const s = nutritionScore(totals as unknown as Record<string, number | null>, goals);
-  if (s == null) return Math.min(100, Math.round((calories / 2000) * 100));
-  return s;
+function scoreNutrition(
+  date: string,
+  totalsByDate: Map<string, NutrientTotals>,
+  activeCaloriesByDate: Map<string, number>,
+  goals: NutritionGoalItem[],
+  calorie: CalorieConfig | null,
+): number {
+  const dates: string[] = [];
+  for (let i = 6; i >= 0; i--) dates.push(addDaysISO(date, -i));
+  return weeklyNutritionScore(
+    dates,
+    totalsByDate as unknown as Map<string, Record<string, number | null>>,
+    activeCaloriesByDate,
+    goals,
+    calorie,
+  );
 }
 
 function scoreBody(entries: BodyMetric[]): number {
@@ -187,6 +197,9 @@ interface Props {
   /** Full nutrient totals per date (Meal Planner, logged entries only). */
   nutritionTotalsByDate: Map<string, NutrientTotals>;
   nutritionGoals: NutritionGoalItem[];
+  /** Oura active calories per date — feeds the dynamic calorie target. */
+  activeCaloriesByDate: Map<string, number>;
+  calorieConfig: CalorieConfig | null;
   bodyMetrics: BodyMetric[];
   workoutSessions: WorkoutSession[];
   runningSessions: RunningSession[];
@@ -206,7 +219,8 @@ interface Point {
 }
 
 export default function ProtocolChargeChart({
-  sleep, nutritionTotalsByDate, nutritionGoals, bodyMetrics, workoutSessions, runningSessions,
+  sleep, nutritionTotalsByDate, nutritionGoals, activeCaloriesByDate, calorieConfig,
+  bodyMetrics, workoutSessions, runningSessions,
   workoutGoalPerWeek, runningGoalKmPerWeek,
 }: Props) {
   const [range, setRange] = useState<Range>("7D");
@@ -229,7 +243,7 @@ export default function ProtocolChargeChart({
     function dayScore(date: string) {
       return {
         sleep:    scoreSleep(sleepMap.get(date) ?? []),
-        nutrition: scoreNutrition(nutritionTotalsByDate.get(date), nutritionGoals),
+        nutrition: scoreNutrition(date, nutritionTotalsByDate, activeCaloriesByDate, nutritionGoals, calorieConfig),
         body:     scoreBody(bodyMap.get(date) ?? []),
         workout:  scoreWorkout(date, workoutSessions, workoutGoalPerWeek),
         running:  scoreRunning(date, runningSessions, runningGoalKmPerWeek),
@@ -279,7 +293,7 @@ export default function ProtocolChargeChart({
       const label = d.toLocaleDateString("en-US", { month: "short" });
       return bucket(daysBetween(isoDate(d), isoDate(end)), label);
     });
-  }, [range, sleep, nutritionTotalsByDate, nutritionGoals, bodyMetrics, workoutSessions, runningSessions, workoutGoalPerWeek, runningGoalKmPerWeek]);
+  }, [range, sleep, nutritionTotalsByDate, nutritionGoals, activeCaloriesByDate, calorieConfig, bodyMetrics, workoutSessions, runningSessions, workoutGoalPerWeek, runningGoalKmPerWeek]);
 
   const TOOLTIP_STYLE = {
     background: "var(--surface)",

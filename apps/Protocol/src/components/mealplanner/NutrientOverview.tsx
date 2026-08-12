@@ -31,14 +31,20 @@ interface DayCalories {
 }
 
 export default function NutrientOverview({
-  perDay, todayTotals, goals,
+  perDay, todayTotals, goals, dailyCalorieTarget,
 }: {
   perDay: DayCalories[];
   todayTotals: NutrientTotals;
   goals: NutritionGoalItem[];
+  /** Rough daily calorie target (base + offset) for the reference line. */
+  dailyCalorieTarget: number | null;
 }) {
-  const targetFor = (key: string) => goalTarget(goals.find((g) => g.nutrient_key === key));
-  const calorieGoal = targetFor("calories");
+  // Nutrient goals are weekly; the daily rings show a ÷7 pace target.
+  const dailyTarget = (key: string) => {
+    const wk = goalTarget(goals.find((g) => g.nutrient_key === key));
+    return wk != null ? Math.round(wk / 7) : null;
+  };
+  const calorieGoal = dailyCalorieTarget;
   const macroData = useMemo(() => {
     const proteinKcal = todayTotals.protein_g * 4;
     const carbsKcal = todayTotals.carbs_g * 4;
@@ -148,14 +154,14 @@ export default function NutrientOverview({
           Micronutrients today
         </div>
         <div style={{ display: "flex", gap: 18, flexWrap: "wrap" }}>
-          <RingGauge label="Sodium" value={todayTotals.sodium_mg} goal={targetFor("sodium_mg")} unit="mg" color="var(--series-nutrition)" track="var(--series-nutrition-track)" />
-          <RingGauge label="Potassium" value={todayTotals.potassium_mg} goal={targetFor("potassium_mg")} unit="mg" color="var(--series-nutrition)" track="var(--series-nutrition-track)" />
-          <RingGauge label="Calcium" value={todayTotals.calcium_mg} goal={targetFor("calcium_mg")} unit="mg" color="var(--series-nutrition)" track="var(--series-nutrition-track)" />
-          <RingGauge label="Iron" value={todayTotals.iron_mg} goal={targetFor("iron_mg")} unit="mg" color="var(--series-nutrition)" track="var(--series-nutrition-track)" />
-          <RingGauge label="Vitamin C" value={todayTotals.vitamin_c_mg} goal={targetFor("vitamin_c_mg")} unit="mg" color="var(--series-nutrition)" track="var(--series-nutrition-track)" />
-          <RingGauge label="Vitamin D" value={todayTotals.vitamin_d_mcg} goal={targetFor("vitamin_d_mcg")} unit="mcg" color="var(--series-nutrition)" track="var(--series-nutrition-track)" />
-          <RingGauge label="Fiber" value={todayTotals.fiber_g} goal={targetFor("fiber_g")} unit="g" color="var(--series-nutrition)" track="var(--series-nutrition-track)" />
-          <RingGauge label="Sugar" value={todayTotals.sugar_g} goal={targetFor("sugar_g")} unit="g" color="var(--series-nutrition)" track="var(--series-nutrition-track)" />
+          <RingGauge label="Sodium" value={todayTotals.sodium_mg} goal={dailyTarget("sodium_mg")} unit="mg" color="var(--series-nutrition)" track="var(--series-nutrition-track)" />
+          <RingGauge label="Potassium" value={todayTotals.potassium_mg} goal={dailyTarget("potassium_mg")} unit="mg" color="var(--series-nutrition)" track="var(--series-nutrition-track)" />
+          <RingGauge label="Calcium" value={todayTotals.calcium_mg} goal={dailyTarget("calcium_mg")} unit="mg" color="var(--series-nutrition)" track="var(--series-nutrition-track)" />
+          <RingGauge label="Iron" value={todayTotals.iron_mg} goal={dailyTarget("iron_mg")} unit="mg" color="var(--series-nutrition)" track="var(--series-nutrition-track)" />
+          <RingGauge label="Vitamin C" value={todayTotals.vitamin_c_mg} goal={dailyTarget("vitamin_c_mg")} unit="mg" color="var(--series-nutrition)" track="var(--series-nutrition-track)" />
+          <RingGauge label="Vitamin D" value={todayTotals.vitamin_d_mcg} goal={dailyTarget("vitamin_d_mcg")} unit="mcg" color="var(--series-nutrition)" track="var(--series-nutrition-track)" />
+          <RingGauge label="Fiber" value={todayTotals.fiber_g} goal={dailyTarget("fiber_g")} unit="g" color="var(--series-nutrition)" track="var(--series-nutrition-track)" />
+          <RingGauge label="Sugar" value={todayTotals.sugar_g} goal={dailyTarget("sugar_g")} unit="g" color="var(--series-nutrition)" track="var(--series-nutrition-track)" />
         </div>
       </div>
     </div>

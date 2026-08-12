@@ -109,6 +109,7 @@ export async function createBodyMetric(entry: CreateBodyMetric): Promise<BodyMet
   await pushBodyMetricToCloud({ ...entry, id });
   return {
     id, ...entry,
+    active_calories: null, // manual body-metric entries don't carry Oura activity
     weight_kg: entry.weight_kg ?? null,
     hrv_ms: entry.hrv_ms ?? null,
     resting_hr_bpm: entry.resting_hr_bpm ?? null,

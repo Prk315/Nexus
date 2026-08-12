@@ -46,11 +46,32 @@ export const fetchActivityGoals = createAsyncThunk("workouts/fetchActivityGoals"
   return getActivityGoals();
 });
 
+const ACTIVITY_GOAL_DEFAULTS: UpdateActivityGoals = {
+  strength_sessions_per_week: null, running_km_per_week: null,
+  base_bmr: null, calorie_offset: null, calorie_tolerance: null,
+};
+
+/** Accepts a PARTIAL patch and merges it over the current row before upserting,
+ *  so the Workouts "Weekly Goals" card (strength/km) and the Meal Planner
+ *  calorie strategy can each save their own fields without clobbering the
+ *  other's — it's one shared row. */
 export const saveActivityGoals = createAsyncThunk(
   "workouts/saveActivityGoals",
-  async (goals: UpdateActivityGoals) => {
+  async (patch: Partial<UpdateActivityGoals>, { getState }) => {
+    const current = (getState() as { workouts: { activityGoals: ActivityGoals | null } }).workouts.activityGoals;
+    const merged: UpdateActivityGoals = {
+      ...ACTIVITY_GOAL_DEFAULTS,
+      ...(current && {
+        strength_sessions_per_week: current.strength_sessions_per_week,
+        running_km_per_week: current.running_km_per_week,
+        base_bmr: current.base_bmr,
+        calorie_offset: current.calorie_offset,
+        calorie_tolerance: current.calorie_tolerance,
+      }),
+      ...patch,
+    };
     const { saveActivityGoals: save } = await import("../../lib/tauriApi");
-    return save(goals);
+    return save(merged);
   },
 );
 

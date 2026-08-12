@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { Moon, Apple, Activity, ChevronDown, ChevronUp } from "lucide-react";
 import { useAppDispatch, useAppSelector } from "../store/hooks";
 import { fetchSleep, fetchBodyMetrics } from "../store/slices/biomarkersSlice";
+import { fetchActivityGoals } from "../store/slices/workoutsSlice";
 import {
   fetchFoods, fetchMeals, fetchMealItems, fetchMealPlanEntries, fetchNutritionGoalItems,
 } from "../store/slices/mealPlannerSlice";
@@ -152,12 +153,22 @@ function NutritionModule() {
   const mealItemsById = useAppSelector((s) => s.mealPlanner.mealItems);
   const planEntries = useAppSelector((s) => s.mealPlanner.planEntries);
   const goalItems = useAppSelector((s) => s.mealPlanner.goalItems);
-  const targetFor = (key: string) => goalTarget(goalItems.find((g) => g.nutrient_key === key));
+  const activityGoals = useAppSelector((s) => s.workouts.activityGoals);
+  // Weekly nutrient goals shown as a daily pace (÷7); calories as its dynamic
+  // daily baseline (base + offset).
+  const dailyTarget = (key: string) => {
+    const wk = goalTarget(goalItems.find((g) => g.nutrient_key === key));
+    return wk != null ? Math.round(wk / 7) : null;
+  };
+  const calorieDaily = activityGoals?.base_bmr != null
+    ? Math.round(Number(activityGoals.base_bmr) + Number(activityGoals.calorie_offset ?? 0))
+    : null;
 
   useEffect(() => {
     dispatch(fetchFoods());
     dispatch(fetchMeals());
     dispatch(fetchNutritionGoalItems());
+    dispatch(fetchActivityGoals());
     dispatch(fetchMealPlanEntries({ start: subDays(NUTRITION_HISTORY_DAYS - 1), end: isoDate(new Date()) }));
   }, [dispatch]);
 
@@ -198,8 +209,8 @@ function NutritionModule() {
   return (
     <div style={MODULE_STYLE}>
       <ModuleHeader icon={<Apple size={16} />} title="Nutrition" color="var(--series-nutrition)" tint="var(--series-nutrition-track)">
-        <StatTile label="Calories today" value={todayEntries.length ? String(Math.round(caloriesToday)) : "—"} sub={targetFor("calories") ? `/ ${targetFor("calories")}` : undefined} />
-        <StatTile label="Protein today" value={todayEntries.length ? `${Math.round(proteinToday)}g` : "—"} sub={targetFor("protein_g") ? `/ ${targetFor("protein_g")}g` : undefined} />
+        <StatTile label="Calories today" value={todayEntries.length ? String(Math.round(caloriesToday)) : "—"} sub={calorieDaily ? `/ ${calorieDaily}` : undefined} />
+        <StatTile label="Protein today" value={todayEntries.length ? `${Math.round(proteinToday)}g` : "—"} sub={dailyTarget("protein_g") ? `/ ${dailyTarget("protein_g")}g` : undefined} />
         <StatTile label="Avg calories (7d)" value={avgCalories != null ? String(Math.round(avgCalories)) : "—"} sub="per day" />
       </ModuleHeader>
 

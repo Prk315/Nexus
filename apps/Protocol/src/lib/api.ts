@@ -213,6 +213,7 @@ function rowToBodyMetric(row: Record<string, unknown>): BodyMetric {
     resilience_stress: row.resilience_stress as number | null,
     cardio_age: row.cardio_age as number | null,
     pulse_wave_velocity: row.pulse_wave_velocity as number | null,
+    active_calories: (row.active_calories as number | null) ?? null,
     notes: row.notes as string | null,
     created_at: row.created_at as string,
   };
@@ -259,6 +260,9 @@ export async function upsertActivityGoalsInCloud(goals: UpdateActivityGoals): Pr
         user_id: getUserId(),
         strength_sessions_per_week: goals.strength_sessions_per_week,
         running_km_per_week: goals.running_km_per_week,
+        base_bmr: goals.base_bmr,
+        calorie_offset: goals.calorie_offset,
+        calorie_tolerance: goals.calorie_tolerance,
         updated_at: new Date().toISOString(),
       },
       { onConflict: "user_id" },

@@ -85,6 +85,8 @@ export interface BodyMetric {
   resilience_stress: number | null;
   cardio_age: number | null;
   pulse_wave_velocity: number | null;
+  /** Oura daily active-energy burn — feeds the dynamic calorie target. */
+  active_calories: number | null;
   notes: string | null;
   created_at: string;
 }
@@ -156,10 +158,19 @@ export interface ActivityGoals {
   user_id: string | null;
   strength_sessions_per_week: number | null;
   running_km_per_week: number | null;
+  /** Dynamic calorie target = base_bmr + that day's Oura active calories +
+   *  calorie_offset (signed: bulk +, cut −); the score rewards staying within
+   *  ±calorie_tolerance of it. base_bmr null = calorie goal not configured. */
+  base_bmr: number | null;
+  calorie_offset: number | null;
+  calorie_tolerance: number | null;
   updated_at: string;
 }
 
-export type UpdateActivityGoals = Pick<ActivityGoals, "strength_sessions_per_week" | "running_km_per_week">;
+export type UpdateActivityGoals = Pick<
+  ActivityGoals,
+  "strength_sessions_per_week" | "running_km_per_week" | "base_bmr" | "calorie_offset" | "calorie_tolerance"
+>;
 
 export interface WorkoutSession {
   id: string;

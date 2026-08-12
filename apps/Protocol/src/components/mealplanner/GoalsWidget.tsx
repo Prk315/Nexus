@@ -2,7 +2,7 @@ import { useState } from "react";
 import { Target } from "lucide-react";
 import { CARD_STYLE } from "../../lib/uiHelpers";
 import { goalTarget } from "../../lib/nutritionScore";
-import GoalsModal from "./GoalsModal";
+import GoalsModal, { type CalorieStrategy } from "./GoalsModal";
 import type { NutrientTotals } from "../../lib/mealNutrition";
 import type { NutritionGoalItem, CreateNutritionGoalItem } from "../../store/types";
 
@@ -27,21 +27,28 @@ function Stat({ label, value, goal, unit }: { label: string; value: number; goal
 }
 
 export default function GoalsWidget({
-  todayTotals, goals, onSave,
+  todayTotals, goals, calorie, calorieDailyTarget, onSave,
 }: {
   todayTotals: NutrientTotals;
   goals: NutritionGoalItem[];
-  onSave: (items: CreateNutritionGoalItem[]) => Promise<void>;
+  calorie: CalorieStrategy | null;
+  /** Today's dynamic calorie target (base + today's active + offset). */
+  calorieDailyTarget: number | null;
+  onSave: (items: CreateNutritionGoalItem[], calorie: CalorieStrategy) => Promise<void>;
 }) {
   const [editing, setEditing] = useState(false);
-  const targetFor = (key: string) => goalTarget(goals.find((g) => g.nutrient_key === key));
+  // Nutrient goals are weekly; show a daily-pace target (÷7) in this at-a-glance strip.
+  const dailyTarget = (key: string) => {
+    const wk = goalTarget(goals.find((g) => g.nutrient_key === key));
+    return wk != null ? Math.round(wk / 7) : null;
+  };
 
   return (
     <>
       <div style={{ ...CARD_STYLE, padding: "12px 16px", display: "flex", alignItems: "center", gap: 16 }}>
-        <Stat label="Calories" value={todayTotals.calories} goal={targetFor("calories")} unit="" />
-        <Stat label="Protein" value={todayTotals.protein_g} goal={targetFor("protein_g")} unit="g" />
-        <Stat label="Carbs" value={todayTotals.carbs_g} goal={targetFor("carbs_g")} unit="g" />
+        <Stat label="Calories" value={todayTotals.calories} goal={calorieDailyTarget} unit="" />
+        <Stat label="Protein" value={todayTotals.protein_g} goal={dailyTarget("protein_g")} unit="g" />
+        <Stat label="Carbs" value={todayTotals.carbs_g} goal={dailyTarget("carbs_g")} unit="g" />
         <button
           onClick={() => setEditing(true)}
           title={goals.length ? "Edit goals" : "Set goals"}
@@ -57,7 +64,7 @@ export default function GoalsWidget({
       </div>
 
       {editing && (
-        <GoalsModal goals={goals} onSave={onSave} onClose={() => setEditing(false)} />
+        <GoalsModal goals={goals} calorie={calorie} onSave={onSave} onClose={() => setEditing(false)} />
       )}
     </>
   );

@@ -8,6 +8,8 @@ import {
   fetchNutritionGoalItems, saveNutritionGoalItem, deleteNutritionGoalItem,
 } from "../store/slices/mealPlannerSlice";
 import { fetchSupplements, fetchSupplementStacks, fetchSupplementLogs } from "../store/slices/supplementsSlice";
+import { fetchActivityGoals, saveActivityGoals } from "../store/slices/workoutsSlice";
+import { fetchBodyMetrics } from "../store/slices/biomarkersSlice";
 import { CARD_STYLE, isoDate } from "../lib/uiHelpers";
 import { entryNutrition, sumNutrition, scaleNutrients } from "../lib/mealNutrition";
 import FoodSearchPanel from "../components/mealplanner/FoodSearchPanel";
@@ -61,6 +63,8 @@ export default function MealPlannerPage() {
   const mealItemsById = useAppSelector((s) => s.mealPlanner.mealItems);
   const planEntries = useAppSelector((s) => s.mealPlanner.planEntries);
   const goalItems = useAppSelector((s) => s.mealPlanner.goalItems);
+  const activityGoals = useAppSelector((s) => s.workouts.activityGoals);
+  const bodyMetrics = useAppSelector((s) => s.biomarkers.bodyMetrics);
   const supplements = useAppSelector((s) => s.supplements.items);
   const supplementLogs = useAppSelector((s) => s.supplements.logs);
 
@@ -75,6 +79,8 @@ export default function MealPlannerPage() {
     dispatch(fetchFoods());
     dispatch(fetchMeals());
     dispatch(fetchNutritionGoalItems());
+    dispatch(fetchActivityGoals());
+    dispatch(fetchBodyMetrics());
     dispatch(fetchSupplements());
     dispatch(fetchSupplementStacks());
   }, [dispatch]);
@@ -161,17 +167,29 @@ export default function MealPlannerPage() {
     setAddingSlot(null);
   }
 
-  /** Reconcile the edited goal set against what's stored: delete removed
-   *  nutrients, upsert the rest. */
-  async function handleSaveGoals(items: CreateNutritionGoalItem[]) {
+  /** Reconcile the edited weekly nutrient goals (delete removed, upsert the
+   *  rest) and persist the dynamic calorie strategy. */
+  async function handleSaveGoals(
+    items: CreateNutritionGoalItem[],
+    calorie: { base_bmr: number | null; calorie_offset: number | null; calorie_tolerance: number | null },
+  ) {
     const desired = new Set(items.map((i) => i.nutrient_key));
     await Promise.all(
       goalItems
-        .filter((g) => !desired.has(g.nutrient_key))
+        .filter((g) => !desired.has(g.nutrient_key) && g.nutrient_key !== "calories")
         .map((g) => dispatch(deleteNutritionGoalItem(g.nutrient_key)).unwrap()),
     );
     await Promise.all(items.map((i) => dispatch(saveNutritionGoalItem(i)).unwrap()));
+    await dispatch(saveActivityGoals(calorie)).unwrap();
   }
+
+  const calorieStrategy = activityGoals
+    ? { base_bmr: activityGoals.base_bmr, calorie_offset: activityGoals.calorie_offset, calorie_tolerance: activityGoals.calorie_tolerance }
+    : null;
+  const todayActive = bodyMetrics.find((b) => b.date === today)?.active_calories ?? 0;
+  const dailyCalorieTarget = activityGoals?.base_bmr != null
+    ? Math.round(Number(activityGoals.base_bmr) + Number(todayActive) + Number(activityGoals.calorie_offset ?? 0))
+    : null;
 
   return (
     <div style={{ padding: 28, display: "flex", flexDirection: "column", gap: 20 }}>
@@ -182,7 +200,7 @@ export default function MealPlannerPage() {
             Plan your week, log what you actually eat, backed by real nutrition data.
           </p>
         </div>
-        <GoalsWidget todayTotals={todayTotals} goals={goalItems} onSave={handleSaveGoals} />
+        <GoalsWidget todayTotals={todayTotals} goals={goalItems} calorie={calorieStrategy} calorieDailyTarget={dailyCalorieTarget} onSave={handleSaveGoals} />
       </div>
 
       {/* One dashboard, three full-width rows on Mac (each stacks on iPhone):
@@ -192,7 +210,7 @@ export default function MealPlannerPage() {
       <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
         <DashCard title="Overview" icon={<BarChart3 size={15} />}>
           <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
-            <NutrientOverview perDay={perDayCalories} todayTotals={todayTotals} goals={goalItems} />
+            <NutrientOverview perDay={perDayCalories} todayTotals={todayTotals} goals={goalItems} dailyCalorieTarget={dailyCalorieTarget} />
             <NutrientBreakdown totals={todayTotals} />
           </div>
         </DashCard>
