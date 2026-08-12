@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
   ComposedChart, Area, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, ReferenceLine,
+  RadialBarChart, RadialBar, PolarAngleAxis, Cell,
 } from "recharts";
 import { Moon } from "lucide-react";
 import { CARD_STYLE, isoDate, formatMinutes } from "../../lib/uiHelpers";
@@ -58,10 +59,23 @@ const METRICS: Metric[] = [
   { key: "light", label: "Light",       color: "#6366f1", width: 1.75, source: "sleep", field: "light_sleep_min", fmt: minToH,                        scored: true,  target: 240, halfLife: 120, dir: "under", weight: 0.16 },
   { key: "hrv",   label: "HRV",         color: "#f59e0b", width: 1.25, source: "body",  field: "hrv_ms",          fmt: (v) => `${Math.round(v)} ms`,  scored: false, plot: (v) => clamp((v / 250) * 100) },
   { key: "hr",    label: "Resting HR",  color: "#ef4444", width: 1.25, source: "body",  field: "resting_hr_bpm",  fmt: (v) => `${Math.round(v)} bpm`, scored: false, plot: (v) => clamp(v) },
+  // Oura daily_sleep contributors — already 0–100 scores, plotted directly. Not
+  // scored/weighted here (Oura already folds them into quality_score).
+  { key: "eff",   label: "Efficiency",  color: "#14b8a6", width: 1.25, source: "sleep", field: "contributor_efficiency",  fmt: (v) => `${Math.round(v)}`, scored: false, plot: (v) => clamp(v) },
+  { key: "rest",  label: "Restfulness", color: "#ec4899", width: 1.25, source: "sleep", field: "contributor_restfulness", fmt: (v) => `${Math.round(v)}`, scored: false, plot: (v) => clamp(v) },
+  { key: "tim",   label: "Timing",      color: "#eab308", width: 1.25, source: "sleep", field: "contributor_timing",      fmt: (v) => `${Math.round(v)}`, scored: false, plot: (v) => clamp(v) },
+  { key: "lat",   label: "Latency",     color: "#64748b", width: 1.25, source: "sleep", field: "contributor_latency",     fmt: (v) => `${Math.round(v)}`, scored: false, plot: (v) => clamp(v) },
 ];
 const METRIC = Object.fromEntries(METRICS.map((m) => [m.key, m])) as Record<string, Metric>;
 
 const SCORE = { key: "score", label: "Sleep score", color: "#d946ef", width: 5 };
+
+const CONTRIBUTOR_DESC: Record<"eff" | "rest" | "tim" | "lat", string> = {
+  eff:  "time asleep vs. in bed",
+  rest: "how still & undisturbed",
+  tim:  "alignment to your rhythm",
+  lat:  "how fast you fell asleep",
+};
 
 /** Exponential-decay score for a scored metric: 100% at target, halving every
  *  `halfLife` further on the penalised side(s). Always in [0, 100]. */
@@ -228,14 +242,18 @@ export default function SleepChart({
     ? `Ideal bedtime ${fmtOffset(ls.optimal_bedtime_start)}${ls.optimal_bedtime_end != null ? `–${fmtOffset(ls.optimal_bedtime_end)}` : ""}${ls.bedtime_recommendation && ls.bedtime_recommendation !== "ideal_bedtime_available" ? ` · ${ls.bedtime_recommendation.replace(/_/g, " ")}` : ""}`
     : null;
 
-  // Oura's own daily_sleep contributors (0–100) — an authoritative breakdown.
+  // Oura's own daily_sleep contributors (0–100) — an authoritative breakdown,
+  // colour-matched to their trend lines, with a one-line explanation each.
   const contributors = ls
-    ? ([
-        ["Efficiency", ls.contributor_efficiency],
-        ["Restfulness", ls.contributor_restfulness],
-        ["Timing", ls.contributor_timing],
-        ["Latency", ls.contributor_latency],
-      ] as const).filter(([, v]) => v != null) as [string, number][]
+    ? (["eff", "rest", "tim", "lat"] as const)
+        .map((k) => {
+          const m = METRIC[k];
+          const v = (ls as unknown as Record<string, unknown>)[m.field as string];
+          return typeof v === "number"
+            ? { label: m.label, value: v, color: m.color, desc: CONTRIBUTOR_DESC[k] }
+            : null;
+        })
+        .filter((x): x is { label: string; value: number; color: string; desc: string } => x != null)
     : [];
 
   const stageRing = (key: "deep" | "rem" | "light") => (
@@ -329,11 +347,7 @@ export default function SleepChart({
           {idealBedtime && (
             <div style={{ textAlign: "center", fontSize: 11, color: "var(--accent)", marginTop: 6, fontWeight: 600 }}>{idealBedtime}</div>
           )}
-          {contributors.length > 0 && (
-            <div style={{ display: "flex", flexWrap: "wrap", gap: 10, justifyContent: "center", marginTop: 6 }}>
-              {contributors.map(([label, v]) => <ContributorPill key={label} label={label} value={v} />)}
-            </div>
-          )}
+          {contributors.length > 0 && <ContributorRadial data={contributors} center={latest.quality} compact />}
         </>
       ) : (
         <div style={{ display: "flex", gap: 24, alignItems: "stretch" }}>
@@ -349,11 +363,7 @@ export default function SleepChart({
             {idealBedtime && (
               <div style={{ fontSize: 11, color: "var(--accent)", lineHeight: 1.5, marginTop: 4, fontWeight: 600 }}>{idealBedtime}</div>
             )}
-            {contributors.length > 0 && (
-              <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginTop: 4 }}>
-                {contributors.map(([label, v]) => <ContributorPill key={label} label={label} value={v} />)}
-              </div>
-            )}
+            {contributors.length > 0 && <ContributorRadial data={contributors} center={latest.quality} />}
           </div>
         </div>
       )}
@@ -414,14 +424,44 @@ function RingMini({ label, pct, color }: { label: string; pct: number | null; co
   );
 }
 
-/** A small pill for an Oura daily_sleep contributor (0–100), coloured by band. */
-function ContributorPill({ label, value }: { label: string; value: number }) {
-  const color = value >= 70 ? "var(--success)" : value >= 40 ? "var(--warning)" : "var(--danger)";
+type Contributor = { label: string; value: number; color: string; desc: string };
+
+/**
+ * Oura daily_sleep contributors as nested rings — each aspect is a concentric
+ * radial bar filled to its 0–100 score (colour-matched to its trend line), the
+ * overall sleep quality in the centre, and an explained legend beneath.
+ */
+function ContributorRadial({ data, center, compact }: { data: Contributor[]; center: number | null; compact?: boolean }) {
   return (
-    <span style={{ display: "inline-flex", alignItems: "center", gap: 4, fontSize: 10, color: "var(--text-muted)" }}>
-      <span style={{ width: 6, height: 6, borderRadius: "50%", background: color, flexShrink: 0 }} />
-      {label} {value}
-    </span>
+    <div style={{ display: "flex", flexDirection: compact ? "row" : "column", alignItems: "center", gap: compact ? 16 : 6, marginTop: 8, ...(compact ? { justifyContent: "center" } : {}) }}>
+      <div style={{ position: "relative", width: 148, height: 148, flexShrink: 0 }}>
+        <ResponsiveContainer width="100%" height="100%">
+          <RadialBarChart data={data} innerRadius="32%" outerRadius="100%" startAngle={90} endAngle={-270} barCategoryGap={2}>
+            <PolarAngleAxis type="number" domain={[0, 100]} tick={false} axisLine={false} />
+            <RadialBar dataKey="value" cornerRadius={5} background={{ fill: "var(--progress-bg)" }} isAnimationActive={false}>
+              {data.map((d) => <Cell key={d.label} fill={d.color} />)}
+            </RadialBar>
+          </RadialBarChart>
+        </ResponsiveContainer>
+        <div style={{ position: "absolute", inset: 0, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", pointerEvents: "none" }}>
+          <div style={{ fontSize: 16, fontWeight: 700, color: "var(--text)" }}>{center != null ? Math.round(center) : "—"}</div>
+          <div style={{ fontSize: 8, color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: "0.05em" }}>overall</div>
+        </div>
+      </div>
+      <div style={{ display: "flex", flexDirection: "column", gap: 5 }}>
+        {data.map((d) => (
+          <div key={d.label} style={{ display: "flex", alignItems: "baseline", gap: 6 }}>
+            <span style={{ width: 8, height: 8, borderRadius: "50%", background: d.color, flexShrink: 0, transform: "translateY(1px)" }} />
+            <div style={{ minWidth: 0 }}>
+              <div style={{ fontSize: 11, color: "var(--text)" }}>
+                <strong>{Math.round(d.value)}</strong> <span style={{ color: "var(--text-secondary)" }}>{d.label}</span>
+              </div>
+              <div style={{ fontSize: 9, color: "var(--text-muted)", lineHeight: 1.2 }}>{d.desc}</div>
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
   );
 }
 
