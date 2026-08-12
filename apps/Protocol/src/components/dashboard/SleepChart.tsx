@@ -1,7 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
   ComposedChart, Area, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, ReferenceLine,
-  RadialBarChart, RadialBar, PolarAngleAxis, Cell,
 } from "recharts";
 import { Moon } from "lucide-react";
 import { CARD_STYLE, isoDate, formatMinutes } from "../../lib/uiHelpers";
@@ -271,6 +270,14 @@ export default function SleepChart({
     </>
   );
 
+  // The 4 Oura contributors as mini rings — same visual family as the metric
+  // rings, laid out in a row that fills the space under the chart.
+  const contributorRings = contributors.length > 0 ? (
+    <div style={{ display: "flex", flexWrap: "wrap", gap: 18, justifyContent: "center", alignItems: "flex-start" }}>
+      {contributors.map((c) => <RingMini key={c.label} label={c.label} pct={c.value} color={c.color} />)}
+    </div>
+  ) : null;
+
   const chart = data.length === 0 ? (
     <div style={{ textAlign: "center", padding: "40px 0", color: "var(--text-muted)", fontSize: 13 }}>
       No sleep data in this range yet.
@@ -347,25 +354,29 @@ export default function SleepChart({
           {idealBedtime && (
             <div style={{ textAlign: "center", fontSize: 11, color: "var(--accent)", marginTop: 6, fontWeight: 600 }}>{idealBedtime}</div>
           )}
-          {contributors.length > 0 && <ContributorRadial data={contributors} center={latest.quality} compact />}
+          {contributorRings && <div style={{ marginTop: 14 }}>{contributorRings}</div>}
         </>
       ) : (
-        <div style={{ display: "flex", gap: 24, alignItems: "stretch" }}>
-          <div style={{ flex: 1, minWidth: 0 }}>{chart}</div>
-          <div style={{ width: 196, flexShrink: 0, display: "flex", flexDirection: "column", justifyContent: "center", gap: 18, borderLeft: "1px solid var(--border)", paddingLeft: 22 }}>
-            {columnRings}
-            {timingLine && (
-              <div style={{ fontSize: 11, color: "var(--text-secondary)", lineHeight: 1.6, marginTop: 4, fontWeight: 500 }}>{timingLine}</div>
-            )}
-            {extras.length > 0 && (
-              <div style={{ fontSize: 11, color: "var(--text-muted)", lineHeight: 1.6, marginTop: 2 }}>{extras.join(" · ")}</div>
-            )}
-            {idealBedtime && (
-              <div style={{ fontSize: 11, color: "var(--accent)", lineHeight: 1.5, marginTop: 4, fontWeight: 600 }}>{idealBedtime}</div>
-            )}
-            {contributors.length > 0 && <ContributorRadial data={contributors} center={latest.quality} />}
+        <>
+          <div style={{ display: "flex", gap: 24, alignItems: "stretch" }}>
+            <div style={{ flex: 1, minWidth: 0 }}>{chart}</div>
+            <div style={{ width: 196, flexShrink: 0, display: "flex", flexDirection: "column", justifyContent: "center", gap: 18, borderLeft: "1px solid var(--border)", paddingLeft: 22 }}>
+              {columnRings}
+              {timingLine && (
+                <div style={{ fontSize: 11, color: "var(--text-secondary)", lineHeight: 1.6, marginTop: 4, fontWeight: 500 }}>{timingLine}</div>
+              )}
+              {extras.length > 0 && (
+                <div style={{ fontSize: 11, color: "var(--text-muted)", lineHeight: 1.6, marginTop: 2 }}>{extras.join(" · ")}</div>
+              )}
+              {idealBedtime && (
+                <div style={{ fontSize: 11, color: "var(--accent)", lineHeight: 1.5, marginTop: 4, fontWeight: 600 }}>{idealBedtime}</div>
+              )}
+            </div>
           </div>
-        </div>
+          {contributorRings && (
+            <div style={{ marginTop: 14, paddingTop: 14, borderTop: "1px solid var(--border-subtle)" }}>{contributorRings}</div>
+          )}
+        </>
       )}
 
       {/* Range toggle */}
@@ -420,47 +431,6 @@ function RingMini({ label, pct, color }: { label: string; pct: number | null; co
     <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 2 }}>
       <Ring pct={pct} color={color} size={36} stroke={4} />
       <span style={{ fontSize: 9, color: "var(--text-muted)" }}>{label}</span>
-    </div>
-  );
-}
-
-type Contributor = { label: string; value: number; color: string; desc: string };
-
-/**
- * Oura daily_sleep contributors as nested rings — each aspect is a concentric
- * radial bar filled to its 0–100 score (colour-matched to its trend line), the
- * overall sleep quality in the centre, and an explained legend beneath.
- */
-function ContributorRadial({ data, center, compact }: { data: Contributor[]; center: number | null; compact?: boolean }) {
-  return (
-    <div style={{ display: "flex", flexDirection: compact ? "row" : "column", alignItems: "center", gap: compact ? 16 : 6, marginTop: 8, ...(compact ? { justifyContent: "center" } : {}) }}>
-      <div style={{ position: "relative", width: 148, height: 148, flexShrink: 0 }}>
-        <ResponsiveContainer width="100%" height="100%">
-          <RadialBarChart data={data} innerRadius="32%" outerRadius="100%" startAngle={90} endAngle={-270} barCategoryGap={2}>
-            <PolarAngleAxis type="number" domain={[0, 100]} tick={false} axisLine={false} />
-            <RadialBar dataKey="value" cornerRadius={5} background={{ fill: "var(--progress-bg)" }} isAnimationActive={false}>
-              {data.map((d) => <Cell key={d.label} fill={d.color} />)}
-            </RadialBar>
-          </RadialBarChart>
-        </ResponsiveContainer>
-        <div style={{ position: "absolute", inset: 0, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", pointerEvents: "none" }}>
-          <div style={{ fontSize: 16, fontWeight: 700, color: "var(--text)" }}>{center != null ? Math.round(center) : "—"}</div>
-          <div style={{ fontSize: 8, color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: "0.05em" }}>overall</div>
-        </div>
-      </div>
-      <div style={{ display: "flex", flexDirection: "column", gap: 5 }}>
-        {data.map((d) => (
-          <div key={d.label} style={{ display: "flex", alignItems: "baseline", gap: 6 }}>
-            <span style={{ width: 8, height: 8, borderRadius: "50%", background: d.color, flexShrink: 0, transform: "translateY(1px)" }} />
-            <div style={{ minWidth: 0 }}>
-              <div style={{ fontSize: 11, color: "var(--text)" }}>
-                <strong>{Math.round(d.value)}</strong> <span style={{ color: "var(--text-secondary)" }}>{d.label}</span>
-              </div>
-              <div style={{ fontSize: 9, color: "var(--text-muted)", lineHeight: 1.2 }}>{d.desc}</div>
-            </div>
-          </div>
-        ))}
-      </div>
     </div>
   );
 }
