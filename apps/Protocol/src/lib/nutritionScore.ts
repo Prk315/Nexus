@@ -56,6 +56,22 @@ export interface CalorieConfig {
   tolerance: number;
 }
 
+/** Defaults so the dynamic calorie model is active out of the box, before the
+ *  user has ever saved a calorie strategy (base 1800, maintain, ±200). */
+export const DEFAULT_CALORIE_CONFIG: CalorieConfig = { base_bmr: 1800, offset: 0, tolerance: 200 };
+
+/** Resolve a CalorieConfig from a stored activity-goals row, falling back to the
+ *  defaults per field — always returns a usable config. */
+export function calorieConfigFrom(
+  goals: { base_bmr: number | null; calorie_offset: number | null; calorie_tolerance: number | null } | null | undefined,
+): CalorieConfig {
+  return {
+    base_bmr: goals?.base_bmr ?? DEFAULT_CALORIE_CONFIG.base_bmr,
+    offset: goals?.calorie_offset ?? DEFAULT_CALORIE_CONFIG.offset,
+    tolerance: goals?.calorie_tolerance ?? DEFAULT_CALORIE_CONFIG.tolerance,
+  };
+}
+
 /** 100 inside [lo, hi]; linear taper to 0 one tolerance-width outside. */
 function bandCloseness(x: number, lo: number, hi: number, tol: number): number {
   if (x >= lo && x <= hi) return 100;

@@ -6,6 +6,12 @@ import type { NutritionGoalItem, CreateNutritionGoalItem } from "../../store/typ
 
 const META_BY_KEY = new Map<string, NutrientMeta>(NUTRIENT_META.map((m) => [m.key, m]));
 
+const CALORIE_PRESETS: { label: string; offset: number }[] = [
+  { label: "Cut −500", offset: -500 },
+  { label: "Maintain", offset: 0 },
+  { label: "Bulk +300", offset: 300 },
+];
+
 export interface CalorieStrategy {
   base_bmr: number | null;
   calorie_offset: number | null;
@@ -111,6 +117,27 @@ export default function GoalsModal({
             </div>
             <div style={{ fontSize: 12, color: "var(--text-muted)", marginTop: -4 }}>
               Each day: <strong>base burn + active calories + offset</strong>. Positive offset = bulk, negative = cut. The score rewards staying within ± tolerance.
+            </div>
+            <div style={{ display: "flex", gap: 6 }}>
+              {CALORIE_PRESETS.map((p) => {
+                const active = offset.trim() !== "" && Number(offset) === p.offset;
+                return (
+                  <button
+                    key={p.label}
+                    type="button"
+                    onClick={() => setOffset(String(p.offset))}
+                    style={{
+                      flex: 1, padding: "5px 8px", fontSize: 12, fontWeight: 600, cursor: "pointer",
+                      borderRadius: "var(--radius-sm)",
+                      border: `1px solid ${active ? "var(--accent)" : "var(--border)"}`,
+                      background: active ? "var(--accent-tint)" : "var(--bg)",
+                      color: active ? "var(--accent)" : "var(--text-secondary)",
+                    }}
+                  >
+                    {p.label}
+                  </button>
+                );
+              })}
             </div>
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 10 }}>
               <label style={{ display: "flex", flexDirection: "column", gap: 4 }}>

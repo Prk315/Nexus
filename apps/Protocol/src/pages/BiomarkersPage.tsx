@@ -7,7 +7,7 @@ import {
   fetchFoods, fetchMeals, fetchMealItems, fetchMealPlanEntries, fetchNutritionGoalItems,
 } from "../store/slices/mealPlannerSlice";
 import { entryNutrition } from "../lib/mealNutrition";
-import { goalTarget } from "../lib/nutritionScore";
+import { goalTarget, calorieConfigFrom } from "../lib/nutritionScore";
 import SleepLogger from "../components/biomarkers/SleepLogger";
 import BodyMetricsLogger from "../components/biomarkers/BodyMetricsLogger";
 import OuraImportPanel from "../components/biomarkers/OuraImportPanel";
@@ -160,9 +160,8 @@ function NutritionModule() {
     const wk = goalTarget(goalItems.find((g) => g.nutrient_key === key));
     return wk != null ? Math.round(wk / 7) : null;
   };
-  const calorieDaily = activityGoals?.base_bmr != null
-    ? Math.round(Number(activityGoals.base_bmr) + Number(activityGoals.calorie_offset ?? 0))
-    : null;
+  const calCfg = calorieConfigFrom(activityGoals);
+  const calorieDaily = Math.round(calCfg.base_bmr + calCfg.offset);
 
   useEffect(() => {
     dispatch(fetchFoods());

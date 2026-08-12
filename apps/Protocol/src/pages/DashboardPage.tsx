@@ -19,6 +19,7 @@ import {
 } from "../store/slices/mealPlannerSlice";
 import { formatMinutes, CARD_STYLE, isoDate } from "../lib/uiHelpers";
 import { entryNutrition, sumNutrition, type NutrientTotals } from "../lib/mealNutrition";
+import { calorieConfigFrom } from "../lib/nutritionScore";
 import { StatTile } from "../components/shared/StatTile";
 import MuscleMap from "../components/workouts/MuscleMap";
 import RingGauge from "../components/mealplanner/RingGauge";
@@ -126,13 +127,9 @@ export default function DashboardPage() {
   for (const b of bodyMetrics) {
     if (b.active_calories != null) activeCaloriesByDate.set(b.date, Number(b.active_calories));
   }
-  const calorieConfig = activityGoals?.base_bmr != null
-    ? {
-        base_bmr: Number(activityGoals.base_bmr),
-        offset: Number(activityGoals.calorie_offset ?? 0),
-        tolerance: Number(activityGoals.calorie_tolerance ?? 200),
-      }
-    : null;
+  // Always-on: defaults (base 1800 / maintain / ±200) apply until the user saves
+  // their own strategy, so the dynamic calorie score works out of the box.
+  const calorieConfig = calorieConfigFrom(activityGoals);
 
   // Last night's sleep now lives inside the SleepChart card (ring column).
 

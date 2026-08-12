@@ -12,6 +12,7 @@ import { fetchActivityGoals, saveActivityGoals } from "../store/slices/workoutsS
 import { fetchBodyMetrics } from "../store/slices/biomarkersSlice";
 import { CARD_STYLE, isoDate } from "../lib/uiHelpers";
 import { entryNutrition, sumNutrition, scaleNutrients } from "../lib/mealNutrition";
+import { calorieConfigFrom } from "../lib/nutritionScore";
 import FoodSearchPanel from "../components/mealplanner/FoodSearchPanel";
 import NutrientOverview from "../components/mealplanner/NutrientOverview";
 import NutrientBreakdown from "../components/mealplanner/NutrientBreakdown";
@@ -186,10 +187,9 @@ export default function MealPlannerPage() {
   const calorieStrategy = activityGoals
     ? { base_bmr: activityGoals.base_bmr, calorie_offset: activityGoals.calorie_offset, calorie_tolerance: activityGoals.calorie_tolerance }
     : null;
+  const calorieCfg = calorieConfigFrom(activityGoals);
   const todayActive = bodyMetrics.find((b) => b.date === today)?.active_calories ?? 0;
-  const dailyCalorieTarget = activityGoals?.base_bmr != null
-    ? Math.round(Number(activityGoals.base_bmr) + Number(todayActive) + Number(activityGoals.calorie_offset ?? 0))
-    : null;
+  const dailyCalorieTarget = Math.round(calorieCfg.base_bmr + Number(todayActive) + calorieCfg.offset);
 
   return (
     <div style={{ padding: 28, display: "flex", flexDirection: "column", gap: 20 }}>
