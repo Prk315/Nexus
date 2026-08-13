@@ -115,7 +115,12 @@ struct AddQuickTaskIntent: AppIntent {
             key: Secrets.widgetTaskKey
         )
         WidgetCenter.shared.reloadTimelines(ofKind: WidgetKind.quickTasks)
-        return .result(dialog: ok ? "Added to \(category.rawValue)s." : "Couldn't reach Nexus.")
+        // Literal directly in argument position: a ternary of two string
+        // literals is a String, which does NOT convert to IntentDialog.
+        if ok {
+            return .result(dialog: "Added to \(category.rawValue)s.")
+        }
+        return .result(dialog: "Couldn't reach Nexus.")
     }
 }
 

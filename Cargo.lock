@@ -2814,7 +2814,7 @@ dependencies = [
 
 [[package]]
 name = "nexus-local"
-version = "0.24.0"
+version = "0.24.1"
 dependencies = [
  "async-trait",
  "axum",
