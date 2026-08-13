@@ -1915,9 +1915,9 @@ function TodoList({
   systems: SystemEntry[];
   courseAssignments: CourseAssignment[];
   onToggleTask: (id: number) => void;
-  onCreateTask: (payload: { plan_id?: number | null; title: string; priority?: string; due_date?: string | null }) => void;
+  onCreateTask: (payload: { plan_id?: number | null; title: string; priority?: string; due_date?: string | null; category?: string | null }) => void;
   onDeleteTask: (id: number) => void;
-  onUpdateTask: (id: number, payload: { title: string; priority: string; due_date?: string | null }) => void;
+  onUpdateTask: (id: number, payload: { title: string; priority: string; due_date?: string | null; category?: string | null }) => void;
   onMarkSystem: (id: number) => void;
   onUnmarkSystem: (id: number) => void;
   onToggleSubtask: (subtaskId: number, systemId: number) => void;
@@ -1937,12 +1937,14 @@ function TodoList({
   const [newPlanId, setNewPlanId] = useState<number | null>(null);
   const [newPriority, setNewPriority] = useState("medium");
   const [newDueDate, setNewDueDate] = useState("");
+  const [newCategory, setNewCategory] = useState<string>("");
 
   // Inline edit state
   const [editingId, setEditingId] = useState<number | null>(null);
   const [editTitle, setEditTitle] = useState("");
   const [editPriority, setEditPriority] = useState("medium");
   const [editDueDate, setEditDueDate] = useState("");
+  const [editCategory, setEditCategory] = useState<string>("");
 
   // Hover state for delete button
   const [hoveredId, setHoveredId] = useState<number | null>(null);
@@ -1952,8 +1954,15 @@ function TodoList({
   const submitCreate = () => {
     const title = newTitle.trim();
     if (!title) return;
-    onCreateTask({ plan_id: newPlanId ?? null, title, priority: newPriority, due_date: newDueDate || null });
-    setNewTitle(""); setNewPlanId(null); setNewPriority("medium"); setNewDueDate("");
+    // A quick task belongs to a category, not a plan — the two are exclusive.
+    onCreateTask({
+      plan_id: newCategory ? null : newPlanId ?? null,
+      title,
+      priority: newPriority,
+      due_date: newDueDate || null,
+      category: newCategory || null,
+    });
+    setNewTitle(""); setNewPlanId(null); setNewPriority("medium"); setNewDueDate(""); setNewCategory("");
     setShowAdd(false);
   };
 
@@ -1962,12 +1971,13 @@ function TodoList({
     setEditTitle(task.title);
     setEditPriority(task.priority);
     setEditDueDate(task.due_date ?? "");
+    setEditCategory(task.category ?? "");
   };
 
   const submitEdit = (id: number) => {
     const title = editTitle.trim();
     if (!title) { setEditingId(null); return; }
-    onUpdateTask(id, { title, priority: editPriority, due_date: editDueDate || null });
+    onUpdateTask(id, { title, priority: editPriority, due_date: editDueDate || null, category: editCategory || null });
     setEditingId(null);
   };
 
@@ -1985,14 +1995,33 @@ function TodoList({
       .sort((a, b) => (p[a.priority] ?? 1) - (p[b.priority] ?? 1));
   }, [tasks]);
 
-  // Group open tasks by plan
+  // Group open tasks by plan. Quick tasks (category set) group under their
+  // category instead — a shopping list under "No plan" reads as clutter, not
+  // as a list. Category groups use negative pseudo-ids so they can share the
+  // collapse mechanism without colliding with real plan ids.
+  const CATEGORY_GROUPS: Record<string, { pseudoId: number; label: string }> = {
+    reminder: { pseudoId: -101, label: "🔔 Reminders" },
+    chore:    { pseudoId: -102, label: "🧹 Chores" },
+    shopping: { pseudoId: -103, label: "🛒 Shopping" },
+  };
   const byPlan = useMemo(() => {
     const map = new Map<number | null, { planTitle: string | null; goalTitle: string | null; tasks: TaskWithContext[] }>();
     for (const t of open) {
-      if (!map.has(t.plan_id)) map.set(t.plan_id, { planTitle: t.plan_title, goalTitle: t.goal_title, tasks: [] });
-      map.get(t.plan_id)!.tasks.push(t);
+      const cat = t.category ? CATEGORY_GROUPS[t.category] : undefined;
+      const key = cat ? cat.pseudoId : t.plan_id;
+      if (!map.has(key)) {
+        map.set(key, cat
+          ? { planTitle: cat.label, goalTitle: null, tasks: [] }
+          : { planTitle: t.plan_title, goalTitle: t.goal_title, tasks: [] });
+      }
+      map.get(key)!.tasks.push(t);
     }
-    return Array.from(map.entries()); // [planId, group]
+    // Category groups first — they're the glanceable lists; plan groups follow.
+    return Array.from(map.entries()).sort(([a], [b]) => {
+      const aCat = a != null && a < 0 ? 0 : 1;
+      const bCat = b != null && b < 0 ? 0 : 1;
+      return aCat - bCat;
+    });
   }, [open]);
 
   const togglePlan = (planId: number | null) => {
@@ -2050,13 +2079,26 @@ function TodoList({
             />
             <div className="flex flex-wrap items-center gap-2">
               <select
-                value={newPlanId ?? ""}
-                onChange={(e) => setNewPlanId(e.target.value ? Number(e.target.value) : null)}
-                className="text-xs bg-input border border-border rounded px-1.5 py-0.5 outline-none max-w-32"
+                value={newCategory}
+                onChange={(e) => setNewCategory(e.target.value)}
+                className="text-xs bg-input border border-border rounded px-1.5 py-0.5 outline-none"
               >
-                <option value="">No plan</option>
-                {activePlans.map((p) => <option key={p.id} value={p.id}>{p.title}</option>)}
+                <option value="">Task</option>
+                <option value="reminder">Reminder</option>
+                <option value="chore">Chore</option>
+                <option value="shopping">Shopping</option>
               </select>
+              {/* Quick tasks don't belong to plans; hide the picker to say so. */}
+              {!newCategory && (
+                <select
+                  value={newPlanId ?? ""}
+                  onChange={(e) => setNewPlanId(e.target.value ? Number(e.target.value) : null)}
+                  className="text-xs bg-input border border-border rounded px-1.5 py-0.5 outline-none max-w-32"
+                >
+                  <option value="">No plan</option>
+                  {activePlans.map((p) => <option key={p.id} value={p.id}>{p.title}</option>)}
+                </select>
+              )}
               <select
                 value={newPriority}
                 onChange={(e) => setNewPriority(e.target.value)}
@@ -2141,6 +2183,16 @@ function TodoList({
                                       className="text-sm bg-input border border-border rounded px-1.5 py-0.5 outline-none focus:ring-1 focus:ring-ring w-full"
                                     />
                                     <div className="flex gap-1.5 items-center">
+                                      <select
+                                        value={editCategory}
+                                        onChange={(e) => setEditCategory(e.target.value)}
+                                        className="text-xs bg-input border border-border rounded px-1 py-0.5 outline-none"
+                                      >
+                                        <option value="">Task</option>
+                                        <option value="reminder">Reminder</option>
+                                        <option value="chore">Chore</option>
+                                        <option value="shopping">Shopping</option>
+                                      </select>
                                       <select
                                         value={editPriority}
                                         onChange={(e) => setEditPriority(e.target.value)}
@@ -2408,14 +2460,19 @@ export function Dashboard() {
   useEffect(() => { load(); }, [load]);
 
   const activeGoals  = useMemo(() => goals.filter((g) => g.status === "active"), [goals]);
-  const todayTasks   = useMemo(() => tasks.filter((t) => t.due_date === date), [tasks, date]);
+  // Quick tasks (reminders / chores / shopping) are standing lists — they show
+  // regardless of due date, unlike project tasks which only surface on their day.
+  const todayTasks   = useMemo(
+    () => tasks.filter((t) => t.due_date === date || t.category != null),
+    [tasks, date],
+  );
 
   const handleToggleTask = async (id: number) => {
     await toggleTask(id);
     setTasks((prev) => prev.map((t) => t.id === id ? { ...t, done: !t.done } : t));
   };
 
-  const handleCreateTask = async (payload: { plan_id?: number | null; title: string; priority?: string; due_date?: string | null }) => {
+  const handleCreateTask = async (payload: { plan_id?: number | null; title: string; priority?: string; due_date?: string | null; category?: string | null }) => {
     await createTask(payload);
     const t = await getAllTasks();
     setTasks(t);
@@ -2426,7 +2483,7 @@ export function Dashboard() {
     setTasks((prev) => prev.filter((t) => t.id !== id));
   };
 
-  const handleUpdateTask = async (id: number, payload: { title: string; priority: string; due_date?: string | null }) => {
+  const handleUpdateTask = async (id: number, payload: { title: string; priority: string; due_date?: string | null; category?: string | null }) => {
     await updateTask(id, payload);
     const t = await getAllTasks();
     setTasks(t);
@@ -2558,6 +2615,7 @@ export function Dashboard() {
         done: newTask.done, sort_order: newTask.sort_order,
         priority: newTask.priority, due_date: newTask.due_date,
         created_at: newTask.created_at, time_estimate: newTask.time_estimate,
+        category: newTask.category,
       }, ...prev]);
     }
     const b = await createCalBlock(date, d.title, d.start_time, d.end_time, d.color, d.description || null, d.location || null, taskId);

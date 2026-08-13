@@ -430,7 +430,9 @@ Nearly every numeric column in `protocol_*` is `integer` while Garmin sends floa
 
 `SupabaseClient.swift` deliberately exposes no generic write. Every widget mutation
 goes through a dedicated edge function with its own scoped secret — `habit-toggle`
-(`WIDGET_HABIT_KEY`), `session-toggle` (`WIDGET_SESSION_KEY`) — POST-only,
+(`WIDGET_HABIT_KEY`), `session-toggle` (`WIDGET_SESSION_KEY`), `task-quick`
+(`WIDGET_TASK_KEY`, complete/create quick tasks in `pf_tasks`), `meal-log`
+(`WIDGET_MEAL_KEY`, toggle/insert `protocol_meal_plan_entries`) — POST-only,
 constant-time compare, fail-closed under 32 chars, service-role client with a
 server-side owner check. The secret ships in a distributed binary and is extractable;
 what the design buys is a blast radius of "this user's sessions" rather than

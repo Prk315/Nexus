@@ -120,6 +120,8 @@ jobs:
               static let userID           = "${SUPABASE_USER_ID}"
               static let widgetKey        = "${WIDGET_HABIT_KEY}"
               static let widgetSessionKey = "${WIDGET_SESSION_KEY}"
+              static let widgetTaskKey    = "${WIDGET_TASK_KEY}"
+              static let widgetMealKey    = "${WIDGET_MEAL_KEY}"
           }
           EOF
           # Fail loudly rather than shipping a build whose habit toggle silently
@@ -135,6 +137,15 @@ jobs:
             echo "::error::WIDGET_SESSION_KEY repo secret is not set — the widget's timer start/stop would 401 against the session-toggle Edge Function."
             exit 1
           fi
+          # And the two quick-action keys (task-quick / meal-log functions).
+          if [ -z "${WIDGET_TASK_KEY}" ]; then
+            echo "::error::WIDGET_TASK_KEY repo secret is not set — the quick-task widget's complete button would 401 against the task-quick Edge Function."
+            exit 1
+          fi
+          if [ -z "${WIDGET_MEAL_KEY}" ]; then
+            echo "::error::WIDGET_MEAL_KEY repo secret is not set — the meal widget's log button would 401 against the meal-log Edge Function."
+            exit 1
+          fi
         env:
           SUPABASE_URL: ${{ vars.SUPABASE_URL }}
           SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
@@ -146,6 +157,10 @@ jobs:
           # accepts exactly one key, so one leaking cannot be used against the
           # other, and either can be rotated alone.
           WIDGET_SESSION_KEY: ${{ secrets.WIDGET_SESSION_KEY }}
+          # Must match WIDGET_TASK_KEY / WIDGET_MEAL_KEY on the Supabase
+          # project — same one-key-per-function scoping as the two above.
+          WIDGET_TASK_KEY: ${{ secrets.WIDGET_TASK_KEY }}
+          WIDGET_MEAL_KEY: ${{ secrets.WIDGET_MEAL_KEY }}
 
       - name: Diagnostics — project tree before build
         run: |

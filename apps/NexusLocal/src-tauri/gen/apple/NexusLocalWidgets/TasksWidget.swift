@@ -43,10 +43,13 @@ struct TasksProvider: TimelineProvider {
         let client = SupabaseClient()          // anon key; App Group unavailable on free-tier
         let today = todayString()
 
+        // Project tasks only (`category=is.null`): quick tasks — reminders,
+        // chores, shopping — have their own widget, and a long shopping list
+        // would drown the 6 rows this one gets.
         let rows: [TaskDetailRow] = (try? await client.fetch(
             table: "pf_tasks",
             select: "id,title,priority,due_date",
-            filters: ["user_id": "eq.\(Secrets.userID)", "done": "eq.false", "order": "due_date.asc.nullslast"]
+            filters: ["user_id": "eq.\(Secrets.userID)", "done": "eq.false", "category": "is.null", "order": "due_date.asc.nullslast"]
         )) ?? []
 
         var items: [TaskItem] = []

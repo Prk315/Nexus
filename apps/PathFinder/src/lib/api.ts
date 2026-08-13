@@ -83,6 +83,7 @@ function mapTask(r: any): Task {
     due_date: r.due_date,
     time_estimate: r.time_estimate,
     kanban_status: r.kanban_status ?? "backlog",
+    category: r.category ?? null,
     created_at: r.created_at,
   };
 }
@@ -103,6 +104,7 @@ function mapTaskWithContext(r: any, plansMap?: Map<number, any>): TaskWithContex
     created_at: r.created_at,
     time_estimate: r.time_estimate,
     kanban_status: r.kanban_status ?? "backlog",
+    category: r.category ?? null,
   };
 }
 
@@ -535,6 +537,7 @@ export const getAllTasks = async (): Promise<TaskWithContext[]> => {
 export const createTask = async (payload: {
   plan_id?: number | null; title: string; priority?: string;
   due_date?: string | null; time_estimate?: number | null;
+  category?: string | null;
 }): Promise<Task> => {
   const { data, error } = await supabase
     .from("pf_tasks")
@@ -547,6 +550,7 @@ export const createTask = async (payload: {
 
 export const updateTask = async (id: number, payload: {
   title: string; priority: string; due_date?: string | null; time_estimate?: number | null;
+  category?: string | null;
 }): Promise<Task> => {
   const { data, error } = await supabase
     .from("pf_tasks")

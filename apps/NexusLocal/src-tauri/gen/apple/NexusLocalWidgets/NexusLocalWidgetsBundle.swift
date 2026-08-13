@@ -12,6 +12,8 @@ struct NexusLocalWidgetsBundle: WidgetBundle {
         ExerciseHeatmapWidget()
         SleepWidget()
         TasksWidget()
+        QuickTasksWidget()
+        MealLogWidget()
         TimeTrackerWidget()
         LearnWidget()
         // Also the autonomy mechanism for Safari blocking: its timeline refresh

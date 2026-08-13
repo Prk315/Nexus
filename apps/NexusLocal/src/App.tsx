@@ -8,6 +8,8 @@ import { GarminPanel } from "./lib/GarminPanel";
 import { KeychainDebug } from "./lib/KeychainDebug";
 import { TimeTrackerDashboard, TimeTrackerSettings } from "./lib/timetracker";
 import { LearnPage } from "./lib/learn";
+import { TasksPage } from "./lib/pathfinder";
+import { ProtocolPage } from "./lib/protocol";
 
 type ModuleManifest = {
   id: string;
@@ -27,7 +29,7 @@ type GridStatus = {
 };
 
 /** The dashboards in the header bar. Add one here and to `renderPage` below. */
-const PAGES = ["time", "learn"] as const;
+const PAGES = ["time", "tasks", "protocol", "learn"] as const;
 type Page = (typeof PAGES)[number];
 
 /**
@@ -195,6 +197,8 @@ export default function App() {
             bleed its light background to the edges. */}
         <main className="flex min-w-0 flex-1 flex-col gap-5 overflow-y-auto px-6 pb-6 pt-5">
           {page === "time" && <TimeTrackerDashboard />}
+          {page === "tasks" && <TasksPage />}
+          {page === "protocol" && <ProtocolPage />}
           {page === "learn" && <LearnPage />}
         </main>
       </div>

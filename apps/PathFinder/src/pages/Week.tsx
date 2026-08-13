@@ -1849,6 +1849,7 @@ export function Week() {
           done: newTask.done, sort_order: newTask.sort_order,
           priority: newTask.priority, due_date: newTask.due_date,
           created_at: newTask.created_at, time_estimate: newTask.time_estimate,
+          category: newTask.category,
         }, ...prev]);
       }
       const b = await createCalBlock(modal.date, d.title, d.start_time, d.end_time, d.color, desc, loc, taskId);

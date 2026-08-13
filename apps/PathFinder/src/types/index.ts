@@ -1,5 +1,9 @@
 export type GoalStatus = "active" | "completed" | "archived";
 export type Priority = "high" | "medium" | "low";
+// Quick-task kinds. `null` on a task means a regular project task — the three
+// named categories are lightweight standing lists (surfaced by Nexus Local and
+// the home-screen quick-task widget) that don't belong to any plan.
+export type TaskCategory = "reminder" | "chore" | "shopping";
 export type Frequency = "daily" | "weekly" | "monthly";
 
 export interface GoalGroup {
@@ -56,6 +60,7 @@ export interface Task {
   created_at: string;
   time_estimate: number | null;
   kanban_status: string;
+  category: TaskCategory | null;
 }
 
 export interface ProjectGoal {
@@ -80,6 +85,7 @@ export interface TaskWithContext {
   created_at: string;
   time_estimate: number | null;
   kanban_status?: string;
+  category: TaskCategory | null;
 }
 
 export interface SystemSubtask {
