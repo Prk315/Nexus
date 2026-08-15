@@ -100,6 +100,24 @@
  * continuity signal `Player`'s deckSession/unit modes resume from, just read
  * here for the checkmark instead of a resume index. One extra round trip for
  * the whole panel, not one per node.
+ *
+ * ── Socratic dialogue nodes (LEARN_PLAN.md "Socratic dialogue nodes",
+ * pinned 2026-08-15) ─────────────────────────────────────────────────────
+ *
+ * Same `lr_proof_*` trio, `kind: "socratic"` — grouped by `parent_unit_id`
+ * exactly like `proofsByParentUnit` (`socraticByParentUnit` below), same
+ * per-unit-mastery gate (only rendered once the parent's `status ===
+ * "mastered"` — "locked" is absence here too, not a visible state). Placed
+ * as a satellite node directly BELOW the unit's exit `DeckNode` (or the
+ * `UnitRow` itself when the unit has no exit deck) — a "?" glyph in a
+ * gradient-tinted disc, sized and shaped like `DeckNode` (a satellite of the
+ * unit, not a peer stop like `ProofNode`'s indented ∴ branch), swapping to
+ * the shared "✓ done" language once `lr_proof_progress.status ===
+ * "completed"`. Tapping opens `SocraticSession` (never `Player` — that
+ * file's content is `SocraticScript`-shaped, not `UnitContent`-shaped) via
+ * `openSocratic`, which reuses the exact same "flip available → in_progress
+ * on first open, never downgrade a completed session" guard `openProof`
+ * uses — same table, same write.
  */
 
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
@@ -117,6 +135,7 @@ import { useCourse } from "./CourseContext";
 import { CourseSwitcher } from "./CourseSwitcher";
 import { Player } from "./Player";
 import { ChallengeSession } from "./ChallengeSession";
+import { SocraticSession } from "./SocraticSession";
 
 type DisplayStatus = "locked" | "available" | "in_progress" | "mastered" | "no_content";
 
@@ -173,6 +192,10 @@ export function PathPanel() {
   // for a proof, without Player having to look this up itself (proof content
   // rows carry no `kind` of their own — only `lr_proof_unit` does).
   const [selectedProofKind, setSelectedProofKind] = useState<ProofUnitKind>("proof");
+  // Socratic dialogue node state — see the file-header note. Own overlay
+  // (`SocraticSession`, never `Player`), own selected-id state: a socratic
+  // side-node's content is script-shaped, not `UnitContent`-shaped.
+  const [selectedSocraticProofId, setSelectedSocraticProofId] = useState<number | null>(null);
   // LEARN_PLAN.md's chapter-checkpoint pilot (2026-08-10) — a ⚡ Lynudfordring
   // node after a chapter's last unit row, opening `ChallengeSession` scoped
   // to that chapter's code prefix (e.g. "LA 2"). See `ChapterChallengeNode`.
@@ -264,6 +287,19 @@ export function PathPanel() {
     const map = new Map<number, ProofUnitEntry[]>();
     for (const pe of proofEntries) {
       if (pe.proofUnit.kind !== "proof") continue;
+      const list = map.get(pe.proofUnit.parent_unit_id) ?? [];
+      list.push(pe);
+      map.set(pe.proofUnit.parent_unit_id, list);
+    }
+    return map;
+  }, [proofEntries]);
+
+  // proof_id[] per parent unit for `kind: "socratic"` rows — same shape and
+  // gate as `proofsByParentUnit` above, just filtered to the dialogue kind.
+  const socraticByParentUnit = useMemo(() => {
+    const map = new Map<number, ProofUnitEntry[]>();
+    for (const pe of proofEntries) {
+      if (pe.proofUnit.kind !== "socratic") continue;
       const list = map.get(pe.proofUnit.parent_unit_id) ?? [];
       list.push(pe);
       map.set(pe.proofUnit.parent_unit_id, list);
@@ -414,6 +450,21 @@ export function PathPanel() {
     });
   }
 
+  // Opens a socratic side-node. Same table, same guard as `openProof` above —
+  // just routed to `selectedSocraticProofId` (-> `SocraticSession`) instead
+  // of `selectedProofId` (-> `Player`).
+  function openSocratic(entry: ProofUnitEntry) {
+    const proofId = entry.proofUnit.proof_id;
+    setSelectedSocraticProofId(proofId);
+    if (entry.progress !== "available") return;
+    setProofEntries((prev) =>
+      prev.map((pe) => (pe.proofUnit.proof_id === proofId ? { ...pe, progress: "in_progress" } : pe))
+    );
+    setProofProgress(proofId, "in_progress").catch(() => {
+      // Best-effort, same posture as openProof above.
+    });
+  }
+
   return (
     <section className="flex flex-col gap-2 md:gap-3">
       <svg width="0" height="0" className="absolute" aria-hidden>
@@ -489,6 +540,7 @@ export function PathPanel() {
                     // mastered — "locked" is absence here, not a visible
                     // state (see the file-header note above).
                     const proofs = status === "mastered" ? (proofsByParentUnit.get(pu.unit.unit_id) ?? []) : [];
+                    const socratics = status === "mastered" ? (socraticByParentUnit.get(pu.unit.unit_id) ?? []) : [];
                     // Flashcard-deck nodes — see the file-header note. Entry
                     // brackets the row above, exit below; either is simply
                     // absent when its array is empty/missing.
@@ -532,6 +584,18 @@ export function PathPanel() {
                             onOpen={() => setSelectedDeckSession({ unitId: pu.unit.unit_id, deck: "exit" })}
                           />
                         )}
+                        {socratics.map((entry) => (
+                          <SocraticNode
+                            key={entry.proofUnit.proof_id}
+                            entry={entry}
+                            title={
+                              proofContentByProof.get(entry.proofUnit.proof_id)?.title ||
+                              entry.proofUnit.title ||
+                              entry.proofUnit.code
+                            }
+                            onOpen={() => openSocratic(entry)}
+                          />
+                        ))}
                         {proofs.map((entry) => (
                           <ProofNode
                             key={entry.proofUnit.proof_id}
@@ -626,6 +690,16 @@ export function PathPanel() {
           deckSession={selectedDeckSession}
           onClose={() => {
             setSelectedDeckSession(null);
+            setReloadNonce((n) => n + 1);
+          }}
+        />
+      )}
+
+      {selectedSocraticProofId !== null && (
+        <SocraticSession
+          proofId={selectedSocraticProofId}
+          onClose={() => {
+            setSelectedSocraticProofId(null);
             setReloadNonce((n) => n + 1);
           }}
         />
@@ -863,6 +937,41 @@ function DeckNode({
           {solvedCount}/{cardCount}
         </span>
       )}
+    </button>
+  );
+}
+
+/**
+ * A Socratic-dialogue side-node — LEARN_PLAN.md "Socratic dialogue nodes".
+ * Sized/shaped exactly like `DeckNode` (20px disc, 11px label, same row
+ * geometry) — deliberately "visually a sibling of deck nodes" per the spec,
+ * not a peer stop on the spine like `ProofNode`'s indented ∴ branch or
+ * `WorkshopNode`'s full-width row. Only ever rendered once the parent unit
+ * is mastered (the call site's own gate, mirroring `ProofNode`'s "locked is
+ * absence, not a visible state"), so unlike `DeckNode` this has no "locked"
+ * tone to draw — it is either available (gradient-tinted "?" disc) or
+ * completed (the shared "✓ done" language every side-node swaps to).
+ */
+function SocraticNode({ entry, title, onOpen }: { entry: ProofUnitEntry; title: string; onOpen: () => void }) {
+  const completed = entry.progress === "completed";
+  return (
+    <button
+      type="button"
+      onClick={onOpen}
+      className="group flex w-full items-center gap-2.5 rounded-lg px-1 py-1 text-left transition-colors active:bg-black/[0.03] md:hover:bg-black/[0.02]"
+    >
+      <span
+        className={`relative z-10 grid h-5 w-5 shrink-0 place-items-center rounded-full text-[9px] ${
+          completed
+            ? "bg-gradient-to-br from-indigo-500/25 to-fuchsia-600/25 ring-1 ring-black/[0.08] text-[#1A1A24]/75"
+            : "bg-gradient-to-br from-indigo-500/15 to-fuchsia-600/15 ring-1 ring-indigo-400/35 text-indigo-700/85"
+        }`}
+      >
+        {completed ? "✓" : "?"}
+      </span>
+      <span className={`min-w-0 flex-1 truncate text-[11px] ${completed ? "text-[#1A1A24]/70" : "text-[#6E6E78]/85"}`}>
+        {title}
+      </span>
     </button>
   );
 }

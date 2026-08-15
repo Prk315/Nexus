@@ -14,6 +14,7 @@ import type {
   ContentStatus,
   Drill,
   Grade,
+  JudgeResult,
   Lens,
   LrChallengeRun,
   LrItemFeedback,
@@ -23,6 +24,7 @@ import type {
   LrProofContentRow,
   LrProofProgress,
   LrProofUnit,
+  LrSocraticContentRow,
   LrUnit,
   LrUnitContentRow,
   LrUnitProgress,
@@ -30,6 +32,8 @@ import type {
   PracticeGroup,
   ProofProgressStatus,
   ProofUnitEntry,
+  SocraticExchangeTurn,
+  SocraticQuestion,
   UnitProgressStatus,
 } from "./types";
 
@@ -38,6 +42,16 @@ import { applyBlame } from "./memory";
 
 // Resolved per call from the node config rather than hardcoded — see
 // `lib/nodeUser.ts`.
+
+// ── Socratic judge (LEARN_PLAN.md "Socratic dialogue nodes") — the ONE call
+// in this file that doesn't go through `supabasePublic`. Edge functions are
+// invoked over plain HTTPS + the anon key as a Bearer token (same pattern as
+// `GarminPanel.tsx`'s `functions/v1/garmin-import` call), not the
+// `supabase-js` client, so a network/503/malformed-JSON failure is a plain
+// `fetch` rejection or a non-2xx response `judgeAnswer` can catch cleanly and
+// turn into `null` — never an exception that reaches the caller. ───────────
+const SOCRATIC_JUDGE_URL = `${(import.meta.env.VITE_SUPABASE_URL as string).replace(/\/$/, "")}/functions/v1/socratic-judge`;
+const SUPABASE_ANON_KEY = import.meta.env.VITE_SUPABASE_ANON_KEY as string;
 
 // Content status preference when several rows exist for the same unit_id:
 // live beats approved beats draft. The app never renders a plain "draft" as
@@ -225,6 +239,75 @@ export async function fetchProofContent(proofId: number): Promise<LrProofContent
   const { data, error } = await supabasePublic.from("lr_proof_content").select("*").eq("proof_id", proofId);
   if (error) throw error;
   return bestContentRow((data ?? []) as LrProofContentRow[]);
+}
+
+/**
+ * Same table, same resolution rule as `fetchProofContent` — only the return
+ * type differs (`content: SocraticScript`, not `UnitContent`). `kind:
+ * "socratic"` rows live in `lr_proof_content` exactly like `kind: "proof"` /
+ * `"workshop"` rows do; there is no separate table (LEARN_PLAN.md "Socratic
+ * dialogue nodes": "Storage: the lr_proof_* trio with kind='socratic'").
+ * `approveProofContent` / `demoteProofContent` below are reused as-is for
+ * socratic content — they only ever address the row by `(proof_id, version)`
+ * and never look at `content`.
+ */
+export async function fetchSocraticContent(proofId: number): Promise<LrSocraticContentRow | null> {
+  const { data, error } = await supabasePublic.from("lr_proof_content").select("*").eq("proof_id", proofId);
+  if (error) throw error;
+  return bestContentRow((data ?? []) as LrSocraticContentRow[]);
+}
+
+/**
+ * Classify one learner answer via the `socratic-judge` edge function
+ * (LEARN_PLAN.md "Runtime judge": Claude `claude-opus-5`, structured JSON —
+ * "input = the question's rubric material + the learner's answer (+ short
+ * exchange history); output = { verdict, facets_hit, misconception,
+ * coach_md }. The judge CLASSIFIES ONLY — every question the learner sees is
+ * authored.").
+ *
+ * **Fail-open, no exceptions**: network failure, a non-2xx status, or a
+ * response that doesn't parse as JSON / doesn't carry a recognised `verdict`
+ * ALL resolve to `null` — never a thrown error. `SocraticSession.tsx` reads
+ * `null` as "judge unavailable for this exchange" and falls into rubric mode
+ * for the rest of the session (LEARN_PLAN.md "Fail-open": "judge unavailable
+ * (no ANTHROPIC_API_KEY secret, network, 503) → RUBRIC MODE ... The node
+ * never breaks; the LLM upgrades it.").
+ */
+export async function judgeAnswer(
+  question: SocraticQuestion,
+  answer: string,
+  history: SocraticExchangeTurn[]
+): Promise<JudgeResult | null> {
+  try {
+    const res = await fetch(SOCRATIC_JUDGE_URL, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${SUPABASE_ANON_KEY}`,
+      },
+      body: JSON.stringify({
+        prompt_md: question.prompt_md,
+        target_md: question.target_md,
+        facets: question.facets,
+        misconceptions: question.misconceptions,
+        answer,
+        history,
+      }),
+    });
+    if (!res.ok) return null;
+    const data = await res.json().catch(() => null);
+    if (!data || (data.verdict !== "solid" && data.verdict !== "partial" && data.verdict !== "off")) {
+      return null;
+    }
+    return {
+      verdict: data.verdict,
+      facets_hit: Array.isArray(data.facets_hit) ? data.facets_hit.filter((f: unknown) => typeof f === "string") : [],
+      misconception: typeof data.misconception === "string" ? data.misconception : null,
+      coach_md: typeof data.coach_md === "string" ? data.coach_md : "",
+    };
+  } catch {
+    return null;
+  }
 }
 
 /** The draft → live curation transition for proof content — mirrors `approveUnitContent`. */

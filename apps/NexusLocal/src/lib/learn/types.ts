@@ -382,14 +382,21 @@ export interface PathUnit {
 // schema 2026-08-10 (no migration file for these three tables exists in this
 // repo yet — the pilot's DDL was applied directly).
 
-// `kind` distinguishes the two side-unit flavours sharing this trio (LEARN_PLAN.md
+// `kind` distinguishes the side-unit flavours sharing this trio (LEARN_PLAN.md
 // "Eksamensværksted" — migration `20260810230000_learn_side_unit_kind.sql`):
 // 'proof' = the original per-unit proof side node (∴), unlocks on its own
 // `parent_unit_id` mastering. 'workshop' = a chapter-end exam-workshop node (§),
 // whose `parent_unit_id` is the chapter's LAST unit and which unlocks once ≥1 unit
 // of that chapter is mastered — the checkpoint's own chapter-mastery rule, not a
-// per-unit one. DB default is 'proof' so every pre-existing row stays a proof.
-export type ProofUnitKind = "proof" | "workshop";
+// per-unit one. 'socratic' (LEARN_PLAN.md "Socratic dialogue nodes", pinned
+// 2026-08-15) = a per-unit chat-style dialogue node (?), same per-unit
+// `parent_unit_id` mastery gate as 'proof', but its `lr_proof_content.content`
+// is SocraticScript-shaped, NOT UnitContent-shaped — the app routes it to
+// `SocraticSession.tsx`, never `Player.tsx`. The `kind` column itself carries no
+// CHECK constraint (migration above is a bare `ALTER TABLE ... ADD COLUMN`), so
+// no schema migration was needed to add this value. DB default is 'proof' so
+// every pre-existing row stays a proof.
+export type ProofUnitKind = "proof" | "workshop" | "socratic";
 
 export interface LrProofUnit {
   proof_id: number;
@@ -528,4 +535,107 @@ export interface LrChallengeRun {
   duration_secs: number | null;
   rounds: ChallengeRoundsPayload | null;
   at?: string;
+}
+
+// --- Socratic dialogue nodes (LEARN_PLAN.md "Socratic dialogue nodes (pinned,
+// 2026-08-15 — pilot: units 2, 3, 9)"). Storage is the same `lr_proof_*` trio
+// as proofs/workshops, `kind: "socratic"` — but the content JSONB is
+// SCRIPT-shaped, not `UnitContent`-shaped, so it gets its own type tree and its
+// own DB-row/fetch types rather than reusing `LrProofContentRow`. The app
+// routes `kind: "socratic"` straight to `SocraticSession.tsx`; `Player.tsx`
+// never sees this shape. ------------------------------------------------------
+
+/** One element of a complete answer — the judge's rubric AND the fail-open
+ * rubric-mode tap-checklist read the same `facets[]` array. */
+export interface SocraticFacet {
+  id: string;
+  desc_md: string;
+}
+
+/** A common wrong belief, with its own authored redirect question. The judge
+ * classifies which one (if any) the learner's answer matches; rubric mode
+ * (no judge) never attempts this classification — see `SocraticSession.tsx`. */
+export interface SocraticMisconception {
+  id: string;
+  desc_md: string;
+  probe_md: string;
+}
+
+/** A deeper, authored probe fired when `targets_facet` was missing from the
+ * learner's answer (judged: per `facets_hit`; rubric mode: per the learner's
+ * own taps) — both branches pick "the first missing facet, in authored
+ * order" and look up its subquestion here. */
+export interface SocraticSubquestion {
+  id: string;
+  targets_facet: string;
+  prompt_md: string;
+}
+
+export interface SocraticQuestion {
+  id: string;
+  concept_ids: string[];
+  lens: Lens | null;
+  /** The main Socratic question — why/how, never bare recall. */
+  prompt_md: string;
+  /** What a solid answer contains — revealed to the learner after the
+   * exchange resolves, AND the judge's own rubric material. */
+  target_md: string;
+  facets: SocraticFacet[];
+  misconceptions: SocraticMisconception[];
+  subquestions: SocraticSubquestion[];
+  /** Authored "prøv igen — mere i denne retning" nudge — the deterministic
+   * fallback whenever there is no more specific authored redirect (an "off"
+   * verdict with no matched misconception, or rubric mode with zero facets
+   * tapped, or a "partial"/some-facets-tapped case whose missing facet has no
+   * authored subquestion). */
+  retry_md: string;
+  max_followups: number;
+}
+
+export interface SocraticScript {
+  schema_version: 1;
+  code: string;
+  title: string;
+  est_minutes: number;
+  questions: SocraticQuestion[];
+}
+
+/** Mirrors `LrProofContentRow` exactly (same `lr_proof_content` table, same
+ * draft→approved→live curation gate, same `bestContentRow` resolution in
+ * api.ts) — the only difference is `content`'s shape. */
+export interface LrSocraticContentRow {
+  proof_id: number;
+  version: number;
+  status: ContentStatus;
+  content: SocraticScript;
+  authored_by: string | null;
+  notes: string | null;
+  created_at: string;
+}
+
+/**
+ * One exchange turn passed as judge history — `{prompt_md, answer}` for
+ * every earlier round of the *current* main question only (LEARN_PLAN.md:
+ * "input = ... the learner's answer (+ short exchange history)"). Built by
+ * `SocraticSession.tsx` from its own transcript; never persisted.
+ */
+export interface SocraticExchangeTurn {
+  prompt_md: string;
+  answer: string;
+}
+
+export type JudgeVerdict = "solid" | "partial" | "off";
+
+/**
+ * The `socratic-judge` edge function's response shape (LEARN_PLAN.md: "output
+ * = { verdict: solid|partial|off, facets_hit: [ids], misconception: id|null,
+ * coach_md: ONE short sentence }"). `api.judgeAnswer` returns this or `null`
+ * — null on ANY failure (network, non-2xx, malformed JSON, an unrecognised
+ * `verdict`), which is what triggers rubric mode for that exchange.
+ */
+export interface JudgeResult {
+  verdict: JudgeVerdict;
+  facets_hit: string[];
+  misconception: string | null;
+  coach_md: string;
 }

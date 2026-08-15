@@ -524,6 +524,53 @@ The prerequisite edges go live (they were dormant since Phase 3):
    never on tile/challenge half-weight paths' prereqs-of-prereqs.
    Verified against the Python reference on fixed sample states before wiring.
 
+## Socratic dialogue nodes (pinned, 2026-08-15 — pilot: units 2, 3, 9)
+
+A per-module PATH NODE (below the exit deck), unlocking when the unit is
+MASTERED. A chat-style dialogue: a main question is posed → the learner writes
+a free-text explanation → the system either advances, poses an authored
+sub-question (a facet was missed), redirects via an authored misconception
+probe, or asks for another attempt — per the judge's classification.
+
+**Storage**: the lr_proof_* trio with `kind='socratic'` (content is a DIALOGUE
+SCRIPT, not UnitContent — the app routes kind='socratic' to SocraticSession,
+never the Player). Curation gate (draft→live) and KLADDE badge as usual.
+
+**Script schema v1**:
+```jsonc
+{
+  "schema_version": 1, "code": "la_1_u1-socratic", "title": "…",
+  "est_minutes": 20,
+  "questions": [ {
+    "id": "q1", "concept_ids": ["la-…"], "lens": "matrix" | null,
+    "prompt_md": "the main Socratic question (why/how, never bare recall)",
+    "target_md": "what a solid answer contains — shown to the learner after the exchange, and the judge's rubric",
+    "facets": [ { "id": "f1", "desc_md": "one element of a complete answer" } ],
+    "misconceptions": [ { "id": "m1", "desc_md": "a common wrong belief",
+                          "probe_md": "authored redirect question for it" } ],
+    "subquestions": [ { "id": "s1", "targets_facet": "f1",
+                        "prompt_md": "deeper probe when f1 is missing" } ],
+    "retry_md": "authored 'prøv igen — mere i denne retning' nudge",
+    "max_followups": 2
+  } ]
+}
+```
+
+**Runtime judge** (`socratic-judge` edge function → Claude `claude-opus-5`,
+structured JSON): input = the question's rubric material + the learner's
+answer (+ short exchange history); output = { verdict: solid|partial|off,
+facets_hit: [ids], misconception: id|null, coach_md: ONE short sentence }.
+The judge CLASSIFIES ONLY — every question the learner sees is authored.
+Branching (app-side, deterministic): solid → next question (grade 3) ·
+partial → subquestion for the first missing facet · off + misconception →
+its probe · off otherwise → retry_md; after max_followups move on (grade 2 if
+recovered, 1 if not). Grades feed applyGrade at weight 1.0 on concept_ids.
+
+**Fail-open**: judge unavailable (no ANTHROPIC_API_KEY secret, network, 503)
+→ RUBRIC MODE, same script: facets reveal as a tap-checklist after answering;
+branching becomes deterministic from the learner's own taps. The node never
+breaks; the LLM upgrades it.
+
 ## Conventions that bite (from CLAUDE.md — enforced)
 
 - camelCase IPC args from JS; snake_case in Rust.
