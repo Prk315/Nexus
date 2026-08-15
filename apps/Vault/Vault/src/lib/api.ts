@@ -1,4 +1,5 @@
 import { supabase, getUserId } from "./supabase";
+import { makeSaver } from "./saveQueue";
 import { VaultGraph, VaultNode, NodeKind, VaultRecord, HighlighterCategory } from "../types";
 
 function err(e: any): never { throw new Error(e?.message ?? String(e)); }
@@ -139,12 +140,20 @@ export async function readContent(id: string): Promise<string> {
   return data?.data ?? "";
 }
 
-export async function saveContent(id: string, content: string): Promise<void> {
+// All content writes go through the save queue (single-flight per node,
+// latest-write-wins, backoff on failure) — never call Supabase directly for
+// these. Unserialized upserts to the same node_id queue on its row lock while
+// each holds a pool connection, which is how one slow save wedged the whole
+// database on 2026-08-15 (see lib/saveQueue.ts).
+async function rawSaveContent(id: string, content: string): Promise<void> {
   const { error } = await supabase.from("vault_content")
     .upsert({ node_id: id, data: content, user_id: getUserId(), updated_at: new Date().toISOString() },
       { onConflict: "node_id" });
   if (error) err(error);
 }
+
+export const saveContent: (id: string, content: string) => Promise<void> =
+  makeSaver(rawSaveContent);
 
 // ── Journals (handwriting stroke data) ───────────────────────────────────────
 
@@ -154,12 +163,15 @@ export async function readJournal(id: string): Promise<string> {
   return data?.data ?? "";
 }
 
-export async function saveJournal(id: string, data: string): Promise<void> {
+async function rawSaveJournal(id: string, data: string): Promise<void> {
   const { error } = await supabase.from("vault_journals")
     .upsert({ node_id: id, data, user_id: getUserId(), updated_at: new Date().toISOString() },
       { onConflict: "node_id" });
   if (error) err(error);
 }
+
+export const saveJournal: (id: string, data: string) => Promise<void> =
+  makeSaver(rawSaveJournal);
 
 // ── Assets (PDFs, videos) → Supabase Storage ─────────────────────────────────
 

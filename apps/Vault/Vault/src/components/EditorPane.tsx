@@ -218,9 +218,17 @@ export const EditorPane = forwardRef<EditorPaneHandle, EditorPaneProps>(
         return;
       setSaveStatus("saving");
       const timer = setTimeout(async () => {
-        await api.saveContent(selectedId, content);
-        setSaveStatus("saved");
-        setTimeout(() => setSaveStatus(""), 1500);
+        try {
+          // Queued in api.ts: single-flight per node, coalescing, backoff.
+          // Resolves once this content (or something newer) is persisted.
+          await api.saveContent(selectedId, content);
+          setSaveStatus("saved");
+          setTimeout(() => setSaveStatus(""), 1500);
+        } catch {
+          // The queue gave up after backoff — say so instead of lying "Saved";
+          // the content stays pending and the next edit re-arms the save.
+          setSaveStatus("error");
+        }
       }, 400);
       return () => clearTimeout(timer);
     }, [content, selectedId]);
@@ -459,8 +467,13 @@ export const EditorPane = forwardRef<EditorPaneHandle, EditorPaneProps>(
               </span>
               <div className="toolbar-actions">
                 {saveStatus && (
-                  <span className="save-status">
-                    {saveStatus === "saving" ? "Saving…" : "Saved"}
+                  <span
+                    className="save-status"
+                    style={saveStatus === "error" ? { color: "#f87171" } : undefined}
+                  >
+                    {saveStatus === "saving" ? "Saving…"
+                      : saveStatus === "error" ? "Not saved — will retry on edit"
+                      : "Saved"}
                   </span>
                 )}
               </div>
