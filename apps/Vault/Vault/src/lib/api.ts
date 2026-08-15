@@ -196,6 +196,21 @@ export async function uploadAsset(nodeId: string, file: File): Promise<string> {
   return data.publicUrl;
 }
 
+/// Canvas images: file in the bucket, URL in the document. Inline base64 is
+/// what made canvas rows megabytes — 69% of the 1.9 MB document that took the
+/// database down on 2026-08-15 was five pasted screenshots, re-written in full
+/// by every autosave. Unlike uploadAsset this does NOT touch vault_content;
+/// the caller owns where the URL lands.
+export async function uploadCanvasImage(blob: Blob): Promise<string> {
+  const ext = (blob.type.split("/")[1] ?? "png").replace("jpeg", "jpg").replace("svg+xml", "svg");
+  const path = `${getUserId()}/canvas/${crypto.randomUUID()}.${ext}`;
+  const { error } = await supabase.storage
+    .from("vault-assets")
+    .upload(path, blob, { contentType: blob.type || "image/png" });
+  if (error) err(error);
+  return supabase.storage.from("vault-assets").getPublicUrl(path).data.publicUrl;
+}
+
 // ── Highlighter categories (per reader node) ─────────────────────────────────
 // Stored as JSON in vault_content under the `${nodeId}_hl` suffix key,
 // following the existing `${id}_annot` convention.

@@ -8,6 +8,7 @@ import type { SqlJsStatic, Database } from 'sql.js';
 import sqlWasmUrl from 'sql.js/dist/sql-wasm.wasm?url';
 import { readText as clipboardReadText } from "@tauri-apps/plugin-clipboard-manager";
 import { isTauri } from "../lib/platform";
+import * as api from "../lib/api";
 import Markdown from "react-markdown";
 import remarkMath from "remark-math";
 import rehypeKatex from "rehype-katex";
@@ -2000,6 +2001,7 @@ export function CanvasEditor({ content, onChange, nodeId }: Props) {
             setSelectedId(block.id);
             setSelectedIds(new Set([block.id]));
             setSelectedArrowId(null);
+            offloadImageBlock(block.id, blob);
           };
           img.src = src;
         };
@@ -2035,6 +2037,20 @@ export function CanvasEditor({ content, onChange, nodeId }: Props) {
     setSelectedId(prev => prev === id ? null : prev);
     setSelectedIds(prev => { const n = new Set(prev); n.delete(id); return n; });
   }, []);
+
+  // Swap a freshly inserted image block's inline data-URL for a storage URL.
+  // The block is inserted with the data-URL first (instant display, and a
+  // fallback that keeps the image if the upload fails — fat but functional),
+  // then upgraded in place once the bucket upload lands.
+  function offloadImageBlock(blockId: string, blob: Blob) {
+    api.uploadCanvasImage(blob)
+      .then(url => setData(d => ({
+        ...d,
+        blocks: d.blocks.map(b =>
+          b.id === blockId && b.type === "image" ? { ...b, src: url } : b),
+      })))
+      .catch(() => { /* keep the base64 src */ });
+  }
 
   function addBlock(factory: (x: number, y: number) => CanvasBlock, sx?: number, sy?: number) {
     pushUndo();
@@ -3415,7 +3431,9 @@ export function CanvasEditor({ content, onChange, nodeId }: Props) {
                 const scale = Math.min(1, maxW / img.naturalWidth, maxH / img.naturalHeight);
                 const w = Math.round(img.naturalWidth * scale);
                 const h = Math.round(img.naturalHeight * scale);
-                addBlock((x, y) => mkImage(x, y, src, w, h));
+                let created: ImageBlock | null = null;
+                addBlock((x, y) => (created = mkImage(x, y, src, w, h)));
+                if (created) offloadImageBlock((created as ImageBlock).id, file);
               };
               img.src = src;
             };
