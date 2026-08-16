@@ -1,7 +1,8 @@
 // Supabase Edge Function: focus-evaluate
 //
-// Collapses focus_blocks + unlock_rules + blocked_sites + blocked_apps + today's
-// time_entries into ONE materialized verdict row per user:
+// Collapses focus_blocks + unlock_rules + blocked_sites + blocked_apps +
+// meal_sessions/meal_unlock_targets + today's time_entries into ONE
+// materialized verdict row per user:
 //
 //   blocking_state(user_id, effective_domains, effective_processes,
 //                  reasons, today_minutes, computed_at)
@@ -51,6 +52,8 @@ import {
   type FocusBlockRow,
   isoWeekday,
   localNow,
+  type MealSessionRow,
+  type MealTargetRow,
   TIMEZONE,
   type UnlockRuleRow,
 } from "./logic.ts";
@@ -224,6 +227,26 @@ async function computeAll(
       .select("user_id, process_name, domain, required_minutes, enabled"),
   );
 
+  // Meal sessions: a user-initiated 30-minute unblock of specific targets.
+  // Only potentially-active rows are fetched — `ends_at > now` bounds the scan
+  // as the table accretes one row per meal per day. As everywhere else in this
+  // function, a missing table (migration not applied) aborts the run rather
+  // than quietly evaluating every meal as inactive — which is also why the
+  // migration must be applied BEFORE this version of the function is deployed.
+  const mealSessions = unwrap<MealSessionRow>(
+    "meal_sessions",
+    await supabase
+      .from("meal_sessions")
+      .select("user_id, meal, started_at, ends_at")
+      .gt("ends_at", now.toISOString()),
+  );
+  const mealTargets = unwrap<MealTargetRow>(
+    "meal_unlock_targets",
+    await supabase
+      .from("meal_unlock_targets")
+      .select("user_id, meal, domain, process_name"),
+  );
+
   // Schedule payload, joined by block_id. A 404 here means work unit 1's
   // migration has not been applied; that must abort rather than quietly
   // evaluate every focus block as blocking nothing.
@@ -263,6 +286,8 @@ async function computeAll(
   const appsByUser = byUser(apps);
   const blocksByUser = byUser(blocks);
   const rulesByUser = byUser(rules);
+  const mealSessionsByUser = byUser(mealSessions);
+  const mealTargetsByUser = byUser(mealTargets);
 
   // Currently only 'default', but derived rather than assumed so a second user
   // does not silently go unevaluated. 'default' is always present so its row is
@@ -273,6 +298,8 @@ async function computeAll(
     ...appsByUser.keys(),
     ...blocksByUser.keys(),
     ...rulesByUser.keys(),
+    ...mealSessionsByUser.keys(),
+    ...mealTargetsByUser.keys(),
   ]);
 
   const { date: localDate, minutes: nowMinutes } = localNow(now, TIMEZONE);
@@ -292,6 +319,9 @@ async function computeAll(
         blockApps,
         blockSites,
         rules: rulesByUser.get(userId) ?? [],
+        mealSessions: mealSessionsByUser.get(userId) ?? [],
+        mealTargets: mealTargetsByUser.get(userId) ?? [],
+        nowMs: now.getTime(),
         weekday,
         nowMinutes,
         todayMinutes,

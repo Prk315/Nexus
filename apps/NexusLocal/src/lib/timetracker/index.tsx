@@ -35,8 +35,10 @@ import { SchedulePanel } from "./SchedulePanel";
 // the two spellings as the same file (TS1261).
 import { Pomodoro } from "./PomodoroPanel";
 import { RewardsPanel } from "./RewardsPanel";
+import { MealsPanel } from "./MealsPanel";
 import { EnforcementPanel } from "./EnforcementPanel";
 import { UsagePanel } from "./UsagePanel";
+import { DayCoveragePanel } from "./DayCoveragePanel";
 
 // --- Visible panels -------------------------------------------------------
 // Work units append their panel component to ONE of the two lists below.
@@ -56,9 +58,15 @@ import { UsagePanel } from "./UsagePanel";
 const DASHBOARD_PANELS: Array<() => ReactElement | null> = [
   TimerPanel,
   Pomodoro,
+  // Dashboard, not settings: the countdown ticks on its own, and the buttons
+  // are pressed three times a day — the "changes by itself" test passes.
+  MealsPanel,
   // Where the day actually went, as measured rather than as intended. Renders
   // null with no daemon and no data, which is every launch on iOS.
   UsagePanel,
+  // The rest of the day: sleep (Protocol) + PathFinder blocks fill what the
+  // tracker can't see, and the leftover gaps are the to-log list.
+  DayCoveragePanel,
 ];
 
 const SETTINGS_PANELS: Array<() => ReactElement | null> = [

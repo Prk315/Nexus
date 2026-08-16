@@ -120,6 +120,64 @@ const int = (v: unknown): number | null => {
   return n === null ? null : Math.round(n);
 };
 
+/**
+ * The user's timezone, for interpreting Garmin's naive local timestamps.
+ * Same single-user decision as focus-evaluate's TIMEZONE — see the reasoning
+ * there before "fixing" this into a per-user column.
+ */
+const TIMEZONE = "Europe/Copenhagen";
+
+/** Matches a trailing UTC designator or numeric offset: Z, +02:00, -0500. */
+const HAS_OFFSET = /([Zz]|[+-]\d{2}:?\d{2})$/;
+
+/**
+ * Garmin's `startTimeLocal` ("2026-08-15 18:03:21", naive, watch-local) as a
+ * UTC ISO instant, for the `started_at timestamptz` columns.
+ *
+ * The naive string MUST be converted here: handing it to Postgres unlabelled
+ * makes the database read it as UTC, shifting every workout by the whole
+ * Copenhagen offset — 1 h in winter, 2 h in summer, silently.
+ *
+ * The offset is resolved via Intl in two passes: format the candidate instant
+ * in TIMEZONE, measure how far the wall clock landed from the target, correct,
+ * and measure once more so a start near a DST transition settles on the right
+ * side. Null on anything unparseable — a missing start is a row that simply
+ * doesn't render on a timeline, which beats a wrong one.
+ */
+function localToUtcIso(value: string | null): string | null {
+  if (!value) return null;
+  const v = value.trim();
+  // Defensive: if a future bridge ever sends an offset-bearing string, it is
+  // already an instant — converting it again would double-shift it.
+  if (HAS_OFFSET.test(v)) {
+    const t = Date.parse(v);
+    return Number.isFinite(t) ? new Date(t).toISOString() : null;
+  }
+  const m = /^(\d{4})-(\d{2})-(\d{2})[T ](\d{2}):(\d{2})(?::(\d{2}))?/.exec(v);
+  if (!m) return null;
+  const [y, mo, d, h, mi, s] = m.slice(1).map((p) => Number(p ?? 0));
+  const target = Date.UTC(y, mo - 1, d, h, mi, s || 0);
+
+  const wallAsUtc = (instant: number): number => {
+    const parts = new Intl.DateTimeFormat("en-CA", {
+      timeZone: TIMEZONE,
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+      hour: "2-digit",
+      minute: "2-digit",
+      second: "2-digit",
+      hourCycle: "h23",
+    }).formatToParts(new Date(instant));
+    const get = (type: string) => Number(parts.find((p) => p.type === type)?.value ?? 0);
+    return Date.UTC(get("year"), get("month") - 1, get("day"), get("hour"), get("minute"), get("second"));
+  };
+
+  let utc = target - (wallAsUtc(target) - target);
+  utc = target - (wallAsUtc(utc) - utc);
+  return new Date(utc).toISOString();
+}
+
 Deno.serve(async (req: Request) => {
   if (req.method === "OPTIONS") return new Response(null, { status: 204, headers: CORS });
   if (req.method !== "POST") return json({ error: "method_not_allowed" }, 405);
@@ -258,6 +316,7 @@ Deno.serve(async (req: Request) => {
         external_id: `garmin:${key}`,
         plan_id: null,
         date,
+        started_at: localToUtcIso(str(a.start_time)),
         planned_km: null,
         actual_km: num(a.actual_km),
         avg_pace_s_per_km: int(a.avg_pace_s_per_km),
@@ -277,6 +336,7 @@ Deno.serve(async (req: Request) => {
         plan_id: null,
         name: str(a.name) ?? "Workout",
         scheduled_date: date,
+        started_at: localToUtcIso(str(a.start_time)),
         completed: true,
         duration_min: int(a.duration_min),
         calories_burned: int(a.calories_burned) ?? int(a.calories),

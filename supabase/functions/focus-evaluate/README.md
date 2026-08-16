@@ -37,6 +37,8 @@ the server does the thinking on a schedule.
 | `schedule_block_apps` | `block_id, process_name` |
 | `schedule_block_sites` | `block_id, domain` |
 | `unlock_rules` | `user_id, process_name, domain, required_minutes, enabled` |
+| `meal_sessions` | `user_id, meal, started_at, ends_at` — only rows with `ends_at > now` |
+| `meal_unlock_targets` | `user_id, meal, domain, process_name` |
 | `time_entries` | `duration_seconds` — today's completed entries only |
 | `active_sessions` | `paused_at` — to decide `focus_only` |
 

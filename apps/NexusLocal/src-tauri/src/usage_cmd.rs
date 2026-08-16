@@ -232,6 +232,96 @@ pub fn tt_usage_today() -> UsageToday {
     }
 }
 
+/// One recorded foreground interval, for the day-coverage timeline.
+#[derive(Debug, Clone, Serialize)]
+pub struct UsageInterval {
+    pub name: String,
+    /// RFC3339 UTC, exactly as the store holds it.
+    pub start: String,
+    pub end: String,
+    pub seconds: i64,
+}
+
+/// The day's app intervals, oldest first — shared by `tt_usage_intervals`
+/// and `tt_usage_spans_range` so the two can never disagree on filtering.
+fn app_intervals(day: &str) -> Vec<UsageInterval> {
+    let mut out: Vec<UsageInterval> = usage::read_day(day)
+        .unwrap_or_default()
+        .iter()
+        .filter(|e| e.is_app() && e.seconds() > 0)
+        .map(|e| UsageInterval {
+            name: e.label().to_string(),
+            start: e.start().to_string(),
+            end: e.end().to_string(),
+            seconds: e.seconds(),
+        })
+        .collect();
+    out.sort_by(|a, b| a.start.cmp(&b.start));
+    out
+}
+
+/// The day's raw app intervals, oldest first.
+///
+/// Exists because the aggregate commands above deliberately collapse intervals
+/// into totals and hour buckets — a timeline needs the actual spans. App
+/// entries only: a site's interval is a subset of its browser's, and painting
+/// both would double-cover every browser minute.
+///
+/// Same infallibility contract as the rest of this file: a missing or malformed
+/// day reads as an empty list, and a junk timestamp drops that row rather than
+/// the day. `date` is `YYYY-MM-DD` local; anything else resolves to an empty
+/// day rather than an error.
+#[tauri::command]
+pub fn tt_usage_intervals(date: Option<String>) -> Vec<UsageInterval> {
+    app_intervals(&date.unwrap_or_else(usage::today_local))
+}
+
+/// One local day's recorded app spans, for the coverage history strip.
+#[derive(Debug, Clone, Serialize)]
+pub struct DaySpans {
+    /// `YYYY-MM-DD`, local.
+    pub date: String,
+    pub spans: Vec<UsageInterval>,
+}
+
+/// How many days `tt_usage_spans_range` returns by default.
+const SPANS_RANGE_DEFAULT_DAYS: u32 = 30;
+
+/// The most days `tt_usage_spans_range` will ever return, however large the
+/// caller asks for — a display command should degrade, not build an
+/// unbounded response.
+const SPANS_RANGE_MAX_DAYS: u32 = 60;
+
+/// Every app interval for a range of local days, oldest first, in one call.
+///
+/// Phase B's 30-day coverage strip needs a whole month of spans to paint the
+/// history view; asking `tt_usage_intervals` once per day would be 30
+/// round-trips through Tauri's IPC for a panel that renders on open. This
+/// walks the same `range_days` used by `tt_usage_range` and batches the reads
+/// into one call instead.
+///
+/// `days` defaults to 30 and is clamped to `1..=60`, silently — same posture
+/// as `tt_usage_range`: this is a display command, so a wild input degrades
+/// to the nearest sane range rather than erroring.
+///
+/// One `DaySpans` per date, **including days with no file** (empty `spans`).
+/// Omitting those days would make the strip render a gap as "no column"
+/// instead of "0%", which is a different claim — the same reasoning as the
+/// zero-filled days in `tt_usage_range`.
+#[tauri::command]
+pub fn tt_usage_spans_range(days: Option<u32>) -> Vec<DaySpans> {
+    let days = days
+        .unwrap_or(SPANS_RANGE_DEFAULT_DAYS)
+        .clamp(1, SPANS_RANGE_MAX_DAYS);
+    range_days(days as i64)
+        .into_iter()
+        .map(|date| {
+            let spans = app_intervals(&date);
+            DaySpans { date, spans }
+        })
+        .collect()
+}
+
 /// Which account the daemon currently exports usage to.
 ///
 /// Read from the config file rather than from the app's own auth session on
@@ -368,6 +458,52 @@ mod tests {
         assert!(today.total_seconds >= 0);
         assert!(today.apps.len() <= TOP_N);
         assert!(today.sites.len() <= TOP_N);
+    }
+
+    #[test]
+    fn intervals_for_a_day_with_no_file_are_empty_not_an_error() {
+        // Same contract as the aggregate commands: a missing day is an empty
+        // day. The panel renders "no screen time" rather than an error box.
+        assert!(tt_usage_intervals(Some("2097-03-04".into())).is_empty());
+        // And a nonsense date degrades the same way.
+        assert!(tt_usage_intervals(Some("not-a-date".into())).is_empty());
+    }
+
+    // ── tt_usage_spans_range ────────────────────────────────────────────────
+
+    #[test]
+    fn the_default_range_is_thirty_ascending_days_ending_today() {
+        let spans = tt_usage_spans_range(None);
+        assert_eq!(spans.len(), 30);
+        for pair in spans.windows(2) {
+            assert!(pair[0].date < pair[1].date, "dates must be strictly ascending");
+        }
+        assert_eq!(spans.last().unwrap().date, usage::today_local());
+    }
+
+    #[test]
+    fn a_requested_count_of_zero_clamps_up_to_one_day() {
+        assert_eq!(tt_usage_spans_range(Some(0)).len(), 1);
+    }
+
+    #[test]
+    fn a_huge_requested_count_clamps_down_to_sixty_days() {
+        assert_eq!(tt_usage_spans_range(Some(999)).len(), 60);
+    }
+
+    #[test]
+    fn every_day_is_present_even_when_its_file_does_not_exist() {
+        // Most of these day files don't exist on a test machine — this reads
+        // the real `~/.nexuslocal/usage/` directory, not a fixture, so the
+        // dev machine's own tracker may have written today's file. That's
+        // fine: the property under test is the *count* of entries, which
+        // must equal the requested day count regardless of which files
+        // happen to exist, not that every entry is empty. An omitted element
+        // would render as "no column" instead of "0%", a different claim.
+        let spans = tt_usage_spans_range(Some(10));
+        assert_eq!(spans.len(), 10);
+        let dates: std::collections::HashSet<_> = spans.iter().map(|d| d.date.clone()).collect();
+        assert_eq!(dates.len(), 10, "every entry is a distinct date");
     }
 
     #[test]

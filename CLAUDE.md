@@ -201,8 +201,8 @@ pomodoro, focus schedules, blocking management and time-unlock rewards.
 `BGTaskScheduler` and no silent push (grep the repo — zero hits), so a `setInterval`
 in the WebView dies the moment the app backgrounds. Instead the `focus-evaluate`
 edge function runs on pg_cron every 5 minutes and collapses `focus_blocks` +
-`schedule_block_{apps,sites}` + `unlock_rules` + `blocked_{sites,apps}` + today's
-`time_entries` into **one** row:
+`schedule_block_{apps,sites}` + `unlock_rules` + `blocked_{sites,apps}` +
+`meal_sessions`/`meal_unlock_targets` + today's `time_entries` into **one** row:
 
 ```
 blocking_state(user_id, effective_domains, effective_processes, reasons, today_minutes, computed_at)
@@ -331,6 +331,16 @@ the three removed controls were one loophole wearing three hats (`enabled = fals
 deleting the row, and flipping `block_mode` from `always` to `focus_only` all end with
 the thing unblocked) — restoring any one restores all three.
 
+**Meal sessions are the sanctioned valve** (`MealsPanel`, added 2026-08-16): breakfast,
+lunch and dinner each buy a 30-minute unblock of a per-meal target list
+(`meal_unlock_targets`), once per meal per local day (unique index on `meal_sessions`,
+not a UI guard). Activation inserts the session row, logs a `pf_cal_blocks` entry so it
+shows in PathFinder's Week view, and pokes `focus-evaluate` directly so the unblock
+lands on the Mac's next 30 s tick instead of the next cron pass. Expiry re-blocks via a
+second poke while the app is open, else on the cron pass (≤5 min late). As always the
+panel derives no policy — the evaluator removes active meal targets from
+`blocking_state` and every enforcer just reads that.
+
 ### Usage tracking, and the one table with different RLS
 
 The daemon measures foreground time: `modules/usage_tracker.rs` samples the frontmost
@@ -339,6 +349,28 @@ app via `lsappinfo` every 5s (no TCC prompt) with idle from `ioreg -c IOHIDSyste
 come from a Chrome MV3 extension in `apps/NexusLocal/extensions/chrome-usage/`, which
 POSTs to `usage_ingest.rs` on **127.0.0.1:1431** authenticated by a token in
 `state_dir()/browser_token`. Everything lands as JSONL in `~/.nexuslocal/usage/`.
+
+`DayCoveragePanel` (added 2026-08-16) widens that view to the whole day: it stitches
+the tracker's raw spans (`tt_usage_intervals`), Protocol sleep bed/rise times
+(`protocol_sleep` read anon via its `widget_anon_read` policy — no session needed),
+Garmin training sessions (`protocol_{workout,running}_sessions.started_at`; runs
+reconstruct duration as pace × distance and skip when either is missing) and
+PathFinder calendar blocks (`pf_cal_blocks` + recurring, expanded with PathFinder's
+0=Sun weekday numbering, **not** ISO 1–7) into a 24 h coverage timeline. Leftover
+gaps ≥ 30 min carry one-tap category chips (shared list in
+`timetracker/categories.ts` — Phase E of `DAY_COVERAGE_ROADMAP.md` reuses these
+strings, don't rename casually) that file a `pf_cal_blocks` row over the gap. Honesty
+checks (screen-during-sleep, screen-heavy offline blocks) render as footnotes and
+never alter the coverage number. Span math lives in `timetracker/coverage.ts`, pure
+and React-free on purpose. Usage data itself still never leaves the Mac — the panel
+only reads remote rows next to it. `garmin-import` converts Garmin's naive
+`startTimeLocal` Copenhagen→UTC into `started_at` (added 2026-08-16; older rows are
+NULL until a re-sync backfills them). `timetracker/history.ts` rebuilds the same
+coverage picture for the last 30 days in a handful of range queries (screen via
+`tt_usage_spans_range`, one call) for the heatmap strip, and
+`detectRecurringGaps` turns a gap recurring on ≥3 of the last 7 days into a
+one-tap weekly-block suggestion (accepts insert `pf_recurring_cal_blocks`,
+dismissals live in localStorage under `nl-coverage-dismissed-suggestions`).
 
 **`usage_intervals` is the only table in this project with sane RLS, and that is
 deliberate.** It holds full URLs and page titles; the anon key is committed in

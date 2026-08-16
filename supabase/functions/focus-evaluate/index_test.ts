@@ -23,6 +23,9 @@ import {
   type FocusBlockRow,
   isoWeekday,
   localNow,
+  mealSessionActive,
+  type MealSessionRow,
+  type MealTargetRow,
   parseDaysOfWeek,
   parseHHMM,
   permanentAppInForce,
@@ -582,4 +585,150 @@ Deno.test("the local date drives the weekday used for schedule matching", () => 
   const { date } = localNow(new Date("2026-08-08T22:30:00Z"));
   assertEquals(date, "2026-08-09");
   assertEquals(isoWeekday(date), 7);
+});
+
+// ── Meal sessions ────────────────────────────────────────────────────────────
+// A user-initiated 30-minute unblock of specific targets. Active iff
+// started_at <= now < ends_at; anything malformed fails toward blocked.
+
+const NOW_MS = Date.parse("2026-08-16T10:00:00Z");
+
+const mealSession = (
+  meal: string,
+  started_at: string,
+  ends_at: string,
+): MealSessionRow => ({ user_id: "default", meal, started_at, ends_at });
+
+const mealTarget = (
+  meal: string,
+  target: { domain?: string; process_name?: string },
+): MealTargetRow => ({
+  user_id: "default",
+  meal,
+  domain: target.domain ?? null,
+  process_name: target.process_name ?? null,
+});
+
+/** A breakfast session running 09:45Z–10:15Z, i.e. active at NOW_MS. */
+const activeBreakfast = mealSession(
+  "breakfast",
+  "2026-08-16T09:45:00+00:00",
+  "2026-08-16T10:15:00+00:00",
+);
+
+Deno.test("mealSessionActive: inclusive start, exclusive end", () => {
+  const s = activeBreakfast;
+  assertFalse(mealSessionActive(s, Date.parse("2026-08-16T09:44:59Z")));
+  assert(mealSessionActive(s, Date.parse("2026-08-16T09:45:00Z")), "inclusive at start");
+  assert(mealSessionActive(s, NOW_MS));
+  assertFalse(mealSessionActive(s, Date.parse("2026-08-16T10:15:00Z")), "exclusive at end");
+});
+
+Deno.test("mealSessionActive: malformed timestamps fail toward blocked", () => {
+  assertFalse(mealSessionActive(mealSession("lunch", "not a date", "2026-08-16T10:15:00Z"), NOW_MS));
+  assertFalse(mealSessionActive(mealSession("lunch", "2026-08-16T09:45:00Z", ""), NOW_MS));
+  // Inverted window: start after end can never contain now.
+  assertFalse(
+    mealSessionActive(
+      mealSession("lunch", "2026-08-16T10:15:00Z", "2026-08-16T09:45:00Z"),
+      NOW_MS,
+    ),
+  );
+});
+
+Deno.test("an active meal session removes a permanently blocked domain", () => {
+  const out = evaluate(
+    input({
+      sites: [site("youtube.com"), site("reddit.com")],
+      mealSessions: [activeBreakfast],
+      mealTargets: [mealTarget("breakfast", { domain: "youtube.com" })],
+      nowMs: NOW_MS,
+    }),
+  );
+  assertEquals(out.effective_domains, ["reddit.com"], "only the meal target opens");
+  assertEquals(out.reasons["youtube.com"], {
+    blocked: false,
+    source: "meal_session",
+    meal: "breakfast",
+    ends_at: "2026-08-16T10:15:00+00:00",
+  });
+});
+
+Deno.test("an active meal session overrides a schedule window", () => {
+  const block = focusBlock("b1", "Deep work", "09:00", "17:00", "1,2,3,4,5");
+  const out = evaluate(
+    input({
+      blocks: [block],
+      blockSites: new Map([["b1", ["youtube.com"]]]),
+      blockApps: new Map([["b1", ["Slack"]]]),
+      mealSessions: [activeBreakfast],
+      mealTargets: [
+        mealTarget("breakfast", { domain: "youtube.com" }),
+        mealTarget("breakfast", { process_name: "Slack" }),
+      ],
+      nowMs: NOW_MS,
+    }),
+  );
+  assertEquals(out.effective_domains, []);
+  assertEquals(out.effective_processes, []);
+  assertEquals(out.reasons["Slack"], {
+    blocked: false,
+    source: "meal_session",
+    meal: "breakfast",
+    ends_at: "2026-08-16T10:15:00+00:00",
+  });
+});
+
+Deno.test("targets of an INACTIVE meal stay blocked", () => {
+  const out = evaluate(
+    input({
+      sites: [site("youtube.com")],
+      // Dinner is configured but no dinner session is running.
+      mealSessions: [activeBreakfast],
+      mealTargets: [mealTarget("dinner", { domain: "youtube.com" })],
+      nowMs: NOW_MS,
+    }),
+  );
+  assertEquals(out.effective_domains, ["youtube.com"]);
+});
+
+Deno.test("an expired meal session unblocks nothing", () => {
+  const out = evaluate(
+    input({
+      sites: [site("youtube.com")],
+      mealSessions: [
+        mealSession("lunch", "2026-08-16T08:00:00Z", "2026-08-16T08:30:00Z"),
+      ],
+      mealTargets: [mealTarget("lunch", { domain: "youtube.com" })],
+      nowMs: NOW_MS,
+    }),
+  );
+  assertEquals(out.effective_domains, ["youtube.com"]);
+});
+
+Deno.test("without nowMs no meal session is active — fails toward blocked", () => {
+  const out = evaluate(
+    input({
+      sites: [site("youtube.com")],
+      mealSessions: [activeBreakfast],
+      mealTargets: [mealTarget("breakfast", { domain: "youtube.com" })],
+      // nowMs deliberately absent.
+    }),
+  );
+  assertEquals(out.effective_domains, ["youtube.com"]);
+});
+
+Deno.test("a meal session claims the explanation over a satisfied unlock rule", () => {
+  const out = evaluate(
+    input({
+      sites: [site("youtube.com")],
+      rules: [rule({ domain: "youtube.com" }, 60)],
+      todayMinutes: 90, // unlock rule is satisfied too
+      mealSessions: [activeBreakfast],
+      mealTargets: [mealTarget("breakfast", { domain: "youtube.com" })],
+      nowMs: NOW_MS,
+    }),
+  );
+  assertEquals(out.effective_domains, []);
+  assertEquals(out.reasons["youtube.com"].source, "meal_session");
 });

@@ -69,6 +69,23 @@ export interface UnlockRuleRow {
   enabled: boolean;
 }
 
+export interface MealSessionRow {
+  user_id: string | null;
+  /** "breakfast" | "lunch" | "dinner" (CHECK-constrained; treated as opaque here). */
+  meal: string;
+  /** timestamptz — PostgREST renders RFC3339 with an offset. */
+  started_at: string;
+  /** timestamptz, started_at + 30 min as written by the app. */
+  ends_at: string;
+}
+
+export interface MealTargetRow {
+  user_id: string | null;
+  meal: string;
+  domain: string | null;
+  process_name: string | null;
+}
+
 export interface EvaluateInput {
   sites: BlockedSiteRow[];
   apps: BlockedAppRow[];
@@ -78,6 +95,15 @@ export interface EvaluateInput {
   /** block_id -> domains, from schedule_block_sites. */
   blockSites: Map<string, string[]>;
   rules: UnlockRuleRow[];
+  /**
+   * Meal-session state. All three are optional so pre-existing callers (and
+   * tests) keep compiling; absent means "no meal session can be active", which
+   * fails toward blocked — the direction every accidental path here must take.
+   */
+  mealSessions?: MealSessionRow[];
+  mealTargets?: MealTargetRow[];
+  /** Epoch ms of *now*, for comparing meal session windows. */
+  nowMs?: number;
   /** ISO weekday of *today* in local time: 1=Mon … 7=Sun. */
   weekday: number;
   /** Local minute-of-day, 0..1439. */
@@ -281,6 +307,25 @@ export function unlockGranted(
 }
 
 /**
+ * Is this meal session running right now?
+ *
+ * [started_at, ends_at) — same inclusive-start/exclusive-end shape as
+ * `windowActive`. Both columns are timestamptz, so PostgREST always renders an
+ * offset and `Date.parse` resolves them as instants regardless of the runtime's
+ * own timezone. Anything unparseable (or an inverted window) yields false:
+ * a malformed session must fail toward blocked, never toward an open valve.
+ */
+export function mealSessionActive(
+  session: Pick<MealSessionRow, "started_at" | "ends_at">,
+  nowMs: number,
+): boolean {
+  const start = Date.parse((session.started_at ?? "").trim());
+  const end = Date.parse((session.ends_at ?? "").trim());
+  if (!Number.isFinite(start) || !Number.isFinite(end)) return false;
+  return nowMs >= start && nowMs < end;
+}
+
+/**
  * Is this permanently-blocked app in force right now?
  *
  * `block_mode = "focus_only"` means the app is blocked ONLY while a timer is
@@ -308,6 +353,11 @@ export function permanentAppInForce(
  *      `focus_only` + timer state).
  *   3. An unlock rule that has met its threshold REMOVES its target from the
  *      effective sets, overriding both of the above.
+ *   4. An *active meal session* (started_at <= now < ends_at) likewise removes
+ *      that meal's configured targets, overriding schedule and permanent
+ *      blocks. Where a meal session and a satisfied unlock rule both free the
+ *      same target, the meal session claims the explanation — it is the
+ *      time-bounded, user-initiated reason and the one about to be asked about.
  *
  * NOTE ON THE GLOBAL TOGGLE: `tick()` gates permanent blocks on
  * `app_blocker::is_blocker_on(&db)`, a local SQLite setting. There is no
@@ -326,11 +376,51 @@ export function evaluate(input: EvaluateInput): EvaluateOutput {
     blockApps,
     blockSites,
     rules,
+    mealSessions,
+    mealTargets,
+    nowMs,
     weekday,
     nowMinutes,
     todayMinutes,
     timerActive,
   } = input;
+
+  // ── Active meal sessions ───────────────────────────────────────────────────
+  // With no `nowMs` there is no way to know a session is active, so none is —
+  // fails toward blocked. Two active sessions for one meal cannot happen under
+  // the once-per-day unique index, but if they did, the later ends_at wins so
+  // the displayed expiry is never premature.
+  const activeMealEnds = new Map<string, string>(); // meal -> ends_at
+  if (typeof nowMs === "number") {
+    for (const session of mealSessions ?? []) {
+      if (!mealSessionActive(session, nowMs)) continue;
+      const existing = activeMealEnds.get(session.meal);
+      if (!existing || session.ends_at > existing) {
+        activeMealEnds.set(session.meal, session.ends_at);
+      }
+    }
+  }
+
+  const mealDomains = new Map<string, { meal: string; ends_at: string }>();
+  const mealProcesses = new Map<string, { meal: string; ends_at: string }>();
+  for (const target of mealTargets ?? []) {
+    const ends = activeMealEnds.get(target.meal);
+    if (!ends) continue;
+    const entry = { meal: target.meal, ends_at: ends };
+    if (target.domain && !mealDomains.has(target.domain)) {
+      mealDomains.set(target.domain, entry);
+    }
+    if (target.process_name && !mealProcesses.has(target.process_name)) {
+      mealProcesses.set(target.process_name, entry);
+    }
+  }
+
+  const mealReason = (entry: { meal: string; ends_at: string }): Reason => ({
+    blocked: false,
+    source: "meal_session",
+    meal: entry.meal,
+    ends_at: entry.ends_at,
+  });
 
   // ── Unlocks ────────────────────────────────────────────────────────────────
   const unlockedDomains = new Map<string, UnlockRuleRow>();
@@ -393,6 +483,11 @@ export function evaluate(input: EvaluateInput): EvaluateOutput {
 
   // ── Domains ────────────────────────────────────────────────────────────────
   for (const site of sites) {
+    const meal = mealDomains.get(site.domain);
+    if (meal) {
+      reasons[site.domain] = mealReason(meal);
+      continue;
+    }
     const unlock = unlockedDomains.get(site.domain);
     if (unlock) {
       reasons[site.domain] = unlockReason(unlock);
@@ -413,6 +508,11 @@ export function evaluate(input: EvaluateInput): EvaluateOutput {
   }
 
   for (const [domain, blockName] of schedDomains) {
+    const meal = mealDomains.get(domain);
+    if (meal) {
+      reasons[domain] = mealReason(meal);
+      continue;
+    }
     const unlock = unlockedDomains.get(domain);
     if (unlock) {
       reasons[domain] = unlockReason(unlock);
@@ -430,6 +530,11 @@ export function evaluate(input: EvaluateInput): EvaluateOutput {
 
   // ── Processes ──────────────────────────────────────────────────────────────
   for (const app of apps) {
+    const meal = mealProcesses.get(app.process_name);
+    if (meal) {
+      reasons[app.process_name] = mealReason(meal);
+      continue;
+    }
     const unlock = unlockedProcesses.get(app.process_name);
     if (unlock) {
       reasons[app.process_name] = unlockReason(unlock);
@@ -466,6 +571,11 @@ export function evaluate(input: EvaluateInput): EvaluateOutput {
   }
 
   for (const [process, blockName] of schedProcesses) {
+    const meal = mealProcesses.get(process);
+    if (meal) {
+      reasons[process] = mealReason(meal);
+      continue;
+    }
     const unlock = unlockedProcesses.get(process);
     if (unlock) {
       reasons[process] = unlockReason(unlock);

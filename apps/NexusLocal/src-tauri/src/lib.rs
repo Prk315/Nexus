@@ -289,6 +289,8 @@ pub fn run() {
             // the daemon, not here.
             usage_cmd::tt_usage_today,
             usage_cmd::tt_usage_range,
+            usage_cmd::tt_usage_intervals,
+            usage_cmd::tt_usage_spans_range,
             garmin_cmd::tt_garmin_run,
             garmin_cmd::tt_garmin_import_config,
             usage_cmd::tt_active_profile_get,
