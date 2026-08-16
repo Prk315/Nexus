@@ -14,7 +14,15 @@ import type { TestQuestion, TestSection } from "../types";
 import { Markdown } from "../Markdown";
 import { ANSWER_COL, CARD, DOCK_SHELL, DOCK_STACK, FEEDBACK, MAIN_SHELL, READING_COL, useLensTokens } from "./tokens";
 
-function QuestionCard({
+/**
+ * Exported (v3, 2026-08-16) so `AggregateTestSession.tsx` ("Samlet prøve",
+ * LEARN_PLAN.md pinned) can reuse the exact option-rendering + rationale-
+ * reveal markup rather than forking it. Only ever reads `question.lens` /
+ * `.prompt_md` / `.options` — any `TestQuestion`-shaped value (including
+ * `aggregateTest.ts`'s `AggregateItem`, which extends `TestQuestion`) works
+ * with zero adapter.
+ */
+export function QuestionCard({
   question,
   selected,
   onSelect,

@@ -118,6 +118,35 @@
  * `openSocratic`, which reuses the exact same "flip available → in_progress
  * on first open, never downgrade a completed session" guard `openProof`
  * uses — same table, same write.
+ *
+ * ── "Samlet prøve" node (LEARN_PLAN.md "Samlet prøve — aggregated unit MCQ
+ * test", pinned 2026-08-16) ──────────────────────────────────────────────
+ *
+ * A satellite node — same 20px-disc/11px-label geometry as `DeckNode`/
+ * `SocraticNode` — placed directly after a unit's Socratic node(s) (or right
+ * where they would sit, when the unit has none). Renders only for a
+ * MASTERED unit whose derived item pool (`aggregateTest.collectUnitMcqs`)
+ * has ≥5 items — no new table, no progress row: it opens
+ * `AggregateTestSession`, which persists nothing beyond the normal attempt
+ * log + memory-state write per answered item, so unlike proof/socratic
+ * nodes there is no "completed" visual state and no `reloadNonce` bump
+ * needed on close. `aggregateItemCounts` (below) computes every mastered
+ * unit's item count once per `contentByUnit` load, not per row render —
+ * content is already sitting in memory here.
+ *
+ * ── Checkpoint suppression for an empty scoped pool (LEARN_PLAN.md, same
+ * pinned section) ────────────────────────────────────────────────────────
+ *
+ * `ChapterChallengeNode` used to render once ≥1 unit in a chapter had
+ * mastered, with no regard for whether that chapter has any content at all
+ * — LA 0 masters its one unit with zero `lr_unit_content` rows (see
+ * contract-gap note #3 above), so `fetchChallengePool`'s chapter-scoped
+ * collector finds zero drills and the node opened onto an empty session.
+ * The real fix is a pool-size check, but that means fetching every unit's
+ * content just to gate a node's visibility — this file already carries the
+ * cheap proxy for "this chapter has anything to draw from" in `units`
+ * (`PathUnit.hasContent`, no extra query), so the node is now gated on
+ * `units.some((u) => u.hasContent)` in addition to `masteredInChapter > 0`.
  */
 
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
@@ -136,6 +165,12 @@ import { CourseSwitcher } from "./CourseSwitcher";
 import { Player } from "./Player";
 import { ChallengeSession } from "./ChallengeSession";
 import { SocraticSession } from "./SocraticSession";
+import { AggregateTestSession } from "./AggregateTestSession";
+import { collectUnitMcqs } from "./aggregateTest";
+
+/** Node renders only above this many derived items (LEARN_PLAN.md's pinned
+ * charter) — below it, a "Samlet prøve" would be a near-empty quiz. */
+const AGGREGATE_TEST_MIN_ITEMS = 5;
 
 type DisplayStatus = "locked" | "available" | "in_progress" | "mastered" | "no_content";
 
@@ -205,6 +240,10 @@ export function PathPanel() {
   const [selectedDeckSession, setSelectedDeckSession] = useState<{ unitId: number; deck: "entry" | "exit" } | null>(
     null
   );
+  // "Samlet prøve" node state (LEARN_PLAN.md, pinned 2026-08-16) — see the
+  // file-header note. Own overlay (`AggregateTestSession`), no reload needed
+  // on close since it mutates no path/progress state.
+  const [selectedAggregateUnitId, setSelectedAggregateUnitId] = useState<number | null>(null);
   // Every deck card id this user has ≥1 `lr_attempt_log` row for, across
   // every unit in the course — one batched query per load, not per node.
   const [deckSolvedIds, setDeckSolvedIds] = useState<Set<string>>(new Set());
@@ -306,6 +345,19 @@ export function PathPanel() {
     }
     return map;
   }, [proofEntries]);
+
+  // "Samlet prøve" node counts — LEARN_PLAN.md, pinned 2026-08-16. Computed
+  // once per `contentByUnit` load (every mastered unit's content is already
+  // in memory here), not per row render. Only units with content contribute
+  // — `collectUnitMcqs` is never called on a unit `contentByUnit` has no
+  // entry for.
+  const aggregateItemCounts = useMemo(() => {
+    const map = new Map<number, number>();
+    for (const [unitId, content] of contentByUnit) {
+      map.set(unitId, collectUnitMcqs(content).length);
+    }
+    return map;
+  }, [contentByUnit]);
 
   // Workshop entries grouped by the chapter they belong to — derived from
   // their `parent_unit_id` (the chapter's last unit) via that unit's own
@@ -596,6 +648,13 @@ export function PathPanel() {
                             onOpen={() => openSocratic(entry)}
                           />
                         ))}
+                        {status === "mastered" &&
+                          (aggregateItemCounts.get(pu.unit.unit_id) ?? 0) >= AGGREGATE_TEST_MIN_ITEMS && (
+                            <AggregateTestNode
+                              count={aggregateItemCounts.get(pu.unit.unit_id) ?? 0}
+                              onOpen={() => setSelectedAggregateUnitId(pu.unit.unit_id)}
+                            />
+                          )}
                         {proofs.map((entry) => (
                           <ProofNode
                             key={entry.proofUnit.proof_id}
@@ -613,8 +672,12 @@ export function PathPanel() {
                   })}
                   {/* Checkpoint node — practice only, never a gate: it must not
                       block path progression, so it renders once ANY unit in
-                      the chapter has mastered, not once the whole chapter has. */}
-                  {masteredInChapter > 0 && (
+                      the chapter has mastered, not once the whole chapter has.
+                      Also suppressed when the whole chapter has no content at
+                      all (LA 0 today) — see the file-header note on checkpoint
+                      suppression: a checkpoint with nothing to draw from just
+                      opens onto an empty session. */}
+                  {masteredInChapter > 0 && units.some((u) => u.hasContent) && (
                     <ChapterChallengeNode chapter={chapter} onOpen={() => setSelectedChallengeChapter(chapter)} />
                   )}
                   {/* Workshop side-node(s) — same "≥1 unit mastered" gate as the
@@ -703,6 +766,10 @@ export function PathPanel() {
             setReloadNonce((n) => n + 1);
           }}
         />
+      )}
+
+      {selectedAggregateUnitId !== null && (
+        <AggregateTestSession unitId={selectedAggregateUnitId} onClose={() => setSelectedAggregateUnitId(null)} />
       )}
     </section>
   );
@@ -971,6 +1038,35 @@ function SocraticNode({ entry, title, onOpen }: { entry: ProofUnitEntry; title: 
       </span>
       <span className={`min-w-0 flex-1 truncate text-[11px] ${completed ? "text-[#1A1A24]/70" : "text-[#6E6E78]/85"}`}>
         {title}
+      </span>
+    </button>
+  );
+}
+
+/**
+ * "Samlet prøve" node — LEARN_PLAN.md "Samlet prøve — aggregated unit MCQ
+ * test", pinned 2026-08-16. Sized/shaped exactly like `SocraticNode`/
+ * `DeckNode` (20px disc, 11px label) — a satellite of the unit, not a peer
+ * stop like `ProofNode`'s indented ∴ branch. "Σ" (sum — "samlet" = collected/
+ * aggregated) is unique in the node glyph vocabulary (◆/◇/✓ = unit, ∴ =
+ * proof, ⚡ = checkpoint, § = workshop, ▤ = deck, ? = socratic). Only ever
+ * rendered once already gated available by the caller (mastered unit, ≥5
+ * derived items — see the file-header note), so unlike `DeckNode` this has
+ * no "locked" tone and unlike `ProofNode`/`SocraticNode` no "completed" tone
+ * either: the session is repeatable practice with nothing to mark done.
+ */
+function AggregateTestNode({ count, onOpen }: { count: number; onOpen: () => void }) {
+  return (
+    <button
+      type="button"
+      onClick={onOpen}
+      className="group flex w-full items-center gap-2.5 rounded-lg px-1 py-1 text-left transition-colors active:bg-black/[0.03] md:hover:bg-black/[0.02]"
+    >
+      <span className="relative z-10 grid h-5 w-5 shrink-0 place-items-center rounded-full bg-gradient-to-br from-indigo-500/15 to-fuchsia-600/15 text-[9px] text-indigo-700/85 ring-1 ring-indigo-400/35">
+        Σ
+      </span>
+      <span className="min-w-0 flex-1 truncate text-[11px] text-[#6E6E78]/85">
+        Samlet prøve · {count} spørgsmål
       </span>
     </button>
   );

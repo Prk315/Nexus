@@ -571,6 +571,29 @@ recovered, 1 if not). Grades feed applyGrade at weight 1.0 on concept_ids.
 branching becomes deterministic from the learner's own taps. The node never
 breaks; the LLM upgrades it.
 
+## Samlet prøve — aggregated unit MCQ test (pinned, 2026-08-16)
+
+A per-unit PATH NODE (after the Socratic node), available when the unit is
+MASTERED. Derived entirely from existing content — no authoring: collect every
+MCQ-form item in the unit's newest content into one shuffled assessment:
+- `test.questions` (options + why_md)
+- flashcard `check` MCQs (entry understanding-checks and exit apply-checks)
+- `choice`-type drills (choices + answer; solution_md as the rationale)
+- `truefalse` drills rendered as two-option MCQs
+Each item keeps its concept_ids/lens and a `source` tag (test | flashcard |
+drill). One pass, no hints, rationale revealed after each answer (why_md /
+solution_md). Grading: logAttempt per item + applyGrade at weight 0.8
+(correct → 2, wrong → 1).
+
+END REPORT — the point of the node: score overall + breakdowns by
+CONCEPT (weakest first, with titles), LENS, and SOURCE type, each as
+fraction bars per DESIGN tokens. Persist nothing new — the attempt log and
+memory state already capture it.
+
+Also pinned: ⚡ chapter checkpoints are suppressed for chapters whose scoped
+drill pool is empty (LA 0); eksamensværksteder scale to every chapter with
+mastered units (LA 1/3/4 now; parent_unit_id = the chapter's last lr_unit row).
+
 ## Conventions that bite (from CLAUDE.md — enforced)
 
 - camelCase IPC args from JS; snake_case in Rust.
