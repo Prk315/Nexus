@@ -3795,6 +3795,11 @@ body {
   color: var(--fg-ghost);
   align-self: center;
   letter-spacing: 0.01em;
+  /* A palm resting on the iPad while drawing lands touch events here and
+     highlights the label. Status chrome is never selectable text. */
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-touch-callout: none;
 }
 
 /* ── Connections panel ──────────────────────────────────────────────────── */

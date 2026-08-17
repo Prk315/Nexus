@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { MatrixBlockContent, MatrixBlockData } from "./MatrixBlock";
 import { GraphBlockContent, GraphBlockData } from "./GraphBlock";
 import { GridBlockContent, GridBlockData } from "./GridBlock";
@@ -1844,6 +1844,520 @@ function MolDrawContent({ block, onUpdate, onSelect }: {
   );
 }
 
+// ── BlockView — one memoized component per block ────────────────────────────────
+//
+// The canvas used to rebuild JSX for every block whenever ANY block changed
+// (single useMemo over data.blocks with selectedId/selectedIds/showPortsFor/
+// viewport.zoom in its deps) — a drag, a keystroke, or an ink commit anywhere
+// on the canvas re-ran the full type-switch for every other block too. Each
+// block now gets its own React.memo component; identity of `block` only
+// changes for the block that actually mutated (every write path is
+// immutable — see updateBlock/deleteBlock and the drag/resize handlers), so
+// default shallow-prop comparison is sufficient and unrelated blocks skip
+// re-render entirely.
+//
+// Component-scoped closures (setState setters, updateBlock, pointer-down
+// handlers, refs, undo, code-cell runners…) are not passed as individual
+// props — that would defeat memoization by handing BlockView a fresh
+// function identity on every parent render. Instead they're bundled into one
+// ref, `BlockApi`, that CanvasEditor reassigns every render
+// (`blockApi.current = {...}`). The ref's own identity never changes, so it
+// never invalidates BlockView's memo, while `.current` always holds the
+// latest closures for event handlers to call.
+interface BlockApi {
+  updateBlock: (id: string, patch: Patch) => void;
+  deleteBlock: (id: string) => void;
+  onHeaderPointerDown: (e: React.PointerEvent, block: CanvasBlock) => void;
+  onResizePointerDown: (e: React.PointerEvent, block: CanvasBlock) => void;
+  onPortPointerDown: (e: React.PointerEvent, blockId: string, port: Port) => void;
+  setSelectedId: React.Dispatch<React.SetStateAction<string | null>>;
+  setSelectedIds: React.Dispatch<React.SetStateAction<Set<string>>>;
+  setSelectedArrowId: React.Dispatch<React.SetStateAction<string | null>>;
+  setContextMenu: React.Dispatch<React.SetStateAction<{ x: number; y: number; blockId: string } | null>>;
+  setHoveredBlockId: React.Dispatch<React.SetStateAction<string | null>>;
+  setData: React.Dispatch<React.SetStateAction<CanvasData>>;
+  pushUndo: (snapshot?: CanvasData) => void;
+  runAllCells: () => Promise<void>;
+  restartKernel: () => Promise<void>;
+  inkModeRef: React.MutableRefObject<boolean>;
+  buildModeRef: React.MutableRefObject<boolean>;
+  selectedIdRef: React.MutableRefObject<string | null>;
+  selectedIdsRef: React.MutableRefObject<Set<string>>;
+}
+
+function closeBtn(blockId: string, api: React.MutableRefObject<BlockApi>) {
+  return (
+    <button className="canvas-block-close" onPointerDown={e => e.stopPropagation()}
+      onClick={e => { e.stopPropagation(); api.current.deleteBlock(blockId); }}>×</button>
+  );
+}
+
+function previewToggle(block: TextBlock | MathBlock, api: React.MutableRefObject<BlockApi>) {
+  return (
+    <button
+      className="canvas-preview-toggle"
+      onPointerDown={e => e.stopPropagation()}
+      onClick={() => api.current.updateBlock(block.id, { preview: !block.preview })}
+    >{block.preview ? "Edit" : "Preview"}</button>
+  );
+}
+
+function renderHeaderPure(block: CanvasBlock, api: React.MutableRefObject<BlockApi>) {
+  if (block.type === "title") {
+    const defaultSize = block.level === 1 ? 28 : block.level === 2 ? 20 : 15;
+    const currentSize = block.fontSize ?? defaultSize;
+    return (
+      <div className="canvas-block-header" onPointerDown={e => api.current.onHeaderPointerDown(e, block)}>
+        <span className="canvas-block-drag">⠿</span>
+        <div className="canvas-title-levels" onPointerDown={e => e.stopPropagation()}>
+          {([1, 2, 3] as const).map(l => (
+            <button key={l} className={`canvas-title-level-btn${block.level === l ? " active" : ""}`}
+              onClick={() => api.current.updateBlock(block.id, { level: l, fontSize: undefined })}>H{l}</button>
+          ))}
+        </div>
+        <div className="canvas-title-size" onPointerDown={e => e.stopPropagation()}>
+          <button className="canvas-title-size-btn" onClick={() => api.current.updateBlock(block.id, { fontSize: Math.max(8, currentSize - 2) })} title="Decrease font size">A−</button>
+          <span className="canvas-title-size-val">{currentSize}</span>
+          <button className="canvas-title-size-btn" onClick={() => api.current.updateBlock(block.id, { fontSize: Math.min(120, currentSize + 2) })} title="Increase font size">A+</button>
+        </div>
+        {closeBtn(block.id, api)}
+      </div>
+    );
+  }
+  if (block.type === "table") {
+    return (
+      <div className="canvas-block-header" onPointerDown={e => api.current.onHeaderPointerDown(e, block)}>
+        <span className="canvas-block-drag">⠿</span>
+        <span className="canvas-block-type-label">Table</span>
+        {closeBtn(block.id, api)}
+      </div>
+    );
+  }
+  if (block.type === "math") {
+    return (
+      <div className="canvas-block-header" onPointerDown={e => api.current.onHeaderPointerDown(e, block)}>
+        <span className="canvas-block-drag">⠿</span>
+        <span className="canvas-block-type-label">∑ Math</span>
+        {previewToggle(block, api)}
+        {closeBtn(block.id, api)}
+      </div>
+    );
+  }
+  if (block.type === "sticky") {
+    const preset = stickyPreset(block.color);
+    return (
+      <div className="canvas-block-header" style={{ background: block.color }} onPointerDown={e => api.current.onHeaderPointerDown(e, block)}>
+        <span className="canvas-block-drag" style={{ color: preset.accent + "60" }}>⠿</span>
+        <div className="canvas-sticky-swatches" onPointerDown={e => e.stopPropagation()}>
+          {STICKY_COLORS.map(p => (
+            <button key={p.bg} className={`canvas-sticky-swatch${block.color === p.bg ? " active" : ""}`}
+              style={{ background: p.accent }} onClick={() => api.current.updateBlock(block.id, { color: p.bg })} />
+          ))}
+        </div>
+        {closeBtn(block.id, api)}
+      </div>
+    );
+  }
+  if (block.type === "checklist") {
+    const done = block.items.filter(i => i.checked).length;
+    return (
+      <div className="canvas-block-header" onPointerDown={e => api.current.onHeaderPointerDown(e, block)}>
+        <span className="canvas-block-drag">⠿</span>
+        <input className="canvas-checklist-title-input" value={block.title}
+          onPointerDown={e => e.stopPropagation()} onChange={e => api.current.updateBlock(block.id, { title: e.target.value })} />
+        {block.items.length > 0 && <span className="canvas-checklist-count">{done}/{block.items.length}</span>}
+        {closeBtn(block.id, api)}
+      </div>
+    );
+  }
+  if (block.type === "kanban") {
+    return (
+      <div className="canvas-block-header" onPointerDown={e => api.current.onHeaderPointerDown(e, block)}>
+        <span className="canvas-block-drag">⠿</span>
+        <span className="canvas-block-type-label">Kanban</span>
+        {closeBtn(block.id, api)}
+      </div>
+    );
+  }
+  if (block.type === "code_cell") {
+    return (
+      <div className="canvas-block-header canvas-block-header-code" onPointerDown={e => api.current.onHeaderPointerDown(e, block)}>
+        <span className="canvas-block-drag" style={{ color: "#475569" }}>⠿</span>
+        {closeBtn(block.id, api)}
+      </div>
+    );
+  }
+  if (block.type === "html") {
+    return (
+      <div className="canvas-block-header canvas-block-header-html" onPointerDown={e => api.current.onHeaderPointerDown(e, block)}>
+        <span className="canvas-block-drag">⠿</span>
+        <span className="canvas-block-type-label" style={{ color: "#ea580c" }}>HTML</span>
+        <button className="canvas-preview-toggle" onPointerDown={e => e.stopPropagation()}
+          onClick={() => api.current.updateBlock(block.id, { preview: !block.preview })}>
+          {block.preview ? "Edit" : "Preview"}
+        </button>
+        {closeBtn(block.id, api)}
+      </div>
+    );
+  }
+  if (block.type === "image") {
+    return (
+      <div className="canvas-block-header canvas-block-header-image" onPointerDown={e => api.current.onHeaderPointerDown(e, block)}>
+        <span className="canvas-block-drag">⠿</span>
+        <span className="canvas-block-type-label">Image</span>
+        {closeBtn(block.id, api)}
+      </div>
+    );
+  }
+  if (block.type === "molecule") {
+    return (
+      <div className="canvas-block-header canvas-block-header-chem" onPointerDown={e => api.current.onHeaderPointerDown(e, block)}>
+        <span className="canvas-block-drag">⠿</span>
+        <span className="canvas-block-type-label chem-header-label">⬡ Molecule</span>
+        {closeBtn(block.id, api)}
+      </div>
+    );
+  }
+  if (block.type === "chem_eq") {
+    return (
+      <div className="canvas-block-header canvas-block-header-chem" onPointerDown={e => api.current.onHeaderPointerDown(e, block)}>
+        <span className="canvas-block-drag">⠿</span>
+        <span className="canvas-block-type-label chem-header-label">⇌ Equation</span>
+        <button className="canvas-preview-toggle" onPointerDown={e => e.stopPropagation()}
+          onClick={() => api.current.updateBlock(block.id, { preview: !block.preview })}>
+          {block.preview ? "Edit" : "Preview"}
+        </button>
+        {closeBtn(block.id, api)}
+      </div>
+    );
+  }
+  if (block.type === "element") {
+    return (
+      <div className="canvas-block-header canvas-block-header-chem" onPointerDown={e => api.current.onHeaderPointerDown(e, block)}>
+        <span className="canvas-block-drag">⠿</span>
+        <span className="canvas-block-type-label chem-header-label">⚛ Element</span>
+        {closeBtn(block.id, api)}
+      </div>
+    );
+  }
+  if (block.type === "mol_draw") {
+    return (
+      <div className="canvas-block-header canvas-block-header-chem" onPointerDown={e => api.current.onHeaderPointerDown(e, block)}>
+        <span className="canvas-block-drag">⠿</span>
+        <span className="canvas-block-type-label chem-header-label">✏ Draw</span>
+        {closeBtn(block.id, api)}
+      </div>
+    );
+  }
+  // text (default)
+  return (
+    <div className="canvas-block-header" onPointerDown={e => api.current.onHeaderPointerDown(e, block)}>
+      <span className="canvas-block-drag">⠿</span>
+      {previewToggle(block as TextBlock, api)}
+      {closeBtn(block.id, api)}
+    </div>
+  );
+}
+
+function renderContentPure(block: CanvasBlock, api: React.MutableRefObject<BlockApi>, zoom: number, sessionId: string | undefined) {
+  const onSelect = () => { api.current.setSelectedId(block.id); api.current.setSelectedIds(new Set([block.id])); api.current.setSelectedArrowId(null); };
+  if (block.type === "title") {
+    const cls = `canvas-title-input canvas-title-h${block.level}`;
+    return (
+      <input className={cls} value={block.text} placeholder={`Heading ${block.level}…`}
+        style={block.fontSize !== undefined ? { fontSize: block.fontSize } : undefined}
+        onChange={e => api.current.updateBlock(block.id, { text: e.target.value })}
+        onPointerDown={e => e.stopPropagation()} />
+    );
+  }
+  if (block.type === "table") {
+    return <TableContent block={block} onUpdate={api.current.updateBlock} zoom={zoom} onSelect={onSelect} />;
+  }
+  if (block.type === "math") {
+    return <MathContent block={block} onUpdate={api.current.updateBlock} />;
+  }
+  if (block.type === "text") {
+    if (block.preview) {
+      return (
+        <div className="canvas-block-md-preview" onPointerDown={e => e.stopPropagation()}>
+          <Markdown remarkPlugins={[remarkMath]} rehypePlugins={[rehypeKatex]}>{block.content}</Markdown>
+        </div>
+      );
+    }
+    return (
+      <textarea className="canvas-block-text" value={block.content} placeholder="Markdown supported…"
+        onChange={e => api.current.updateBlock(block.id, { content: e.target.value })}
+        onPaste={handleNativePaste}
+        onPointerDown={e => e.stopPropagation()} onDoubleClick={e => e.stopPropagation()} />
+    );
+  }
+  if (block.type === "sticky") {
+    const { accent } = stickyPreset(block.color);
+    return (
+      <textarea className="canvas-block-text" value={block.content} placeholder="Type here…"
+        style={{ color: accent }}
+        onChange={e => api.current.updateBlock(block.id, { content: e.target.value })}
+        onPaste={handleNativePaste}
+        onPointerDown={e => e.stopPropagation()} onDoubleClick={e => e.stopPropagation()} />
+    );
+  }
+  if (block.type === "checklist") return <ChecklistContent block={block} onUpdate={api.current.updateBlock} />;
+  if (block.type === "kanban")    return <KanbanContent    block={block} onUpdate={api.current.updateBlock} onSelect={onSelect} />;
+  if (block.type === "html") return (
+    <HtmlContent block={block} onUpdate={api.current.updateBlock} onSelect={onSelect} />
+  );
+  if (block.type === "code_cell") return (
+    <CodeCellContent
+      block={block}
+      sessionId={sessionId ?? block.id}
+      onUpdate={patch => api.current.updateBlock(block.id, patch as Patch)}
+      onRunAll={api.current.runAllCells}
+      onRestart={api.current.restartKernel}
+      onSelect={onSelect}
+    />
+  );
+  if (block.type === "image") return (
+    <img
+      className="canvas-image-content"
+      src={block.src}
+      alt=""
+      draggable={false}
+      onPointerDown={e => e.stopPropagation()}
+    />
+  );
+  if (block.type === "molecule") return (
+    <MoleculeContent block={block} onUpdate={api.current.updateBlock} onSelect={onSelect} />
+  );
+  if (block.type === "chem_eq") return (
+    <ChemEqContent block={block} onUpdate={api.current.updateBlock} onSelect={onSelect} />
+  );
+  if (block.type === "element") return (
+    <ElementContent block={block} onUpdate={api.current.updateBlock} onSelect={onSelect} />
+  );
+  if (block.type === "mol_draw") return (
+    <MolDrawContent block={block} onUpdate={api.current.updateBlock} onSelect={onSelect} />
+  );
+  if (block.type === "matrix") return (
+    <MatrixBlockContent
+      block={block}
+      onPatch={p => api.current.updateBlock(block.id, p as Patch)}
+      onSelect={onSelect}
+    />
+  );
+  if (block.type === "simple_grid") return (
+    <GridBlockContent
+      block={block}
+      onPatch={p => api.current.updateBlock(block.id, p as Patch)}
+      onSelect={onSelect}
+    />
+  );
+  if (block.type === "graph_theory") return (
+    <GraphBlockContent
+      block={block}
+      onPatch={p => api.current.updateBlock(block.id, p as Patch)}
+      onSelect={onSelect}
+    />
+  );
+}
+
+interface BlockViewProps {
+  block: CanvasBlock;
+  selected: boolean;
+  inMultiSel: boolean;
+  zoom: number;
+  showPorts: boolean;
+  sessionId?: string;
+  api: React.MutableRefObject<BlockApi>;
+}
+
+const BlockView = memo(function BlockView({ block, selected, inMultiSel, zoom, showPorts, sessionId, api }: BlockViewProps) {
+  if (block.type === "frame") {
+    const fColor  = block.color       ?? "#94a3b8";
+    const fStyle  = block.borderStyle ?? "dashed";
+    const fWidth  = block.borderWidth ?? 2;
+    const fRadius = block.radius      ?? 10;
+    const fFill   = block.fill        ?? "transparent";
+    return (
+      <div key={block.id}
+        className={`canvas-frame${selected ? " selected" : ""}${inMultiSel ? " multi-selected" : ""}`}
+        style={{
+          left: block.x, top: block.y, width: block.width, height: block.height, zIndex: 0,
+          borderColor: fColor, borderStyle: fStyle, borderWidth: fWidth,
+          borderRadius: fRadius, background: fFill,
+        }}
+        onContextMenu={e => { e.preventDefault(); e.stopPropagation(); api.current.setSelectedId(block.id); api.current.setSelectedIds(new Set([block.id])); api.current.setContextMenu({ x: e.clientX, y: e.clientY, blockId: block.id }); }}
+      >
+        <div className="canvas-frame-tag" style={{ borderColor: fColor, color: fColor }}
+          onPointerDown={e => api.current.onHeaderPointerDown(e, block)}>
+          <span className="canvas-frame-drag">⠿</span>
+          <input
+            className="canvas-frame-label-input"
+            value={block.label}
+            placeholder="Group…"
+            onChange={e => api.current.updateBlock(block.id, { label: e.target.value })}
+            onPointerDown={e => e.stopPropagation()}
+          />
+          {(selected || inMultiSel) && (
+            <button className="canvas-block-close" onPointerDown={e => e.stopPropagation()}
+              onClick={e => { e.stopPropagation(); api.current.deleteBlock(block.id); }}>×</button>
+          )}
+        </div>
+        {(selected || inMultiSel) && (
+          <div className="canvas-frame-toolbar" onPointerDown={e => e.stopPropagation()}>
+            {FRAME_COLORS.map(c => (
+              <button key={c} className={`canvas-frame-color-btn${fColor === c ? " active" : ""}`}
+                style={{ background: c, outlineColor: c }}
+                onClick={() => api.current.updateBlock(block.id, { color: c })} />
+            ))}
+            <div className="canvas-frame-tb-sep" />
+            {(["solid","dashed","dotted"] as const).map(s => (
+              <button key={s} className={`canvas-frame-tb-btn${fStyle === s ? " active" : ""}`}
+                title={s} onClick={() => api.current.updateBlock(block.id, { borderStyle: s })}>
+                {s === "solid" ? "—" : s === "dashed" ? "╌╌" : "⋯"}
+              </button>
+            ))}
+            <div className="canvas-frame-tb-sep" />
+            {([1.5, 2.5, 4] as const).map(w => (
+              <button key={w} className={`canvas-frame-tb-btn${fWidth === w ? " active" : ""}`}
+                title={`${w}px border`} onClick={() => api.current.updateBlock(block.id, { borderWidth: w })}>
+                <span style={{ display:"block", height: w < 2 ? "1px" : w < 3 ? "2px" : "4px", width: 14, background:"currentColor", borderRadius: 1 }} />
+              </button>
+            ))}
+            <div className="canvas-frame-tb-sep" />
+            {([0, 10, 24] as const).map(r => (
+              <button key={r} className={`canvas-frame-tb-btn${fRadius === r ? " active" : ""}`}
+                title={`Radius ${r}`} onClick={() => api.current.updateBlock(block.id, { radius: r })}>
+                <span style={{ display:"block", width:13, height:13, border:"1.5px solid currentColor", borderRadius: r === 0 ? 1 : r === 10 ? 4 : 9, background:"transparent" }} />
+              </button>
+            ))}
+            <div className="canvas-frame-tb-sep" />
+            {FRAME_FILLS.map((f, i) => (
+              <button key={i} className={`canvas-frame-color-btn${fFill === f ? " active" : ""}`}
+                style={{
+                  background: i === 0 ? "var(--bg-base)" : f,
+                  outlineColor: fColor,
+                  ...(i === 0 ? { border: "1px dashed var(--border-base)" } : {}),
+                }}
+                title={i === 0 ? "No fill" : "Tinted fill"}
+                onClick={() => api.current.updateBlock(block.id, { fill: f })} />
+            ))}
+          </div>
+        )}
+        <div className="canvas-block-resize" onPointerDown={e => api.current.onResizePointerDown(e, block)} />
+      </div>
+    );
+  }
+
+  const isShape = block.type === "shape";
+
+  if (isShape) {
+    return (
+      <div key={block.id}
+        className={`canvas-block canvas-block-shape${selected ? " selected" : ""}${inMultiSel ? " multi-selected" : ""}`}
+        style={{ left: block.x, top: block.y, width: block.width, height: block.height, zIndex: 2 }}
+        onPointerDown={e => {
+          if (api.current.inkModeRef.current && e.pointerType === "pen") return;
+          e.stopPropagation();
+          if (api.current.buildModeRef.current) {
+            if (e.shiftKey) {
+              const fromId = api.current.selectedIdRef.current;
+              if (fromId && fromId !== block.id) {
+                api.current.pushUndo();
+                api.current.setData(d => ({ ...d, arrows: [...d.arrows, { id: uid(), fromId, fromPort: "right", toId: block.id, toPort: "left" }] }));
+              }
+              return; // keep current active node
+            }
+            api.current.setSelectedId(block.id); api.current.setSelectedIds(new Set([block.id])); api.current.setSelectedArrowId(null);
+            return;
+          }
+          const curIds = api.current.selectedIdsRef.current;
+          if (curIds.has(block.id) && curIds.size > 1) return;
+          api.current.setSelectedId(block.id); api.current.setSelectedIds(new Set([block.id])); api.current.setSelectedArrowId(null);
+        }}
+        onMouseEnter={() => api.current.setHoveredBlockId(block.id)}
+        onMouseLeave={() => api.current.setHoveredBlockId(null)}
+        onDoubleClick={e => e.stopPropagation()}
+        onContextMenu={e => { e.preventDefault(); e.stopPropagation(); api.current.setSelectedId(block.id); api.current.setSelectedIds(new Set([block.id])); api.current.setContextMenu({ x: e.clientX, y: e.clientY, blockId: block.id }); }}
+      >
+        <svg viewBox={`0 0 ${block.width} ${block.height}`}
+          style={{ position: "absolute", inset: 0, width: "100%", height: "100%", pointerEvents: "none" }}>
+          <ShapeSvg shape={block.shape} width={block.width} height={block.height} selected={selected || inMultiSel} color={block.color} />
+        </svg>
+        <textarea className="canvas-shape-label" value={block.label} placeholder="Label…"
+          style={{ color: block.color === "#1e293b" ? "rgba(255,255,255,0.88)" : undefined }}
+          onChange={e => api.current.updateBlock(block.id, { label: e.target.value })}
+          onPaste={handleNativePaste}
+          onPointerDown={e => e.stopPropagation()} onDoubleClick={e => e.stopPropagation()} />
+        {(showPorts || selected || inMultiSel) && (
+          <div className="canvas-shape-toolbar" onPointerDown={e => e.stopPropagation()}>
+            {(Object.keys(SHAPE_ICONS) as ShapeKind[]).map(sk => (
+              <button key={sk} className={`canvas-shape-type-btn${block.shape === sk ? " active" : ""}`}
+                title={sk} onClick={() => api.current.updateBlock(block.id, { shape: sk })}>{SHAPE_ICONS[sk]}</button>
+            ))}
+            <div className="canvas-shape-toolbar-sep" />
+            {SHAPE_COLORS.map(c => (
+              <button key={c} className={`canvas-shape-color-btn${(block.color ?? "#ffffff") === c ? " active" : ""}`}
+                style={{ background: c }} title={c}
+                onClick={() => api.current.updateBlock(block.id, { color: c })} />
+            ))}
+            <div className="canvas-shape-toolbar-sep" />
+            <button className="canvas-block-close" onPointerDown={e => e.stopPropagation()}
+              onClick={e => { e.stopPropagation(); api.current.deleteBlock(block.id); }}>×</button>
+          </div>
+        )}
+        <div className="canvas-shape-drag" onPointerDown={e => api.current.onHeaderPointerDown(e, block)}>⠿</div>
+        <div className="canvas-block-resize" onPointerDown={e => api.current.onResizePointerDown(e, block)} />
+        {showPorts && PORTS.map(port => (
+          <div key={port} className="canvas-port" style={portDotStyle(port)}
+            onPointerDown={e => api.current.onPortPointerDown(e, block.id, port)} />
+        ))}
+      </div>
+    );
+  }
+
+  // Standard block
+  return (
+    <div key={block.id}
+      className={`canvas-block canvas-block-${block.type}${selected ? " selected" : ""}${inMultiSel ? " multi-selected" : ""}`}
+      style={{
+        left: block.x, top: block.y, width: block.width, height: block.height, zIndex: 2,
+        ...(block.type === "sticky" ? { background: block.color, borderColor: stickyPreset(block.color).accent + "50" } : {}),
+      }}
+      onPointerDown={e => {
+        if (api.current.inkModeRef.current && e.pointerType === "pen") return;
+        e.stopPropagation();
+        if (api.current.buildModeRef.current) {
+          if (e.shiftKey) {
+            const fromId = api.current.selectedIdRef.current;
+            if (fromId && fromId !== block.id) {
+              api.current.pushUndo();
+              api.current.setData(d => ({ ...d, arrows: [...d.arrows, { id: uid(), fromId, fromPort: "right", toId: block.id, toPort: "left" }] }));
+            }
+            return;
+          }
+          api.current.setSelectedId(block.id); api.current.setSelectedIds(new Set([block.id])); api.current.setSelectedArrowId(null);
+          return;
+        }
+        const curIds = api.current.selectedIdsRef.current;
+        if (curIds.has(block.id) && curIds.size > 1) return;
+        api.current.setSelectedId(block.id); api.current.setSelectedIds(new Set([block.id])); api.current.setSelectedArrowId(null);
+      }}
+      onMouseEnter={() => api.current.setHoveredBlockId(block.id)}
+      onMouseLeave={() => api.current.setHoveredBlockId(null)}
+      onDoubleClick={e => e.stopPropagation()}
+      onContextMenu={e => { e.preventDefault(); e.stopPropagation(); api.current.setSelectedId(block.id); api.current.setSelectedIds(new Set([block.id])); api.current.setContextMenu({ x: e.clientX, y: e.clientY, blockId: block.id }); }}
+    >
+      {renderHeaderPure(block, api)}
+      {renderContentPure(block, api, zoom, sessionId)}
+      <div className="canvas-block-resize" onPointerDown={e => api.current.onResizePointerDown(e, block)} />
+      {showPorts && PORTS.map(port => (
+        <div key={port} className="canvas-port" style={portDotStyle(port)}
+          onPointerDown={e => api.current.onPortPointerDown(e, block.id, port)} />
+      ))}
+    </div>
+  );
+});
+
 // ── Main component ─────────────────────────────────────────────────────────────
 
 interface Props { content: string; onChange: (content: string) => void; nodeId?: string; }
@@ -1968,6 +2482,9 @@ export function CanvasEditor({ content, onChange, nodeId }: Props) {
   // set while no ink gesture is in flight (see onPointerMove); cleared on any
   // pointerdown, on pointer-leave, and by clearInkPreview.
   const inkHover         = useRef<{ sx: number; sy: number } | null>(null);
+  // What kind of pointer last touched down — dblclick events are MouseEvents
+  // with no pointerType of their own, so the quick-create gate reads this.
+  const lastPointerType  = useRef<string>("mouse");
   // Eraser: one undo snapshot per gesture (taken lazily, on the first sample
   // that actually erases something — a swipe that never touches a stroke
   // must not push a no-op undo entry), plus a screen-space cursor ring.
@@ -2679,6 +3196,7 @@ export function CanvasEditor({ content, onChange, nodeId }: Props) {
   // ── Pointer handlers ────────────────────────────────────────────────────────
 
   function onBgPointerDown(e: React.PointerEvent) {
+    lastPointerType.current = e.pointerType;
     // Any pointerdown ends a hover — real contact is about to draw, erase,
     // lasso, or pan, none of which should leave a stale ghost behind.
     inkHover.current = null;
@@ -2815,6 +3333,11 @@ export function CanvasEditor({ content, onChange, nodeId }: Props) {
       return;
     }
     if (pendingRef.current || tool === "lasso") return;
+    // Double-tap quick-create is a keyboard-workflow affordance: two fast pen
+    // taps while handwriting (outside ink mode) or a resting palm's touch
+    // taps both synthesize dblclick and were spawning text blocks mid-writing.
+    // Only a mouse gets the shortcut.
+    if (lastPointerType.current !== "mouse") return;
     const rect = containerRef.current!.getBoundingClientRect();
     addBlock(mkText, e.clientX - rect.left, e.clientY - rect.top);
   }
@@ -3438,343 +3961,6 @@ export function CanvasEditor({ content, onChange, nodeId }: Props) {
     }
   }
 
-  // ── Render helpers ──────────────────────────────────────────────────────────
-
-  function closeBtn(blockId: string) {
-    return (
-      <button className="canvas-block-close" onPointerDown={e => e.stopPropagation()}
-        onClick={e => { e.stopPropagation(); deleteBlock(blockId); }}>×</button>
-    );
-  }
-
-  function previewToggle(block: TextBlock | MathBlock) {
-    return (
-      <button
-        className="canvas-preview-toggle"
-        onPointerDown={e => e.stopPropagation()}
-        onClick={() => updateBlock(block.id, { preview: !block.preview })}
-      >{block.preview ? "Edit" : "Preview"}</button>
-    );
-  }
-
-  function renderHeader(block: CanvasBlock) {
-    if (block.type === "title") {
-      const defaultSize = block.level === 1 ? 28 : block.level === 2 ? 20 : 15;
-      const currentSize = block.fontSize ?? defaultSize;
-      return (
-        <div className="canvas-block-header" onPointerDown={e => onHeaderPointerDown(e, block)}>
-          <span className="canvas-block-drag">⠿</span>
-          <div className="canvas-title-levels" onPointerDown={e => e.stopPropagation()}>
-            {([1, 2, 3] as const).map(l => (
-              <button key={l} className={`canvas-title-level-btn${block.level === l ? " active" : ""}`}
-                onClick={() => updateBlock(block.id, { level: l, fontSize: undefined })}>H{l}</button>
-            ))}
-          </div>
-          <div className="canvas-title-size" onPointerDown={e => e.stopPropagation()}>
-            <button className="canvas-title-size-btn" onClick={() => updateBlock(block.id, { fontSize: Math.max(8, currentSize - 2) })} title="Decrease font size">A−</button>
-            <span className="canvas-title-size-val">{currentSize}</span>
-            <button className="canvas-title-size-btn" onClick={() => updateBlock(block.id, { fontSize: Math.min(120, currentSize + 2) })} title="Increase font size">A+</button>
-          </div>
-          {closeBtn(block.id)}
-        </div>
-      );
-    }
-    if (block.type === "table") {
-      return (
-        <div className="canvas-block-header" onPointerDown={e => onHeaderPointerDown(e, block)}>
-          <span className="canvas-block-drag">⠿</span>
-          <span className="canvas-block-type-label">Table</span>
-          {closeBtn(block.id)}
-        </div>
-      );
-    }
-    if (block.type === "math") {
-      return (
-        <div className="canvas-block-header" onPointerDown={e => onHeaderPointerDown(e, block)}>
-          <span className="canvas-block-drag">⠿</span>
-          <span className="canvas-block-type-label">∑ Math</span>
-          {previewToggle(block)}
-          {closeBtn(block.id)}
-        </div>
-      );
-    }
-    if (block.type === "sticky") {
-      const preset = stickyPreset(block.color);
-      return (
-        <div className="canvas-block-header" style={{ background: block.color }} onPointerDown={e => onHeaderPointerDown(e, block)}>
-          <span className="canvas-block-drag" style={{ color: preset.accent + "60" }}>⠿</span>
-          <div className="canvas-sticky-swatches" onPointerDown={e => e.stopPropagation()}>
-            {STICKY_COLORS.map(p => (
-              <button key={p.bg} className={`canvas-sticky-swatch${block.color === p.bg ? " active" : ""}`}
-                style={{ background: p.accent }} onClick={() => updateBlock(block.id, { color: p.bg })} />
-            ))}
-          </div>
-          {closeBtn(block.id)}
-        </div>
-      );
-    }
-    if (block.type === "checklist") {
-      const done = block.items.filter(i => i.checked).length;
-      return (
-        <div className="canvas-block-header" onPointerDown={e => onHeaderPointerDown(e, block)}>
-          <span className="canvas-block-drag">⠿</span>
-          <input className="canvas-checklist-title-input" value={block.title}
-            onPointerDown={e => e.stopPropagation()} onChange={e => updateBlock(block.id, { title: e.target.value })} />
-          {block.items.length > 0 && <span className="canvas-checklist-count">{done}/{block.items.length}</span>}
-          {closeBtn(block.id)}
-        </div>
-      );
-    }
-    if (block.type === "kanban") {
-      return (
-        <div className="canvas-block-header" onPointerDown={e => onHeaderPointerDown(e, block)}>
-          <span className="canvas-block-drag">⠿</span>
-          <span className="canvas-block-type-label">Kanban</span>
-          {closeBtn(block.id)}
-        </div>
-      );
-    }
-    if (block.type === "code_cell") {
-      return (
-        <div className="canvas-block-header canvas-block-header-code" onPointerDown={e => onHeaderPointerDown(e, block)}>
-          <span className="canvas-block-drag" style={{ color: "#475569" }}>⠿</span>
-          {closeBtn(block.id)}
-        </div>
-      );
-    }
-    if (block.type === "html") {
-      return (
-        <div className="canvas-block-header canvas-block-header-html" onPointerDown={e => onHeaderPointerDown(e, block)}>
-          <span className="canvas-block-drag">⠿</span>
-          <span className="canvas-block-type-label" style={{ color: "#ea580c" }}>HTML</span>
-          <button className="canvas-preview-toggle" onPointerDown={e => e.stopPropagation()}
-            onClick={() => updateBlock(block.id, { preview: !block.preview })}>
-            {block.preview ? "Edit" : "Preview"}
-          </button>
-          {closeBtn(block.id)}
-        </div>
-      );
-    }
-    if (block.type === "image") {
-      return (
-        <div className="canvas-block-header canvas-block-header-image" onPointerDown={e => onHeaderPointerDown(e, block)}>
-          <span className="canvas-block-drag">⠿</span>
-          <span className="canvas-block-type-label">Image</span>
-          {closeBtn(block.id)}
-        </div>
-      );
-    }
-    if (block.type === "molecule") {
-      return (
-        <div className="canvas-block-header canvas-block-header-chem" onPointerDown={e => onHeaderPointerDown(e, block)}>
-          <span className="canvas-block-drag">⠿</span>
-          <span className="canvas-block-type-label chem-header-label">⬡ Molecule</span>
-          {closeBtn(block.id)}
-        </div>
-      );
-    }
-    if (block.type === "chem_eq") {
-      return (
-        <div className="canvas-block-header canvas-block-header-chem" onPointerDown={e => onHeaderPointerDown(e, block)}>
-          <span className="canvas-block-drag">⠿</span>
-          <span className="canvas-block-type-label chem-header-label">⇌ Equation</span>
-          <button className="canvas-preview-toggle" onPointerDown={e => e.stopPropagation()}
-            onClick={() => updateBlock(block.id, { preview: !block.preview })}>
-            {block.preview ? "Edit" : "Preview"}
-          </button>
-          {closeBtn(block.id)}
-        </div>
-      );
-    }
-    if (block.type === "element") {
-      return (
-        <div className="canvas-block-header canvas-block-header-chem" onPointerDown={e => onHeaderPointerDown(e, block)}>
-          <span className="canvas-block-drag">⠿</span>
-          <span className="canvas-block-type-label chem-header-label">⚛ Element</span>
-          {closeBtn(block.id)}
-        </div>
-      );
-    }
-    if (block.type === "mol_draw") {
-      return (
-        <div className="canvas-block-header canvas-block-header-chem" onPointerDown={e => onHeaderPointerDown(e, block)}>
-          <span className="canvas-block-drag">⠿</span>
-          <span className="canvas-block-type-label chem-header-label">✏ Draw</span>
-          {closeBtn(block.id)}
-        </div>
-      );
-    }
-    // text (default)
-    return (
-      <div className="canvas-block-header" onPointerDown={e => onHeaderPointerDown(e, block)}>
-        <span className="canvas-block-drag">⠿</span>
-        {previewToggle(block as TextBlock)}
-        {closeBtn(block.id)}
-      </div>
-    );
-  }
-
-  async function runAllCells() {
-    const blocks = dataRef.current.blocks;
-    const arrows = dataRef.current.arrows;
-    const order = getExecutionOrder(blocks, arrows);
-    for (const id of order) {
-      const block = blocks.find(b => b.id === id) as CodeCellBlock | undefined;
-      if (!block) continue;
-      const sessionId = getComponentSessionId(id, nodeId, blocks, arrows);
-      const lang = block.language ?? "python";
-      updateBlock(id, { running: true, outputs: [] });
-      try {
-        let outputs: OutputChunk[];
-        if (lang === "sql") {
-          outputs = await runSqlCode(sessionId, block.code);
-        } else {
-          const result = await invoke<{ chunks: { type: string; content: string }[] }>(
-            "run_python", { sessionId, code: block.code }
-          );
-          outputs = result.chunks as OutputChunk[];
-        }
-        updateBlock(id, { running: false, outputs });
-      } catch (e) {
-        updateBlock(id, { running: false, outputs: [{ type: "error", content: String(e) }] });
-      }
-    }
-  }
-
-  async function restartKernel() {
-    const blocks = dataRef.current.blocks;
-    const arrows = dataRef.current.arrows;
-    const cellIds = blocks.filter(b => b.type === "code_cell").map(b => b.id);
-
-    const pythonSessionIds = new Set(
-      cellIds
-        .filter(id => ((blocks.find(b => b.id === id) as CodeCellBlock)?.language ?? "python") === "python")
-        .map(id => getComponentSessionId(id, nodeId, blocks, arrows))
-    );
-    const sqlSessionIds = new Set(
-      cellIds
-        .filter(id => (blocks.find(b => b.id === id) as CodeCellBlock)?.language === "sql")
-        .map(id => getComponentSessionId(id, nodeId, blocks, arrows))
-    );
-
-    // Python execution is Rust-backed (desktop only); no-op in the web build.
-    if (isTauri())
-      await Promise.all([...pythonSessionIds].map(sid => invoke("reset_python_session", { sessionId: sid })));
-    sqlSessionIds.forEach(sid => _resetSqlSession(sid));
-
-    setData(d => ({
-      ...d,
-      blocks: d.blocks.map(b => b.type === "code_cell"
-        ? { ...b, outputs: [], running: false }
-        : b),
-    }));
-  }
-
-  function renderContent(block: CanvasBlock) {
-    if (block.type === "title") {
-      const cls = `canvas-title-input canvas-title-h${block.level}`;
-      return (
-        <input className={cls} value={block.text} placeholder={`Heading ${block.level}…`}
-          style={block.fontSize !== undefined ? { fontSize: block.fontSize } : undefined}
-          onChange={e => updateBlock(block.id, { text: e.target.value })}
-          onPointerDown={e => e.stopPropagation()} />
-      );
-    }
-    if (block.type === "table") {
-      return <TableContent block={block} onUpdate={updateBlock} zoom={viewport.zoom} onSelect={() => { setSelectedId(block.id); setSelectedIds(new Set([block.id])); setSelectedArrowId(null); }} />;
-    }
-    if (block.type === "math") {
-      return <MathContent block={block} onUpdate={updateBlock} />;
-    }
-    if (block.type === "text") {
-      if (block.preview) {
-        return (
-          <div className="canvas-block-md-preview" onPointerDown={e => e.stopPropagation()}>
-            <Markdown remarkPlugins={[remarkMath]} rehypePlugins={[rehypeKatex]}>{block.content}</Markdown>
-          </div>
-        );
-      }
-      return (
-        <textarea className="canvas-block-text" value={block.content} placeholder="Markdown supported…"
-          onChange={e => updateBlock(block.id, { content: e.target.value })}
-          onPaste={handleNativePaste}
-          onPointerDown={e => e.stopPropagation()} onDoubleClick={e => e.stopPropagation()} />
-      );
-    }
-    if (block.type === "sticky") {
-      const { accent } = stickyPreset(block.color);
-      return (
-        <textarea className="canvas-block-text" value={block.content} placeholder="Type here…"
-          style={{ color: accent }}
-          onChange={e => updateBlock(block.id, { content: e.target.value })}
-          onPaste={handleNativePaste}
-          onPointerDown={e => e.stopPropagation()} onDoubleClick={e => e.stopPropagation()} />
-      );
-    }
-    if (block.type === "checklist") return <ChecklistContent block={block} onUpdate={updateBlock} />;
-    if (block.type === "kanban")    return <KanbanContent    block={block} onUpdate={updateBlock} onSelect={() => { setSelectedId(block.id); setSelectedIds(new Set([block.id])); setSelectedArrowId(null); }} />;
-    if (block.type === "html") return (
-      <HtmlContent block={block} onUpdate={updateBlock}
-        onSelect={() => { setSelectedId(block.id); setSelectedIds(new Set([block.id])); setSelectedArrowId(null); }} />
-    );
-    if (block.type === "code_cell") return (
-      <CodeCellContent
-        block={block}
-        sessionId={getComponentSessionId(block.id, nodeId, data.blocks, data.arrows)}
-        onUpdate={patch => updateBlock(block.id, patch as Patch)}
-        onRunAll={runAllCells}
-        onRestart={restartKernel}
-        onSelect={() => { setSelectedId(block.id); setSelectedIds(new Set([block.id])); setSelectedArrowId(null); }}
-      />
-    );
-    if (block.type === "image") return (
-      <img
-        className="canvas-image-content"
-        src={block.src}
-        alt=""
-        draggable={false}
-        onPointerDown={e => e.stopPropagation()}
-      />
-    );
-    if (block.type === "molecule") return (
-      <MoleculeContent block={block} onUpdate={updateBlock}
-        onSelect={() => { setSelectedId(block.id); setSelectedIds(new Set([block.id])); setSelectedArrowId(null); }} />
-    );
-    if (block.type === "chem_eq") return (
-      <ChemEqContent block={block} onUpdate={updateBlock}
-        onSelect={() => { setSelectedId(block.id); setSelectedIds(new Set([block.id])); setSelectedArrowId(null); }} />
-    );
-    if (block.type === "element") return (
-      <ElementContent block={block} onUpdate={updateBlock}
-        onSelect={() => { setSelectedId(block.id); setSelectedIds(new Set([block.id])); setSelectedArrowId(null); }} />
-    );
-    if (block.type === "mol_draw") return (
-      <MolDrawContent block={block} onUpdate={updateBlock}
-        onSelect={() => { setSelectedId(block.id); setSelectedIds(new Set([block.id])); setSelectedArrowId(null); }} />
-    );
-    if (block.type === "matrix") return (
-      <MatrixBlockContent
-        block={block}
-        onPatch={p => updateBlock(block.id, p as Patch)}
-        onSelect={() => { setSelectedId(block.id); setSelectedIds(new Set([block.id])); setSelectedArrowId(null); }}
-      />
-    );
-    if (block.type === "simple_grid") return (
-      <GridBlockContent
-        block={block}
-        onPatch={p => updateBlock(block.id, p as Patch)}
-        onSelect={() => { setSelectedId(block.id); setSelectedIds(new Set([block.id])); setSelectedArrowId(null); }}
-      />
-    );
-    if (block.type === "graph_theory") return (
-      <GraphBlockContent
-        block={block}
-        onPatch={p => updateBlock(block.id, p as Patch)}
-        onSelect={() => { setSelectedId(block.id); setSelectedIds(new Set([block.id])); setSelectedArrowId(null); }}
-      />
-    );
-  }
-
   // ── Canvas navigation ────────────────────────────────────────────────────────
 
   function navigateTo(block: CanvasBlock) {
@@ -3904,206 +4090,74 @@ export function CanvasEditor({ content, onChange, nodeId }: Props) {
     );
   }), [data.arrows, data.blocks, selectedArrowId, arrowHoverPos]);
 
-  // ── Memoized block JSX — viewport.x/y excluded so panning skips reconciliation ─
-  const blockElements = useMemo(() => data.blocks.map(block => {
-    // Vector-ish blocks draw themselves in the SVG layer below. They must NOT
-    // also get a .canvas-block wrapper: that is an opaque box the size of the
-    // shape's bounding rect with a ≥32px header on top of it, which sits at
-    // z-index 2 and hides the very stroke it belongs to. ink_stroke was missing
-    // from this list, so every pen stroke came out buried under a white card.
-    if (block.type === "divider" || block.type === "draw_arrow" || block.type === "draw_ellipse"
-      || block.type === "draw_polygon" || block.type === "ink_stroke") return null;
-    const selected   = selectedId === block.id || (selectedIds.has(block.id) && selectedIds.size === 1);
-    const inMultiSel = selectedIds.has(block.id) && selectedIds.size > 1;
-
-    if (block.type === "frame") {
-      const fColor  = block.color       ?? "#94a3b8";
-      const fStyle  = block.borderStyle ?? "dashed";
-      const fWidth  = block.borderWidth ?? 2;
-      const fRadius = block.radius      ?? 10;
-      const fFill   = block.fill        ?? "transparent";
-      return (
-        <div key={block.id}
-          className={`canvas-frame${selected ? " selected" : ""}${inMultiSel ? " multi-selected" : ""}`}
-          style={{
-            left: block.x, top: block.y, width: block.width, height: block.height, zIndex: 0,
-            borderColor: fColor, borderStyle: fStyle, borderWidth: fWidth,
-            borderRadius: fRadius, background: fFill,
-          }}
-          onContextMenu={e => { e.preventDefault(); e.stopPropagation(); setSelectedId(block.id); setSelectedIds(new Set([block.id])); setContextMenu({ x: e.clientX, y: e.clientY, blockId: block.id }); }}
-        >
-          <div className="canvas-frame-tag" style={{ borderColor: fColor, color: fColor }}
-            onPointerDown={e => onHeaderPointerDown(e, block)}>
-            <span className="canvas-frame-drag">⠿</span>
-            <input
-              className="canvas-frame-label-input"
-              value={block.label}
-              placeholder="Group…"
-              onChange={e => updateBlock(block.id, { label: e.target.value })}
-              onPointerDown={e => e.stopPropagation()}
-            />
-            {(selected || inMultiSel) && (
-              <button className="canvas-block-close" onPointerDown={e => e.stopPropagation()}
-                onClick={e => { e.stopPropagation(); deleteBlock(block.id); }}>×</button>
-            )}
-          </div>
-          {(selected || inMultiSel) && (
-            <div className="canvas-frame-toolbar" onPointerDown={e => e.stopPropagation()}>
-              {FRAME_COLORS.map(c => (
-                <button key={c} className={`canvas-frame-color-btn${fColor === c ? " active" : ""}`}
-                  style={{ background: c, outlineColor: c }}
-                  onClick={() => updateBlock(block.id, { color: c })} />
-              ))}
-              <div className="canvas-frame-tb-sep" />
-              {(["solid","dashed","dotted"] as const).map(s => (
-                <button key={s} className={`canvas-frame-tb-btn${fStyle === s ? " active" : ""}`}
-                  title={s} onClick={() => updateBlock(block.id, { borderStyle: s })}>
-                  {s === "solid" ? "—" : s === "dashed" ? "╌╌" : "⋯"}
-                </button>
-              ))}
-              <div className="canvas-frame-tb-sep" />
-              {([1.5, 2.5, 4] as const).map(w => (
-                <button key={w} className={`canvas-frame-tb-btn${fWidth === w ? " active" : ""}`}
-                  title={`${w}px border`} onClick={() => updateBlock(block.id, { borderWidth: w })}>
-                  <span style={{ display:"block", height: w < 2 ? "1px" : w < 3 ? "2px" : "4px", width: 14, background:"currentColor", borderRadius: 1 }} />
-                </button>
-              ))}
-              <div className="canvas-frame-tb-sep" />
-              {([0, 10, 24] as const).map(r => (
-                <button key={r} className={`canvas-frame-tb-btn${fRadius === r ? " active" : ""}`}
-                  title={`Radius ${r}`} onClick={() => updateBlock(block.id, { radius: r })}>
-                  <span style={{ display:"block", width:13, height:13, border:"1.5px solid currentColor", borderRadius: r === 0 ? 1 : r === 10 ? 4 : 9, background:"transparent" }} />
-                </button>
-              ))}
-              <div className="canvas-frame-tb-sep" />
-              {FRAME_FILLS.map((f, i) => (
-                <button key={i} className={`canvas-frame-color-btn${fFill === f ? " active" : ""}`}
-                  style={{
-                    background: i === 0 ? "var(--bg-base)" : f,
-                    outlineColor: fColor,
-                    ...(i === 0 ? { border: "1px dashed var(--border-base)" } : {}),
-                  }}
-                  title={i === 0 ? "No fill" : "Tinted fill"}
-                  onClick={() => updateBlock(block.id, { fill: f })} />
-              ))}
-            </div>
-          )}
-          <div className="canvas-block-resize" onPointerDown={e => onResizePointerDown(e, block)} />
-        </div>
-      );
+  async function runAllCells() {
+    const blocks = dataRef.current.blocks;
+    const arrows = dataRef.current.arrows;
+    const order = getExecutionOrder(blocks, arrows);
+    for (const id of order) {
+      const block = blocks.find(b => b.id === id) as CodeCellBlock | undefined;
+      if (!block) continue;
+      const sessionId = getComponentSessionId(id, nodeId, blocks, arrows);
+      const lang = block.language ?? "python";
+      updateBlock(id, { running: true, outputs: [] });
+      try {
+        let outputs: OutputChunk[];
+        if (lang === "sql") {
+          outputs = await runSqlCode(sessionId, block.code);
+        } else {
+          const result = await invoke<{ chunks: { type: string; content: string }[] }>(
+            "run_python", { sessionId, code: block.code }
+          );
+          outputs = result.chunks as OutputChunk[];
+        }
+        updateBlock(id, { running: false, outputs });
+      } catch (e) {
+        updateBlock(id, { running: false, outputs: [{ type: "error", content: String(e) }] });
+      }
     }
+  }
 
-    const isShape   = block.type === "shape";
-    const showPorts = showPortsFor.has(block.id);
+  async function restartKernel() {
+    const blocks = dataRef.current.blocks;
+    const arrows = dataRef.current.arrows;
+    const cellIds = blocks.filter(b => b.type === "code_cell").map(b => b.id);
 
-    if (isShape) {
-      return (
-        <div key={block.id}
-          className={`canvas-block canvas-block-shape${selected ? " selected" : ""}${inMultiSel ? " multi-selected" : ""}`}
-          style={{ left: block.x, top: block.y, width: block.width, height: block.height, zIndex: 2 }}
-          onPointerDown={e => {
-            if (inkModeRef.current && e.pointerType === "pen") return;
-            e.stopPropagation();
-            if (buildModeRef.current) {
-              if (e.shiftKey) {
-                const fromId = selectedIdRef.current;
-                if (fromId && fromId !== block.id) {
-                  pushUndo();
-                  setData(d => ({ ...d, arrows: [...d.arrows, { id: uid(), fromId, fromPort: "right", toId: block.id, toPort: "left" }] }));
-                }
-                return; // keep current active node
-              }
-              setSelectedId(block.id); setSelectedIds(new Set([block.id])); setSelectedArrowId(null);
-              return;
-            }
-            const curIds = selectedIdsRef.current;
-            if (curIds.has(block.id) && curIds.size > 1) return;
-            setSelectedId(block.id); setSelectedIds(new Set([block.id])); setSelectedArrowId(null);
-          }}
-          onMouseEnter={() => setHoveredBlockId(block.id)}
-          onMouseLeave={() => setHoveredBlockId(null)}
-          onDoubleClick={e => e.stopPropagation()}
-          onContextMenu={e => { e.preventDefault(); e.stopPropagation(); setSelectedId(block.id); setSelectedIds(new Set([block.id])); setContextMenu({ x: e.clientX, y: e.clientY, blockId: block.id }); }}
-        >
-          <svg viewBox={`0 0 ${block.width} ${block.height}`}
-            style={{ position: "absolute", inset: 0, width: "100%", height: "100%", pointerEvents: "none" }}>
-            <ShapeSvg shape={block.shape} width={block.width} height={block.height} selected={selected || inMultiSel} color={block.color} />
-          </svg>
-          <textarea className="canvas-shape-label" value={block.label} placeholder="Label…"
-            style={{ color: block.color === "#1e293b" ? "rgba(255,255,255,0.88)" : undefined }}
-            onChange={e => updateBlock(block.id, { label: e.target.value })}
-            onPaste={handleNativePaste}
-            onPointerDown={e => e.stopPropagation()} onDoubleClick={e => e.stopPropagation()} />
-          {(showPorts || selected || inMultiSel) && (
-            <div className="canvas-shape-toolbar" onPointerDown={e => e.stopPropagation()}>
-              {(Object.keys(SHAPE_ICONS) as ShapeKind[]).map(sk => (
-                <button key={sk} className={`canvas-shape-type-btn${block.shape === sk ? " active" : ""}`}
-                  title={sk} onClick={() => updateBlock(block.id, { shape: sk })}>{SHAPE_ICONS[sk]}</button>
-              ))}
-              <div className="canvas-shape-toolbar-sep" />
-              {SHAPE_COLORS.map(c => (
-                <button key={c} className={`canvas-shape-color-btn${(block.color ?? "#ffffff") === c ? " active" : ""}`}
-                  style={{ background: c }} title={c}
-                  onClick={() => updateBlock(block.id, { color: c })} />
-              ))}
-              <div className="canvas-shape-toolbar-sep" />
-              <button className="canvas-block-close" onPointerDown={e => e.stopPropagation()}
-                onClick={e => { e.stopPropagation(); deleteBlock(block.id); }}>×</button>
-            </div>
-          )}
-          <div className="canvas-shape-drag" onPointerDown={e => onHeaderPointerDown(e, block)}>⠿</div>
-          <div className="canvas-block-resize" onPointerDown={e => onResizePointerDown(e, block)} />
-          {showPorts && PORTS.map(port => (
-            <div key={port} className="canvas-port" style={portDotStyle(port)}
-              onPointerDown={e => onPortPointerDown(e, block.id, port)} />
-          ))}
-        </div>
-      );
-    }
-
-    // Standard block
-    return (
-      <div key={block.id}
-        className={`canvas-block canvas-block-${block.type}${selected ? " selected" : ""}${inMultiSel ? " multi-selected" : ""}`}
-        style={{
-          left: block.x, top: block.y, width: block.width, height: block.height, zIndex: 2,
-          ...(block.type === "sticky" ? { background: block.color, borderColor: stickyPreset(block.color).accent + "50" } : {}),
-        }}
-        onPointerDown={e => {
-          if (inkModeRef.current && e.pointerType === "pen") return;
-          e.stopPropagation();
-          if (buildModeRef.current) {
-            if (e.shiftKey) {
-              const fromId = selectedIdRef.current;
-              if (fromId && fromId !== block.id) {
-                pushUndo();
-                setData(d => ({ ...d, arrows: [...d.arrows, { id: uid(), fromId, fromPort: "right", toId: block.id, toPort: "left" }] }));
-              }
-              return;
-            }
-            setSelectedId(block.id); setSelectedIds(new Set([block.id])); setSelectedArrowId(null);
-            return;
-          }
-          const curIds = selectedIdsRef.current;
-          if (curIds.has(block.id) && curIds.size > 1) return;
-          setSelectedId(block.id); setSelectedIds(new Set([block.id])); setSelectedArrowId(null);
-        }}
-        onMouseEnter={() => setHoveredBlockId(block.id)}
-        onMouseLeave={() => setHoveredBlockId(null)}
-        onDoubleClick={e => e.stopPropagation()}
-        onContextMenu={e => { e.preventDefault(); e.stopPropagation(); setSelectedId(block.id); setSelectedIds(new Set([block.id])); setContextMenu({ x: e.clientX, y: e.clientY, blockId: block.id }); }}
-      >
-        {renderHeader(block)}
-        {renderContent(block)}
-        <div className="canvas-block-resize" onPointerDown={e => onResizePointerDown(e, block)} />
-        {showPorts && PORTS.map(port => (
-          <div key={port} className="canvas-port" style={portDotStyle(port)}
-            onPointerDown={e => onPortPointerDown(e, block.id, port)} />
-        ))}
-      </div>
+    const pythonSessionIds = new Set(
+      cellIds
+        .filter(id => ((blocks.find(b => b.id === id) as CodeCellBlock)?.language ?? "python") === "python")
+        .map(id => getComponentSessionId(id, nodeId, blocks, arrows))
     );
-  }), [data.blocks, data.arrows, selectedId, selectedIds, showPortsFor, viewport.zoom, nodeId,
-       updateBlock, deleteBlock, onHeaderPointerDown, onResizePointerDown, onPortPointerDown]);
+    const sqlSessionIds = new Set(
+      cellIds
+        .filter(id => (blocks.find(b => b.id === id) as CodeCellBlock)?.language === "sql")
+        .map(id => getComponentSessionId(id, nodeId, blocks, arrows))
+    );
+
+    // Python execution is Rust-backed (desktop only); no-op in the web build.
+    if (isTauri())
+      await Promise.all([...pythonSessionIds].map(sid => invoke("reset_python_session", { sessionId: sid })));
+    sqlSessionIds.forEach(sid => _resetSqlSession(sid));
+
+    setData(d => ({
+      ...d,
+      blocks: d.blocks.map(b => b.type === "code_cell"
+        ? { ...b, outputs: [], running: false }
+        : b),
+    }));
+  }
+
+  // ── BlockApi bag — latest closures for BlockView, stable ref identity ────────
+  // Reassigned every render so event handlers inside BlockView always call the
+  // freshest closures, while the ref object itself never changes and therefore
+  // never breaks BlockView's React.memo comparison. See the BlockApi/BlockView
+  // definitions above the component for the full design rationale.
+  const blockApi = useRef<BlockApi>({} as BlockApi);
+  blockApi.current = {
+    updateBlock, deleteBlock, onHeaderPointerDown, onResizePointerDown, onPortPointerDown,
+    setSelectedId, setSelectedIds, setSelectedArrowId, setContextMenu, setHoveredBlockId, setData,
+    pushUndo, runAllCells, restartKernel,
+    inkModeRef, buildModeRef, selectedIdRef, selectedIdsRef,
+  };
 
   const multiCount = selectedIds.size;
   const { x, y, zoom } = viewport;
@@ -4807,8 +4861,27 @@ export function CanvasEditor({ content, onChange, nodeId }: Props) {
           }} />
         )}
 
-        {/* Blocks */}
-        {blockElements}
+        {/* Blocks — plain (non-memoized) map; cheap now that per-block JSX and
+            re-render decisions live in BlockView. Vector-ish blocks draw
+            themselves in the SVG layer below and must NOT also get a
+            .canvas-block wrapper: that is an opaque box the size of the
+            shape's bounding rect with a ≥32px header on top of it, which sits
+            at z-index 2 and hides the very stroke it belongs to. ink_stroke
+            was missing from this list once, so every pen stroke came out
+            buried under a white card. */}
+        {data.blocks.map(block => {
+          if (block.type === "divider" || block.type === "draw_arrow" || block.type === "draw_ellipse"
+            || block.type === "draw_polygon" || block.type === "ink_stroke") return null;
+          return (
+            <BlockView key={block.id} block={block}
+              selected={selectedId === block.id || (selectedIds.has(block.id) && selectedIds.size === 1)}
+              inMultiSel={selectedIds.has(block.id) && selectedIds.size > 1}
+              zoom={viewport.zoom}
+              showPorts={showPortsFor.has(block.id)}
+              sessionId={block.type === "code_cell" ? getComponentSessionId(block.id, nodeId, data.blocks, data.arrows) : undefined}
+              api={blockApi} />
+          );
+        })}
       </div>
 
       {/* Ink stroke floating toolbar — screen-space, NOT inside .canvas-world.
