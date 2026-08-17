@@ -10,6 +10,7 @@ import { CategoryHighlight } from "../extensions/CategoryHighlight";
 import { SlashCommandsList } from "./SlashCommandsList";
 import { HighlighterCatEditor } from "./HighlighterCatEditor";
 import { DatabaseInsertPicker } from "./DatabaseInsertPicker";
+import { MathField } from "./MathField";
 import * as api from "../lib/api";
 import { DEFAULT_HIGHLIGHTERS, findAncestorOfKind, getDescendants } from "../nodeUtils";
 import type { VaultGraph, HighlighterCategory, VaultRecord } from "../types";
@@ -34,8 +35,12 @@ function MathEditPopover({
 }) {
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const previewRef = useRef<HTMLDivElement>(null);
+  // Local to the popover — the LaTeX string itself stays the single source
+  // of truth (lifted into `mathEdit.latex`), so switching tabs never has
+  // anything to reconcile.
+  const [mode, setMode] = useState<"visual" | "latex">("visual");
 
-  useEffect(() => { textareaRef.current?.focus(); }, []);
+  useEffect(() => { if (mode === "latex") textareaRef.current?.focus(); }, [mode]);
 
   useEffect(() => {
     const el = previewRef.current;
@@ -48,7 +53,9 @@ function MathEditPopover({
       el.textContent = e?.message ?? "Invalid LaTeX";
       el.classList.add("math-edit-preview-error");
     }
-  }, [state.latex, state.kind]);
+    // `mode` is a dep because the preview div only exists on the LaTeX tab —
+    // switching tabs must render the existing latex, not wait for an edit.
+  }, [state.latex, state.kind, mode]);
 
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
@@ -70,15 +77,42 @@ function MathEditPopover({
         onPointerDown={e => e.stopPropagation()}
       >
         <div className="math-edit-title">{state.kind === "block" ? "Math block" : "Inline math"}</div>
-        <textarea
-          ref={textareaRef}
-          className="math-edit-input"
-          value={state.latex}
-          onChange={e => onChange(e.target.value)}
-          spellCheck={false}
-          rows={state.kind === "block" ? 4 : 2}
-        />
-        <div ref={previewRef} className="math-edit-preview" />
+        <div className="math-edit-mode-tabs" role="tablist">
+          <button
+            type="button"
+            role="tab"
+            aria-selected={mode === "visual"}
+            className={`math-edit-mode-tab${mode === "visual" ? " active" : ""}`}
+            onClick={() => setMode("visual")}
+          >Visual</button>
+          <button
+            type="button"
+            role="tab"
+            aria-selected={mode === "latex"}
+            className={`math-edit-mode-tab${mode === "latex" ? " active" : ""}`}
+            onClick={() => setMode("latex")}
+          >LaTeX</button>
+        </div>
+        {mode === "visual" ? (
+          <MathField
+            value={state.latex}
+            onChange={onChange}
+            autoFocus
+            className="math-edit-mathfield"
+          />
+        ) : (
+          <>
+            <textarea
+              ref={textareaRef}
+              className="math-edit-input"
+              value={state.latex}
+              onChange={e => onChange(e.target.value)}
+              spellCheck={false}
+              rows={state.kind === "block" ? 4 : 2}
+            />
+            <div ref={previewRef} className="math-edit-preview" />
+          </>
+        )}
         <div className="math-edit-actions">
           <button className="math-edit-btn math-edit-btn-delete" onClick={onDelete} type="button">
             Delete

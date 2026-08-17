@@ -52,6 +52,14 @@
   --sticky:        oklch(0.58 0.14 85);
   --sticky-border: oklch(0.88 0.06 85);
 
+  /* MathLive's virtual keyboard panel is appended to <body> and reads its
+     stacking from this var (default 105, per mathlive's own CSS:
+     `--_keyboard-zindex: var(--keyboard-zindex, 105)`). 10000 is the
+     highest z-index any Vault overlay uses (.confirm-backdrop,
+     .math-edit-backdrop); the keyboard has to render on top of a MathField
+     hosted inside either of those, or an iPad user can't reach it. */
+  --keyboard-zindex: 10001;
+
   --edge-out:        oklch(0.45 0.12 145);
   --edge-out-bg:     oklch(0.96 0.03 145);
   --edge-out-border: oklch(0.88 0.06 145);
@@ -2747,6 +2755,51 @@ body {
   margin-bottom: 12px;
 }
 
+.math-edit-mode-tabs {
+  display: flex;
+  gap: 4px;
+  margin-bottom: 10px;
+}
+
+.math-edit-mode-tab {
+  padding: 4px 12px;
+  border-radius: 100px;
+  border: 1px solid var(--border-base);
+  background: var(--bg-raised);
+  color: var(--fg-muted);
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all var(--duration) var(--ease);
+}
+.math-edit-mode-tab:hover { color: var(--fg-main); border-color: var(--border-strong); }
+.math-edit-mode-tab.active {
+  background: var(--accent, #4f8ef7);
+  border-color: var(--accent, #4f8ef7);
+  color: #fff;
+}
+
+/* MathfieldElement renders its own internal layout; the wrapper just needs
+   a comparable footprint to the LaTeX textarea it replaces. */
+.math-edit-mathfield {
+  display: block;
+  width: 100%;
+  min-height: 52px;
+  background: var(--bg-raised);
+  border: 1px solid var(--border-base);
+  border-radius: var(--radius);
+  padding: 8px 10px;
+  font-size: 18px;
+  box-sizing: border-box;
+}
+
+.math-field-loading {
+  padding: 16px 10px;
+  color: var(--fg-muted);
+  font-size: 13px;
+  text-align: center;
+}
+
 .math-edit-input {
   width: 100%;
   resize: vertical;
@@ -3524,11 +3577,34 @@ body {
 .canvas-tool-table { color: var(--fg-muted); }
 
 /* ── Canvas: math block ─────────────────────────────────────────────────── */
+.canvas-math-edit-wrap {
+  position: relative;
+  flex: 1;
+  display: flex;
+}
 .canvas-math-input {
   font-family: "SF Mono", "Fira Code", "Fira Mono", monospace;
   font-size: 12px;
   line-height: 1.6;
   resize: none;
+}
+.canvas-math-visual-btn {
+  position: absolute;
+  bottom: 6px;
+  right: 6px;
+  background: var(--bg-raised);
+  border: 1px solid var(--border-base);
+  border-radius: 100px;
+  color: var(--fg-muted);
+  font-size: 10px;
+  font-weight: 500;
+  padding: 3px 9px;
+  cursor: pointer;
+  transition: all var(--duration) var(--ease);
+}
+.canvas-math-visual-btn:hover {
+  border-color: var(--border-strong);
+  color: var(--fg-main);
 }
 .canvas-math-preview {
   flex: 1;
