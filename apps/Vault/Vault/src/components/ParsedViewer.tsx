@@ -6,6 +6,7 @@ import * as api from "../lib/api";
 import { DEFAULT_HIGHLIGHTERS } from "../nodeUtils";
 import { useResizableWidth } from "../hooks/useResizableWidth";
 import type { VaultGraph, HighlighterCategory } from "../types";
+import { KATEX_OPTS } from "../lib/katexShared";
 
 interface Props {
   content: string;               // pre-rendered full-fidelity HTML (see md ingest)
@@ -70,10 +71,10 @@ export function ParsedViewer({ content, nodeId }: Props) {
     if (!root) return;
     root.innerHTML = typeof content === "string" ? content : "";
     root.querySelectorAll<HTMLElement>('[data-type="inline-math"]').forEach((el) => {
-      try { katex.render(el.getAttribute("data-latex") || "", el, { throwOnError: false, displayMode: false }); } catch { /* keep raw */ }
+      try { katex.render(el.getAttribute("data-latex") || "", el, { ...KATEX_OPTS, displayMode: false }); } catch { /* keep raw */ }
     });
     root.querySelectorAll<HTMLElement>('[data-type="block-math"]').forEach((el) => {
-      try { katex.render(el.getAttribute("data-latex") || "", el, { throwOnError: false, displayMode: true }); } catch { /* keep raw */ }
+      try { katex.render(el.getAttribute("data-latex") || "", el, { ...KATEX_OPTS, displayMode: true }); } catch { /* keep raw */ }
     });
     const items: OutlineItem[] = [];
     root.querySelectorAll<HTMLElement>("h1, h2, h3, h4").forEach((el, i) => {

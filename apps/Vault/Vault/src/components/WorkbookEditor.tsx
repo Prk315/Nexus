@@ -7,6 +7,7 @@ import { NoteEditor } from "./NoteEditor";
 import { CanvasEditor } from "./CanvasEditor";
 import { isTauri } from "../lib/platform";
 import * as api from "../lib/api";
+import { KATEX_MACROS } from "../lib/katexShared";
 
 // Linked-node content read/write: use the Rust command inside the desktop shell,
 // fall back to Supabase (the source of truth) in the browser / web deploy.
@@ -573,7 +574,7 @@ function FormulaPreview({ latex }: { latex: string }) {
     if (!ref.current) return;
     if (!latex.trim()) { ref.current.innerHTML = ""; setError(null); return; }
     try {
-      katex.render(latex, ref.current, { throwOnError: true, displayMode: true });
+      katex.render(latex, ref.current, { throwOnError: true, displayMode: true, macros: KATEX_MACROS, strict: "ignore" });
       setError(null);
     } catch (e: any) {
       ref.current.innerHTML = "";
@@ -756,7 +757,7 @@ function ExMathEditor({ block, onPatch }: { block: ExMathBlock; onPatch: (p: Par
     if (!el) return;
     if (!block.formula.trim()) { el.innerHTML = ""; setError(null); return; }
     try {
-      katex.render(block.formula, el, { throwOnError: true, displayMode: true });
+      katex.render(block.formula, el, { throwOnError: true, displayMode: true, macros: KATEX_MACROS, strict: "ignore" });
       setError(null);
     } catch (e: any) {
       el.innerHTML = "";
