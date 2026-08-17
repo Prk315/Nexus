@@ -1,4 +1,4 @@
-import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { MatrixBlockContent, MatrixBlockData } from "./MatrixBlock";
 import { GraphBlockContent, GraphBlockData } from "./GraphBlock";
 import { GridBlockContent, GridBlockData } from "./GridBlock";
@@ -2358,6 +2358,62 @@ const BlockView = memo(function BlockView({ block, selected, inMultiSel, zoom, s
   );
 });
 
+interface InkStrokeGProps {
+  block: InkStrokeBlock;
+  d: string;
+  hitD: string;
+  filled: boolean;
+  sel: boolean;
+  zoom: number;
+  onPointerDownStroke: (e: React.PointerEvent, ib: InkStrokeBlock) => void;
+}
+
+// Per-stroke <g>, extracted so React.memo can bail on the N-1 strokes that
+// didn't change when stroke N+1 commits. inkStrokePaths.map used to rebuild
+// fresh JSX for EVERY committed stroke on every commit — on a populated page
+// that render was long enough to delay/drop the next pen-down. block/d/hitD/
+// filled are all identity-stable across unrelated commits (inkPathCache
+// reuses the cached entry when a stroke's points/strokeWidth haven't
+// changed), sel is a plain boolean, zoom is the one prop shared by every
+// stroke, and onPointerDownStroke is the single stable callback below — so a
+// commit that only appends a new stroke leaves every existing InkStrokeG's
+// props referentially/value-equal and memo bails without touching the DOM.
+const InkStrokeG = memo(function InkStrokeG({ block: ib, d, hitD, filled, sel, zoom, onPointerDownStroke }: InkStrokeGProps) {
+  if (!d) return null;
+  return (
+    <g>
+      {/* Hit area is sized in screen pixels (divided by zoom) so a
+          finger can still grab a thin stroke at low zoom on iPad.
+          Always the centerline path, even for filled/outline strokes. */}
+      <path d={hitD} fill="none" stroke="transparent"
+        strokeWidth={Math.max(ib.strokeWidth + 8, 22 / zoom)}
+        pointerEvents="stroke" style={{ cursor: "move" }}
+        onPointerDown={e => onPointerDownStroke(e, ib)} />
+      {filled ? (
+        <path d={d} fill={ib.color} fillRule="nonzero" pointerEvents="none" />
+      ) : ib.nib === "highlighter" ? (
+        <path d={d} fill="none" stroke={ib.color}
+          strokeWidth={sel ? ib.strokeWidth + 1 : ib.strokeWidth}
+          strokeLinecap="butt" strokeLinejoin="round"
+          pointerEvents="none" opacity={0.45}
+          style={{ mixBlendMode: "multiply" }} />
+      ) : (
+        <path d={d} fill="none" stroke={ib.color}
+          strokeWidth={sel ? ib.strokeWidth + 1 : ib.strokeWidth}
+          strokeLinecap="round" strokeLinejoin="round"
+          pointerEvents="none" />
+      )}
+      {sel && (
+        <rect x={ib.x - 4} y={ib.y - 4}
+          width={ib.width + 8} height={ib.height + 8}
+          fill="none" stroke="var(--border-strong)"
+          strokeWidth={1} strokeDasharray="4 3" rx={2}
+          pointerEvents="none" />
+      )}
+    </g>
+  );
+});
+
 // ── Main component ─────────────────────────────────────────────────────────────
 
 interface Props { content: string; onChange: (content: string) => void; nodeId?: string; }
@@ -2507,6 +2563,34 @@ export function CanvasEditor({ content, onChange, nodeId }: Props) {
   const dataRef          = useRef(data);
   dataRef.current        = data;
   const lastSaved        = useRef(content);
+  // Kept live like dataRef above — the unmount-flush effect (deps: []) closes
+  // over whatever onChange/nodeId was current at mount, so without refs it
+  // would call a stale prop instead of the caller's latest handler. nodeId
+  // in particular can never actually change under a mounted instance now
+  // that EditorPane/WorkbookEditor key every CanvasEditor by node id (a
+  // different node is a different mounted instance, never a prop swap on
+  // this one) — mirrored into a ref anyway since "can't change" is a
+  // property of the callers, not something this component can enforce.
+  const onChangeRef      = useRef(onChange);
+  onChangeRef.current    = onChange;
+  const nodeIdRef        = useRef(nodeId);
+  nodeIdRef.current      = nodeId;
+
+  // ── Wet-ink buffer ──────────────────────────────────────────────────────────
+  // Finished pen/highlighter strokes land here instead of an immediate
+  // setData — a setData per stroke forces a full re-render of the SVG ink
+  // layer (inkStrokePaths.map) on every pen-up, which is what capped fast
+  // handwriting throughput on a populated page. wetStrokes drains into one
+  // batched setData either on a 250ms writing pause (flushWetStrokes,
+  // defined below pushUndo) or immediately at any of the flush-trigger call
+  // sites (undo/redo, tool switches, eraser/lasso start, viewport change,
+  // unmount) that need `data` to actually contain the buffered strokes.
+  const wetStrokes       = useRef<InkStrokeBlock[]>([]);
+  const wetFlushTimer    = useRef(0);
+  // Set by flushWetStrokes, consumed by the useLayoutEffect below — the wet
+  // strokes stay painted on the preview canvas (their finished, final look)
+  // until the SVG has them too, so the swap is invisible.
+  const wetClearPending  = useRef(false);
 
   const touchStartRef    = useRef<{ dist: number; midX: number; midY: number } | null>(null);
   // Two/three-finger tap → undo/redo, tracked independently of the pinch
@@ -2536,6 +2620,48 @@ export function CanvasEditor({ content, onChange, nodeId }: Props) {
     return () => clearTimeout(t);
   }, [data]);
 
+  // A stroke can still be sitting unflushed in wetStrokes when this component
+  // unmounts (closing/switching away from this canvas within 250ms of the
+  // last pen-up) — the 300ms save-debounce above only ever sees `data`, and
+  // `data` never had the wet strokes. Bypass setData (the component is
+  // dying, nothing will render the result).
+  //
+  // This must NOT route through onChange. onChange is EditorPane's
+  // setContent, closed over whatever `selectedId` is current at the moment
+  // this cleanup actually runs — and since a node switch changes props on
+  // the SAME instance before it unmounts... except it no longer does: every
+  // caller now keys CanvasEditor by node id (EditorPane, WorkbookEditor), so
+  // a "different node" is always a fresh mount, never a prop change on this
+  // one, and this cleanup only ever runs for a genuine unmount of the node
+  // it was created for. Save straight to that node instead, via the same
+  // save queue every other write uses (single-flight per id, so this can't
+  // race a save already in flight for the SAME node) — bypassing onChange
+  // closes off the old hazard structurally rather than by timing. nodeId
+  // can't change under a mounted instance (see nodeIdRef's comment above)
+  // but is still read through the ref rather than the captured prop, on the
+  // general principle that a cleanup should never trust a render-time
+  // closure for anything that matters. onChangeRef is kept only as the
+  // fallback for a CanvasEditor mounted without a nodeId at all.
+  useEffect(() => {
+    return () => {
+      if (!wetStrokes.current.length) return;
+      const merged = { ...dataRef.current, blocks: [...dataRef.current.blocks, ...wetStrokes.current] };
+      wetStrokes.current = [];
+      const json = serializeData(merged);
+      const id = nodeIdRef.current;
+      if (id) {
+        // Fire-and-forget: the component is already gone, nothing here can
+        // await. api.saveContent's queue (lib/saveQueue.ts) retries on
+        // failure with exponential backoff up to 6 attempts before giving up
+        // silently — the same best-effort guarantee every other save in this
+        // app already has, not a new weaker path for this one.
+        api.saveContent(id, json).catch(() => {});
+      } else {
+        onChangeRef.current(json);
+      }
+    };
+  }, []);
+
   // Content bounds for navigation panels
   const contentBounds = useMemo(() => getContentBounds(data.blocks), [data.blocks]);
 
@@ -2554,6 +2680,12 @@ export function CanvasEditor({ content, onChange, nodeId }: Props) {
     if (!el) return;
     const handler = (e: WheelEvent) => {
       e.preventDefault();
+      // Wet strokes are painted screen-space from the viewport at the moment
+      // they were drawn — a pan/zoom before flush would leave them stuck at
+      // the old projection. Guarded (not an unconditional flushWetStrokes()
+      // call) since wheel fires on every tick of a trackpad gesture and the
+      // buffer is empty the overwhelming majority of the time.
+      if (wetStrokes.current.length) flushWetStrokes();
       if (e.ctrlKey || e.shiftKey) {
         const rect = el.getBoundingClientRect();
         const mx = e.clientX - rect.left;
@@ -2598,6 +2730,50 @@ export function CanvasEditor({ content, onChange, nodeId }: Props) {
     if (!canvas || !ctx) return;
     ctx.clearRect(0, 0, canvas.clientWidth, canvas.clientHeight);
     const vp = viewportRef.current;
+
+    // ── Wet strokes ── finished pen/highlighter strokes buffered in
+    // wetStrokes (see flushWetStrokes) but not yet in `data` / the SVG ink
+    // layer. Painted in the SAME geometry their committed SVG form will use
+    // (inkOutline(..., last: true) for pen, stroked centerline for
+    // highlighter) so there is no visible change when the stroke hops from
+    // here to the SVG on flush — same pixels, same paint (the clear-after-
+    // render useLayoutEffect below wipes this canvas in the same frame the
+    // SVG picks the strokes up).
+    for (const ws of wetStrokes.current) {
+      if (ws.nib === "highlighter") {
+        const hlPts = ws.points.map(p => ({ x: p.x * vp.zoom + vp.x, y: p.y * vp.zoom + vp.y }));
+        if (hlPts.length >= 2) {
+          ctx.strokeStyle = ws.color;
+          ctx.lineWidth = ws.strokeWidth * vp.zoom;
+          ctx.lineCap = "butt";
+          ctx.lineJoin = "round";
+          ctx.globalAlpha = 0.45;
+          ctx.globalCompositeOperation = "multiply";
+          ctx.beginPath();
+          ctx.moveTo(hlPts[0].x, hlPts[0].y);
+          for (let i = 1; i < hlPts.length; i++) ctx.lineTo(hlPts[i].x, hlPts[i].y);
+          ctx.stroke();
+          ctx.globalAlpha = 1;
+          ctx.globalCompositeOperation = "source-over";
+        }
+      } else {
+        const outline = inkOutline(ws.points, ws.strokeWidth, true);
+        if (outline.length >= 4) {
+          const pts = outline.map(([x, y]) => ({ x: x * vp.zoom + vp.x, y: y * vp.zoom + vp.y }));
+          ctx.fillStyle = ws.color;
+          ctx.beginPath();
+          ctx.moveTo(pts[0].x, pts[0].y);
+          for (let i = 0; i < pts.length; i++) {
+            const p0 = pts[i];
+            const p1 = pts[(i + 1) % pts.length];
+            ctx.quadraticCurveTo(p0.x, p0.y, (p0.x + p1.x) / 2, (p0.y + p1.y) / 2);
+          }
+          ctx.closePath();
+          ctx.fill();
+        }
+      }
+    }
+
     const raw = inkActive.current;
     // Pressure-tapered fill, same geometry as the committed stroke's outline
     // (inkOutline/outlineToPath) so there's no visible "pop" on commit beyond
@@ -2720,6 +2896,22 @@ export function CanvasEditor({ content, onChange, nodeId }: Props) {
     if (!inkRafId.current) inkRafId.current = requestAnimationFrame(drawInkPreview);
   }
 
+  // flushWetStrokes' setData lands the wet strokes in `data` (and so in the
+  // SVG ink layer, once inkStrokePaths' useMemo picks up the new
+  // data.blocks) some render after the flush call. The wet strokes must stay
+  // painted on the preview canvas until that render actually commits, or
+  // there's a blank gap between "wet canvas cleared" and "SVG shows the
+  // strokes." useLayoutEffect (not useEffect) fires synchronously after the
+  // commit but before the browser paints, so the canvas wipe below and the
+  // SVG's first paint of the flushed strokes land in the SAME frame.
+  useLayoutEffect(() => {
+    if (wetClearPending.current) {
+      wetClearPending.current = false;
+      scheduleInkDraw();
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [data.blocks]);
+
   // Fired by the 600ms hold timer armed in onBgPointerDown/onPointerMove. A
   // truly still pen emits no pointermove events at all, which is why this
   // runs off a timeout rather than being polled. Guarded against the stroke
@@ -2800,7 +2992,38 @@ export function CanvasEditor({ content, onChange, nodeId }: Props) {
     redoStack.current = [];
   }
 
+  // Drains wetStrokes into ONE setData, with one undo entry PER stroke —
+  // preserving the granularity a per-stroke pushUndo+setData used to give,
+  // just deferred off the pen-up's hot path. `base` walks forward through
+  // the buffered strokes so each pushed snapshot is "the doc right before
+  // this particular stroke," which is what makes a single undo immediately
+  // after a fast-flush (see the doUndo/doRedo callers below) remove only the
+  // most recent stroke rather than the whole batch.
+  function flushWetStrokes() {
+    if (wetFlushTimer.current) { clearTimeout(wetFlushTimer.current); wetFlushTimer.current = 0; }
+    const wet = wetStrokes.current;
+    if (!wet.length) return;
+    wetStrokes.current = [];
+    let base = snapshotData();
+    for (const s of wet) {
+      pushUndo(base);
+      base = { blocks: [...base.blocks, s], arrows: base.arrows };
+    }
+    // Anticipate the commit on dataRef before setData's updater actually
+    // runs — a gesture armed synchronously right after this call (eraser,
+    // lasso) reads dataRef/snapshotData for its own working doc, and without
+    // this it would be one render behind and miss the strokes just flushed
+    // (same lag eraseGesture.doc and inkSelectionBbox already guard against
+    // elsewhere). setData's updater still appends to whatever `d` React
+    // actually holds, so this can't cause a double-append.
+    const merged = { ...dataRef.current, blocks: [...dataRef.current.blocks, ...wet] };
+    setData(d => ({ ...d, blocks: [...d.blocks, ...wet] }));
+    dataRef.current = merged;
+    wetClearPending.current = true;
+  }
+
   function doUndo() {
+    flushWetStrokes();
     if (undoStack.current.length === 0) return;
     const prev = undoStack.current[undoStack.current.length - 1];
     redoStack.current = [snapshotData(), ...redoStack.current.slice(0, 49)];
@@ -2810,6 +3033,7 @@ export function CanvasEditor({ content, onChange, nodeId }: Props) {
   }
 
   function doRedo() {
+    flushWetStrokes();
     if (redoStack.current.length === 0) return;
     const next = redoStack.current[0];
     undoStack.current = [...undoStack.current.slice(-49), snapshotData()];
@@ -2821,6 +3045,7 @@ export function CanvasEditor({ content, onChange, nodeId }: Props) {
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
       if (e.key === "Escape") {
+        flushWetStrokes();
         setContextMenu(null);
         setPendingArrow(null);
         setPreviewPos(null);
@@ -3168,9 +3393,14 @@ export function CanvasEditor({ content, onChange, nodeId }: Props) {
   // Switching ink tool (or leaving ink mode — see the toggle button below)
   // must not strand an in-progress lasso/drag/scale from the previous tool.
   function selectInkTool(t: "pen" | "highlighter" | "eraser" | "lasso") {
+    flushWetStrokes();
     inkLasso.current = null;
     inkSelDrag.current = null;
     inkSelScale.current = null;
+    // Eagerly, not just via the render-time mirror: a pointerdown arriving
+    // before React re-renders (fast pen after a tool tap, or any programmatic
+    // switch-then-dispatch) must route by the NEW tool, not a stale ref.
+    inkToolRef.current = t;
     setInkTool(t);
   }
 
@@ -3216,6 +3446,11 @@ export function CanvasEditor({ content, onChange, nodeId }: Props) {
       const wx = (e.clientX - rect.left - vp.x) / vp.zoom;
       const wy = (e.clientY - rect.top  - vp.y) / vp.zoom;
       if (inkToolRef.current === "eraser") {
+        // The gesture's working doc is snapshotData() taken right here — any
+        // stroke still sitting in wetStrokes would otherwise be invisible to
+        // the eraser (and to the pointer-up lasso selection below) until the
+        // next flush.
+        flushWetStrokes();
         activePenId.current = e.pointerId;
         const preErase = snapshotData();
         eraseGesture.current = { snapshot: preErase, erased: false, doc: preErase };
@@ -3225,6 +3460,7 @@ export function CanvasEditor({ content, onChange, nodeId }: Props) {
         return;
       }
       if (inkToolRef.current === "lasso") {
+        flushWetStrokes();
         activePenId.current = e.pointerId;
         const curIds = selectedIdsRef.current;
         const bbox = curIds.size > 0 ? inkSelectionBbox(curIds) : null;
@@ -3421,7 +3657,14 @@ export function CanvasEditor({ content, onChange, nodeId }: Props) {
     setSelectedId(b.id); setSelectedIds(new Set([b.id])); setSelectedArrowId(null);
     dragDrawArrow.current = { id: b.id, mode: which, mx: e.clientX, my: e.clientY, ox: b.x, oy: b.y, ox2: b.x2, oy2: b.y2 };
   }
-  function onInkStrokePointerDown(e: React.PointerEvent, ib: InkStrokeBlock) {
+  // useCallback([]) so InkStrokeG's memo actually bails — a plain function
+  // here would be a fresh reference every render, which defeats the memo on
+  // every one of the N unchanged strokes just as surely as an unmemoized
+  // path array would. Safe with empty deps: every read below goes through a
+  // ref (inkModeRef, preDrawSnapshot, dragDrawShape), a param (e, ib), or a
+  // stable setState setter — same pattern as onHeaderPointerDown/
+  // onResizePointerDown/onPortPointerDown above.
+  const onInkStrokePointerDown = useCallback((e: React.PointerEvent, ib: InkStrokeBlock) => {
     if (inkModeRef.current && e.pointerType === "pen") return;
     e.stopPropagation();
     preDrawSnapshot.current = snapshotData();
@@ -3432,7 +3675,7 @@ export function CanvasEditor({ content, onChange, nodeId }: Props) {
       id: ib.id, mx: e.clientX, my: e.clientY, ox: ib.x, oy: ib.y,
       opts: ib.points.map(p => ({ ...p })),
     };
-  }
+  }, []);
   function onDrawShapePointerDown(e: React.PointerEvent, b: DrawEllipseBlock | DrawPolygonBlock) {
     e.stopPropagation();
     preDrawSnapshot.current = snapshotData();
@@ -3731,7 +3974,10 @@ export function CanvasEditor({ content, onChange, nodeId }: Props) {
       if (shape) {
         // Draw-and-hold snap: commit the idealized shape instead of the
         // buffered ink stroke, carrying the pen's own color/width the same
-        // way a manually-drawn shape carries its style.
+        // way a manually-drawn shape carries its style. Committed
+        // immediately (not wet-buffered) — the snap is rare, and the result
+        // is a draw_polygon/draw_ellipse block that only the SVG layer
+        // knows how to render, so there's no wet-canvas form for it anyway.
         pushUndo();
         const style = { color: penColorRef.current, strokeWidth: inkWidthRef.current };
         const block =
@@ -3739,6 +3985,7 @@ export function CanvasEditor({ content, onChange, nodeId }: Props) {
           shape.kind === "polygon" ? { ...mkDrawPolygon(shape.points, true), ...style } :
                                       { ...mkDrawEllipse(shape.x, shape.y, shape.w, shape.h), ...style };
         setData(d => ({ ...d, blocks: [...d.blocks, block] }));
+        clearInkPreview();
       } else {
         const raw = inkActive.current;
         if (raw.length >= 2) {
@@ -3753,14 +4000,24 @@ export function CanvasEditor({ content, onChange, nodeId }: Props) {
             const bh = Math.max(...ys) - Math.min(...ys);
             if (bw >= bh * 8 || bh >= bw * 8) pts = [pts[0], pts[pts.length - 1]];
           }
-          pushUndo();
-          setData(d => ({ ...d, blocks: [...d.blocks, mkInkStroke(pts, color, width, isHighlighter ? "highlighter" : undefined)] }));
+          // Wet-ink buffer (see flushWetStrokes) — no pushUndo/setData here.
+          // The finished stroke is handed to drawInkPreview instead, which
+          // paints it in its exact final look; scheduleInkDraw below puts it
+          // on screen this frame, same as the SVG would have. NOT
+          // clearInkPreview() — the wet stroke must stay visible until the
+          // flush effect wipes it in the same paint the SVG picks it up.
+          wetStrokes.current.push(mkInkStroke(pts, color, width, isHighlighter ? "highlighter" : undefined));
+          if (wetFlushTimer.current) clearTimeout(wetFlushTimer.current);
+          wetFlushTimer.current = window.setTimeout(flushWetStrokes, 250);
+          scheduleInkDraw();
+        } else {
+          // Too short to commit (a tap, effectively) — nothing to keep wet.
+          clearInkPreview();
         }
       }
       snapShape.current = null;
       inkActive.current = null;
       activePenId.current = null;
-      clearInkPreview();
       releaseCapture();
       return;
     }
@@ -3922,6 +4179,10 @@ export function CanvasEditor({ content, onChange, nodeId }: Props) {
     }
     if (e.touches.length !== 2 || !touchStartRef.current) return;
     e.preventDefault();
+    // Same reasoning as the wheel handler's guard: wet strokes are painted
+    // from a fixed screen-space projection of the viewport at draw time, so
+    // a pinch that moves the viewport before flush would leave them behind.
+    if (wetStrokes.current.length) flushWetStrokes();
     const [t0, t1] = [e.touches[0], e.touches[1]];
     const dist = Math.hypot(t1.clientX - t0.clientX, t1.clientY - t0.clientY);
     const midX = (t0.clientX + t1.clientX) / 2;
@@ -4227,7 +4488,7 @@ export function CanvasEditor({ content, onChange, nodeId }: Props) {
         <button
           className={`canvas-tool-btn${buildMode ? " canvas-tool-active" : ""}`}
           title="Build Mode — click canvas to create shapes; click node to make active; Shift+click node to connect from active"
-          onClick={() => { setBuildMode(m => !m); setTool("pan"); setOpenMenu(null); setInkMode(false); setInkPopover(false); inkActive.current = null; activePenId.current = null; if (snapHold.current) { clearTimeout(snapHold.current.timer); snapHold.current = null; } snapShape.current = null; clearInkPreview(); }}
+          onClick={() => { flushWetStrokes(); setBuildMode(m => !m); setTool("pan"); setOpenMenu(null); setInkMode(false); setInkPopover(false); inkActive.current = null; activePenId.current = null; if (snapHold.current) { clearTimeout(snapHold.current.timer); snapHold.current = null; } snapShape.current = null; clearInkPreview(); }}
         >⊕ Build</button>
 
         {/* Ink / Draw mode toggle */}
@@ -4235,6 +4496,7 @@ export function CanvasEditor({ content, onChange, nodeId }: Props) {
           className={`canvas-tool-btn${inkMode ? " canvas-tool-active" : ""}`}
           title="Ink Mode — Apple Pencil draws freely anywhere; single-finger touch suppressed; two-finger pan/zoom still works"
           onClick={() => {
+            flushWetStrokes();
             const next = !inkMode;
             setInkMode(next);
             if (next) {
@@ -4629,38 +4891,9 @@ export function CanvasEditor({ content, onChange, nodeId }: Props) {
           {/* ── Ink strokes ──────────────────────────────────────────── */}
           {inkStrokePaths.map(({ block: ib, d, hitD, filled }) => {
             const sel = selectedId === ib.id || selectedIds.has(ib.id);
-            if (!d) return null;
             return (
-              <g key={ib.id}>
-                {/* Hit area is sized in screen pixels (divided by zoom) so a
-                    finger can still grab a thin stroke at low zoom on iPad.
-                    Always the centerline path, even for filled/outline strokes. */}
-                <path d={hitD} fill="none" stroke="transparent"
-                  strokeWidth={Math.max(ib.strokeWidth + 8, 22 / zoom)}
-                  pointerEvents="stroke" style={{ cursor: "move" }}
-                  onPointerDown={e => onInkStrokePointerDown(e, ib)} />
-                {filled ? (
-                  <path d={d} fill={ib.color} fillRule="nonzero" pointerEvents="none" />
-                ) : ib.nib === "highlighter" ? (
-                  <path d={d} fill="none" stroke={ib.color}
-                    strokeWidth={sel ? ib.strokeWidth + 1 : ib.strokeWidth}
-                    strokeLinecap="butt" strokeLinejoin="round"
-                    pointerEvents="none" opacity={0.45}
-                    style={{ mixBlendMode: "multiply" }} />
-                ) : (
-                  <path d={d} fill="none" stroke={ib.color}
-                    strokeWidth={sel ? ib.strokeWidth + 1 : ib.strokeWidth}
-                    strokeLinecap="round" strokeLinejoin="round"
-                    pointerEvents="none" />
-                )}
-                {sel && (
-                  <rect x={ib.x - 4} y={ib.y - 4}
-                    width={ib.width + 8} height={ib.height + 8}
-                    fill="none" stroke="var(--border-strong)"
-                    strokeWidth={1} strokeDasharray="4 3" rx={2}
-                    pointerEvents="none" />
-                )}
-              </g>
+              <InkStrokeG key={ib.id} block={ib} d={d} hitD={hitD} filled={filled} sel={sel}
+                zoom={zoom} onPointerDownStroke={onInkStrokePointerDown} />
             );
           })}
 
