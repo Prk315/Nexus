@@ -167,6 +167,7 @@ import { ChallengeSession } from "./ChallengeSession";
 import { SocraticSession } from "./SocraticSession";
 import { AggregateTestSession } from "./AggregateTestSession";
 import { collectUnitMcqs } from "./aggregateTest";
+import { ReferencePanel } from "./ReferencePanel";
 
 /** Node renders only above this many derived items (LEARN_PLAN.md's pinned
  * charter) — below it, a "Samlet prøve" would be a near-empty quiz. */
@@ -413,6 +414,17 @@ export function PathPanel() {
 
   const total = path?.length ?? 0;
 
+  // Units whose theory the reference library may show — everything not
+  // locked. Locked units' statements would spoil upcoming material; see
+  // ReferencePanel's file-header note #4.
+  const unlockedUnitIds = useMemo(() => {
+    const ids = new Set<number>();
+    for (const [unitId, status] of statusByUnit) {
+      if (status === "available" || status === "in_progress" || status === "mastered") ids.add(unitId);
+    }
+    return ids;
+  }, [statusByUnit]);
+
   const chapters = useMemo(() => {
     if (!path) return [] as Array<[string, PathUnit[]]>;
     const sorted = [...path].sort((a, b) => a.unit.idx - b.unit.idx);
@@ -572,6 +584,11 @@ export function PathPanel() {
               )}
             </div>
           </div>
+
+          {/* Formelsamling — fixed-position button + drawer, so its JSX slot
+              is irrelevant visually; it derives everything from state this
+              component already loads (see ReferencePanel's header note). */}
+          <ReferencePanel path={path} contentByUnit={contentByUnit} unlockedUnitIds={unlockedUnitIds} />
 
           <div ref={listRef} className="relative flex flex-col md:mt-1">
             <div className="pointer-events-none absolute left-[14px] top-0 bottom-0 w-px bg-black/[0.08]" />
