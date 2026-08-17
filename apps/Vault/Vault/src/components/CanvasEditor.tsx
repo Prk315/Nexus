@@ -48,7 +48,7 @@ interface MolDrawBlock   extends BaseBlock { type: "mol_draw"; atoms: MolAtom[];
 interface DrawArrowBlock  extends BaseBlock { type: "draw_arrow";   x2: number; y2: number; color: string; strokeWidth: number; dashed: boolean; headEnd: boolean; headStart: boolean; }
 interface DrawEllipseBlock extends BaseBlock { type: "draw_ellipse"; color: string; fill: string; strokeWidth: number; dashed: boolean; }
 interface DrawPolygonBlock extends BaseBlock { type: "draw_polygon"; points: { x: number; y: number }[]; closed: boolean; color: string; fill: string; strokeWidth: number; dashed: boolean; }
-interface InkStrokeBlock  extends BaseBlock { type: "ink_stroke";  points: { x: number; y: number }[]; color: string; strokeWidth: number; }
+interface InkStrokeBlock  extends BaseBlock { type: "ink_stroke";  points: { x: number; y: number; p?: number }[]; color: string; strokeWidth: number; }
 
 type CanvasBlock = TextBlock | StickyBlock | TitleBlock | DividerBlock | TableBlock | MathBlock
                 | ChecklistBlock | KanbanBlock | ShapeBlock | FrameBlock | CodeCellBlock | HtmlBlock | ImageBlock
@@ -97,6 +97,20 @@ function migrateBlock(b: any): CanvasBlock {
     if (b.output != null) outputs.push({ type: b.outputType ?? "text", content: b.output });
     return { ...b, outputs, running: false, language: b.language ?? "python" } as CodeCellBlock;
   }
+  // Migrate ink_stroke blocks saved in compact v2 flat-array format (pts) back
+  // into runtime object-array form (points). Legacy (v1) blocks already have
+  // `points` as an array of {x,y} objects and pass through unchanged.
+  if (b.type === "ink_stroke" && Array.isArray(b.pts)) {
+    const flat: number[] = b.pts;
+    const points: { x: number; y: number; p?: number }[] = [];
+    const tripleCount = Math.floor(flat.length / 3);
+    for (let i = 0; i < tripleCount; i++) {
+      const base = i * 3;
+      points.push({ x: flat[base], y: flat[base + 1], p: flat[base + 2] });
+    }
+    const { pts, v, ...rest } = b;
+    return { ...rest, points } as InkStrokeBlock;
+  }
   return b as CanvasBlock;
 }
 
@@ -108,6 +122,20 @@ function parseData(raw: string): CanvasData {
       return { blocks: d.blocks.map(migrateBlock), arrows: Array.isArray(d.arrows) ? d.arrows : [] };
   } catch { /* fall through */ }
   return { blocks: [], arrows: [] };
+}
+
+function serializeData(d: CanvasData): string {
+  const blocks = d.blocks.map((b) => {
+    if (b.type !== "ink_stroke") return b;
+    const round2 = (n: number) => Math.round(n * 100) / 100;
+    const pts: number[] = [];
+    for (const pt of b.points) {
+      pts.push(round2(pt.x), round2(pt.y), Math.round((pt.p ?? 0.5) * 1000) / 1000);
+    }
+    const { points, ...rest } = b;
+    return { ...rest, x: round2(b.x), y: round2(b.y), width: round2(b.width), height: round2(b.height), v: 2, pts };
+  });
+  return JSON.stringify({ blocks, arrows: d.arrows });
 }
 
 const uid = () => crypto.randomUUID();
@@ -199,12 +227,36 @@ function pointsToSmoothPath(pts: { x: number; y: number }[]): string {
   d += ` L ${last.x} ${last.y}`;
   return d;
 }
-function mkInkStroke(points: { x: number; y: number }[], color: string, strokeWidth: number): InkStrokeBlock {
+function mkInkStroke(points: { x: number; y: number; p?: number }[], color: string, strokeWidth: number): InkStrokeBlock {
   const xs = points.map(p => p.x), ys = points.map(p => p.y);
   const bx = Math.min(...xs), by = Math.min(...ys);
   return { id: uid(), type: "ink_stroke", x: bx, y: by,
     width: Math.max(...xs) - bx || 1, height: Math.max(...ys) - by || 1,
     points, color, strokeWidth };
+}
+// Safari reports real Apple Pencil pressure; mice report a constant 0.5.
+// Keep the raw value — "no pressure" detection happens at render time.
+function pressureOf(e: { pressure: number }): number | undefined {
+  return e.pressure > 0 ? e.pressure : undefined;
+}
+function rdpPerpDist(pt: { x: number; y: number }, a: { x: number; y: number }, b: { x: number; y: number }): number {
+  const dx = b.x - a.x, dy = b.y - a.y;
+  const len = Math.hypot(dx, dy);
+  if (len === 0) return Math.hypot(pt.x - a.x, pt.y - a.y);
+  return Math.abs(dy * pt.x - dx * pt.y + b.x * a.y - b.y * a.x) / len;
+}
+function rdpSimplify(points: { x: number; y: number; p?: number }[], epsilon: number): { x: number; y: number; p?: number }[] {
+  if (points.length <= 2) return points;
+  const first = points[0], last = points[points.length - 1];
+  let maxDist = 0, idx = 0;
+  for (let i = 1; i < points.length - 1; i++) {
+    const d = rdpPerpDist(points[i], first, last);
+    if (d > maxDist) { maxDist = d; idx = i; }
+  }
+  if (maxDist <= epsilon) return [first, last];
+  const left = rdpSimplify(points.slice(0, idx + 1), epsilon);
+  const right = rdpSimplify(points.slice(idx), epsilon);
+  return [...left.slice(0, -1), ...right];
 }
 
 function mkSimpleGrid(x: number, y: number): GridBlockData {
@@ -1734,9 +1786,20 @@ export function CanvasEditor({ content, onChange, nodeId }: Props) {
   const inkModeRef       = useRef(inkMode);
   inkModeRef.current     = inkMode;
   const [inkColor,       setInkColor]       = useState(DRAW_COLORS[0]);
+  const inkColorRef      = useRef(inkColor);
+  inkColorRef.current    = inkColor;
   const [inkWidth,       setInkWidth]       = useState(2.5);
-  const inkActive        = useRef<{ x: number; y: number }[] | null>(null);
-  const [inkPreview,     setInkPreview]     = useState<string | null>(null);
+  const inkWidthRef      = useRef(inkWidth);
+  inkWidthRef.current    = inkWidth;
+  const inkActive        = useRef<{ x: number; y: number; p?: number }[] | null>(null);
+  const activePenId      = useRef<number | null>(null);
+  // Predicted-tail points (preview-only, never committed) for the in-progress
+  // stroke, plus the imperative <canvas> overlay that replaces the old
+  // inkPreview React state — a full reconcile per pointermove sample
+  // visibly lagged the Pencil on long strokes.
+  const inkPredicted     = useRef<{ x: number; y: number }[]>([]);
+  const inkCanvasRef     = useRef<HTMLCanvasElement | null>(null);
+  const inkRafId         = useRef(0);
   const dataRef          = useRef(data);
   dataRef.current        = data;
   const lastSaved        = useRef(content);
@@ -1759,7 +1822,7 @@ export function CanvasEditor({ content, onChange, nodeId }: Props) {
 
   useEffect(() => {
     const t = setTimeout(() => {
-      const json = JSON.stringify(data);
+      const json = serializeData(data);
       lastSaved.current = json;
       onChange(json);
     }, 300);
@@ -1803,6 +1866,79 @@ export function CanvasEditor({ content, onChange, nodeId }: Props) {
     el.addEventListener("wheel", handler, { passive: false });
     return () => el.removeEventListener("wheel", handler);
   }, []);
+
+  // ── Ink live-preview canvas ─────────────────────────────────────────────────
+  // Imperative <canvas> overlay for the in-progress stroke. Screen-space (it
+  // sits outside the scaled .canvas-world), so world points are projected
+  // through the viewport and stroke width is scaled by zoom manually — the
+  // committed stroke lives inside .canvas-world and gets that scaling for
+  // free from the CSS transform.
+
+  function clearInkPreview() {
+    if (inkRafId.current) { cancelAnimationFrame(inkRafId.current); inkRafId.current = 0; }
+    inkPredicted.current = [];
+    const canvas = inkCanvasRef.current;
+    if (!canvas) return;
+    const ctx = canvas.getContext("2d");
+    ctx?.clearRect(0, 0, canvas.clientWidth, canvas.clientHeight);
+  }
+
+  function drawInkPreview() {
+    inkRafId.current = 0;
+    const canvas = inkCanvasRef.current;
+    const ctx = canvas?.getContext("2d");
+    if (!canvas || !ctx) return;
+    ctx.clearRect(0, 0, canvas.clientWidth, canvas.clientHeight);
+    const raw = inkActive.current;
+    if (!raw || raw.length === 0) return;
+    const vp = viewportRef.current;
+    const pts = raw.concat(inkPredicted.current)
+      .map(p => ({ x: p.x * vp.zoom + vp.x, y: p.y * vp.zoom + vp.y }));
+    ctx.strokeStyle = inkColorRef.current;
+    ctx.lineWidth = inkWidthRef.current * vp.zoom;
+    ctx.lineCap = "round";
+    ctx.lineJoin = "round";
+    ctx.beginPath();
+    ctx.moveTo(pts[0].x, pts[0].y);
+    // Same quadratic-midpoint smoothing shape as pointsToSmoothPath, just
+    // drawn with canvas calls instead of an SVG path string.
+    for (let i = 0; i < pts.length - 1; i++) {
+      const mx = (pts[i].x + pts[i + 1].x) / 2;
+      const my = (pts[i].y + pts[i + 1].y) / 2;
+      ctx.quadraticCurveTo(pts[i].x, pts[i].y, mx, my);
+    }
+    const last = pts[pts.length - 1];
+    ctx.lineTo(last.x, last.y);
+    ctx.stroke();
+  }
+
+  function scheduleInkDraw() {
+    if (!inkRafId.current) inkRafId.current = requestAnimationFrame(drawInkPreview);
+  }
+
+  // Size the backing store to the element's CSS box × devicePixelRatio so
+  // strokes stay crisp, and keep it sized across layout changes. A resize
+  // wipes the canvas — acceptable, since drawInkPreview repaints the
+  // in-progress stroke from inkActive on the next frame.
+  useEffect(() => {
+    if (!inkMode) return;
+    const canvas = inkCanvasRef.current;
+    if (!canvas) return;
+    const resize = () => {
+      const dpr = window.devicePixelRatio || 1;
+      canvas.width  = Math.max(1, Math.round(canvas.clientWidth  * dpr));
+      canvas.height = Math.max(1, Math.round(canvas.clientHeight * dpr));
+      const ctx = canvas.getContext("2d");
+      ctx?.setTransform(dpr, 0, 0, dpr, 0, 0);
+    };
+    resize();
+    const ro = new ResizeObserver(resize);
+    ro.observe(canvas);
+    return () => {
+      ro.disconnect();
+      clearInkPreview();
+    };
+  }, [inkMode]);
 
   // ── Copy / Paste ─────────────────────────────────────────────────────────────
 
@@ -1864,7 +2000,8 @@ export function CanvasEditor({ content, onChange, nodeId }: Props) {
         setDrawCurrent(null);
         setPolygonPts([]);
         inkActive.current = null;
-        setInkPreview(null);
+        activePenId.current = null;
+        clearInkPreview();
         if (selectedIdsRef.current.size > 1) { setSelectedIds(new Set()); setSelectedId(null); }
         return;
       }
@@ -2068,25 +2205,32 @@ export function CanvasEditor({ content, onChange, nodeId }: Props) {
   // ── Pointer handlers ────────────────────────────────────────────────────────
 
   function onBgPointerDown(e: React.PointerEvent) {
+    // A pen is never a palm: a palm touching down first steals isPrimary,
+    // and gating on it would silently discard the pen stroke. Route the
+    // pen before the isPrimary check; every other pointer type keeps it.
+    if (inkModeRef.current && e.pointerType === "pen") {
+      if (activePenId.current !== null) return; // one pen stroke at a time
+      // Backstop to the ink capture layer: kills the compatibility mouse
+      // events, so the Pencil can never drop a caret or start a text
+      // selection even if it lands on something interactive.
+      e.preventDefault();
+      e.currentTarget.setPointerCapture(e.pointerId);
+      setOpenMenu(null);
+      activePenId.current = e.pointerId;
+      const rect = containerRef.current!.getBoundingClientRect();
+      const vp = viewportRef.current;
+      const cx = (e.clientX - rect.left - vp.x) / vp.zoom;
+      const cy = (e.clientY - rect.top  - vp.y) / vp.zoom;
+      inkActive.current = [{ x: cx, y: cy, p: pressureOf(e) }];
+      scheduleInkDraw();
+      return;
+    }
     if (!e.isPrimary) return;
     e.currentTarget.setPointerCapture(e.pointerId);
     setOpenMenu(null);
     // ── Ink mode routing ──
     if (inkModeRef.current) {
       if (e.pointerType === "touch") return; // suppress single-finger touch
-      if (e.pointerType === "pen") {
-        // Backstop to the ink capture layer: kills the compatibility mouse
-        // events, so the Pencil can never drop a caret or start a text
-        // selection even if it lands on something interactive.
-        e.preventDefault();
-        const rect = containerRef.current!.getBoundingClientRect();
-        const vp = viewportRef.current;
-        const cx = (e.clientX - rect.left - vp.x) / vp.zoom;
-        const cy = (e.clientY - rect.top  - vp.y) / vp.zoom;
-        inkActive.current = [{ x: cx, y: cy }];
-        setInkPreview(pointsToSmoothPath([{ x: cx, y: cy }]));
-        return;
-      }
       // mouse: fall through to normal pan/lasso
     }
     if (pendingRef.current) { setPendingArrow(null); setPreviewPos(null); return; }
@@ -2255,12 +2399,29 @@ export function CanvasEditor({ content, onChange, nodeId }: Props) {
   function onPointerMove(e: React.PointerEvent) {
     const vp = viewportRef.current;
     // ── Ink mode: accumulate pen points ──
-    if (inkModeRef.current && e.pointerType === "pen" && inkActive.current) {
+    if (inkModeRef.current && e.pointerType === "pen" && inkActive.current && e.pointerId === activePenId.current) {
       const rect = containerRef.current!.getBoundingClientRect();
-      const cx = (e.clientX - rect.left - vp.x) / vp.zoom;
-      const cy = (e.clientY - rect.top  - vp.y) / vp.zoom;
-      inkActive.current.push({ x: cx, y: cy });
-      setInkPreview(pointsToSmoothPath(inkActive.current));
+      // getCoalescedEvents() surfaces every sample the OS batched between
+      // frames — without it fast strokes lose points and look faceted. It
+      // legitimately returns [] for untrusted events (and defensively may
+      // elsewhere) — an empty list must still yield the parent event.
+      const native = e.nativeEvent as PointerEvent;
+      const coalesced = native.getCoalescedEvents?.();
+      const events = coalesced && coalesced.length ? coalesced : [native];
+      for (const ev of events) {
+        const cx = (ev.clientX - rect.left - vp.x) / vp.zoom;
+        const cy = (ev.clientY - rect.top  - vp.y) / vp.zoom;
+        inkActive.current.push({ x: cx, y: cy, p: pressureOf(ev) });
+      }
+      // Predicted events smooth the tail of a fast stroke in the preview
+      // only — overwritten each move, never pushed into inkActive (the
+      // committed source), so a mispredicted point never enters the stroke.
+      const predicted = native.getPredictedEvents?.() ?? [];
+      inkPredicted.current = predicted.map(ev => ({
+        x: (ev.clientX - rect.left - vp.x) / vp.zoom,
+        y: (ev.clientY - rect.top  - vp.y) / vp.zoom,
+      }));
+      scheduleInkDraw();
       return;
     }
     if (pendingRef.current) {
@@ -2404,15 +2565,25 @@ export function CanvasEditor({ content, onChange, nodeId }: Props) {
   }
 
   function onPointerUp(e?: React.PointerEvent) {
+    // Captures taken in onBgPointerDown were never released anywhere in the
+    // file; release whichever pointer this event belongs to, for every
+    // pointer type, wherever this function returns.
+    const releaseCapture = () => {
+      if (!e) return;
+      try { e.currentTarget.releasePointerCapture(e.pointerId); } catch { /* not captured, or already released */ }
+    };
     // ── Commit ink stroke ──
-    if (inkModeRef.current && e?.pointerType === "pen" && inkActive.current) {
-      const pts = inkActive.current;
-      if (pts.length >= 2) {
+    if (inkModeRef.current && e?.pointerType === "pen" && inkActive.current && e.pointerId === activePenId.current) {
+      const raw = inkActive.current;
+      if (raw.length >= 2) {
+        const pts = rdpSimplify(raw, 0.4 / viewportRef.current.zoom);
         pushUndo();
         setData(d => ({ ...d, blocks: [...d.blocks, mkInkStroke(pts, inkColor, inkWidth)] }));
       }
       inkActive.current = null;
-      setInkPreview(null);
+      activePenId.current = null;
+      clearInkPreview();
+      releaseCapture();
       return;
     }
     if (lassoStart.current) {
@@ -2485,6 +2656,7 @@ export function CanvasEditor({ content, onChange, nodeId }: Props) {
     preDrawSnapshot.current = null; dragDrawArrow.current = null; dragDrawShape.current = null;
     isPanning.current = false; dragBlock.current = null; resizeBlock.current = null; dragDivider.current = null; dragWaypoint.current = null;
     setSnapGuides([]);
+    releaseCapture();
   }
 
   // ── Touch gesture handlers (pinch-to-zoom + two-finger pan) ─────────────────
@@ -3212,7 +3384,11 @@ export function CanvasEditor({ content, onChange, nodeId }: Props) {
           carries no handlers of its own: pointer and touch events bubble to
           the container below, which already routes pen → ink, two fingers →
           pan/zoom, mouse → pan. */}
-      {inkMode && <div className="canvas-ink-layer" />}
+      {inkMode && (
+        <div className="canvas-ink-layer">
+          <canvas ref={inkCanvasRef} className="canvas-ink-preview" />
+        </div>
+      )}
 
       {/* ── Toolbar trigger strip (indicator shown when toolbar is hidden) ── */}
       <div
@@ -3246,7 +3422,7 @@ export function CanvasEditor({ content, onChange, nodeId }: Props) {
         <button
           className={`canvas-tool-btn${buildMode ? " canvas-tool-active" : ""}`}
           title="Build Mode — click canvas to create shapes; click node to make active; Shift+click node to connect from active"
-          onClick={() => { setBuildMode(m => !m); setTool("pan"); setOpenMenu(null); setInkMode(false); inkActive.current = null; setInkPreview(null); }}
+          onClick={() => { setBuildMode(m => !m); setTool("pan"); setOpenMenu(null); setInkMode(false); inkActive.current = null; activePenId.current = null; clearInkPreview(); }}
         >⊕ Build</button>
 
         {/* Ink / Draw mode toggle */}
@@ -3267,7 +3443,8 @@ export function CanvasEditor({ content, onChange, nodeId }: Props) {
               setSelectedId(null); setSelectedIds(new Set()); setSelectedArrowId(null);
             }
             inkActive.current = null;
-            setInkPreview(null);
+            activePenId.current = null;
+            clearInkPreview();
           }}
         >✏ Ink</button>
 
@@ -3613,14 +3790,6 @@ export function CanvasEditor({ content, onChange, nodeId }: Props) {
               </g>
             );
           })}
-
-          {/* ── Ink live preview ─────────────────────────────────────── */}
-          {inkPreview && (
-            <path d={inkPreview} fill="none"
-              stroke={inkColor} strokeWidth={inkWidth}
-              strokeLinecap="round" strokeLinejoin="round"
-              pointerEvents="none" />
-          )}
 
           {/* ── Draw preview (in-progress arrow / ellipse) ────────────── */}
           {drawStart.current && drawCurrent && (() => {

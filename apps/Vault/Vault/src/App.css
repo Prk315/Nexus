@@ -2242,6 +2242,16 @@ body {
   -webkit-touch-callout: none;
 }
 
+/* Imperative preview canvas for the in-progress stroke. Purely visual —
+   pointerEvents stays off so the capture layer above keeps taking the hits. */
+.canvas-ink-preview {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+}
+
 /* Pen settings, shown in the toolbar only while ink mode is on. */
 .ink-palette {
   display: flex;
