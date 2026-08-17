@@ -16,6 +16,7 @@ import katex from "katex";
 import "katex/dist/katex.min.css";
 import SmilesDrawer from 'smiles-drawer';
 import 'katex/contrib/mhchem';
+import { getStroke } from "perfect-freehand";
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 
@@ -226,6 +227,35 @@ function pointsToSmoothPath(pts: { x: number; y: number }[]): string {
   const last = pts[pts.length - 1];
   d += ` L ${last.x} ${last.y}`;
   return d;
+}
+// Pressure-tapered outline for strokes with real per-point pressure data
+// (everything drawn since Phase 1). Legacy strokes (no `p` anywhere) keep
+// rendering as a uniform stroked `pointsToSmoothPath` centerline instead —
+// see the `filled` split at the ink-stroke render/cache sites.
+function inkOutline(points: { x: number; y: number; p?: number }[], strokeWidth: number, last: boolean = true): number[][] {
+  const ps = points.filter(pt => pt.p != null).map(pt => pt.p!);
+  const simulate = ps.length === 0 || ps.every(p => p === ps[0]);
+  return getStroke(points.map(pt => [pt.x, pt.y, pt.p ?? 0.5]), {
+    size: strokeWidth * 2,
+    thinning: 0.6,
+    smoothing: 0.5,
+    streamline: 0.5,
+    simulatePressure: simulate,
+    last,
+  });
+}
+// Canonical perfect-freehand svg-path helper: average-quadratic through
+// consecutive outline points, closed with Z.
+function outlineToPath(outline: number[][]): string {
+  if (outline.length < 4) return "";
+  const r = (n: number) => Math.round(n * 100) / 100;
+  let d = `M ${r(outline[0][0])} ${r(outline[0][1])} Q`;
+  for (let i = 0; i < outline.length; i++) {
+    const [x0, y0] = outline[i];
+    const [x1, y1] = outline[(i + 1) % outline.length];
+    d += ` ${r(x0)} ${r(y0)} ${r((x0 + x1) / 2)} ${r((y0 + y1) / 2)}`;
+  }
+  return d + " Z";
 }
 function mkInkStroke(points: { x: number; y: number; p?: number }[], color: string, strokeWidth: number): InkStrokeBlock {
   const xs = points.map(p => p.x), ys = points.map(p => p.y);
@@ -1892,24 +1922,27 @@ export function CanvasEditor({ content, onChange, nodeId }: Props) {
     const raw = inkActive.current;
     if (!raw || raw.length === 0) return;
     const vp = viewportRef.current;
-    const pts = raw.concat(inkPredicted.current)
-      .map(p => ({ x: p.x * vp.zoom + vp.x, y: p.y * vp.zoom + vp.y }));
-    ctx.strokeStyle = inkColorRef.current;
-    ctx.lineWidth = inkWidthRef.current * vp.zoom;
-    ctx.lineCap = "round";
-    ctx.lineJoin = "round";
+    // Pressure-tapered fill, same geometry as the committed stroke's outline
+    // (inkOutline/outlineToPath) so there's no visible "pop" on commit beyond
+    // the open→closed tip (last: false here vs true once committed). `size`
+    // is in world units — the outline itself is projected world→screen below,
+    // so it picks up zoom scaling from the projection, not from lineWidth.
+    const worldPts = raw.concat(inkPredicted.current.map(p => ({ x: p.x, y: p.y, p: undefined })));
+    const outline = inkOutline(worldPts, inkWidthRef.current, false);
+    if (outline.length < 4) return;
+    const pts = outline.map(([x, y]) => ({ x: x * vp.zoom + vp.x, y: y * vp.zoom + vp.y }));
+    ctx.fillStyle = inkColorRef.current;
     ctx.beginPath();
     ctx.moveTo(pts[0].x, pts[0].y);
-    // Same quadratic-midpoint smoothing shape as pointsToSmoothPath, just
-    // drawn with canvas calls instead of an SVG path string.
-    for (let i = 0; i < pts.length - 1; i++) {
-      const mx = (pts[i].x + pts[i + 1].x) / 2;
-      const my = (pts[i].y + pts[i + 1].y) / 2;
-      ctx.quadraticCurveTo(pts[i].x, pts[i].y, mx, my);
+    // Mirrors outlineToPath's average-quadratic-through-consecutive-points
+    // geometry, drawn with canvas calls instead of an SVG path string.
+    for (let i = 0; i < pts.length; i++) {
+      const p0 = pts[i];
+      const p1 = pts[(i + 1) % pts.length];
+      ctx.quadraticCurveTo(p0.x, p0.y, (p0.x + p1.x) / 2, (p0.y + p1.y) / 2);
     }
-    const last = pts[pts.length - 1];
-    ctx.lineTo(last.x, last.y);
-    ctx.stroke();
+    ctx.closePath();
+    ctx.fill();
   }
 
   function scheduleInkDraw() {
@@ -3079,14 +3112,24 @@ export function CanvasEditor({ content, onChange, nodeId }: Props) {
   // flight the live preview sets state on each pointermove, so without this
   // cache the whole page's ink is re-smoothed dozens of times a second — which
   // is what makes drawing feel sticky on iPad once a canvas has real ink on it.
-  const inkPathCache = useRef(new Map<string, { points: InkStrokeBlock["points"]; d: string }>());
+  const inkPathCache = useRef(new Map<string, { points: InkStrokeBlock["points"]; strokeWidth: number; d: string; hitD: string; filled: boolean }>());
   const inkStrokePaths = useMemo(() => {
-    const next = new Map<string, { points: InkStrokeBlock["points"]; d: string }>();
+    const next = new Map<string, { points: InkStrokeBlock["points"]; strokeWidth: number; d: string; hitD: string; filled: boolean }>();
     const out = inkStrokeBlocks.map(ib => {
       const prev = inkPathCache.current.get(ib.id);
-      const entry = prev && prev.points === ib.points ? prev : { points: ib.points, d: pointsToSmoothPath(ib.points) };
+      const entry = prev && prev.points === ib.points && prev.strokeWidth === ib.strokeWidth
+        ? prev
+        : {
+            points: ib.points,
+            strokeWidth: ib.strokeWidth,
+            hitD: pointsToSmoothPath(ib.points),
+            filled: ib.points.some(pt => pt.p != null),
+            d: ib.points.some(pt => pt.p != null)
+              ? outlineToPath(inkOutline(ib.points, ib.strokeWidth))
+              : pointsToSmoothPath(ib.points),
+          };
       next.set(ib.id, entry);
-      return { block: ib, d: entry.d };
+      return { block: ib, d: entry.d, hitD: entry.hitD, filled: entry.filled };
     });
     inkPathCache.current = next;
     return out;
@@ -3765,21 +3808,26 @@ export function CanvasEditor({ content, onChange, nodeId }: Props) {
           })}
 
           {/* ── Ink strokes ──────────────────────────────────────────── */}
-          {inkStrokePaths.map(({ block: ib, d }) => {
+          {inkStrokePaths.map(({ block: ib, d, hitD, filled }) => {
             const sel = selectedId === ib.id || selectedIds.has(ib.id);
             if (!d) return null;
             return (
               <g key={ib.id}>
                 {/* Hit area is sized in screen pixels (divided by zoom) so a
-                    finger can still grab a thin stroke at low zoom on iPad. */}
-                <path d={d} fill="none" stroke="transparent"
+                    finger can still grab a thin stroke at low zoom on iPad.
+                    Always the centerline path, even for filled/outline strokes. */}
+                <path d={hitD} fill="none" stroke="transparent"
                   strokeWidth={Math.max(ib.strokeWidth + 8, 22 / zoom)}
                   pointerEvents="stroke" style={{ cursor: "move" }}
                   onPointerDown={e => onInkStrokePointerDown(e, ib)} />
-                <path d={d} fill="none" stroke={ib.color}
-                  strokeWidth={sel ? ib.strokeWidth + 1 : ib.strokeWidth}
-                  strokeLinecap="round" strokeLinejoin="round"
-                  pointerEvents="none" />
+                {filled ? (
+                  <path d={d} fill={ib.color} fillRule="nonzero" pointerEvents="none" />
+                ) : (
+                  <path d={d} fill="none" stroke={ib.color}
+                    strokeWidth={sel ? ib.strokeWidth + 1 : ib.strokeWidth}
+                    strokeLinecap="round" strokeLinejoin="round"
+                    pointerEvents="none" />
+                )}
                 {sel && (
                   <rect x={ib.x - 4} y={ib.y - 4}
                     width={ib.width + 8} height={ib.height + 8}
