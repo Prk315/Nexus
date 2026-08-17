@@ -322,6 +322,67 @@ function rdpSimplify(points: { x: number; y: number; p?: number }[], epsilon: nu
   const right = rdpSimplify(points.slice(idx), epsilon);
   return [...left.slice(0, -1), ...right];
 }
+// Draw-and-hold shape snap (Apple Notes gesture): the recognized ideal shape
+// a buffered pen stroke morphs into once the pen holds still. World coords
+// throughout — see the hold-timer arming in onBgPointerDown/onPointerMove.
+type SnapShape =
+  | { kind: "line"; a: { x: number; y: number }; b: { x: number; y: number } }
+  | { kind: "polygon"; points: { x: number; y: number }[] } // triangle=3 / rect=4 corners, closed
+  | { kind: "ellipse"; x: number; y: number; w: number; h: number };
+
+// Pure shape recognizer for a buffered pen stroke (world coords). Thresholds
+// mix screen-px-derived constants with world-space geometry — a known
+// simplification, not zoom-scaled, since the snap gesture is a quick "hold
+// still" check rather than a precision fit.
+function recognizeShape(points: { x: number; y: number; p?: number }[] | null): SnapShape | null {
+  if (!points || points.length < 8) return null;
+  const xs = points.map(p => p.x), ys = points.map(p => p.y);
+  const minX = Math.min(...xs), maxX = Math.max(...xs);
+  const minY = Math.min(...ys), maxY = Math.max(...ys);
+  const w = maxX - minX, h = maxY - minY;
+  const diag = Math.hypot(w, h);
+  const first = points[0], last = points[points.length - 1];
+  const closeDist = Math.hypot(last.x - first.x, last.y - first.y);
+  const closed = closeDist < Math.max(0.15 * diag, 12);
+
+  if (!closed) {
+    // Line candidate: every point stays close to the first→last chord.
+    let maxDist = 0;
+    for (const p of points) {
+      const d = rdpPerpDist(p, first, last);
+      if (d > maxDist) maxDist = d;
+    }
+    if (maxDist < Math.max(0.04 * diag, 6)) {
+      return { kind: "line", a: { x: first.x, y: first.y }, b: { x: last.x, y: last.y } };
+    }
+    return null;
+  }
+
+  // Closed loop: RDP-simplify a copy and classify by remaining vertex count.
+  let simplified = rdpSimplify(points, 0.05 * diag);
+  if (simplified.length > 1) {
+    const sf = simplified[0], sl = simplified[simplified.length - 1];
+    if (Math.hypot(sl.x - sf.x, sl.y - sf.y) < Math.max(0.15 * diag, 12)) {
+      simplified = simplified.slice(0, -1); // drop the duplicate closing point
+    }
+  }
+  const corners = simplified.map(p => ({ x: p.x, y: p.y }));
+  const k = corners.length;
+  if (k === 3 || k === 4) return { kind: "polygon", points: corners };
+  if (k >= 6) {
+    if (w === 0 || h === 0) return null;
+    const cx = minX + w / 2, cy = minY + h / 2;
+    const rx = w / 2, ry = h / 2;
+    let sumDev = 0;
+    for (const p of points) {
+      const dx = p.x - cx, dy = p.y - cy;
+      sumDev += Math.abs((dx * dx) / (rx * rx) + (dy * dy) / (ry * ry) - 1);
+    }
+    if (sumDev / points.length < 0.35) return { kind: "ellipse", x: minX, y: minY, w, h };
+    return null;
+  }
+  return null; // k === 5, or too few corners to be a recognizable shape
+}
 // Ray-casting point-in-polygon test, world coords on both sides — used to
 // resolve an ink-mode lasso close into a set of selected strokes.
 function pointInPolygon(pt: { x: number; y: number }, poly: { x: number; y: number }[]): boolean {
@@ -1888,6 +1949,13 @@ export function CanvasEditor({ content, onChange, nodeId }: Props) {
   const [inkPopover,     setInkPopover]     = useState(false);
   const inkActive        = useRef<{ x: number; y: number; p?: number }[] | null>(null);
   const activePenId      = useRef<number | null>(null);
+  // Draw-and-hold shape snap: `snapHold` tracks the screen-space anchor for
+  // the "pen stopped moving" timer (re-armed by onPointerMove on any >4px
+  // move); `snapShape` holds the recognized ideal shape once the 600ms hold
+  // fires, swapping the live preview and — on lift — the committed block.
+  // Pen tool only (gated at every arm site); highlighter never snaps.
+  const snapHold          = useRef<{ x: number; y: number; timer: number } | null>(null);
+  const snapShape         = useRef<SnapShape | null>(null);
   // Predicted-tail points (preview-only, never committed) for the in-progress
   // stroke, plus the imperative <canvas> overlay that replaces the old
   // inkPreview React state — a full reconcile per pointermove sample
@@ -2045,6 +2113,30 @@ export function CanvasEditor({ content, onChange, nodeId }: Props) {
           ctx.globalAlpha = 1;
           ctx.globalCompositeOperation = "source-over";
         }
+      } else if (snapShape.current) {
+        // Draw-and-hold snap: the live freehand outline is replaced by the
+        // idealized shape (stroked, not filled) so the morph reads clearly.
+        const shape = snapShape.current;
+        const proj = (p: { x: number; y: number }) => ({ x: p.x * vp.zoom + vp.x, y: p.y * vp.zoom + vp.y });
+        ctx.strokeStyle = penColorRef.current;
+        ctx.lineWidth = inkWidthRef.current * vp.zoom;
+        ctx.lineCap = "round";
+        ctx.lineJoin = "round";
+        ctx.beginPath();
+        if (shape.kind === "line") {
+          const a = proj(shape.a), b = proj(shape.b);
+          ctx.moveTo(a.x, a.y);
+          ctx.lineTo(b.x, b.y);
+        } else if (shape.kind === "polygon") {
+          const pts = shape.points.map(proj);
+          ctx.moveTo(pts[0].x, pts[0].y);
+          for (let i = 1; i < pts.length; i++) ctx.lineTo(pts[i].x, pts[i].y);
+          ctx.closePath();
+        } else {
+          const c = proj({ x: shape.x + shape.w / 2, y: shape.y + shape.h / 2 });
+          ctx.ellipse(c.x, c.y, (shape.w / 2) * vp.zoom, (shape.h / 2) * vp.zoom, 0, 0, Math.PI * 2);
+        }
+        ctx.stroke();
       } else {
         const outline = inkOutline(worldPts, inkWidthRef.current, false);
         if (outline.length >= 4) {
@@ -2109,6 +2201,20 @@ export function CanvasEditor({ content, onChange, nodeId }: Props) {
 
   function scheduleInkDraw() {
     if (!inkRafId.current) inkRafId.current = requestAnimationFrame(drawInkPreview);
+  }
+
+  // Fired by the 600ms hold timer armed in onBgPointerDown/onPointerMove. A
+  // truly still pen emits no pointermove events at all, which is why this
+  // runs off a timeout rather than being polled. Guarded against the stroke
+  // having already ended (pointerup/cancel/Escape all clear inkActive and
+  // the timer, but a timer queued just before that can still fire once).
+  function trySnap() {
+    if (!inkActive.current) return;
+    const shape = recognizeShape(inkActive.current);
+    if (shape) {
+      snapShape.current = shape;
+      scheduleInkDraw();
+    }
   }
 
   // Size the backing store to the element's CSS box × devicePixelRatio so
@@ -2210,6 +2316,8 @@ export function CanvasEditor({ content, onChange, nodeId }: Props) {
         setPolygonPts([]);
         inkActive.current = null;
         activePenId.current = null;
+        if (snapHold.current) { clearTimeout(snapHold.current.timer); snapHold.current = null; }
+        snapShape.current = null;
         eraseGesture.current = null;
         erasePos.current = null;
         inkLasso.current = null;
@@ -2632,6 +2740,12 @@ export function CanvasEditor({ content, onChange, nodeId }: Props) {
       }
       activePenId.current = e.pointerId;
       inkActive.current = [{ x: wx, y: wy, p: pressureOf(e) }];
+      // Draw-and-hold snap: pen tool only, never the highlighter.
+      if (inkToolRef.current === "pen") {
+        if (snapHold.current) clearTimeout(snapHold.current.timer);
+        snapShape.current = null;
+        snapHold.current = { x: e.clientX, y: e.clientY, timer: window.setTimeout(trySnap, 600) };
+      }
       scheduleInkDraw();
       return;
     }
@@ -2837,6 +2951,19 @@ export function CanvasEditor({ content, onChange, nodeId }: Props) {
         const cx = (ev.clientX - rect.left - vp.x) / vp.zoom;
         const cy = (ev.clientY - rect.top  - vp.y) / vp.zoom;
         inkActive.current.push({ x: cx, y: cy, p: pressureOf(ev) });
+      }
+      // Draw-and-hold snap (pen tool only): a truly still pen fires no
+      // pointermove events, so the 600ms recognition timer runs off the last
+      // qualifying move rather than being polled here. Movement >4px from
+      // the anchor re-arms the timer and cancels any shape already snapped
+      // into (the user is drawing again, not holding).
+      if (inkToolRef.current === "pen" && snapHold.current) {
+        const hdx = e.clientX - snapHold.current.x, hdy = e.clientY - snapHold.current.y;
+        if (Math.hypot(hdx, hdy) > 4) {
+          clearTimeout(snapHold.current.timer);
+          snapHold.current = { x: e.clientX, y: e.clientY, timer: window.setTimeout(trySnap, 600) };
+          if (snapShape.current) { snapShape.current = null; scheduleInkDraw(); }
+        }
       }
       // Predicted events smooth the tail of a fast stroke in the preview
       // only — overwritten each move, never pushed into inkActive (the
@@ -3076,22 +3203,38 @@ export function CanvasEditor({ content, onChange, nodeId }: Props) {
     };
     // ── Commit ink stroke ──
     if (inkModeRef.current && e?.pointerType === "pen" && inkActive.current && e.pointerId === activePenId.current) {
-      const raw = inkActive.current;
-      if (raw.length >= 2) {
-        const isHighlighter = inkToolRef.current === "highlighter";
-        let pts = rdpSimplify(raw, 0.4 / viewportRef.current.zoom);
-        const width = isHighlighter ? hlWidthRef.current : inkWidth;
-        const color = isHighlighter ? hlColorRef.current : penColor;
-        if (isHighlighter) {
-          // Snap-to-straight: a flat-ish swipe becomes a clean straight line.
-          const xs = pts.map(p => p.x), ys = pts.map(p => p.y);
-          const bw = Math.max(...xs) - Math.min(...xs);
-          const bh = Math.max(...ys) - Math.min(...ys);
-          if (bw >= bh * 8 || bh >= bw * 8) pts = [pts[0], pts[pts.length - 1]];
-        }
+      if (snapHold.current) { clearTimeout(snapHold.current.timer); snapHold.current = null; }
+      const shape = snapShape.current;
+      if (shape) {
+        // Draw-and-hold snap: commit the idealized shape instead of the
+        // buffered ink stroke, carrying the pen's own color/width the same
+        // way a manually-drawn shape carries its style.
         pushUndo();
-        setData(d => ({ ...d, blocks: [...d.blocks, mkInkStroke(pts, color, width, isHighlighter ? "highlighter" : undefined)] }));
+        const style = { color: penColorRef.current, strokeWidth: inkWidthRef.current };
+        const block =
+          shape.kind === "line"    ? { ...mkDrawPolygon([shape.a, shape.b], false), ...style } :
+          shape.kind === "polygon" ? { ...mkDrawPolygon(shape.points, true), ...style } :
+                                      { ...mkDrawEllipse(shape.x, shape.y, shape.w, shape.h), ...style };
+        setData(d => ({ ...d, blocks: [...d.blocks, block] }));
+      } else {
+        const raw = inkActive.current;
+        if (raw.length >= 2) {
+          const isHighlighter = inkToolRef.current === "highlighter";
+          let pts = rdpSimplify(raw, 0.4 / viewportRef.current.zoom);
+          const width = isHighlighter ? hlWidthRef.current : inkWidth;
+          const color = isHighlighter ? hlColorRef.current : penColor;
+          if (isHighlighter) {
+            // Snap-to-straight: a flat-ish swipe becomes a clean straight line.
+            const xs = pts.map(p => p.x), ys = pts.map(p => p.y);
+            const bw = Math.max(...xs) - Math.min(...xs);
+            const bh = Math.max(...ys) - Math.min(...ys);
+            if (bw >= bh * 8 || bh >= bw * 8) pts = [pts[0], pts[pts.length - 1]];
+          }
+          pushUndo();
+          setData(d => ({ ...d, blocks: [...d.blocks, mkInkStroke(pts, color, width, isHighlighter ? "highlighter" : undefined)] }));
+        }
       }
+      snapShape.current = null;
       inkActive.current = null;
       activePenId.current = null;
       clearInkPreview();
@@ -4030,7 +4173,7 @@ export function CanvasEditor({ content, onChange, nodeId }: Props) {
         <button
           className={`canvas-tool-btn${buildMode ? " canvas-tool-active" : ""}`}
           title="Build Mode — click canvas to create shapes; click node to make active; Shift+click node to connect from active"
-          onClick={() => { setBuildMode(m => !m); setTool("pan"); setOpenMenu(null); setInkMode(false); setInkPopover(false); inkActive.current = null; activePenId.current = null; clearInkPreview(); }}
+          onClick={() => { setBuildMode(m => !m); setTool("pan"); setOpenMenu(null); setInkMode(false); setInkPopover(false); inkActive.current = null; activePenId.current = null; if (snapHold.current) { clearTimeout(snapHold.current.timer); snapHold.current = null; } snapShape.current = null; clearInkPreview(); }}
         >⊕ Build</button>
 
         {/* Ink / Draw mode toggle */}
@@ -4054,6 +4197,8 @@ export function CanvasEditor({ content, onChange, nodeId }: Props) {
             setInkPopover(false);
             inkActive.current = null;
             activePenId.current = null;
+            if (snapHold.current) { clearTimeout(snapHold.current.timer); snapHold.current = null; }
+            snapShape.current = null;
             eraseGesture.current = null;
             erasePos.current = null;
             inkLasso.current = null;
