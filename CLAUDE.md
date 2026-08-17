@@ -372,6 +372,16 @@ coverage picture for the last 30 days in a handful of range queries (screen via
 one-tap weekly-block suggestion (accepts insert `pf_recurring_cal_blocks`,
 dismissals live in localStorage under `nl-coverage-dismissed-suggestions`).
 
+The JSONL *reading* half (entry type, parser, `read_day`, path resolution) lives in
+`packages/nexus-core/crate/src/usage_store.rs`; NexusLocal's `usage.rs` re-exports it
+and keeps the writers. PathFinder's src-tauri (revived 2026-08-17 after going dormant
+in the Supabase migration) reads the same files via `pf_usage_spans` for the Week
+view's off-by-default "Actual" overlay (sleep/screen/training behind the planned
+blocks — usage data still never leaves this Mac). The shared span math is
+`packages/nexus-core/src/coverage.ts`, imported via the `@nexus/core/coverage` deep
+alias in both apps' vite configs — deliberately not the `@nexus/core` barrel, which
+would drag three.js into every consumer.
+
 **`usage_intervals` is the only table in this project with sane RLS, and that is
 deliberate.** It holds full URLs and page titles; the anon key is committed in
 `config.rs` and the repo is public, so a permissive policy would publish every page

@@ -15,6 +15,8 @@ import {
   getDeadlines, getReminders, toggleDeadline, toggleReminder, updateCourseAssignment,
   getCaSubtasks, toggleCaSubtask,
 } from "../lib/api";
+import { loadActualWeek, type ActualDay } from "../lib/actual";
+import { type Span, dayStartMs } from "@nexus/core/coverage";
 import { Button } from "../components/ui/button";
 import { cn, layoutCalItems } from "../lib/utils";
 import { isDue } from "../components/workspace/systemForms";
@@ -77,6 +79,45 @@ function addHour(t: string, h: number): string {
   const hh = Math.floor(min / 60);
   const mm = min % 60;
   return `${String(hh).padStart(2, "0")}:${String(mm).padStart(2, "0")}`;
+}
+
+// ── Actual-day overlay (sleep/screen/training behind planned blocks) ──────────
+
+/** Reuses the column's minute→pixel mapping so the overlay never drifts from the blocks. */
+function actualSpanPx(span: Span, iso: string): { top: number; height: number } | null {
+  const dayStart = dayStartMs(iso);
+  const startMin = Math.max(HOUR_START * 60, (span.start - dayStart) / 60_000);
+  const endMin   = Math.min(HOUR_END   * 60, (span.end   - dayStart) / 60_000);
+  if (endMin <= startMin) return null;
+  const top = minutesToPx(startMin);
+  return { top, height: Math.max(1, minutesToPx(endMin) - top) };
+}
+
+const ACTUAL_TRACKS: { key: keyof ActualDay; colorCls: string }[] = [
+  { key: "sleep",    colorCls: "bg-indigo-400"  },
+  { key: "screen",   colorCls: "bg-sky-400"     },
+  { key: "training", colorCls: "bg-emerald-400" },
+];
+
+/** Background layer behind the timed events — same time grid, low opacity, non-interactive. */
+function ActualOverlay({ actual, iso }: { actual: ActualDay; iso: string }) {
+  return (
+    <div className="absolute inset-0 pointer-events-none">
+      {ACTUAL_TRACKS.flatMap(({ key, colorCls }) =>
+        actual[key].map((span, i) => {
+          const rect = actualSpanPx(span, iso);
+          if (!rect) return null;
+          return (
+            <div
+              key={`${key}-${i}`}
+              className={cn("absolute left-0 right-0 rounded-sm opacity-[0.18]", colorCls)}
+              style={{ top: rect.top, height: rect.height }}
+            />
+          );
+        }),
+      )}
+    </div>
+  );
 }
 
 const BLOCK_COLORS: Record<string, { bg: string; border: string; text: string; dot: string }> = {
@@ -651,12 +692,13 @@ function TaskPopupChip({ t, onToggle, onEdit }: {
 
 // ── Time column ───────────────────────────────────────────────────────────────
 
-function TimeColumn({ date, isToday, blocks, systems, courseAssignments, scheduleEntries, onClickSlot, onClickBlock }: {
+function TimeColumn({ date, isToday, blocks, systems, courseAssignments, scheduleEntries, actual, onClickSlot, onClickBlock }: {
   date: Date; isToday: boolean;
   blocks: CalBlock[];
   systems: SystemEntry[];
   courseAssignments: CourseAssignment[];
   scheduleEntries: ScheduleEntry[];
+  actual?: ActualDay;
   onClickSlot: (date: string, time: string) => void;
   onClickBlock: (b: CalBlock) => void;
 }) {
@@ -699,6 +741,9 @@ function TimeColumn({ date, isToday, blocks, systems, courseAssignments, schedul
           <div key={`${h}h`} className="absolute left-0 right-0 border-t border-border/10 border-dashed"
             style={{ top: i * HOUR_PX + HOUR_PX / 2 }} />
         ))}
+
+        {/* Actual-day overlay — behind everything else, purely visual */}
+        {actual && <ActualOverlay actual={actual} iso={iso} />}
 
         {/* Current time indicator */}
         {showNow && (
@@ -1663,6 +1708,13 @@ export function Week() {
   const toggleHeader = () => setShowHeader((v) => { localStorage.setItem("week_panel_header", v ? "0" : "1"); return !v; });
   const toggleFooter = () => setShowFooter((v) => { localStorage.setItem("week_panel_footer", v ? "0" : "1"); return !v; });
 
+  // "Actual" overlay — sleep/screen/training behind the planned blocks.
+  // Default OFF: when off, loadActualWeek never runs, so the calendar costs
+  // exactly what it costs today.
+  const [showActual, setShowActual] = useState(() => localStorage.getItem("pf-week-show-actual") === "1");
+  const [actualByDate, setActualByDate] = useState<Map<string, ActualDay>>(new Map());
+  const toggleActual = () => setShowActual((v) => { localStorage.setItem("pf-week-show-actual", v ? "0" : "1"); return !v; });
+
   // Weekly focus note — persisted per-week in localStorage
   const [weekNote, setWeekNote] = useState("");
 
@@ -1707,6 +1759,18 @@ export function Week() {
       gridRef.current.scrollTop = (8 - HOUR_START) * HOUR_PX - 8;
     }
   }, [start, view]);
+
+  // Actual-day data — loads once per visible week while the toggle is on;
+  // re-runs when the week navigates (start changes), not on unrelated
+  // re-renders. Off by default, so a plain week view never fires this.
+  useEffect(() => {
+    if (!showActual || view !== "week") return;
+    let cancelled = false;
+    loadActualWeek(days.map(toISO))
+      .then((map) => { if (!cancelled) setActualByDate(map); })
+      .catch(() => { if (!cancelled) setActualByDate(new Map()); });
+    return () => { cancelled = true; };
+  }, [showActual, view, start]);
 
   // Week navigation
   const prevWeek = () => {
@@ -2136,6 +2200,25 @@ export function Week() {
             ))}
           </div>
           <Button size="sm" variant="outline" className="h-7 text-xs" onClick={goToday}>Today</Button>
+          <div className="w-px h-4 bg-border" />
+          {/* Actual-day overlay toggle */}
+          <button
+            onClick={toggleActual}
+            title="Show actual day (sleep, screen, training) behind planned blocks"
+            className={cn(
+              "rounded-full border px-2.5 py-1 text-xs font-medium transition-colors",
+              showActual ? "border-primary/40 bg-primary/10 text-primary" : "border-border text-muted-foreground hover:text-foreground"
+            )}
+          >
+            Actual
+          </button>
+          {showActual && (
+            <div className="flex items-center gap-2 pl-0.5">
+              <span className="flex items-center gap-1 text-[10px] text-muted-foreground"><span className="h-1.5 w-1.5 rounded-full bg-indigo-400" />Sleep</span>
+              <span className="flex items-center gap-1 text-[10px] text-muted-foreground"><span className="h-1.5 w-1.5 rounded-full bg-sky-400" />Screen</span>
+              <span className="flex items-center gap-1 text-[10px] text-muted-foreground"><span className="h-1.5 w-1.5 rounded-full bg-emerald-400" />Training</span>
+            </div>
+          )}
         </div>
       </div>
 
@@ -2312,6 +2395,7 @@ export function Week() {
                       systems={systems}
                       courseAssignments={items.course_assignments.filter((a) => a.due_date === iso)}
                       scheduleEntries={scheduleEntriesFor(iso)}
+                      actual={showActual ? actualByDate.get(iso) : undefined}
                       onClickSlot={(date, time) => setModal({ kind: "create-block", date, startTime: time })}
                       onClickBlock={(b) => setModal({ kind: "edit-block", block: b })}
                     />

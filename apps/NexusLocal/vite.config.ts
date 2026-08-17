@@ -10,6 +10,7 @@ export default defineConfig({
   resolve: {
     alias: {
       "@": path.resolve(__dirname, "./src"),
+      "@nexus/core/coverage": path.resolve(__dirname, "../../packages/nexus-core/src/coverage.ts"),
       "@nexus/core": path.resolve(__dirname, "../../packages/nexus-core/src/index.ts"),
     },
   },

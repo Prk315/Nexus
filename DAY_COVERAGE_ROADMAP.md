@@ -117,7 +117,17 @@ by (start-bucket, end-bucket, weekday-set) so it never nags twice.
 - Verify: seed a week of synthetic gap history through the pure helpers in
   tests; the suggestion fires on 3/7 and not on 2/7.
 
-## Phase C — plan vs. reality in PathFinder
+## Phase C — plan vs. reality in PathFinder ✅ shipped 2026-08-17
+
+Shipped: the JSONL reader (entry type, parser, path resolution, `read_day`)
+lives in `packages/nexus-core/crate/src/usage_store.rs` with NexusLocal
+re-exporting it (public surface unchanged, 169 tests still green); PathFinder's
+revived Rust side exposes `pf_usage_spans`; the span math moved to
+`packages/nexus-core/src/coverage.ts` behind a `@nexus/core/coverage` deep
+alias (deliberately NOT the three.js-heavy barrel); and Week view gained an
+off-by-default "Actual" toggle rendering sleep/screen/training behind the
+blocks with the grid's own minute→pixel mapping. Desktop only — the toggle
+lives in the desktop header; mobile is untouched.
 
 Render the actual day faintly behind the planned blocks in PathFinder's Week
 view: sleep band + screen spans as a background layer per day column.

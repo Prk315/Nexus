@@ -1,6 +1,7 @@
 mod commands;
 mod db;
 mod models;
+mod usage_spans;
 
 use std::sync::Mutex;
 use tauri::Manager;
@@ -175,6 +176,7 @@ pub fn run() {
             commands::upsert_book_sections,
             commands::toggle_book_section,
             commands::update_book_section,
+            usage_spans::pf_usage_spans,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

@@ -2807,6 +2807,9 @@ dependencies = [
 name = "nexus-core"
 version = "0.1.0"
 dependencies = [
+ "chrono",
+ "chrono-tz",
+ "dirs 5.0.1",
  "serde",
  "serde_json",
  "thiserror 1.0.69",
@@ -2822,6 +2825,7 @@ dependencies = [
  "chrono-tz",
  "dirs 5.0.1",
  "libc",
+ "nexus-core",
  "reqwest 0.12.28",
  "serde",
  "serde_json",
@@ -3187,6 +3191,7 @@ checksum = "df94ce210e5bc13cb6651479fa48d14f601d9858cfe0467f43ae157023b938d3"
 name = "pathfinder"
 version = "0.1.0"
 dependencies = [
+ "nexus-core",
  "rusqlite",
  "serde",
  "serde_json",

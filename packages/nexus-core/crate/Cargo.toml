@@ -11,3 +11,9 @@ name = "nexus_core"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 thiserror = "1"
+chrono = { version = "0.4", features = ["serde"] }
+# The usage store buckets intervals by *local* day (Europe/Copenhagen), and
+# chrono alone has no tz database — see the matching comment in NexusLocal's
+# Cargo.toml.
+chrono-tz = "0.10"
+dirs = "5"
