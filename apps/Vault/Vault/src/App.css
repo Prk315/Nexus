@@ -6427,6 +6427,7 @@ body {
 .parsed-viewer {
   flex: 1;
   min-height: 0;
+  min-width: 0; /* see .parsed-body's comment — the whole chain must yield */
   display: flex;
   flex-direction: column;
 }
@@ -6440,13 +6441,99 @@ body {
 .parsed-body {
   flex: 1 1 auto;
   min-height: 0;
+  /* min-width: 0 all the way up the flex chain (here, .parsed-viewer, and
+     .parsed-scroll/-wrap below): flex items default to min-width:auto and
+     refuse to shrink below their content, so the 1528px margins-mode sheet
+     propagated its width clear up to <body> (overflow hidden) instead of
+     becoming scrollable inside .parsed-scroll. Every ancestor must yield. */
+  min-width: 0;
+  display: flex;
+}
+/* Positioned ancestor for the margin-ink canvas (see MarginInkLayer.tsx) —
+   the canvas is an absolutely-inset sibling of .parsed-scroll so it stays
+   viewport-fixed (never scrolls) while repainting itself against the live
+   scroll position every frame. .parsed-scroll remains the sole scrolling
+   element (overflow-y, and overflow-x once margins mode is on); the wrapper
+   only adds position:relative + a flex passthrough so layout is unchanged
+   when margins mode is off. */
+.parsed-scroll-wrap {
+  position: relative;
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 0;
   display: flex;
 }
 .parsed-scroll {
   flex: 1 1 auto;
+  /* min-width:0 overrides the flex default of min-width:auto, which would
+     otherwise let .parsed-scroll's automatic minimum size grow to fit its
+     1528px-wide .parsed-content in margins mode instead of clamping to the
+     wrapper's share of the row — the exact bug that made scrollWidth equal
+     clientWidth (no scrollbar, content silently clipped by <body>) even
+     though overflow-x:auto was set. width:100% is a second belt-and-braces
+     pass-down of the wrapper's box, on top of flex-grow. */
+  min-width: 0;
+  width: 100%;
   min-height: 0;
   overflow-y: auto;
 }
+/* Margins mode: widen the sheet so a jotting margin opens on each side.
+   MARGIN_WIDTH = 430px = exactly 50% of the original 860px page width
+   (.parsed-content's max-width below); TEXT_MEASURE = 860 − 2×96 = 668px is
+   the column's normal reading measure at desktop widths, where the clamp()
+   below has maxed out at 96px of horizontal padding per side (border-box).
+   SHEET_WIDTH = TEXT_MEASURE + 2×MARGIN_WIDTH = 668 + 860 = 1528px — the two
+   margins together span exactly one original page width, framing the
+   unchanged text column between them. Horizontal scroll opens to reach the
+   sheet on viewports narrower than 1528px. */
+.parsed-scroll.parsed-margins-on { overflow-x: auto; }
+.parsed-margins-on .parsed-content {
+  max-width: none;
+  width: 1528px;
+  padding-left: 430px;
+  padding-right: 430px;
+  position: relative; /* anchors the margin hairlines below */
+}
+.parsed-margins-on .parsed-content::before,
+.parsed-margins-on .parsed-content::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 1px;
+  background: var(--border-base, #e2e2e6);
+  pointer-events: none;
+}
+.parsed-margins-on .parsed-content::before { left: 430px; }
+.parsed-margins-on .parsed-content::after { right: 430px; }
+
+.margin-ink-canvas {
+  position: absolute;
+  inset: 0;
+  pointer-events: none; /* margins off (or read-only): strokes still render, no capture */
+}
+.margin-ink-canvas.margin-ink-active {
+  pointer-events: auto;
+  /* Allow native finger pan/scroll (both axes — margins mode adds
+     horizontal scroll); MarginInkLayer's own non-passive touchmove listener
+     preventDefaults only stylus touches so Safari doesn't cancel the Pencil
+     stroke mid-draw. touch-action:none here would block finger-scrolling
+     the book entirely, which is the opposite of the intent. */
+  touch-action: pan-x pan-y;
+  cursor: crosshair;
+}
+
+.parsed-margin-colors { display: inline-flex; align-items: center; gap: 4px; padding: 0 4px; }
+.parsed-margin-dot {
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  border: 2px solid transparent;
+  padding: 0;
+  cursor: pointer;
+}
+.parsed-margin-dot.active { border-color: var(--fg-main); box-shadow: 0 0 0 1px var(--bg-base); }
+
 .parsed-outline {
   flex: 0 0 auto;
   width: 260px;
