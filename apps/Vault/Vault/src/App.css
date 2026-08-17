@@ -2295,6 +2295,54 @@ body {
   border-color: var(--border-base);
 }
 
+.ink-tool-btn {
+  height: 26px;
+  display: flex;
+  align-items: center;
+  padding: 0 8px;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--fg-muted);
+  font-size: 11px;
+  font-weight: 500;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: all var(--duration) var(--ease);
+}
+
+.ink-tool-btn:hover {
+  background: var(--bg-raised);
+  color: var(--fg-primary);
+}
+
+.ink-tool-btn.active {
+  background: var(--bg-raised);
+  border-color: var(--border-base);
+  color: var(--fg-primary);
+}
+
+.ink-undo-btn {
+  width: 26px;
+  height: 26px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--fg-muted);
+  font-size: 14px;
+  cursor: pointer;
+  padding: 0;
+  transition: all var(--duration) var(--ease);
+}
+
+.ink-undo-btn:hover {
+  background: var(--bg-raised);
+  color: var(--fg-primary);
+}
+
 /* Touch has no hover: the hairline trigger strip is a tap target on iPad, so
    give it a finger-sized height there. */
 @media (pointer: coarse) {
