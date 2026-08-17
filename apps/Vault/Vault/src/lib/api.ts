@@ -146,6 +146,11 @@ export async function readContent(id: string): Promise<string> {
 // each holds a pool connection, which is how one slow save wedged the whole
 // database on 2026-08-15 (see lib/saveQueue.ts).
 async function rawSaveContent(id: string, content: string): Promise<void> {
+  // Telemetry for the 2026-08-15 save incident (1.9MB canvas autosave wedged
+  // Supabase for 2h) — a loud signal before a save gets that big again.
+  if (content.length > 500_000) {
+    console.warn(`[vault] large content save: ${(content.length / 1024).toFixed(0)} kB for node ${id}`);
+  }
   const { error } = await supabase.from("vault_content")
     .upsert({ node_id: id, data: content, user_id: getUserId(), updated_at: new Date().toISOString() },
       { onConflict: "node_id" });
