@@ -7,6 +7,7 @@ import { DEFAULT_HIGHLIGHTERS } from "../nodeUtils";
 import { useResizableWidth } from "../hooks/useResizableWidth";
 import type { VaultGraph, HighlighterCategory } from "../types";
 import { KATEX_OPTS } from "../lib/katexShared";
+import { MarginInkLayer, type MarginInkHandle } from "./MarginInkLayer";
 
 interface Props {
   content: string;               // pre-rendered full-fidelity HTML (see md ingest)
@@ -17,6 +18,9 @@ interface Props {
 
 const BASE_FONT = 16.5;
 const FONT_MIN = 0.8, FONT_MAX = 1.8, FONT_STEP = 0.1;
+
+type MarginTool = "pen" | "highlighter" | "eraser";
+const MARGIN_COLORS = ["#1d4ed8", "#dc2626", "#16a34a", "#ea580c", "#18181b"];
 
 // The parsed HTML is authored by our own ingest pipeline (not user input), so
 // rendering it directly is safe and preserves all book formatting.
@@ -53,6 +57,25 @@ export function ParsedViewer({ content, nodeId }: Props) {
   const [matchCount, setMatchCount] = useState(0);
   const [matchIdx, setMatchIdx] = useState(0);
   const matchesRef = useRef<Range[]>([]);
+
+  // ── Margin notes (jotting margins on both sides of the page) ───────────────
+  const [marginsOn, setMarginsOn] = useState(() => localStorage.getItem(`vault.margins.${nodeId}`) === "1");
+  const [marginTool, setMarginTool] = useState<MarginTool>("pen");
+  const [marginColor, setMarginColor] = useState(MARGIN_COLORS[0]);
+  const marginInkRef = useRef<MarginInkHandle>(null);
+  // scrollRef/rootRef (above) are read synchronously all over this file, so
+  // they must keep working exactly as before. But a plain ref never triggers
+  // a re-render when it first attaches — passed straight through as props,
+  // MarginInkLayer would see `null` on its very first render and stay stuck
+  // on that stale value forever (props only update via a parent re-render).
+  // These callback refs dual-assign into the existing mutable refs AND into
+  // state, so the state update forces the re-render that hands MarginInkLayer
+  // the real elements once they exist.
+  const [scrollEl, setScrollEl] = useState<HTMLDivElement | null>(null);
+  const [contentEl, setContentEl] = useState<HTMLDivElement | null>(null);
+  useEffect(() => {
+    localStorage.setItem(`vault.margins.${nodeId}`, marginsOn ? "1" : "0");
+  }, [marginsOn, nodeId]);
 
   const supportsHighlightApi =
     typeof (window as any).Highlight === "function" && (CSS as any).highlights;
@@ -336,6 +359,29 @@ export function ParsedViewer({ content, nodeId }: Props) {
           </button>
         ))}
         <button className="tt-btn" onClick={() => setEditingCats((v) => !v)} type="button" title="Edit highlighters">✎</button>
+        <div className="tt-sep" />
+        {/* margin notes */}
+        <button className={`tt-btn${marginsOn ? " active" : ""}`} onClick={() => setMarginsOn((v) => !v)} type="button" title="Margin notes">✎ Margins</button>
+        {marginsOn && (
+          <>
+            <button className={`tt-btn${marginTool === "pen" ? " active" : ""}`} onClick={() => setMarginTool("pen")} type="button" title="Pen">Pen</button>
+            <button className={`tt-btn${marginTool === "highlighter" ? " active" : ""}`} onClick={() => setMarginTool("highlighter")} type="button" title="Highlighter">High</button>
+            <button className={`tt-btn${marginTool === "eraser" ? " active" : ""}`} onClick={() => setMarginTool("eraser")} type="button" title="Eraser">Erase</button>
+            <span className="parsed-margin-colors">
+              {MARGIN_COLORS.map((c) => (
+                <button
+                  key={c}
+                  className={`parsed-margin-dot${marginColor === c ? " active" : ""}`}
+                  style={{ background: c }}
+                  onClick={() => setMarginColor(c)}
+                  type="button"
+                  title={c}
+                />
+              ))}
+            </span>
+            <button className="tt-btn" onClick={() => marginInkRef.current?.undo()} type="button" title="Undo last margin stroke">↶</button>
+          </>
+        )}
       </div>
       {editingCats && (
         <HighlighterCatEditor cats={highlighters} onChange={persistHighlighters} onClose={() => setEditingCats(false)} />
@@ -372,8 +418,30 @@ export function ParsedViewer({ content, nodeId }: Props) {
         {sidebarOpen && (
           <div className="pv-resize" onPointerDown={outlineResize.startResize} title="Drag to resize" />
         )}
-        <div ref={scrollRef} className="parsed-scroll">
-          <div ref={rootRef} className="parsed-content" />
+        {/* Wrapper is the positioned ancestor for the margin-ink canvas, which
+            must stay viewport-fixed (NOT scroll with .parsed-content) and
+            repaint itself against live scroll position instead. Keeping the
+            canvas OUTSIDE .parsed-scroll as an absolutely-inset sibling means
+            it never scrolls at all — no position:sticky bookkeeping needed. */}
+        <div className="parsed-scroll-wrap">
+          <div
+            ref={(el) => { scrollRef.current = el; setScrollEl(el); }}
+            className={`parsed-scroll${marginsOn ? " parsed-margins-on" : ""}`}
+          >
+            <div
+              ref={(el) => { rootRef.current = el; setContentEl(el); }}
+              className="parsed-content"
+            />
+          </div>
+          <MarginInkLayer
+            ref={marginInkRef}
+            nodeId={nodeId}
+            scrollEl={scrollEl}
+            contentEl={contentEl}
+            enabled={marginsOn}
+            tool={marginTool}
+            color={marginColor}
+          />
         </div>
       </div>
     </div>

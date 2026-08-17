@@ -47,11 +47,16 @@ export async function createNode(name: string, kind: NodeKind): Promise<VaultGra
 }
 
 export async function deleteNode(id: string): Promise<VaultGraph> {
-  // Clean up content rows that won't cascade (no FK on vault_content / vault_journals)
+  // Clean up content rows that won't cascade (no FK on vault_content / vault_journals).
+  // `_textannot` and `_bookmarks` were a pre-existing orphan gap (same suffix-key
+  // shape as `_annot`/`_hl`); `_margins` is the margin-notes layer added alongside.
   await Promise.all([
     supabase.from("vault_content").delete().eq("node_id", id),
     supabase.from("vault_content").delete().eq("node_id", `${id}_annot`),
     supabase.from("vault_content").delete().eq("node_id", `${id}_hl`),
+    supabase.from("vault_content").delete().eq("node_id", `${id}_textannot`),
+    supabase.from("vault_content").delete().eq("node_id", `${id}_bookmarks`),
+    supabase.from("vault_content").delete().eq("node_id", `${id}_margins`),
     supabase.from("vault_journals").delete().eq("node_id", id),
     supabase.from("vault_records").delete().eq("source_node_id", id),
   ]);
