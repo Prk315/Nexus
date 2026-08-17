@@ -74,6 +74,36 @@ const STICKY_COLORS = [
 const DRAW_COLORS = ["#64748b","#ef4444","#f97316","#eab308","#22c55e","#3b82f6","#a855f7","#ec4899","#ffffff","#0f172a"];
 const DRAW_FILLS  = ["none","rgba(239,68,68,0.15)","rgba(249,115,22,0.15)","rgba(234,179,8,0.15)","rgba(34,197,94,0.15)","rgba(59,130,246,0.15)","rgba(168,85,247,0.15)","rgba(236,72,153,0.15)","rgba(255,255,255,0.15)","rgba(15,23,42,0.4)"];
 
+// Per-tool ink prefs, persisted to localStorage — see the load/save around the
+// penColor/hlColor state in CanvasEditor. Kept module-level since it needs no
+// component state to compute.
+const INK_PREFS_KEY = "vault.ink.prefs";
+const DEFAULT_HL_COLOR = "#eab308";
+interface InkPrefs { pen: { color: string; width: number }; highlighter: { color: string; width: number }; recents: string[]; }
+function loadInkPrefs(): InkPrefs {
+  const fallback: InkPrefs = { pen: { color: DRAW_COLORS[0], width: 2.5 }, highlighter: { color: DEFAULT_HL_COLOR, width: 14 }, recents: [] };
+  try {
+    const raw = localStorage.getItem(INK_PREFS_KEY);
+    if (!raw) return fallback;
+    const parsed = JSON.parse(raw);
+    return {
+      pen: {
+        color: typeof parsed?.pen?.color === "string" ? parsed.pen.color : fallback.pen.color,
+        width: typeof parsed?.pen?.width === "number" ? parsed.pen.width : fallback.pen.width,
+      },
+      highlighter: {
+        color: typeof parsed?.highlighter?.color === "string" ? parsed.highlighter.color : fallback.highlighter.color,
+        width: typeof parsed?.highlighter?.width === "number" ? parsed.highlighter.width : fallback.highlighter.width,
+      },
+      recents: Array.isArray(parsed?.recents) ? parsed.recents.filter((c: unknown): c is string => typeof c === "string").slice(0, 6) : fallback.recents,
+    };
+  } catch {
+    // Corrupt JSON, disabled storage (private mode), or a shape we don't
+    // recognize — fall back rather than crash the editor over a preference.
+    return fallback;
+  }
+}
+
 const PORTS: Port[] = ["top", "right", "bottom", "left"];
 const SHAPE_ICONS: Record<ShapeKind, string> = { rect: "▭", rounded: "▢", ellipse: "○", diamond: "◇" }
 const SHAPE_COLORS = ["#ffffff","#fef9c3","#dbeafe","#dcfce7","#fce7f3","#f3e8ff","#ffedd5","#e2e8f0","#1e293b"];
@@ -1832,18 +1862,30 @@ export function CanvasEditor({ content, onChange, nodeId }: Props) {
   const [inkMode,        setInkMode]        = useState(false);
   const inkModeRef       = useRef(inkMode);
   inkModeRef.current     = inkMode;
-  const [inkColor,       setInkColor]       = useState(DRAW_COLORS[0]);
-  const inkColorRef      = useRef(inkColor);
-  inkColorRef.current    = inkColor;
-  const [inkWidth,       setInkWidth]       = useState(2.5);
+  // Per-tool color/width + recent custom colors, loaded once from
+  // localStorage (see loadInkPrefs) and persisted back by the effect below.
+  const inkPrefsInitRef  = useRef<InkPrefs | null>(null);
+  if (!inkPrefsInitRef.current) inkPrefsInitRef.current = loadInkPrefs();
+  const inkPrefsInit     = inkPrefsInitRef.current;
+  const [penColor,       setPenColor]       = useState(inkPrefsInit.pen.color);
+  const penColorRef      = useRef(penColor);
+  penColorRef.current    = penColor;
+  const [inkWidth,       setInkWidth]       = useState(inkPrefsInit.pen.width);
   const inkWidthRef      = useRef(inkWidth);
   inkWidthRef.current    = inkWidth;
   const [inkTool,        setInkTool]        = useState<"pen" | "highlighter" | "eraser" | "lasso">("pen");
   const inkToolRef       = useRef(inkTool);
   inkToolRef.current     = inkTool;
-  const [hlWidth,        setHlWidth]        = useState(14);
+  const [hlColor,        setHlColor]        = useState(inkPrefsInit.highlighter.color);
+  const hlColorRef       = useRef(hlColor);
+  hlColorRef.current     = hlColor;
+  const [hlWidth,        setHlWidth]        = useState(inkPrefsInit.highlighter.width);
   const hlWidthRef       = useRef(hlWidth);
   hlWidthRef.current     = hlWidth;
+  const [recentColors,   setRecentColors]   = useState<string[]>(inkPrefsInit.recents);
+  // GoodNotes-style popover: only pen/highlighter have one, toggled by
+  // clicking the already-active tool button (see onInkToolClick).
+  const [inkPopover,     setInkPopover]     = useState(false);
   const inkActive        = useRef<{ x: number; y: number; p?: number }[] | null>(null);
   const activePenId      = useRef<number | null>(null);
   // Predicted-tail points (preview-only, never committed) for the in-progress
@@ -1853,6 +1895,11 @@ export function CanvasEditor({ content, onChange, nodeId }: Props) {
   const inkPredicted     = useRef<{ x: number; y: number }[]>([]);
   const inkCanvasRef     = useRef<HTMLCanvasElement | null>(null);
   const inkRafId         = useRef(0);
+  // Screen-space hover point for a hovering (buttons===0) Apple Pencil — iPadOS
+  // Safari 16.4+ on M2 iPads fires real pointermove events for this. Only ever
+  // set while no ink gesture is in flight (see onPointerMove); cleared on any
+  // pointerdown, on pointer-leave, and by clearInkPreview.
+  const inkHover         = useRef<{ sx: number; sy: number } | null>(null);
   // Eraser: one undo snapshot per gesture (taken lazily, on the first sample
   // that actually erases something — a swipe that never touches a stroke
   // must not push a no-op undo entry), plus a screen-space cursor ring.
@@ -1952,6 +1999,7 @@ export function CanvasEditor({ content, onChange, nodeId }: Props) {
   function clearInkPreview() {
     if (inkRafId.current) { cancelAnimationFrame(inkRafId.current); inkRafId.current = 0; }
     inkPredicted.current = [];
+    inkHover.current = null;
     const canvas = inkCanvasRef.current;
     if (!canvas) return;
     const ctx = canvas.getContext("2d");
@@ -1982,7 +2030,7 @@ export function CanvasEditor({ content, onChange, nodeId }: Props) {
         // `ib.nib === "highlighter"` branch in the committed <path> below).
         const hlPts = worldPts.map(p => ({ x: p.x * vp.zoom + vp.x, y: p.y * vp.zoom + vp.y }));
         if (hlPts.length >= 2) {
-          ctx.strokeStyle = inkColorRef.current;
+          ctx.strokeStyle = hlColorRef.current;
           ctx.lineWidth = hlWidthRef.current * vp.zoom;
           ctx.lineCap = "butt";
           ctx.lineJoin = "round";
@@ -2001,7 +2049,7 @@ export function CanvasEditor({ content, onChange, nodeId }: Props) {
         const outline = inkOutline(worldPts, inkWidthRef.current, false);
         if (outline.length >= 4) {
           const pts = outline.map(([x, y]) => ({ x: x * vp.zoom + vp.x, y: y * vp.zoom + vp.y }));
-          ctx.fillStyle = inkColorRef.current;
+          ctx.fillStyle = penColorRef.current;
           ctx.beginPath();
           ctx.moveTo(pts[0].x, pts[0].y);
           // Mirrors outlineToPath's average-quadratic-through-consecutive-points
@@ -2040,6 +2088,23 @@ export function CanvasEditor({ content, onChange, nodeId }: Props) {
       ctx.lineWidth = 1.5;
       ctx.stroke();
     }
+
+    // ── Pencil hover ghost (pen hovering, no gesture in progress) ── Only
+    // pen/highlighter get a ghost — eraser already has its own ring above,
+    // and lasso draws nothing while idle. inkHover is only ever set while no
+    // gesture ref is live (see onPointerMove), so this never overlaps a
+    // real stroke/erase/lasso preview.
+    if (inkHover.current && (inkToolRef.current === "pen" || inkToolRef.current === "highlighter")) {
+      const { sx, sy } = inkHover.current;
+      const isHl = inkToolRef.current === "highlighter";
+      const w = isHl ? hlWidthRef.current : inkWidthRef.current;
+      ctx.beginPath();
+      ctx.arc(sx, sy, (w / 2) * vp.zoom, 0, Math.PI * 2);
+      ctx.fillStyle = isHl ? hlColorRef.current : penColorRef.current;
+      ctx.globalAlpha = 0.3;
+      ctx.fill();
+      ctx.globalAlpha = 1;
+    }
   }
 
   function scheduleInkDraw() {
@@ -2069,6 +2134,20 @@ export function CanvasEditor({ content, onChange, nodeId }: Props) {
       clearInkPreview();
     };
   }, [inkMode]);
+
+  // Persist ink prefs on every change — the payload is tiny, so writing on
+  // each keystroke (e.g. dragging the custom color picker) is cheap.
+  // localStorage can throw in Safari private mode; a failed write just means
+  // prefs don't survive this reload, never a crash.
+  useEffect(() => {
+    try {
+      localStorage.setItem(INK_PREFS_KEY, JSON.stringify({
+        pen: { color: penColor, width: inkWidth },
+        highlighter: { color: hlColor, width: hlWidth },
+        recents: recentColors,
+      }));
+    } catch { /* private mode / quota exceeded — session just won't persist */ }
+  }, [penColor, inkWidth, hlColor, hlWidth, recentColors]);
 
   // ── Copy / Paste ─────────────────────────────────────────────────────────────
 
@@ -2137,6 +2216,7 @@ export function CanvasEditor({ content, onChange, nodeId }: Props) {
         inkSelDrag.current = null;
         inkSelScale.current = null;
         clearInkPreview();
+        setInkPopover(false);
         if (selectedIdsRef.current.size > 1) { setSelectedIds(new Set()); setSelectedId(null); }
         return;
       }
@@ -2469,9 +2549,31 @@ export function CanvasEditor({ content, onChange, nodeId }: Props) {
     setInkTool(t);
   }
 
+  // GoodNotes-style tool button: clicking the already-active pen/highlighter
+  // button toggles its color+width popover; clicking a different tool always
+  // switches (via selectInkTool) and closes the popover. Eraser/lasso have no
+  // popover, so re-clicking either while active is a no-op.
+  function onInkToolClick(t: "pen" | "highlighter" | "eraser" | "lasso") {
+    if (inkToolRef.current === t) {
+      if (t === "pen" || t === "highlighter") setInkPopover(v => !v);
+      return;
+    }
+    selectInkTool(t);
+    setInkPopover(false);
+  }
+
+  // Applies a color to whichever of pen/highlighter is currently active —
+  // shared by the palette swatches, the recents row, and the custom picker.
+  function setActiveInkColor(hex: string) {
+    if (inkTool === "highlighter") setHlColor(hex); else setPenColor(hex);
+  }
+
   // ── Pointer handlers ────────────────────────────────────────────────────────
 
   function onBgPointerDown(e: React.PointerEvent) {
+    // Any pointerdown ends a hover — real contact is about to draw, erase,
+    // lasso, or pan, none of which should leave a stale ghost behind.
+    inkHover.current = null;
     // A pen is never a palm: a palm touching down first steals isPrimary,
     // and gating on it would silently discard the pen stroke. Route the
     // pen before the isPrimary check; every other pointer type keeps it.
@@ -2706,6 +2808,21 @@ export function CanvasEditor({ content, onChange, nodeId }: Props) {
 
   function onPointerMove(e: React.PointerEvent) {
     const vp = viewportRef.current;
+    // ── Pencil hover ghost ── iPadOS Safari (16.4+, M2 iPads) fires real
+    // pointermove events with buttons===0 for a hovering Apple Pencil. Track
+    // it only when no ink gesture is in flight — the branches below already
+    // claim the pointer via inkActive/eraseGesture/inkLasso/inkSelDrag/
+    // inkSelScale, so this can never compete with an active stroke. Desktop
+    // mice also fire buttons===0 moves; gating on pointerType === "pen" keeps
+    // them unaffected.
+    if (inkModeRef.current && e.pointerType === "pen" && e.buttons === 0
+        && !inkActive.current && !eraseGesture.current && !inkLasso.current
+        && !inkSelDrag.current && !inkSelScale.current) {
+      const rect = containerRef.current!.getBoundingClientRect();
+      inkHover.current = { sx: e.clientX - rect.left, sy: e.clientY - rect.top };
+      scheduleInkDraw();
+      return;
+    }
     // ── Ink mode: accumulate pen points ──
     if (inkModeRef.current && e.pointerType === "pen" && inkActive.current && e.pointerId === activePenId.current) {
       const rect = containerRef.current!.getBoundingClientRect();
@@ -2964,6 +3081,7 @@ export function CanvasEditor({ content, onChange, nodeId }: Props) {
         const isHighlighter = inkToolRef.current === "highlighter";
         let pts = rdpSimplify(raw, 0.4 / viewportRef.current.zoom);
         const width = isHighlighter ? hlWidthRef.current : inkWidth;
+        const color = isHighlighter ? hlColorRef.current : penColor;
         if (isHighlighter) {
           // Snap-to-straight: a flat-ish swipe becomes a clean straight line.
           const xs = pts.map(p => p.x), ys = pts.map(p => p.y);
@@ -2972,7 +3090,7 @@ export function CanvasEditor({ content, onChange, nodeId }: Props) {
           if (bw >= bh * 8 || bh >= bw * 8) pts = [pts[0], pts[pts.length - 1]];
         }
         pushUndo();
-        setData(d => ({ ...d, blocks: [...d.blocks, mkInkStroke(pts, inkColor, width, isHighlighter ? "highlighter" : undefined)] }));
+        setData(d => ({ ...d, blocks: [...d.blocks, mkInkStroke(pts, color, width, isHighlighter ? "highlighter" : undefined)] }));
       }
       inkActive.current = null;
       activePenId.current = null;
@@ -3857,6 +3975,10 @@ export function CanvasEditor({ content, onChange, nodeId }: Props) {
       onPointerMove={onPointerMove}
       onPointerUp={onPointerUp}
       onPointerCancel={onPointerUp}
+      // Pointer capture (set on every ink gesture) suppresses boundary events,
+      // so this only ever fires for an uncaptured hover — safe to just drop
+      // the Pencil hover ghost. scheduleInkDraw repaints without it.
+      onPointerLeave={() => { inkHover.current = null; scheduleInkDraw(); }}
       onClick={onBgClick}
       onDoubleClick={onBgDblClick}
       onTouchStart={onTouchStart}
@@ -3908,7 +4030,7 @@ export function CanvasEditor({ content, onChange, nodeId }: Props) {
         <button
           className={`canvas-tool-btn${buildMode ? " canvas-tool-active" : ""}`}
           title="Build Mode — click canvas to create shapes; click node to make active; Shift+click node to connect from active"
-          onClick={() => { setBuildMode(m => !m); setTool("pan"); setOpenMenu(null); setInkMode(false); inkActive.current = null; activePenId.current = null; clearInkPreview(); }}
+          onClick={() => { setBuildMode(m => !m); setTool("pan"); setOpenMenu(null); setInkMode(false); setInkPopover(false); inkActive.current = null; activePenId.current = null; clearInkPreview(); }}
         >⊕ Build</button>
 
         {/* Ink / Draw mode toggle */}
@@ -3929,6 +4051,7 @@ export function CanvasEditor({ content, onChange, nodeId }: Props) {
               // block selected would only strand its toolbar under the sheet.
               setSelectedId(null); setSelectedIds(new Set()); setSelectedArrowId(null);
             }
+            setInkPopover(false);
             inkActive.current = null;
             activePenId.current = null;
             eraseGesture.current = null;
@@ -3941,42 +4064,71 @@ export function CanvasEditor({ content, onChange, nodeId }: Props) {
         >✏ Ink</button>
 
         {/* Pen settings — the only way to change colour or nib; without them
-            every stroke on every canvas is 2.5px slate. */}
+            every stroke on every canvas is 2.5px slate. Color/width live in a
+            GoodNotes-style popover (see onInkToolClick) instead of an
+            always-visible strip, anchored under the tool buttons. */}
         {inkMode && (
           <>
             <div className="canvas-toolbar-sep" />
             <div className="ink-palette">
-              <button className={`ink-tool-btn${inkTool === "pen" ? " active" : ""}`}
-                title="Pen" onClick={() => selectInkTool("pen")}>✒︎ Pen</button>
-              <button className={`ink-tool-btn${inkTool === "highlighter" ? " active" : ""}`}
-                title="Highlighter" onClick={() => selectInkTool("highlighter")}>🖊 High</button>
-              <button className={`ink-tool-btn${inkTool === "eraser" ? " active" : ""}`}
-                title="Eraser" onClick={() => selectInkTool("eraser")}>◌ Erase</button>
-              <button className={`ink-tool-btn${inkTool === "lasso" ? " active" : ""}`}
-                title="Lasso" onClick={() => selectInkTool("lasso")}>⬚ Lasso</button>
-              <div className="canvas-divider-float-sep" />
-              {DRAW_COLORS.map(c => (
-                <button key={c} className={`ink-color-btn${inkColor === c ? " active" : ""}`}
-                  style={{ background: c, outlineColor: c }}
-                  title={`Pen colour ${c}`}
-                  onClick={() => setInkColor(c)} />
-              ))}
-              <div className="canvas-divider-float-sep" />
-              {inkTool === "highlighter" ? [8, 14, 20].map(w => (
-                <button key={w} className={`ink-width-btn${hlWidth === w ? " active" : ""}`}
-                  title={`${w}px highlighter`} onClick={() => setHlWidth(w)}>
-                  {/* Ringed so a white pen is still visible on the toolbar. */}
-                  <span style={{ display: "block", width: Math.min(w * 2 + 4, 24), height: Math.min(w * 2 + 4, 24), borderRadius: "50%",
-                    background: inkColor, boxShadow: "0 0 0 1px var(--border-base)" }} />
-                </button>
-              )) : [1.5, 2.5, 4, 7].map(w => (
-                <button key={w} className={`ink-width-btn${inkWidth === w ? " active" : ""}`}
-                  title={`${w}px nib`} onClick={() => setInkWidth(w)}>
-                  {/* Ringed so a white pen is still visible on the toolbar. */}
-                  <span style={{ display: "block", width: w * 2 + 4, height: w * 2 + 4, borderRadius: "50%",
-                    background: inkColor, boxShadow: "0 0 0 1px var(--border-base)" }} />
-                </button>
-              ))}
+              <div className="ink-tool-group">
+                <button className={`ink-tool-btn${inkTool === "pen" ? " active" : ""}`}
+                  title="Pen — click again for colour/width" onClick={() => onInkToolClick("pen")}>✒︎ Pen</button>
+                <button className={`ink-tool-btn${inkTool === "highlighter" ? " active" : ""}`}
+                  title="Highlighter — click again for colour/width" onClick={() => onInkToolClick("highlighter")}>🖊 High</button>
+                <button className={`ink-tool-btn${inkTool === "eraser" ? " active" : ""}`}
+                  title="Eraser" onClick={() => onInkToolClick("eraser")}>◌ Erase</button>
+                <button className={`ink-tool-btn${inkTool === "lasso" ? " active" : ""}`}
+                  title="Lasso" onClick={() => onInkToolClick("lasso")}>⬚ Lasso</button>
+
+                {inkPopover && (inkTool === "pen" || inkTool === "highlighter") && (() => {
+                  const activeColor = inkTool === "highlighter" ? hlColor : penColor;
+                  const widths = inkTool === "highlighter" ? [8, 14, 20] : [1.5, 2.5, 4, 7];
+                  const activeWidth = inkTool === "highlighter" ? hlWidth : inkWidth;
+                  return (
+                    <div className="ink-popover" onPointerDown={e => e.stopPropagation()}>
+                      <div className="ink-popover-row ink-popover-colors">
+                        {DRAW_COLORS.map(c => (
+                          <button key={c} className={`ink-color-btn${activeColor === c ? " active" : ""}`}
+                            style={{ background: c, outlineColor: c }}
+                            title={`Colour ${c}`}
+                            onClick={() => setActiveInkColor(c)} />
+                        ))}
+                      </div>
+                      {recentColors.length > 0 && (
+                        <div className="ink-popover-row ink-popover-recents">
+                          {recentColors.map(c => (
+                            <button key={c} className={`ink-color-btn${activeColor === c ? " active" : ""}`}
+                              style={{ background: c, outlineColor: c }}
+                              title={`Recent ${c}`}
+                              onClick={() => setActiveInkColor(c)} />
+                          ))}
+                        </div>
+                      )}
+                      <label className="ink-custom-color" title="Custom colour">
+                        <input type="color" value={activeColor}
+                          onChange={e => {
+                            const hex = e.target.value;
+                            setActiveInkColor(hex);
+                            setRecentColors(prev => [hex, ...prev.filter(c => c !== hex)].slice(0, 6));
+                          }} />
+                        <span>Custom…</span>
+                      </label>
+                      <div className="ink-popover-row ink-popover-widths">
+                        {widths.map(w => (
+                          <button key={w} className={`ink-width-btn${activeWidth === w ? " active" : ""}`}
+                            title={`${w}px ${inkTool}`}
+                            onClick={() => inkTool === "highlighter" ? setHlWidth(w) : setInkWidth(w)}>
+                            {/* Ringed so a white pen is still visible on the popover. */}
+                            <span style={{ display: "block", width: Math.min(w * 2 + 4, 24), height: Math.min(w * 2 + 4, 24), borderRadius: "50%",
+                              background: activeColor, boxShadow: "0 0 0 1px var(--border-base)" }} />
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  );
+                })()}
+              </div>
               <div className="canvas-divider-float-sep" />
               <button className="ink-undo-btn" title="Undo" onClick={() => doUndo()}>↶</button>
               <button className="ink-undo-btn" title="Redo" onClick={() => doRedo()}>↷</button>
@@ -4408,7 +4560,12 @@ export function CanvasEditor({ content, onChange, nodeId }: Props) {
           })}
         </svg>
 
-        {/* Divider floating toolbar */}
+        {/* Divider floating toolbar — still lives inside .canvas-world, so
+            (like the arrow/ellipse/polygon toolbars below) it scales with
+            zoom. The ink stroke toolbar had the same wart and was moved to
+            screen-space positioning outside .canvas-world (see below, near
+            the Blocks layer close); the same fix would apply here if it
+            starts visibly drifting. */}
         {dividerBlocks.filter(div => selectedId === div.id).map(div => (
           <div key={div.id + "-tb"} className="canvas-divider-float-toolbar"
             style={{ left: (div.x + div.x2) / 2, top: Math.min(div.y, div.y2) - 36 }}
@@ -4488,28 +4645,6 @@ export function CanvasEditor({ content, onChange, nodeId }: Props) {
           );
         })}
 
-        {/* Ink stroke floating toolbar */}
-        {inkStrokeBlocks.filter(ib => selectedId === ib.id).map(ib => (
-          <div key={ib.id + "-tb"} className="canvas-divider-float-toolbar ds-float-toolbar"
-            style={{ left: ib.x + ib.width / 2, top: ib.y - 44 }}
-            onPointerDown={e => e.stopPropagation()}>
-            {DRAW_COLORS.map(c => (
-              <button key={c} className={`ds-color-btn${ib.color === c ? " active" : ""}`}
-                style={{ background: c, outlineColor: c }}
-                onClick={() => { pushUndo(); updateBlock(ib.id, { color: c }); }} />
-            ))}
-            <div className="canvas-divider-float-sep" />
-            {[1.5, 2.5, 4].map(w => (
-              <button key={w} className={`canvas-divider-style-btn${ib.strokeWidth === w ? " active" : ""}`}
-                onClick={() => { pushUndo(); updateBlock(ib.id, { strokeWidth: w }); }}>
-                <span style={{ display:"block", height: w < 2 ? "1.5px" : w < 3 ? "2.5px" : "4px", width:14, background:"currentColor", borderRadius:1 }} />
-              </button>
-            ))}
-            <div className="canvas-divider-float-sep" />
-            <button className="canvas-block-close" onClick={() => deleteBlock(ib.id)}>×</button>
-          </div>
-        ))}
-
         {/* Polygon in-progress hint */}
         {tool === "draw_polygon" && polygonPts.length > 0 && (
           <div className="ds-poly-hint" onPointerDown={e => e.stopPropagation()}>
@@ -4530,6 +4665,41 @@ export function CanvasEditor({ content, onChange, nodeId }: Props) {
         {/* Blocks */}
         {blockElements}
       </div>
+
+      {/* Ink stroke floating toolbar — screen-space, NOT inside .canvas-world.
+          It used to live in that SVG-adjacent layer above and inherit the
+          world's `scale(zoom)` CSS transform, which made the toolbar itself
+          grow/shrink with zoom instead of staying a fixed on-screen size.
+          Position is recomputed from the block's world coords through the
+          live `viewport` state on every render instead, same math the world
+          transform used to do for free (world→screen: wx*zoom + vp.x). The
+          class still carries .canvas-divider-float-toolbar's
+          `transform: translate(-50%, 0)`, which centers it under the stroke
+          without any extra positioning here. z-index 30 (from that class)
+          keeps it above the world's blocks/SVG (z-index ≤5) and below the
+          main toolbar (z-index 40). */}
+      {inkStrokeBlocks.filter(ib => selectedId === ib.id).map(ib => (
+        <div key={ib.id + "-tb"} className="canvas-divider-float-toolbar ds-float-toolbar"
+          style={{ left: (ib.x + ib.width / 2) * zoom + x, top: ib.y * zoom + y - 44 }}
+          onPointerDown={e => e.stopPropagation()}>
+          {DRAW_COLORS.map(c => (
+            <button key={c} className={`ds-color-btn${ib.color === c ? " active" : ""}`}
+              style={{ background: c, outlineColor: c }}
+              onClick={() => { pushUndo(); updateBlock(ib.id, { color: c }); }} />
+          ))}
+          <div className="canvas-divider-float-sep" />
+          {/* Highlighter strokes get their own [8,14,20] range instead of the
+              pen's [1.5,2.5,4,7] — a highlighter at 2.5px is invisible. */}
+          {(ib.nib === "highlighter" ? [8, 14, 20] : [1.5, 2.5, 4, 7]).map(w => (
+            <button key={w} className={`canvas-divider-style-btn${ib.strokeWidth === w ? " active" : ""}`}
+              onClick={() => { pushUndo(); updateBlock(ib.id, { strokeWidth: w }); }}>
+              <span style={{ display:"block", height: `${Math.min(w, 10)}px`, width:14, background:"currentColor", borderRadius:1 }} />
+            </button>
+          ))}
+          <div className="canvas-divider-float-sep" />
+          <button className="canvas-block-close" onClick={() => deleteBlock(ib.id)}>×</button>
+        </div>
+      ))}
 
       {/* ── Context menu ── */}
       {contextMenu && (

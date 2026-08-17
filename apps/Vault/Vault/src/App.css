@@ -2259,6 +2259,77 @@ body {
   gap: 4px;
 }
 
+/* Positioned ancestor for .ink-popover, which anchors under the tool
+   buttons — position:relative here doesn't affect the flex layout. */
+.ink-tool-group {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+/* GoodNotes-style colour/width popover for the active pen or highlighter,
+   opened by clicking that tool's button again (see onInkToolClick). Matches
+   .toolbar-dropdown's look (same dark panel, same anchor pattern). */
+.ink-popover {
+  position: absolute;
+  top: calc(100% + 8px);
+  left: 0;
+  z-index: 50;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  background: var(--bg-base);
+  border: 1px solid var(--border-faint);
+  border-radius: 10px;
+  box-shadow: var(--shadow-md);
+  padding: 10px;
+  width: 176px;
+  animation: dd-in 120ms cubic-bezier(0.16,1,0.3,1);
+}
+
+.ink-popover-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+
+.ink-popover-recents {
+  padding-top: 6px;
+  border-top: 1px solid var(--border-faint);
+}
+
+.ink-popover-widths {
+  padding-top: 6px;
+  border-top: 1px solid var(--border-faint);
+  justify-content: flex-start;
+}
+
+.ink-custom-color {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 11px;
+  color: var(--fg-muted);
+  cursor: pointer;
+}
+
+.ink-custom-color input[type="color"] {
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: 1px solid var(--border-base);
+  border-radius: 50%;
+  background: none;
+  cursor: pointer;
+  overflow: hidden;
+}
+
+/* Strip the native swatch inset so the color fills the circular button. */
+.ink-custom-color input[type="color"]::-webkit-color-swatch-wrapper { padding: 0; }
+.ink-custom-color input[type="color"]::-webkit-color-swatch { border: none; border-radius: 50%; }
+
 .ink-color-btn {
   width: 18px;
   height: 18px;
