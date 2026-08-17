@@ -49,7 +49,7 @@ interface MolDrawBlock   extends BaseBlock { type: "mol_draw"; atoms: MolAtom[];
 interface DrawArrowBlock  extends BaseBlock { type: "draw_arrow";   x2: number; y2: number; color: string; strokeWidth: number; dashed: boolean; headEnd: boolean; headStart: boolean; }
 interface DrawEllipseBlock extends BaseBlock { type: "draw_ellipse"; color: string; fill: string; strokeWidth: number; dashed: boolean; }
 interface DrawPolygonBlock extends BaseBlock { type: "draw_polygon"; points: { x: number; y: number }[]; closed: boolean; color: string; fill: string; strokeWidth: number; dashed: boolean; }
-interface InkStrokeBlock  extends BaseBlock { type: "ink_stroke";  points: { x: number; y: number; p?: number }[]; color: string; strokeWidth: number; }
+interface InkStrokeBlock  extends BaseBlock { type: "ink_stroke";  points: { x: number; y: number; p?: number }[]; color: string; strokeWidth: number; nib?: "highlighter"; }
 
 type CanvasBlock = TextBlock | StickyBlock | TitleBlock | DividerBlock | TableBlock | MathBlock
                 | ChecklistBlock | KanbanBlock | ShapeBlock | FrameBlock | CodeCellBlock | HtmlBlock | ImageBlock
@@ -257,12 +257,16 @@ function outlineToPath(outline: number[][]): string {
   }
   return d + " Z";
 }
-function mkInkStroke(points: { x: number; y: number; p?: number }[], color: string, strokeWidth: number): InkStrokeBlock {
+function mkInkStroke(points: { x: number; y: number; p?: number }[], color: string, strokeWidth: number, nib?: "highlighter"): InkStrokeBlock {
   const xs = points.map(p => p.x), ys = points.map(p => p.y);
   const bx = Math.min(...xs), by = Math.min(...ys);
-  return { id: uid(), type: "ink_stroke", x: bx, y: by,
+  const block: InkStrokeBlock = { id: uid(), type: "ink_stroke", x: bx, y: by,
     width: Math.max(...xs) - bx || 1, height: Math.max(...ys) - by || 1,
     points, color, strokeWidth };
+  // Keep v1-era objects shape-stable: only attach `nib` when the caller
+  // actually asked for one (pen strokes stay pen, no stray `nib: undefined`).
+  if (nib) block.nib = nib;
+  return block;
 }
 // Safari reports real Apple Pencil pressure; mice report a constant 0.5.
 // Keep the raw value — "no pressure" detection happens at render time.
@@ -287,6 +291,19 @@ function rdpSimplify(points: { x: number; y: number; p?: number }[], epsilon: nu
   const left = rdpSimplify(points.slice(0, idx + 1), epsilon);
   const right = rdpSimplify(points.slice(idx), epsilon);
   return [...left.slice(0, -1), ...right];
+}
+// Ray-casting point-in-polygon test, world coords on both sides — used to
+// resolve an ink-mode lasso close into a set of selected strokes.
+function pointInPolygon(pt: { x: number; y: number }, poly: { x: number; y: number }[]): boolean {
+  let inside = false;
+  for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) {
+    const xi = poly[i].x, yi = poly[i].y;
+    const xj = poly[j].x, yj = poly[j].y;
+    const intersect = ((yi > pt.y) !== (yj > pt.y)) &&
+      (pt.x < (xj - xi) * (pt.y - yi) / (yj - yi) + xi);
+    if (intersect) inside = !inside;
+  }
+  return inside;
 }
 
 function mkSimpleGrid(x: number, y: number): GridBlockData {
@@ -1821,6 +1838,12 @@ export function CanvasEditor({ content, onChange, nodeId }: Props) {
   const [inkWidth,       setInkWidth]       = useState(2.5);
   const inkWidthRef      = useRef(inkWidth);
   inkWidthRef.current    = inkWidth;
+  const [inkTool,        setInkTool]        = useState<"pen" | "highlighter" | "eraser" | "lasso">("pen");
+  const inkToolRef       = useRef(inkTool);
+  inkToolRef.current     = inkTool;
+  const [hlWidth,        setHlWidth]        = useState(14);
+  const hlWidthRef       = useRef(hlWidth);
+  hlWidthRef.current     = hlWidth;
   const inkActive        = useRef<{ x: number; y: number; p?: number }[] | null>(null);
   const activePenId      = useRef<number | null>(null);
   // Predicted-tail points (preview-only, never committed) for the in-progress
@@ -1830,11 +1853,33 @@ export function CanvasEditor({ content, onChange, nodeId }: Props) {
   const inkPredicted     = useRef<{ x: number; y: number }[]>([]);
   const inkCanvasRef     = useRef<HTMLCanvasElement | null>(null);
   const inkRafId         = useRef(0);
+  // Eraser: one undo snapshot per gesture (taken lazily, on the first sample
+  // that actually erases something — a swipe that never touches a stroke
+  // must not push a no-op undo entry), plus a screen-space cursor ring.
+  // `doc` is the gesture's working copy of the document: erase math runs on it
+  // synchronously and setData receives it as a plain value. Running the sweep
+  // inside a setData updater looked equivalent but wasn't — React defers
+  // updaters, so on fast input every pointermove and the pointerup batch into
+  // one task, pointerup nulls this ref first, and the undo push guarded by it
+  // silently never happens.
+  const eraseGesture     = useRef<{ snapshot: CanvasData; erased: boolean; doc: CanvasData } | null>(null);
+  const erasePos         = useRef<{ sx: number; sy: number } | null>(null);
+  // Ink-mode lasso: in-progress polygon (world coords), plus drag/scale of
+  // the resulting selection. Both drag and scale keep a pre-gesture snapshot,
+  // and `moved` is flipped by the move handler itself — pointer-up must not
+  // diff against dataRef, which is a commit behind when a fast gesture's
+  // moves and up all land in one task (same race as eraseGesture's doc).
+  const inkLasso         = useRef<{ x: number; y: number }[] | null>(null);
+  const inkSelDrag       = useRef<{ mx: number; my: number; snapshot: CanvasData; orig: Map<string, InkStrokeBlock>; moved?: boolean } | null>(null);
+  const inkSelScale      = useRef<{ ox: number; oy: number; ow: number; oh: number; snapshot: CanvasData; orig: Map<string, InkStrokeBlock>; moved?: boolean } | null>(null);
   const dataRef          = useRef(data);
   dataRef.current        = data;
   const lastSaved        = useRef(content);
 
   const touchStartRef    = useRef<{ dist: number; midX: number; midY: number } | null>(null);
+  // Two/three-finger tap → undo/redo, tracked independently of the pinch
+  // state above (a tap never accumulates the movement pinch needs).
+  const touchTapRef      = useRef<{ count: number; t: number; positions: { id: number; x: number; y: number }[] } | null>(null);
 
   const imageInputRef    = useRef<HTMLInputElement>(null);
 
@@ -1919,30 +1964,82 @@ export function CanvasEditor({ content, onChange, nodeId }: Props) {
     const ctx = canvas?.getContext("2d");
     if (!canvas || !ctx) return;
     ctx.clearRect(0, 0, canvas.clientWidth, canvas.clientHeight);
-    const raw = inkActive.current;
-    if (!raw || raw.length === 0) return;
     const vp = viewportRef.current;
+    const raw = inkActive.current;
     // Pressure-tapered fill, same geometry as the committed stroke's outline
     // (inkOutline/outlineToPath) so there's no visible "pop" on commit beyond
     // the open→closed tip (last: false here vs true once committed). `size`
     // is in world units — the outline itself is projected world→screen below,
     // so it picks up zoom scaling from the projection, not from lineWidth.
-    const worldPts = raw.concat(inkPredicted.current.map(p => ({ x: p.x, y: p.y, p: undefined })));
-    const outline = inkOutline(worldPts, inkWidthRef.current, false);
-    if (outline.length < 4) return;
-    const pts = outline.map(([x, y]) => ({ x: x * vp.zoom + vp.x, y: y * vp.zoom + vp.y }));
-    ctx.fillStyle = inkColorRef.current;
-    ctx.beginPath();
-    ctx.moveTo(pts[0].x, pts[0].y);
-    // Mirrors outlineToPath's average-quadratic-through-consecutive-points
-    // geometry, drawn with canvas calls instead of an SVG path string.
-    for (let i = 0; i < pts.length; i++) {
-      const p0 = pts[i];
-      const p1 = pts[(i + 1) % pts.length];
-      ctx.quadraticCurveTo(p0.x, p0.y, (p0.x + p1.x) / 2, (p0.y + p1.y) / 2);
+    // Guarded (not an early return) since eraser/lasso preview below must
+    // still draw on frames where no pen stroke is in flight.
+    if (raw && raw.length > 0) {
+      const worldPts = raw.concat(inkPredicted.current.map(p => ({ x: p.x, y: p.y, p: undefined })));
+
+      if (inkToolRef.current === "highlighter") {
+        // Highlighter preview strokes the raw polyline instead of filling a
+        // pressure outline — mirrors the committed centerline render (see the
+        // `ib.nib === "highlighter"` branch in the committed <path> below).
+        const hlPts = worldPts.map(p => ({ x: p.x * vp.zoom + vp.x, y: p.y * vp.zoom + vp.y }));
+        if (hlPts.length >= 2) {
+          ctx.strokeStyle = inkColorRef.current;
+          ctx.lineWidth = hlWidthRef.current * vp.zoom;
+          ctx.lineCap = "butt";
+          ctx.lineJoin = "round";
+          ctx.globalAlpha = 0.45;
+          ctx.globalCompositeOperation = "multiply";
+          ctx.beginPath();
+          ctx.moveTo(hlPts[0].x, hlPts[0].y);
+          for (let i = 1; i < hlPts.length; i++) ctx.lineTo(hlPts[i].x, hlPts[i].y);
+          ctx.stroke();
+          // Reset — later drawing (lasso rope, eraser ring, next pen stroke)
+          // must not inherit multiply/alpha from the highlighter pass.
+          ctx.globalAlpha = 1;
+          ctx.globalCompositeOperation = "source-over";
+        }
+      } else {
+        const outline = inkOutline(worldPts, inkWidthRef.current, false);
+        if (outline.length >= 4) {
+          const pts = outline.map(([x, y]) => ({ x: x * vp.zoom + vp.x, y: y * vp.zoom + vp.y }));
+          ctx.fillStyle = inkColorRef.current;
+          ctx.beginPath();
+          ctx.moveTo(pts[0].x, pts[0].y);
+          // Mirrors outlineToPath's average-quadratic-through-consecutive-points
+          // geometry, drawn with canvas calls instead of an SVG path string.
+          for (let i = 0; i < pts.length; i++) {
+            const p0 = pts[i];
+            const p1 = pts[(i + 1) % pts.length];
+            ctx.quadraticCurveTo(p0.x, p0.y, (p0.x + p1.x) / 2, (p0.y + p1.y) / 2);
+          }
+          ctx.closePath();
+          ctx.fill();
+        }
+      }
     }
-    ctx.closePath();
-    ctx.fill();
+
+    // ── Lasso rope (screen-projected, dashed) ──
+    if (inkLasso.current && inkLasso.current.length >= 2) {
+      const poly = inkLasso.current.map(p => ({ x: p.x * vp.zoom + vp.x, y: p.y * vp.zoom + vp.y }));
+      ctx.setLineDash([6, 4]);
+      ctx.strokeStyle = "rgba(59,130,246,0.9)";
+      ctx.lineWidth = 1.5;
+      ctx.beginPath();
+      ctx.moveTo(poly[0].x, poly[0].y);
+      for (let i = 1; i < poly.length; i++) ctx.lineTo(poly[i].x, poly[i].y);
+      ctx.closePath();
+      ctx.stroke();
+      ctx.setLineDash([]); // reset — a dashed lasso must not leak into the next frame's fill/stroke
+    }
+
+    // ── Eraser cursor ring (screen-space, constant size regardless of zoom) ──
+    if (erasePos.current) {
+      const { sx, sy } = erasePos.current;
+      ctx.beginPath();
+      ctx.arc(sx, sy, 10, 0, Math.PI * 2);
+      ctx.strokeStyle = "rgba(120,120,130,0.9)";
+      ctx.lineWidth = 1.5;
+      ctx.stroke();
+    }
   }
 
   function scheduleInkDraw() {
@@ -2034,6 +2131,11 @@ export function CanvasEditor({ content, onChange, nodeId }: Props) {
         setPolygonPts([]);
         inkActive.current = null;
         activePenId.current = null;
+        eraseGesture.current = null;
+        erasePos.current = null;
+        inkLasso.current = null;
+        inkSelDrag.current = null;
+        inkSelScale.current = null;
         clearInkPreview();
         if (selectedIdsRef.current.size > 1) { setSelectedIds(new Set()); setSelectedId(null); }
         return;
@@ -2235,6 +2337,138 @@ export function CanvasEditor({ content, onChange, nodeId }: Props) {
     setSelectedArrowId(null);
   }
 
+  // ── Ink eraser ──────────────────────────────────────────────────────────────
+  // Splits strokes instead of deleting whole blocks: points within R of the
+  // sample are removed, and the surviving points on either side become their
+  // own strokes (each still gets a fresh id via mkInkStroke). A stroke with
+  // nothing marked is pushed back by reference, unchanged — that's what keeps
+  // inkPathCache's identity check (`prev.points === ib.points`) hitting for
+  // every stroke the eraser sample didn't touch.
+  function eraseSweepOnce(blocks: CanvasBlock[], wx: number, wy: number): { blocks: CanvasBlock[]; changed: boolean; removedIds: string[] } {
+    const R = 10 / viewportRef.current.zoom; // world-space radius for a ~20px-diameter screen cursor
+    let changed = false;
+    const removedIds: string[] = [];
+    const next: CanvasBlock[] = [];
+    for (const b of blocks) {
+      if (b.type !== "ink_stroke") { next.push(b); continue; }
+      const pad = R + b.strokeWidth / 2;
+      if (wx < b.x - pad || wx > b.x + b.width + pad || wy < b.y - pad || wy > b.y + b.height + pad) {
+        next.push(b); // bbox quick-reject
+        continue;
+      }
+      // Segment-aware erase: RDP leaves points 20-60px apart, so testing only
+      // the vertices lets the eraser pass clean between two of them (or clip a
+      // run end) without ever splitting the stroke. Walk each segment in ~3px
+      // sub-steps instead, and cut the stroke at the disc boundary with
+      // interpolated points (and pressure) — a sweep through the middle yields
+      // two clean halves regardless of how sparse the stored points are.
+      const inside = (x: number, y: number) => Math.hypot(x - wx, y - wy) <= pad;
+      const pts = b.points;
+      const runs: InkStrokeBlock["points"][] = [];
+      let run: InkStrokeBlock["points"] = [];
+      let prevInside = inside(pts[0].x, pts[0].y);
+      let touched = prevInside;
+      if (!prevInside) run.push(pts[0]);
+      for (let i = 0; i < pts.length - 1; i++) {
+        const a = pts[i], c = pts[i + 1];
+        const segLen = Math.hypot(c.x - a.x, c.y - a.y);
+        const steps = Math.max(1, Math.ceil(segLen / 3));
+        for (let s = 1; s <= steps; s++) {
+          const t = s / steps;
+          const x = a.x + (c.x - a.x) * t;
+          const y = a.y + (c.y - a.y) * t;
+          const nowInside = inside(x, y);
+          if (nowInside !== prevInside) {
+            touched = true;
+            const p = a.p != null || c.p != null
+              ? (a.p ?? 0.5) + ((c.p ?? 0.5) - (a.p ?? 0.5)) * t
+              : undefined;
+            const boundary = p != null ? { x, y, p } : { x, y };
+            if (nowInside) {
+              run.push(boundary);
+              if (run.length >= 2) runs.push(run);
+              run = [];
+            } else {
+              run = [boundary];
+            }
+            prevInside = nowInside;
+          }
+          if (s === steps && !nowInside) run.push(c);
+        }
+      }
+      if (run.length >= 2) runs.push(run);
+      if (!touched) { next.push(b); continue; }
+      changed = true;
+      removedIds.push(b.id);
+      for (const r of runs) next.push(mkInkStroke(r, b.color, b.strokeWidth, b.nib));
+    }
+    return { blocks: next, changed, removedIds };
+  }
+
+  // Batches every sample from one pointer event (or the single down-point)
+  // into ONE setData call. All math runs synchronously against the gesture's
+  // working doc — never inside a setData updater (see the eraseGesture comment)
+  // and never against dataRef, which lags a commit behind during a fast sweep.
+  // The pen is captured for the whole gesture, so nothing else edits the doc.
+  function eraseAt(points: { x: number; y: number }[]) {
+    const g = eraseGesture.current;
+    if (!g || !points.length) return;
+    let { blocks, arrows } = g.doc;
+    let anyChanged = false;
+    const removedIds: string[] = [];
+    for (const pt of points) {
+      const res = eraseSweepOnce(blocks, pt.x, pt.y);
+      if (res.changed) { blocks = res.blocks; anyChanged = true; removedIds.push(...res.removedIds); }
+    }
+    if (!anyChanged) return;
+    // One undo entry per gesture: pushed synchronously on the first sample
+    // that actually erases something.
+    if (!g.erased) {
+      pushUndo(g.snapshot);
+      g.erased = true;
+    }
+    // Mirrors deleteBlock's arrow rule: drop any arrow that pointed at a
+    // stroke id which no longer exists (split-away or fully erased).
+    const removedSet = new Set(removedIds);
+    arrows = arrows.filter(a => !removedSet.has(a.fromId) && !removedSet.has(a.toId));
+    g.doc = { blocks, arrows };
+    setData(g.doc);
+  }
+
+  // Combined bbox (world coords) of the selected ink strokes — used both to
+  // decide "pen-down inside the selection starts a drag" and to render the
+  // lasso selection rect + scale handle.
+  function inkSelectionBbox(ids: Set<string>): { x: number; y: number; width: number; height: number } | null {
+    const strokes = dataRef.current.blocks.filter((b): b is InkStrokeBlock => b.type === "ink_stroke" && ids.has(b.id));
+    if (!strokes.length) return null;
+    const x1 = Math.min(...strokes.map(b => b.x));
+    const y1 = Math.min(...strokes.map(b => b.y));
+    const x2 = Math.max(...strokes.map(b => b.x + b.width));
+    const y2 = Math.max(...strokes.map(b => b.y + b.height));
+    return { x: x1, y: y1, width: x2 - x1, height: y2 - y1 };
+  }
+
+  // Pre-gesture snapshot of the selected ink strokes, keyed by id — read by
+  // both the drag and scale start paths so pointer-up can diff post-gesture
+  // block state against it (see the preDragSnapshot-style commit in onPointerUp).
+  function origInkMap(ids: Set<string>): Map<string, InkStrokeBlock> {
+    const orig = new Map<string, InkStrokeBlock>();
+    for (const id of ids) {
+      const b = dataRef.current.blocks.find(bb => bb.id === id);
+      if (b && b.type === "ink_stroke") orig.set(id, b);
+    }
+    return orig;
+  }
+
+  // Switching ink tool (or leaving ink mode — see the toggle button below)
+  // must not strand an in-progress lasso/drag/scale from the previous tool.
+  function selectInkTool(t: "pen" | "highlighter" | "eraser" | "lasso") {
+    inkLasso.current = null;
+    inkSelDrag.current = null;
+    inkSelScale.current = null;
+    setInkTool(t);
+  }
+
   // ── Pointer handlers ────────────────────────────────────────────────────────
 
   function onBgPointerDown(e: React.PointerEvent) {
@@ -2249,12 +2483,53 @@ export function CanvasEditor({ content, onChange, nodeId }: Props) {
       e.preventDefault();
       e.currentTarget.setPointerCapture(e.pointerId);
       setOpenMenu(null);
-      activePenId.current = e.pointerId;
       const rect = containerRef.current!.getBoundingClientRect();
       const vp = viewportRef.current;
-      const cx = (e.clientX - rect.left - vp.x) / vp.zoom;
-      const cy = (e.clientY - rect.top  - vp.y) / vp.zoom;
-      inkActive.current = [{ x: cx, y: cy, p: pressureOf(e) }];
+      const wx = (e.clientX - rect.left - vp.x) / vp.zoom;
+      const wy = (e.clientY - rect.top  - vp.y) / vp.zoom;
+      if (inkToolRef.current === "eraser") {
+        activePenId.current = e.pointerId;
+        const preErase = snapshotData();
+        eraseGesture.current = { snapshot: preErase, erased: false, doc: preErase };
+        eraseAt([{ x: wx, y: wy }]);
+        erasePos.current = { sx: e.clientX - rect.left, sy: e.clientY - rect.top };
+        scheduleInkDraw();
+        return;
+      }
+      if (inkToolRef.current === "lasso") {
+        activePenId.current = e.pointerId;
+        const curIds = selectedIdsRef.current;
+        const bbox = curIds.size > 0 ? inkSelectionBbox(curIds) : null;
+        if (bbox) {
+          // Scale handle hit-test — same corner as the visual rect rendered
+          // below (bbox bottom-right + 4px pad, size 12/zoom), but tested
+          // against a 24/zoom tolerance rect since the handle itself is too
+          // small a target for a fingertip. This routes the handle through
+          // the same centralized pen pipeline as every other ink gesture —
+          // the DOM handle used to have its own onPointerDown, but the
+          // ink-capture sheet (.canvas-ink-layer, z-index 5) sits above the
+          // world SVG (z-index 1) whenever inkMode is on and swallows the
+          // hit before it ever reaches an element inside canvas-world.
+          const hs = 24 / vp.zoom;
+          const hx = bbox.x + bbox.width + 4;
+          const hy = bbox.y + bbox.height + 4;
+          if (Math.abs(wx - hx) <= hs / 2 && Math.abs(wy - hy) <= hs / 2) {
+            inkSelScale.current = { ox: bbox.x, oy: bbox.y, ow: bbox.width, oh: bbox.height, snapshot: snapshotData(), orig: origInkMap(curIds) };
+            return;
+          }
+          // Inside the (untoleranced) bbox but not on the handle → drag.
+          if (wx >= bbox.x && wx <= bbox.x + bbox.width && wy >= bbox.y && wy <= bbox.y + bbox.height) {
+            inkSelDrag.current = { mx: wx, my: wy, snapshot: snapshotData(), orig: origInkMap(curIds) };
+            return;
+          }
+        }
+        // Outside both → start a fresh lasso.
+        setSelectedIds(new Set()); setSelectedId(null);
+        inkLasso.current = [{ x: wx, y: wy }];
+        return;
+      }
+      activePenId.current = e.pointerId;
+      inkActive.current = [{ x: wx, y: wy, p: pressureOf(e) }];
       scheduleInkDraw();
       return;
     }
@@ -2457,6 +2732,83 @@ export function CanvasEditor({ content, onChange, nodeId }: Props) {
       scheduleInkDraw();
       return;
     }
+    // ── Ink mode: eraser sweep (batch every coalesced sample into one setData) ──
+    if (inkModeRef.current && e.pointerType === "pen" && eraseGesture.current && e.pointerId === activePenId.current) {
+      const rect = containerRef.current!.getBoundingClientRect();
+      const native = e.nativeEvent as PointerEvent;
+      const coalesced = native.getCoalescedEvents?.();
+      const events = coalesced && coalesced.length ? coalesced : [native];
+      const pts = events.map(ev => ({
+        x: (ev.clientX - rect.left - vp.x) / vp.zoom,
+        y: (ev.clientY - rect.top  - vp.y) / vp.zoom,
+      }));
+      eraseAt(pts);
+      erasePos.current = { sx: e.clientX - rect.left, sy: e.clientY - rect.top };
+      scheduleInkDraw();
+      return;
+    }
+    // ── Ink mode: lasso rope in progress ──
+    if (inkModeRef.current && e.pointerType === "pen" && inkLasso.current && e.pointerId === activePenId.current) {
+      const rect = containerRef.current!.getBoundingClientRect();
+      const native = e.nativeEvent as PointerEvent;
+      const coalesced = native.getCoalescedEvents?.();
+      const events = coalesced && coalesced.length ? coalesced : [native];
+      for (const ev of events) {
+        inkLasso.current.push({
+          x: (ev.clientX - rect.left - vp.x) / vp.zoom,
+          y: (ev.clientY - rect.top  - vp.y) / vp.zoom,
+        });
+      }
+      scheduleInkDraw();
+      return;
+    }
+    // ── Ink lasso selection: drag (translate) ── — armed only by the pen
+    // branch in onBgPointerDown; routes here purely on pointerId match.
+    if (inkSelDrag.current && e.pointerId === activePenId.current) {
+      const rect = containerRef.current!.getBoundingClientRect();
+      const wx = (e.clientX - rect.left - vp.x) / vp.zoom;
+      const wy = (e.clientY - rect.top  - vp.y) / vp.zoom;
+      const { mx, my, orig } = inkSelDrag.current;
+      const dx = wx - mx, dy = wy - my;
+      if (dx !== 0 || dy !== 0) inkSelDrag.current.moved = true;
+      setData(d => ({
+        ...d,
+        blocks: d.blocks.map(b => {
+          const o = orig.get(b.id);
+          if (!o) return b;
+          return { ...o, x: o.x + dx, y: o.y + dy, points: o.points.map(p => ({ ...p, x: p.x + dx, y: p.y + dy })) };
+        }),
+      }));
+      return;
+    }
+    // ── Ink lasso selection: scale ── — armed only by the pen branch's
+    // handle hit-test in onBgPointerDown; routes here purely on pointerId
+    // match. Tools stay pen-only: mouse can't arm this, by design.
+    if (inkSelScale.current && e.pointerId === activePenId.current) {
+      const rect = containerRef.current!.getBoundingClientRect();
+      const wx = (e.clientX - rect.left - vp.x) / vp.zoom;
+      const wy = (e.clientY - rect.top  - vp.y) / vp.zoom;
+      const { ox, oy, ow, oh, orig } = inkSelScale.current;
+      const s = Math.max(0.05, Math.max((wx - ox) / ow, (wy - oy) / oh));
+      if (s !== 1) inkSelScale.current.moved = true;
+      setData(d => ({
+        ...d,
+        blocks: d.blocks.map(b => {
+          const o = orig.get(b.id);
+          if (!o) return b;
+          return {
+            ...o,
+            x: ox + (o.x - ox) * s,
+            y: oy + (o.y - oy) * s,
+            width: o.width * s,
+            height: o.height * s,
+            strokeWidth: Math.max(0.5, o.strokeWidth * s),
+            points: o.points.map(p => ({ ...p, x: ox + (p.x - ox) * s, y: oy + (p.y - oy) * s })),
+          };
+        }),
+      }));
+      return;
+    }
     if (pendingRef.current) {
       const rect = containerRef.current!.getBoundingClientRect();
       setPreviewPos({ x: (e.clientX - rect.left - vp.x) / vp.zoom, y: (e.clientY - rect.top - vp.y) / vp.zoom });
@@ -2609,11 +2961,65 @@ export function CanvasEditor({ content, onChange, nodeId }: Props) {
     if (inkModeRef.current && e?.pointerType === "pen" && inkActive.current && e.pointerId === activePenId.current) {
       const raw = inkActive.current;
       if (raw.length >= 2) {
-        const pts = rdpSimplify(raw, 0.4 / viewportRef.current.zoom);
+        const isHighlighter = inkToolRef.current === "highlighter";
+        let pts = rdpSimplify(raw, 0.4 / viewportRef.current.zoom);
+        const width = isHighlighter ? hlWidthRef.current : inkWidth;
+        if (isHighlighter) {
+          // Snap-to-straight: a flat-ish swipe becomes a clean straight line.
+          const xs = pts.map(p => p.x), ys = pts.map(p => p.y);
+          const bw = Math.max(...xs) - Math.min(...xs);
+          const bh = Math.max(...ys) - Math.min(...ys);
+          if (bw >= bh * 8 || bh >= bw * 8) pts = [pts[0], pts[pts.length - 1]];
+        }
         pushUndo();
-        setData(d => ({ ...d, blocks: [...d.blocks, mkInkStroke(pts, inkColor, inkWidth)] }));
+        setData(d => ({ ...d, blocks: [...d.blocks, mkInkStroke(pts, inkColor, width, isHighlighter ? "highlighter" : undefined)] }));
       }
       inkActive.current = null;
+      activePenId.current = null;
+      clearInkPreview();
+      releaseCapture();
+      return;
+    }
+    // ── Ink eraser gesture end ──
+    if (eraseGesture.current && e && e.pointerId === activePenId.current) {
+      eraseGesture.current = null;
+      erasePos.current = null;
+      activePenId.current = null;
+      clearInkPreview();
+      releaseCapture();
+      return;
+    }
+    // ── Ink lasso: close the rope and select every stroke with a point inside ──
+    if (inkLasso.current && e && e.pointerId === activePenId.current) {
+      const poly = inkLasso.current;
+      if (poly.length >= 3) {
+        const ids = dataRef.current.blocks
+          .filter((b): b is InkStrokeBlock => b.type === "ink_stroke")
+          .filter(b => b.points.some(p => pointInPolygon(p, poly)))
+          .map(b => b.id);
+        setSelectedIds(new Set(ids));
+        setSelectedId(ids.length === 1 ? ids[0] : null);
+        setSelectedArrowId(null);
+      }
+      inkLasso.current = null;
+      activePenId.current = null;
+      clearInkPreview();
+      releaseCapture();
+      return;
+    }
+    // ── Ink lasso selection: drag/scale gesture end — one undo entry only if
+    // something actually moved (mirrors the preDragSnapshot commit pattern) ──
+    if ((inkSelDrag.current || inkSelScale.current) && e && e.pointerId === activePenId.current) {
+      const drag = inkSelDrag.current;
+      const scale = inkSelScale.current;
+      const snapshot = drag?.snapshot ?? scale?.snapshot ?? null;
+      // `moved` comes from the gesture ref, set by the move handler itself —
+      // dataRef is a commit behind here when the whole gesture batched into
+      // one task, and diffing against it dropped the undo entry entirely.
+      const moved = !!(drag?.moved || scale?.moved);
+      if (moved && snapshot) pushUndo(snapshot);
+      inkSelDrag.current = null;
+      inkSelScale.current = null;
       activePenId.current = null;
       clearInkPreview();
       releaseCapture();
@@ -2695,6 +3101,18 @@ export function CanvasEditor({ content, onChange, nodeId }: Props) {
   // ── Touch gesture handlers (pinch-to-zoom + two-finger pan) ─────────────────
 
   function onTouchStart(e: React.TouchEvent) {
+    // Two- or three-finger tap → undo/redo (works in every mode, not just
+    // ink). Recorded on every touchstart while the finger count is 2 or 3;
+    // resets everything else, so a stray extra/missing finger cancels it.
+    if (e.touches.length === 2 || e.touches.length === 3) {
+      touchTapRef.current = {
+        count: e.touches.length,
+        t: performance.now(),
+        positions: Array.from(e.touches).map(t => ({ id: t.identifier, x: t.clientX, y: t.clientY })),
+      };
+    } else {
+      touchTapRef.current = null;
+    }
     if (e.touches.length !== 2) return;
     e.preventDefault();
     const [t0, t1] = [e.touches[0], e.touches[1]];
@@ -2706,6 +3124,18 @@ export function CanvasEditor({ content, onChange, nodeId }: Props) {
   }
 
   function onTouchMove(e: React.TouchEvent) {
+    // Any tracked touch moving > 8px cancels the tap candidate — pinch/pan
+    // gestures involve movement, so this naturally excludes them.
+    if (touchTapRef.current) {
+      for (let i = 0; i < e.touches.length; i++) {
+        const t = e.touches[i];
+        const rec = touchTapRef.current.positions.find(p => p.id === t.identifier);
+        if (rec && Math.hypot(t.clientX - rec.x, t.clientY - rec.y) > 8) {
+          touchTapRef.current = null;
+          break;
+        }
+      }
+    }
     if (e.touches.length !== 2 || !touchStartRef.current) return;
     e.preventDefault();
     const [t0, t1] = [e.touches[0], e.touches[1]];
@@ -2735,8 +3165,16 @@ export function CanvasEditor({ content, onChange, nodeId }: Props) {
     touchStartRef.current = { dist, midX, midY };
   }
 
-  function onTouchEnd() {
+  function onTouchEnd(e: React.TouchEvent) {
     touchStartRef.current = null;
+    if (e.touches.length === 0) {
+      const tap = touchTapRef.current;
+      if (tap && performance.now() - tap.t < 300) {
+        if (tap.count === 2) doUndo();
+        else if (tap.count === 3) doRedo();
+      }
+      touchTapRef.current = null;
+    }
   }
 
   // ── Render helpers ──────────────────────────────────────────────────────────
@@ -3117,14 +3555,19 @@ export function CanvasEditor({ content, onChange, nodeId }: Props) {
     const next = new Map<string, { points: InkStrokeBlock["points"]; strokeWidth: number; d: string; hitD: string; filled: boolean }>();
     const out = inkStrokeBlocks.map(ib => {
       const prev = inkPathCache.current.get(ib.id);
+      // Highlighter strokes always render as a stroked centerline, never the
+      // perfect-freehand filled outline, regardless of pressure data — nib
+      // never changes after creation, so points/width identity above still
+      // covers cache invalidation.
+      const filled = ib.nib !== "highlighter" && ib.points.some(pt => pt.p != null);
       const entry = prev && prev.points === ib.points && prev.strokeWidth === ib.strokeWidth
         ? prev
         : {
             points: ib.points,
             strokeWidth: ib.strokeWidth,
             hitD: pointsToSmoothPath(ib.points),
-            filled: ib.points.some(pt => pt.p != null),
-            d: ib.points.some(pt => pt.p != null)
+            filled,
+            d: filled
               ? outlineToPath(inkOutline(ib.points, ib.strokeWidth))
               : pointsToSmoothPath(ib.points),
           };
@@ -3478,6 +3921,7 @@ export function CanvasEditor({ content, onChange, nodeId }: Props) {
             if (next) {
               setBuildMode(false);
               setTool("pan");
+              setInkTool("pen");
               setPolygonPts([]);
               drawStart.current = null; setDrawCurrent(null);
               setOpenMenu(null);
@@ -3487,6 +3931,11 @@ export function CanvasEditor({ content, onChange, nodeId }: Props) {
             }
             inkActive.current = null;
             activePenId.current = null;
+            eraseGesture.current = null;
+            erasePos.current = null;
+            inkLasso.current = null;
+            inkSelDrag.current = null;
+            inkSelScale.current = null;
             clearInkPreview();
           }}
         >✏ Ink</button>
@@ -3497,6 +3946,15 @@ export function CanvasEditor({ content, onChange, nodeId }: Props) {
           <>
             <div className="canvas-toolbar-sep" />
             <div className="ink-palette">
+              <button className={`ink-tool-btn${inkTool === "pen" ? " active" : ""}`}
+                title="Pen" onClick={() => selectInkTool("pen")}>✒︎ Pen</button>
+              <button className={`ink-tool-btn${inkTool === "highlighter" ? " active" : ""}`}
+                title="Highlighter" onClick={() => selectInkTool("highlighter")}>🖊 High</button>
+              <button className={`ink-tool-btn${inkTool === "eraser" ? " active" : ""}`}
+                title="Eraser" onClick={() => selectInkTool("eraser")}>◌ Erase</button>
+              <button className={`ink-tool-btn${inkTool === "lasso" ? " active" : ""}`}
+                title="Lasso" onClick={() => selectInkTool("lasso")}>⬚ Lasso</button>
+              <div className="canvas-divider-float-sep" />
               {DRAW_COLORS.map(c => (
                 <button key={c} className={`ink-color-btn${inkColor === c ? " active" : ""}`}
                   style={{ background: c, outlineColor: c }}
@@ -3504,7 +3962,14 @@ export function CanvasEditor({ content, onChange, nodeId }: Props) {
                   onClick={() => setInkColor(c)} />
               ))}
               <div className="canvas-divider-float-sep" />
-              {[1.5, 2.5, 4, 7].map(w => (
+              {inkTool === "highlighter" ? [8, 14, 20].map(w => (
+                <button key={w} className={`ink-width-btn${hlWidth === w ? " active" : ""}`}
+                  title={`${w}px highlighter`} onClick={() => setHlWidth(w)}>
+                  {/* Ringed so a white pen is still visible on the toolbar. */}
+                  <span style={{ display: "block", width: Math.min(w * 2 + 4, 24), height: Math.min(w * 2 + 4, 24), borderRadius: "50%",
+                    background: inkColor, boxShadow: "0 0 0 1px var(--border-base)" }} />
+                </button>
+              )) : [1.5, 2.5, 4, 7].map(w => (
                 <button key={w} className={`ink-width-btn${inkWidth === w ? " active" : ""}`}
                   title={`${w}px nib`} onClick={() => setInkWidth(w)}>
                   {/* Ringed so a white pen is still visible on the toolbar. */}
@@ -3512,6 +3977,9 @@ export function CanvasEditor({ content, onChange, nodeId }: Props) {
                     background: inkColor, boxShadow: "0 0 0 1px var(--border-base)" }} />
                 </button>
               ))}
+              <div className="canvas-divider-float-sep" />
+              <button className="ink-undo-btn" title="Undo" onClick={() => doUndo()}>↶</button>
+              <button className="ink-undo-btn" title="Redo" onClick={() => doRedo()}>↷</button>
             </div>
           </>
         )}
@@ -3822,6 +4290,12 @@ export function CanvasEditor({ content, onChange, nodeId }: Props) {
                   onPointerDown={e => onInkStrokePointerDown(e, ib)} />
                 {filled ? (
                   <path d={d} fill={ib.color} fillRule="nonzero" pointerEvents="none" />
+                ) : ib.nib === "highlighter" ? (
+                  <path d={d} fill="none" stroke={ib.color}
+                    strokeWidth={sel ? ib.strokeWidth + 1 : ib.strokeWidth}
+                    strokeLinecap="butt" strokeLinejoin="round"
+                    pointerEvents="none" opacity={0.45}
+                    style={{ mixBlendMode: "multiply" }} />
                 ) : (
                   <path d={d} fill="none" stroke={ib.color}
                     strokeWidth={sel ? ib.strokeWidth + 1 : ib.strokeWidth}
@@ -3838,6 +4312,35 @@ export function CanvasEditor({ content, onChange, nodeId }: Props) {
               </g>
             );
           })}
+
+          {/* ── Ink-lasso selection bbox + scale handle ─────────────────
+              Combined bbox of every selected ink stroke, dashed like the
+              per-stroke rect above, plus a visual affordance at the
+              bottom-right corner marking the scale handle. Purely visual —
+              no handlers here: .canvas-ink-layer (z-index 5) sits above this
+              SVG (z-index 1) whenever inkMode is on and would swallow any
+              pointerdown before it reached this element, pen or otherwise.
+              The actual hit-test lives in onBgPointerDown's pen branch,
+              which the capture sheet does bubble through — same corner +
+              size (12/zoom), tested against a wider tolerance rect. Keep the
+              two in sync if the handle's geometry changes. */}
+          {inkMode && inkTool === "lasso" && selectedIds.size > 0 && (() => {
+            const bbox = inkSelectionBbox(selectedIds);
+            if (!bbox) return null;
+            const hs = 12 / zoom;
+            const hx = bbox.x + bbox.width + 4;
+            const hy = bbox.y + bbox.height + 4;
+            return (
+              <g pointerEvents="none">
+                <rect x={bbox.x - 4} y={bbox.y - 4}
+                  width={bbox.width + 8} height={bbox.height + 8}
+                  fill="none" stroke="var(--border-strong)"
+                  strokeWidth={1} strokeDasharray="4 3" rx={2} />
+                <rect x={hx - hs / 2} y={hy - hs / 2} width={hs} height={hs}
+                  fill="white" stroke="#3b82f6" strokeWidth={1.5} />
+              </g>
+            );
+          })()}
 
           {/* ── Draw preview (in-progress arrow / ellipse) ────────────── */}
           {drawStart.current && drawCurrent && (() => {
@@ -3928,23 +4431,23 @@ export function CanvasEditor({ content, onChange, nodeId }: Props) {
             onPointerDown={e => e.stopPropagation()}>
             {DRAW_COLORS.map(c => (
               <button key={c} className={`ds-color-btn${da.color === c ? " active" : ""}`}
-                style={{ background: c, outlineColor: c }} onClick={() => updateBlock(da.id, { color: c })} />
+                style={{ background: c, outlineColor: c }} onClick={() => { pushUndo(); updateBlock(da.id, { color: c }); }} />
             ))}
             <div className="canvas-divider-float-sep" />
             {[1.5, 2.5, 4].map(w => (
               <button key={w} className={`canvas-divider-style-btn${da.strokeWidth === w ? " active" : ""}`}
-                onClick={() => updateBlock(da.id, { strokeWidth: w })}>
+                onClick={() => { pushUndo(); updateBlock(da.id, { strokeWidth: w }); }}>
                 <span style={{ display:"block", height: w < 2 ? "1.5px" : w < 3 ? "2.5px" : "4px", width:14, background:"currentColor", borderRadius:1 }} />
               </button>
             ))}
             <div className="canvas-divider-float-sep" />
             <button className={`canvas-divider-style-btn${da.dashed ? " active" : ""}`}
-              onClick={() => updateBlock(da.id, { dashed: !da.dashed })} title="Dashed">╌╌</button>
+              onClick={() => { pushUndo(); updateBlock(da.id, { dashed: !da.dashed }); }} title="Dashed">╌╌</button>
             <div className="canvas-divider-float-sep" />
             <button className={`canvas-divider-style-btn${da.headStart ? " active" : ""}`}
-              onClick={() => updateBlock(da.id, { headStart: !da.headStart })} title="Head at start">◄—</button>
+              onClick={() => { pushUndo(); updateBlock(da.id, { headStart: !da.headStart }); }} title="Head at start">◄—</button>
             <button className={`canvas-divider-style-btn${da.headEnd ? " active" : ""}`}
-              onClick={() => updateBlock(da.id, { headEnd: !da.headEnd })} title="Head at end">—►</button>
+              onClick={() => { pushUndo(); updateBlock(da.id, { headEnd: !da.headEnd }); }} title="Head at end">—►</button>
             <div className="canvas-divider-float-sep" />
             <button className="canvas-block-close" onClick={() => deleteBlock(da.id)}>×</button>
           </div>
@@ -3961,24 +4464,24 @@ export function CanvasEditor({ content, onChange, nodeId }: Props) {
               onPointerDown={e => e.stopPropagation()}>
               {DRAW_COLORS.map(c => (
                 <button key={c} className={`ds-color-btn${ds.color === c ? " active" : ""}`}
-                  style={{ background: c, outlineColor: c }} onClick={() => updateBlock(ds.id, { color: c })} />
+                  style={{ background: c, outlineColor: c }} onClick={() => { pushUndo(); updateBlock(ds.id, { color: c }); }} />
               ))}
               <div className="canvas-divider-float-sep" />
               {DRAW_FILLS.map((f, i) => (
                 <button key={i} className={`ds-color-btn ds-fill-btn${ds.fill === f ? " active" : ""}`}
                   style={{ background: f === "none" ? "transparent" : f, border: f === "none" ? "1px dashed var(--border-base)" : undefined, outlineColor: ds.color }}
-                  onClick={() => updateBlock(ds.id, { fill: f })} />
+                  onClick={() => { pushUndo(); updateBlock(ds.id, { fill: f }); }} />
               ))}
               <div className="canvas-divider-float-sep" />
               {[1.5, 2.5, 4].map(w => (
                 <button key={w} className={`canvas-divider-style-btn${ds.strokeWidth === w ? " active" : ""}`}
-                  onClick={() => updateBlock(ds.id, { strokeWidth: w })}>
+                  onClick={() => { pushUndo(); updateBlock(ds.id, { strokeWidth: w }); }}>
                   <span style={{ display:"block", height: w < 2 ? "1.5px" : w < 3 ? "2.5px" : "4px", width:14, background:"currentColor", borderRadius:1 }} />
                 </button>
               ))}
               <div className="canvas-divider-float-sep" />
               <button className={`canvas-divider-style-btn${ds.dashed ? " active" : ""}`}
-                onClick={() => updateBlock(ds.id, { dashed: !ds.dashed })} title="Dashed">╌╌</button>
+                onClick={() => { pushUndo(); updateBlock(ds.id, { dashed: !ds.dashed }); }} title="Dashed">╌╌</button>
               <div className="canvas-divider-float-sep" />
               <button className="canvas-block-close" onClick={() => deleteBlock(ds.id)}>×</button>
             </div>
@@ -3993,12 +4496,12 @@ export function CanvasEditor({ content, onChange, nodeId }: Props) {
             {DRAW_COLORS.map(c => (
               <button key={c} className={`ds-color-btn${ib.color === c ? " active" : ""}`}
                 style={{ background: c, outlineColor: c }}
-                onClick={() => updateBlock(ib.id, { color: c })} />
+                onClick={() => { pushUndo(); updateBlock(ib.id, { color: c }); }} />
             ))}
             <div className="canvas-divider-float-sep" />
             {[1.5, 2.5, 4].map(w => (
               <button key={w} className={`canvas-divider-style-btn${ib.strokeWidth === w ? " active" : ""}`}
-                onClick={() => updateBlock(ib.id, { strokeWidth: w })}>
+                onClick={() => { pushUndo(); updateBlock(ib.id, { strokeWidth: w }); }}>
                 <span style={{ display:"block", height: w < 2 ? "1.5px" : w < 3 ? "2.5px" : "4px", width:14, background:"currentColor", borderRadius:1 }} />
               </button>
             ))}
