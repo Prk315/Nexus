@@ -568,6 +568,7 @@ export const EditorPane = forwardRef<EditorPaneHandle, EditorPaneProps>(
               <div className="loading-state">Loading…</div>
             ) : selectedNode?.kind.type === "Canvas" ? (
               <CanvasEditor
+                key={selectedId}
                 content={content}
                 onChange={setContent}
                 nodeId={selectedId ?? undefined}
