@@ -63,10 +63,23 @@ const COMMANDS: CommandItem[] = [
       editor.chain().focus().deleteRange(range).setHorizontalRule().run(),
   },
   {
+    title: "Inline Math",
+    icon: "√x",
+    // insertInlineMath defaults its position to the *current* selection, so
+    // the deleteRange must be dispatched first — chaining both into one
+    // .run() would insert at the stale pre-delete cursor position.
+    command: ({ editor, range }) => {
+      editor.chain().focus().deleteRange(range).run();
+      editor.chain().focus().insertInlineMath({ latex: "x" }).run();
+    },
+  },
+  {
     title: "Math Block",
     icon: "∑",
-    command: ({ editor, range }) =>
-      editor.chain().focus().deleteRange(range).insertContent("$$\\text{expression}$$").run(),
+    command: ({ editor, range }) => {
+      editor.chain().focus().deleteRange(range).run();
+      editor.chain().focus().insertBlockMath({ latex: "x" }).run();
+    },
   },
   {
     title: "Table",

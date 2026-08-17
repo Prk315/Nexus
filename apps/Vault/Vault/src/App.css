@@ -2675,31 +2675,157 @@ body {
   cursor: col-resize;
 }
 
-/* ── KaTeX / Math ───────────────────────────────────────────────────────── */
-.tiptap-editor .ProseMirror .Tiptap-mathematics-editor {
-  background: var(--bg-raised);
+/* ── KaTeX / Math (@tiptap/extension-mathematics v3 node views) ───────────
+   The extension renders inline math as <span data-type="inline-math"> and
+   block math as <div data-type="block-math">, both wrapped in a
+   .tiptap-mathematics-render element (+ --editable when the editor is
+   editable). Parse errors add .inline-math-error / .block-math-error. */
+.tiptap-editor .ProseMirror .tiptap-mathematics-render {
   border-radius: 6px;
-  padding: 2px 8px;
-  font-family: "Menlo", "Monaco", monospace;
-  font-size: 13px;
-  color: var(--fg-main);
-  outline: 1px solid var(--border-base);
-}
-
-.tiptap-editor .ProseMirror .Tiptap-mathematics-render {
-  cursor: pointer;
   padding: 2px 4px;
-  border-radius: 6px;
   color: var(--fg-main);
   transition: background var(--duration) var(--ease);
 }
 
-.tiptap-editor .ProseMirror .Tiptap-mathematics-render:hover {
+.tiptap-editor .ProseMirror .tiptap-mathematics-render--editable {
+  cursor: pointer;
+}
+
+.tiptap-editor .ProseMirror .tiptap-mathematics-render--editable:hover {
   background: var(--bg-raised);
+}
+
+.tiptap-editor .ProseMirror [data-type="block-math"] {
+  display: block;
+  margin: 0.9em 0;
+  text-align: center;
+}
+
+.tiptap-editor .ProseMirror .inline-math-error,
+.tiptap-editor .ProseMirror .block-math-error {
+  background: var(--destructive-bg);
+  border: 1px solid var(--destructive-border);
+  color: var(--destructive);
+  font-family: "Menlo", "Monaco", monospace;
+  font-size: 13px;
 }
 
 .tiptap-editor .ProseMirror .katex { color: var(--fg-main); }
 .tiptap-editor .ProseMirror .katex-display { margin: 0.9em 0; }
+
+/* ── Math edit popover (NoteEditor's inline/block LaTeX editor) ───────────
+   Same visual language as .confirm-dialog (fixed centered card, blurred
+   backdrop) but Save is a primary action, not a destructive one, so it gets
+   its own accent-colored button rather than reusing .confirm-btn-danger. */
+.math-edit-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 10000;
+  background: oklch(0 0 0 / 32%);
+  backdrop-filter: blur(6px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+}
+
+.math-edit-dialog {
+  background: var(--bg-base);
+  border: 1px solid var(--border-base);
+  border-radius: calc(var(--radius) * 1.5);
+  box-shadow: var(--shadow-lg);
+  width: 460px;
+  max-width: 100%;
+  padding: 22px 22px 18px;
+  animation: confirm-pop var(--duration) var(--ease);
+}
+
+.math-edit-title {
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--fg-main);
+  margin-bottom: 12px;
+}
+
+.math-edit-input {
+  width: 100%;
+  resize: vertical;
+  background: var(--bg-raised);
+  border: 1px solid var(--border-base);
+  border-radius: var(--radius);
+  padding: 8px 10px;
+  font-family: "Menlo", "Monaco", monospace;
+  font-size: 13.5px;
+  color: var(--fg-main);
+  box-sizing: border-box;
+}
+
+.math-edit-input:focus {
+  outline: 2px solid var(--accent, #4f8ef7);
+  outline-offset: -1px;
+}
+
+.math-edit-preview {
+  min-height: 44px;
+  margin-top: 12px;
+  padding: 10px 12px;
+  background: var(--bg-raised);
+  border: 1px solid var(--border-base);
+  border-radius: var(--radius);
+  overflow-x: auto;
+  color: var(--fg-main);
+}
+
+.math-edit-preview.math-edit-preview-error {
+  color: var(--destructive);
+  font-family: "Menlo", "Monaco", monospace;
+  font-size: 12.5px;
+}
+
+.math-edit-actions {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 10px;
+  margin-top: 18px;
+}
+
+.math-edit-actions-right {
+  display: flex;
+  gap: 10px;
+}
+
+.math-edit-btn {
+  min-height: 42px;
+  min-width: 88px;
+  padding: 0 16px;
+  border-radius: var(--radius);
+  font-size: 14px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background var(--duration) var(--ease), border-color var(--duration) var(--ease);
+}
+
+.math-edit-btn-cancel {
+  background: var(--bg-raised);
+  border: 1px solid var(--border-base);
+  color: var(--fg-main);
+}
+.math-edit-btn-cancel:hover { background: var(--bg-muted); }
+
+.math-edit-btn-save {
+  background: var(--accent, #4f8ef7);
+  border: 1px solid var(--accent, #4f8ef7);
+  color: #fff;
+}
+.math-edit-btn-save:hover { filter: brightness(1.06); }
+
+.math-edit-btn-delete {
+  background: transparent;
+  border: 1px solid var(--destructive-border);
+  color: var(--destructive);
+}
+.math-edit-btn-delete:hover { background: var(--destructive-bg); }
 
 /* ── Markdown preview ───────────────────────────────────────────────────── */
 .preview h1, .preview h2, .preview h3 {

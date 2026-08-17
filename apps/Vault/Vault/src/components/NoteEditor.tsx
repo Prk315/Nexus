@@ -4,6 +4,7 @@ import Placeholder from "@tiptap/extension-placeholder";
 import Mathematics from "@tiptap/extension-mathematics";
 import { Table, TableRow, TableHeader, TableCell } from "@tiptap/extension-table";
 import { useEffect, useRef, useState } from "react";
+import katex from "katex";
 import { createSlashCommandsExtension, type SlashMenuState } from "../extensions/SlashCommands";
 import { CategoryHighlight } from "../extensions/CategoryHighlight";
 import { SlashCommandsList } from "./SlashCommandsList";
@@ -12,7 +13,89 @@ import { DatabaseInsertPicker } from "./DatabaseInsertPicker";
 import * as api from "../lib/api";
 import { DEFAULT_HIGHLIGHTERS, findAncestorOfKind, getDescendants } from "../nodeUtils";
 import type { VaultGraph, HighlighterCategory, VaultRecord } from "../types";
+import { KATEX_OPTS } from "../lib/katexShared";
 import "katex/dist/katex.min.css";
+import "katex/contrib/mhchem";
+
+interface MathEditState { kind: "inline" | "block"; pos: number; latex: string }
+
+// Small centered dialog for editing an inline/block math node's LaTeX with a
+// live KaTeX preview. Mirrors ConfirmDialog's visual language (see App.css
+// .math-edit-*) but isn't a destructive confirmation, so it gets its own
+// button styling rather than reusing .confirm-btn-danger for Save.
+function MathEditPopover({
+  state, onChange, onSave, onDelete, onCancel,
+}: {
+  state: MathEditState;
+  onChange: (latex: string) => void;
+  onSave: () => void;
+  onDelete: () => void;
+  onCancel: () => void;
+}) {
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const previewRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => { textareaRef.current?.focus(); }, []);
+
+  useEffect(() => {
+    const el = previewRef.current;
+    if (!el) return;
+    if (!state.latex.trim()) { el.innerHTML = ""; el.classList.remove("math-edit-preview-error"); return; }
+    try {
+      katex.render(state.latex, el, { ...KATEX_OPTS, displayMode: state.kind === "block" });
+      el.classList.remove("math-edit-preview-error");
+    } catch (e: any) {
+      el.textContent = e?.message ?? "Invalid LaTeX";
+      el.classList.add("math-edit-preview-error");
+    }
+  }, [state.latex, state.kind]);
+
+  useEffect(() => {
+    function onKey(e: KeyboardEvent) {
+      if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); onCancel(); }
+    }
+    // Capture phase, same reasoning as ConfirmDialog: don't let a global
+    // Escape binding close whatever is rendered behind this dialog too.
+    window.addEventListener("keydown", onKey, true);
+    return () => window.removeEventListener("keydown", onKey, true);
+  }, [onCancel]);
+
+  return (
+    <div className="math-edit-backdrop" onPointerDown={onCancel}>
+      <div
+        className="math-edit-dialog"
+        role="dialog"
+        aria-modal="true"
+        aria-label={state.kind === "block" ? "Edit math block" : "Edit inline math"}
+        onPointerDown={e => e.stopPropagation()}
+      >
+        <div className="math-edit-title">{state.kind === "block" ? "Math block" : "Inline math"}</div>
+        <textarea
+          ref={textareaRef}
+          className="math-edit-input"
+          value={state.latex}
+          onChange={e => onChange(e.target.value)}
+          spellCheck={false}
+          rows={state.kind === "block" ? 4 : 2}
+        />
+        <div ref={previewRef} className="math-edit-preview" />
+        <div className="math-edit-actions">
+          <button className="math-edit-btn math-edit-btn-delete" onClick={onDelete} type="button">
+            Delete
+          </button>
+          <div className="math-edit-actions-right">
+            <button className="math-edit-btn math-edit-btn-cancel" onClick={onCancel} type="button">
+              Cancel
+            </button>
+            <button className="math-edit-btn math-edit-btn-save" onClick={onSave} type="button">
+              Save
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
 
 interface Props {
   content: string;
@@ -37,6 +120,7 @@ function parseContent(raw: string) {
 export function NoteEditor({ content, onChange, nodeId, graph }: Props) {
   const [, forceUpdate] = useState(0);
   const [slashMenu, setSlashMenu] = useState<SlashMenuState | null>(null);
+  const [mathEdit, setMathEdit] = useState<MathEditState | null>(null);
   const [nearRightEdge, setNearRightEdge] = useState(false);
   const [onPanel, setOnPanel] = useState(false);
   const wrapperRef = useRef<HTMLDivElement>(null);
@@ -71,7 +155,15 @@ export function NoteEditor({ content, onChange, nodeId, graph }: Props) {
     extensions: [
       StarterKit,
       Placeholder.configure({ placeholder: "Write here… (type / for commands)" }),
-      Mathematics,
+      Mathematics.configure({
+        katexOptions: KATEX_OPTS,
+        inlineOptions: {
+          onClick: (node, pos) => setMathEdit({ kind: "inline", pos, latex: node.attrs.latex }),
+        },
+        blockOptions: {
+          onClick: (node, pos) => setMathEdit({ kind: "block", pos, latex: node.attrs.latex }),
+        },
+      }),
       CategoryHighlight,
       Table.configure({ resizable: true }),
       TableRow,
@@ -161,6 +253,72 @@ export function NoteEditor({ content, onChange, nodeId, graph }: Props) {
     openDatabasePicker();
   };
 
+  // The extension's update/delete commands require doc.nodeAt(pos) to be
+  // EXACTLY the math node — anything else silently returns false, which is
+  // how a stale position turns Save into a no-op with no error anywhere.
+  // Positions captured before an insert are guesses (a block insert in
+  // particular does not land the node at selection.from), so never trust a
+  // stored pos: re-resolve against the live document, falling back to the
+  // nearest node of the right type if the exact position no longer holds it.
+  function resolveMathPos(kind: "inline" | "block", pos: number): number | null {
+    if (!editor) return null;
+    const typeName = kind === "inline" ? "inlineMath" : "blockMath";
+    const at = editor.state.doc.nodeAt(pos);
+    if (at?.type.name === typeName) return pos;
+    let found: number | null = null;
+    let best = Infinity;
+    editor.state.doc.descendants((n, p) => {
+      if (n.type.name === typeName) {
+        const d = Math.abs(p - pos);
+        if (d < best) { best = d; found = p; }
+      }
+    });
+    return found;
+  }
+
+  // Insert a placeholder math node at the cursor, then immediately open the
+  // popover on it so the user types the real expression right away. The
+  // popover's pos is resolved from the document AFTER the insert lands.
+  function insertInlineMathAtCursor() {
+    if (!editor) return;
+    editor.chain().focus().insertInlineMath({ latex: "x" }).run();
+    const pos = resolveMathPos("inline", editor.state.selection.from);
+    if (pos !== null) setMathEdit({ kind: "inline", pos, latex: "x" });
+  }
+
+  function insertBlockMathAtCursor() {
+    if (!editor) return;
+    editor.chain().focus().insertBlockMath({ latex: "x" }).run();
+    const pos = resolveMathPos("block", editor.state.selection.from);
+    if (pos !== null) setMathEdit({ kind: "block", pos, latex: "x" });
+  }
+
+  function saveMathEdit() {
+    if (!editor || !mathEdit) return;
+    const pos = resolveMathPos(mathEdit.kind, mathEdit.pos);
+    if (pos !== null) {
+      if (mathEdit.kind === "inline") {
+        editor.chain().focus().updateInlineMath({ latex: mathEdit.latex, pos }).run();
+      } else {
+        editor.chain().focus().updateBlockMath({ latex: mathEdit.latex, pos }).run();
+      }
+    }
+    setMathEdit(null);
+  }
+
+  function deleteMathEdit() {
+    if (!editor || !mathEdit) return;
+    const pos = resolveMathPos(mathEdit.kind, mathEdit.pos);
+    if (pos !== null) {
+      if (mathEdit.kind === "inline") {
+        editor.chain().focus().deleteInlineMath({ pos }).run();
+      } else {
+        editor.chain().focus().deleteBlockMath({ pos }).run();
+      }
+    }
+    setMathEdit(null);
+  }
+
   const btn = (active: boolean, onClick: () => void, label: string) => (
     <button className={`tt-btn${active ? " active" : ""}`} onClick={onClick} type="button">
       {label}
@@ -224,6 +382,9 @@ export function NoteEditor({ content, onChange, nodeId, graph }: Props) {
               <button className="tt-btn" onClick={() => editor.chain().focus().deleteTable().run()} type="button" title="Delete table">del⊞</button>
             </>
         }
+        <div className="tt-sep" />
+        <button className="tt-btn" onClick={insertInlineMathAtCursor} type="button" title="Inline math">√x</button>
+        <button className="tt-btn" onClick={insertBlockMathAtCursor} type="button" title="Math block">∑</button>
         {btn(editor.isActive("highlight"), () => editor.chain().focus().unsetHighlight().run(), "🖊")}
         {nodeId && (
           <>
@@ -273,6 +434,15 @@ export function NoteEditor({ content, onChange, nodeId, graph }: Props) {
         <SlashCommandsList
           {...slashMenu}
           keyHandlerRef={keyHandlerRef}
+        />
+      )}
+      {mathEdit && (
+        <MathEditPopover
+          state={mathEdit}
+          onChange={(latex) => setMathEdit(m => m && { ...m, latex })}
+          onSave={saveMathEdit}
+          onDelete={deleteMathEdit}
+          onCancel={() => setMathEdit(null)}
         />
       )}
 

@@ -17,6 +17,7 @@ import "katex/dist/katex.min.css";
 import SmilesDrawer from 'smiles-drawer';
 import 'katex/contrib/mhchem';
 import { getStroke } from "perfect-freehand";
+import { KATEX_MACROS, KATEX_OPTS } from "../lib/katexShared";
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 
@@ -908,7 +909,7 @@ function MathContent({ block, onUpdate }: { block: MathBlock; onUpdate: (id: str
     if (!block.preview) return null;
     const src = block.formula.trim() || "\\text{empty}";
     try {
-      return katex.renderToString(src, { throwOnError: false, displayMode: true });
+      return katex.renderToString(src, { ...KATEX_OPTS, displayMode: true });
     } catch {
       return null;
     }
@@ -1139,7 +1140,7 @@ function ChemEqContent({ block, onUpdate, onSelect }: {
     const el = previewRef.current;
     if (!el || !block.formula.trim()) { setRenderError(null); return; }
     try {
-      katex.render(`\\ce{${block.formula}}`, el, { throwOnError: true, displayMode: true });
+      katex.render(`\\ce{${block.formula}}`, el, { throwOnError: true, displayMode: true, macros: KATEX_MACROS });
       setRenderError(null);
     } catch (e: any) {
       el.innerHTML = "";
@@ -2080,7 +2081,7 @@ function renderContentPure(block: CanvasBlock, api: React.MutableRefObject<Block
     if (block.preview) {
       return (
         <div className="canvas-block-md-preview" onPointerDown={e => e.stopPropagation()}>
-          <Markdown remarkPlugins={[remarkMath]} rehypePlugins={[rehypeKatex]}>{block.content}</Markdown>
+          <Markdown remarkPlugins={[remarkMath]} rehypePlugins={[[rehypeKatex, KATEX_OPTS]]}>{block.content}</Markdown>
         </div>
       );
     }
