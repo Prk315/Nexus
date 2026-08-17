@@ -1,4 +1,5 @@
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { MatrixBlockContent, MatrixBlockData } from "./MatrixBlock";
 import { GraphBlockContent, GraphBlockData } from "./GraphBlock";
 import { GridBlockContent, GridBlockData } from "./GridBlock";
@@ -18,6 +19,7 @@ import SmilesDrawer from 'smiles-drawer';
 import 'katex/contrib/mhchem';
 import { getStroke } from "perfect-freehand";
 import { KATEX_MACROS, KATEX_OPTS } from "../lib/katexShared";
+import { MathField } from "./MathField";
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 
@@ -905,6 +907,16 @@ async function handleNativePaste(e: React.ClipboardEvent<HTMLTextAreaElement>) {
 // ── MathContent ───────────────────────────────────────────────────────────────
 
 function MathContent({ block, onUpdate }: { block: MathBlock; onUpdate: (id: string, p: Patch) => void }) {
+  // Local to this block's own MathContent instance — BlockView is memoized
+  // on (block, selected, inMultiSel, zoom, showPorts, sessionId, api), and
+  // this state isn't one of those, so it never factors into that memo
+  // comparison or invalidates it. MathContent keeps its position in the
+  // tree across re-renders (it's called unconditionally for every "math"
+  // block via renderContentPure), so React preserves this state exactly
+  // like any other component-local state — no need to route it through the
+  // BlockApi ref bag.
+  const [visualOpen, setVisualOpen] = useState(false);
+
   const rendered = useMemo(() => {
     if (!block.preview) return null;
     const src = block.formula.trim() || "\\text{empty}";
@@ -915,6 +927,15 @@ function MathContent({ block, onUpdate }: { block: MathBlock; onUpdate: (id: str
     }
   }, [block.formula, block.preview]);
 
+  useEffect(() => {
+    if (!visualOpen) return;
+    function onKey(e: KeyboardEvent) {
+      if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); setVisualOpen(false); }
+    }
+    window.addEventListener("keydown", onKey, true);
+    return () => window.removeEventListener("keydown", onKey, true);
+  }, [visualOpen]);
+
   if (block.preview) {
     return (
       <div
@@ -924,17 +945,69 @@ function MathContent({ block, onUpdate }: { block: MathBlock; onUpdate: (id: str
       />
     );
   }
+
+  // The visual-edit modal is portaled to document.body rather than rendered
+  // in place: .canvas-world (the pan/zoom layer every block lives inside)
+  // carries a `transform`, which makes `position: fixed` descendants
+  // contain themselves to that transformed box instead of the viewport —
+  // the .math-edit-backdrop CSS this reuses (position: fixed; inset: 0)
+  // would cover the wrong area otherwise. Escaping via a portal is what
+  // ConfirmDialog gets "for free" everywhere else in the app, since none of
+  // its other call sites sit inside a transformed ancestor.
   return (
-    <textarea
-      className="canvas-block-text canvas-math-input"
-      value={block.formula}
-      placeholder={"LaTeX formula…\ne.g.  \\frac{a}{b}  or  E = mc^2"}
-      spellCheck={false}
-      onChange={e => onUpdate(block.id, { formula: e.target.value })}
-      onPaste={handleNativePaste}
-      onPointerDown={e => e.stopPropagation()}
-      onDoubleClick={e => e.stopPropagation()}
-    />
+    <>
+      <div className="canvas-math-edit-wrap">
+        <textarea
+          className="canvas-block-text canvas-math-input"
+          value={block.formula}
+          placeholder={"LaTeX formula…\ne.g.  \\frac{a}{b}  or  E = mc^2"}
+          spellCheck={false}
+          onChange={e => onUpdate(block.id, { formula: e.target.value })}
+          onPaste={handleNativePaste}
+          onPointerDown={e => e.stopPropagation()}
+          onDoubleClick={e => e.stopPropagation()}
+        />
+        <button
+          type="button"
+          className="canvas-math-visual-btn"
+          onPointerDown={e => e.stopPropagation()}
+          onClick={e => { e.stopPropagation(); setVisualOpen(true); }}
+        >✎ visual</button>
+      </div>
+      {visualOpen && createPortal(
+        <div
+          className="math-edit-backdrop"
+          onPointerDown={e => { e.stopPropagation(); setVisualOpen(false); }}
+        >
+          <div
+            className="math-edit-dialog"
+            role="dialog"
+            aria-modal="true"
+            aria-label="Edit math block"
+            onPointerDown={e => e.stopPropagation()}
+          >
+            <div className="math-edit-title">Math block</div>
+            <MathField
+              value={block.formula}
+              onChange={f => onUpdate(block.id, { formula: f })}
+              autoFocus
+              className="math-edit-mathfield"
+            />
+            <div className="math-edit-actions">
+              <div />
+              <div className="math-edit-actions-right">
+                <button
+                  type="button"
+                  className="math-edit-btn math-edit-btn-save"
+                  onClick={() => setVisualOpen(false)}
+                >Done</button>
+              </div>
+            </div>
+          </div>
+        </div>,
+        document.body
+      )}
+    </>
   );
 }
 
