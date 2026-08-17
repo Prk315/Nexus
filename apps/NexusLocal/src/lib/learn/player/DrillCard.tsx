@@ -32,6 +32,15 @@ import {
   useSolidBar,
   useTranslateBar,
 } from "./tokens";
+import {
+  Workspace,
+  WorkspaceToggle,
+  useWorkspaceLayout,
+  scratchLineCount,
+  WS_SPLIT_ROW,
+  WS_SPLIT_MAIN,
+  WS_PANE,
+} from "./Workspace";
 
 const ARCHETYPE_LABEL: Record<Archetype, string> = {
   computational: "COMPUTATIONAL",
@@ -58,6 +67,11 @@ const FORMAT_ERROR_MESSAGE: Record<"numeric" | "vector" | "matrix", string> = {
   vector: "Kunne ikke læses som en vektor — skriv komponenterne adskilt med komma, fx 1, -2, 3",
   matrix: "Kunne ikke læses som en matrix — adskil rækker med semikolon, fx 1 2; 3 4",
 };
+
+// Only typed answer types get the Arbejdsrum workspace (LEARN_PLAN.md).
+// choice/tiles keep today's layout byte-for-byte: with `ws === false` the
+// wrapper below resolves to READING_COL + `display:contents`.
+const WORKSPACE_TYPES = new Set(["numeric", "vector", "matrix", "text"]);
 
 export function DrillCard({
   drill,
@@ -90,6 +104,13 @@ export function DrillCard({
   const [hintsShown, setHintsShown] = useState(0);
   const [showSolution, setShowSolution] = useState(false);
   const [shaking, setShaking] = useState(false);
+  const layout = useWorkspaceLayout();
+  const [sheetOpen, setSheetOpen] = useState(false);
+  const ws = WORKSPACE_TYPES.has(drill.answer_type);
+  const wsKey = `drill:${drill.id}`;
+  /** Set to false to ship without the desktop answer relocation (the pane
+   * then only carries scratch; the answer stays in the card). */
+  const relocateAnswer = true;
 
   useEffect(() => {
     if (!shaking) return;
@@ -145,6 +166,16 @@ export function DrillCard({
     }
   }
 
+  // Workspace → answer input. RAW line text, never LaTeX — the learner types
+  // in the grammar answers.ts already parses (§ the Arbejdsrum charter's
+  // round-trip contract); the LaTeX exists only for the eye.
+  function copyToAnswer(line: string) {
+    if (result === true) return; // already solved; input is disabled
+    setInput(line);
+    setFormatError(null);
+    setSheetOpen(false);
+  }
+
   const difficulty = Math.min(Math.max(drill.difficulty ?? 1, 1), 3);
   const canCheck =
     drill.answer_type === "choice"
@@ -153,10 +184,165 @@ export function DrillCard({
         ? tileSelection.length > 0
         : input.trim().length > 0;
 
+  // D2 — the answer block and its feedback banners, lifted verbatim into
+  // consts so the desktop workspace pane can carry them as its footer
+  // (charter: the pane "keeps the answer input at its bottom") while every
+  // other breakpoint renders them in the card exactly as before. Known,
+  // accepted wart: crossing the 1024px boundary mid-drill remounts the input
+  // and drops focus (state is preserved).
+  const answerBlock = (
+    /* Answer surfaces stay hand-sized: a text field or an MCQ option
+       stretched to a 46rem measure reads as a form, not a question. */
+    <div className={`mt-3 md:mt-6 ${ANSWER_COL} ${shaking ? "animate-[learn-shake_.34s]" : ""}`}>
+      {drill.answer_type === "numeric" && (
+        <input
+          inputMode="decimal"
+          value={input}
+          onChange={(e) => {
+            setInput(e.target.value);
+            setFormatError(null);
+          }}
+          placeholder="fx 6 eller 2/3"
+          disabled={result === true}
+          className="w-full rounded-xl border border-black/15 bg-white px-3 py-3 font-mono text-[16px] text-[#1A1A24] outline-none transition-shadow placeholder:text-[#6E6E78]/60 focus:border-indigo-500/50 focus:shadow-[0_0_0_3px_rgba(99,102,241,0.12)]"
+        />
+      )}
+      {drill.answer_type === "vector" && (
+        <>
+          <input
+            value={input}
+            onChange={(e) => {
+              setInput(e.target.value);
+              setFormatError(null);
+            }}
+            placeholder="fx 1, -2, 3"
+            disabled={result === true}
+            className="w-full rounded-xl border border-black/15 bg-white px-3 py-3 font-mono text-[16px] text-[#1A1A24] outline-none transition-shadow placeholder:text-[#6E6E78]/60 focus:border-indigo-500/50 focus:shadow-[0_0_0_3px_rgba(99,102,241,0.12)]"
+          />
+          {input.trim() ? (
+            <p className="mt-1 text-[11px] text-[#6E6E78]/80">
+              ⟨{input.trim()}⟩ · {input.split(/[,\s]+/).filter(Boolean).length} entries
+            </p>
+          ) : (
+            <p className="mt-1 text-[11px] text-[#6E6E78]/60">
+              Skriv komponenterne adskilt med komma, fx 1, -2, 3
+            </p>
+          )}
+        </>
+      )}
+      {drill.answer_type === "matrix" && (
+        <>
+          <textarea
+            rows={3}
+            value={input}
+            onChange={(e) => {
+              setInput(e.target.value);
+              setFormatError(null);
+            }}
+            placeholder="fx 1 2; 3 4"
+            disabled={result === true}
+            className="w-full rounded-xl border border-black/15 bg-white px-3 py-3 font-mono text-[16px] text-[#1A1A24] outline-none transition-shadow placeholder:text-[#6E6E78]/60 focus:border-indigo-500/50 focus:shadow-[0_0_0_3px_rgba(99,102,241,0.12)]"
+          />
+          {input.trim() ? (
+            <p className="mt-1 text-[11px] text-[#6E6E78]/80">
+              {input.split(/[;\n]+/).filter((r) => r.trim()).length} ×{" "}
+              {input.split(/[;\n]+/)[0]?.trim().split(/[,\s]+/).filter(Boolean).length ?? 0}
+            </p>
+          ) : (
+            <p className="mt-1 text-[11px] text-[#6E6E78]/60">
+              Adskil rækker med semikolon, fx 1 2; 3 4
+            </p>
+          )}
+        </>
+      )}
+      {drill.answer_type === "choice" && drill.choices && (
+        <div className={drill.choices.length === 2 ? "grid grid-cols-2 gap-2" : "flex flex-col gap-2"}>
+          {drill.choices.map((choice) => {
+            const isSelected = selectedChoice === choice;
+            let stateClass = "border-black/10 bg-white text-[#1A1A24]/80 active:bg-black/[0.04]";
+            if (checked) {
+              const isCorrectChoice = checkAnswer("choice", choice, drill.answer, drill.choices) === true;
+              if (isCorrectChoice) stateClass = "border-emerald-500/40 bg-emerald-50 text-[#1A1A24]/90";
+              else if (isSelected) stateClass = "border-red-500/40 bg-red-50 text-[#1A1A24]/90";
+              else stateClass = "border-black/[0.06] bg-transparent text-[#6E6E78]/55";
+            } else if (isSelected) {
+              stateClass = "border-black/25 bg-black/[0.04] text-[#1A1A24]/90";
+            }
+            return (
+              <button
+                key={choice}
+                type="button"
+                disabled={result === true}
+                onClick={() => setSelectedChoice(choice)}
+                className={`min-h-[44px] w-full rounded-xl border px-3 py-3 text-left text-[14px] transition-colors ${stateClass}`}
+              >
+                <Markdown className="inline">{choice}</Markdown>
+              </button>
+            );
+          })}
+        </div>
+      )}
+      {drill.answer_type === "text" && (
+        <textarea
+          rows={2}
+          value={input}
+          onChange={(e) => setInput(e.target.value)}
+          placeholder="Skriv dit svar (selv-bedømt)…"
+          className="w-full rounded-xl border border-black/15 bg-white px-3 py-3 text-[16px] text-[#1A1A24] outline-none transition-shadow placeholder:text-[#6E6E78]/60 focus:border-indigo-500/50 focus:shadow-[0_0_0_3px_rgba(99,102,241,0.12)]"
+        />
+      )}
+      {drill.answer_type === "tiles" && (
+        <TileDrill
+          tiles={drill.tiles ?? []}
+          mode={drill.mode ?? "select"}
+          answerSequence={drill.answer?.sequence}
+          selection={tileSelection}
+          onSelectionChange={setTileSelection}
+          checked={checked}
+          disabled={result === true}
+        />
+      )}
+      {ws && layout === "phone" && (
+        <div className="mt-2 flex justify-end">
+          <WorkspaceToggle onClick={() => setSheetOpen(true)} count={scratchLineCount(wsKey)} />
+        </div>
+      )}
+    </div>
+  );
+
+  const feedbackBlock = (
+    <>
+      {!isText && checked && result !== null && (
+        <div
+          className={`mt-3 flex animate-[learn-step-in_.18s_ease-out] items-center gap-2 rounded-xl px-3 py-2.5 text-[13px] md:mt-4 md:max-w-[34rem] ${
+            result ? FEEDBACK.correct : FEEDBACK.wrong
+          }`}
+        >
+          <span className="text-[15px]">{result ? "✓" : "✕"}</span>
+          <span>{result ? "Correct" : "Not quite"}</span>
+        </div>
+      )}
+
+      {/* Format event, not a knowledge event (answers.ts `inputParses`) —
+          neutral tone, never the red `FEEDBACK.wrong` treatment above.
+          Mutually exclusive with it: this path returns out of `runCheck`
+          before `checked`/`result` are ever set. */}
+      {!isText && formatError && (
+        <div
+          className={`mt-3 flex animate-[learn-step-in_.18s_ease-out] items-center gap-2 rounded-xl px-3 py-2.5 text-[13px] md:mt-4 md:max-w-[34rem] ${FEEDBACK.format}`}
+        >
+          <span className="text-[15px]">⚠</span>
+          <span>{formatError}</span>
+        </div>
+      )}
+    </>
+  );
+
   return (
     <>
       <main className={`${MAIN_SHELL} pb-48`}>
-        <div className={READING_COL}>
+        <div className={ws && layout === "desktop" ? WS_SPLIT_ROW : READING_COL}>
+          <div className={ws && layout === "desktop" ? WS_SPLIT_MAIN : "contents"}>
         <div className="flex items-center justify-between text-[10px] uppercase tracking-wide text-[#6E6E78]">
           <span>{indexLabel}</span>
         </div>
@@ -191,141 +377,15 @@ export function DrillCard({
             {drill.prompt_md}
           </Markdown>
 
-          {/* Answer surfaces stay hand-sized: a text field or an MCQ option
-              stretched to a 46rem measure reads as a form, not a question. */}
-          <div className={`mt-3 md:mt-6 ${ANSWER_COL} ${shaking ? "animate-[learn-shake_.34s]" : ""}`}>
-            {drill.answer_type === "numeric" && (
-              <input
-                inputMode="decimal"
-                value={input}
-                onChange={(e) => {
-                  setInput(e.target.value);
-                  setFormatError(null);
-                }}
-                placeholder="fx 6 eller 2/3"
-                disabled={result === true}
-                className="w-full rounded-xl border border-black/15 bg-white px-3 py-3 font-mono text-[16px] text-[#1A1A24] outline-none transition-shadow placeholder:text-[#6E6E78]/60 focus:border-indigo-500/50 focus:shadow-[0_0_0_3px_rgba(99,102,241,0.12)]"
-              />
-            )}
-            {drill.answer_type === "vector" && (
-              <>
-                <input
-                  value={input}
-                  onChange={(e) => {
-                    setInput(e.target.value);
-                    setFormatError(null);
-                  }}
-                  placeholder="fx 1, -2, 3"
-                  disabled={result === true}
-                  className="w-full rounded-xl border border-black/15 bg-white px-3 py-3 font-mono text-[16px] text-[#1A1A24] outline-none transition-shadow placeholder:text-[#6E6E78]/60 focus:border-indigo-500/50 focus:shadow-[0_0_0_3px_rgba(99,102,241,0.12)]"
-                />
-                {input.trim() ? (
-                  <p className="mt-1 text-[11px] text-[#6E6E78]/80">
-                    ⟨{input.trim()}⟩ · {input.split(/[,\s]+/).filter(Boolean).length} entries
-                  </p>
-                ) : (
-                  <p className="mt-1 text-[11px] text-[#6E6E78]/60">
-                    Skriv komponenterne adskilt med komma, fx 1, -2, 3
-                  </p>
-                )}
-              </>
-            )}
-            {drill.answer_type === "matrix" && (
-              <>
-                <textarea
-                  rows={3}
-                  value={input}
-                  onChange={(e) => {
-                    setInput(e.target.value);
-                    setFormatError(null);
-                  }}
-                  placeholder="fx 1 2; 3 4"
-                  disabled={result === true}
-                  className="w-full rounded-xl border border-black/15 bg-white px-3 py-3 font-mono text-[16px] text-[#1A1A24] outline-none transition-shadow placeholder:text-[#6E6E78]/60 focus:border-indigo-500/50 focus:shadow-[0_0_0_3px_rgba(99,102,241,0.12)]"
-                />
-                {input.trim() ? (
-                  <p className="mt-1 text-[11px] text-[#6E6E78]/80">
-                    {input.split(/[;\n]+/).filter((r) => r.trim()).length} ×{" "}
-                    {input.split(/[;\n]+/)[0]?.trim().split(/[,\s]+/).filter(Boolean).length ?? 0}
-                  </p>
-                ) : (
-                  <p className="mt-1 text-[11px] text-[#6E6E78]/60">
-                    Adskil rækker med semikolon, fx 1 2; 3 4
-                  </p>
-                )}
-              </>
-            )}
-            {drill.answer_type === "choice" && drill.choices && (
-              <div className={drill.choices.length === 2 ? "grid grid-cols-2 gap-2" : "flex flex-col gap-2"}>
-                {drill.choices.map((choice) => {
-                  const isSelected = selectedChoice === choice;
-                  let stateClass = "border-black/10 bg-white text-[#1A1A24]/80 active:bg-black/[0.04]";
-                  if (checked) {
-                    const isCorrectChoice = checkAnswer("choice", choice, drill.answer, drill.choices) === true;
-                    if (isCorrectChoice) stateClass = "border-emerald-500/40 bg-emerald-50 text-[#1A1A24]/90";
-                    else if (isSelected) stateClass = "border-red-500/40 bg-red-50 text-[#1A1A24]/90";
-                    else stateClass = "border-black/[0.06] bg-transparent text-[#6E6E78]/55";
-                  } else if (isSelected) {
-                    stateClass = "border-black/25 bg-black/[0.04] text-[#1A1A24]/90";
-                  }
-                  return (
-                    <button
-                      key={choice}
-                      type="button"
-                      disabled={result === true}
-                      onClick={() => setSelectedChoice(choice)}
-                      className={`min-h-[44px] w-full rounded-xl border px-3 py-3 text-left text-[14px] transition-colors ${stateClass}`}
-                    >
-                      <Markdown className="inline">{choice}</Markdown>
-                    </button>
-                  );
-                })}
-              </div>
-            )}
-            {drill.answer_type === "text" && (
-              <textarea
-                rows={2}
-                value={input}
-                onChange={(e) => setInput(e.target.value)}
-                placeholder="Skriv dit svar (selv-bedømt)…"
-                className="w-full rounded-xl border border-black/15 bg-white px-3 py-3 text-[16px] text-[#1A1A24] outline-none transition-shadow placeholder:text-[#6E6E78]/60 focus:border-indigo-500/50 focus:shadow-[0_0_0_3px_rgba(99,102,241,0.12)]"
-              />
-            )}
-            {drill.answer_type === "tiles" && (
-              <TileDrill
-                tiles={drill.tiles ?? []}
-                mode={drill.mode ?? "select"}
-                answerSequence={drill.answer?.sequence}
-                selection={tileSelection}
-                onSelectionChange={setTileSelection}
-                checked={checked}
-                disabled={result === true}
-              />
-            )}
-          </div>
-
-          {!isText && checked && result !== null && (
-            <div
-              className={`mt-3 flex animate-[learn-step-in_.18s_ease-out] items-center gap-2 rounded-xl px-3 py-2.5 text-[13px] md:mt-4 md:max-w-[34rem] ${
-                result ? FEEDBACK.correct : FEEDBACK.wrong
-              }`}
-            >
-              <span className="text-[15px]">{result ? "✓" : "✕"}</span>
-              <span>{result ? "Correct" : "Not quite"}</span>
-            </div>
-          )}
-
-          {/* Format event, not a knowledge event (answers.ts `inputParses`) —
-              neutral tone, never the red `FEEDBACK.wrong` treatment above.
-              Mutually exclusive with it: this path returns out of `runCheck`
-              before `checked`/`result` are ever set. */}
-          {!isText && formatError && (
-            <div
-              className={`mt-3 flex animate-[learn-step-in_.18s_ease-out] items-center gap-2 rounded-xl px-3 py-2.5 text-[13px] md:mt-4 md:max-w-[34rem] ${FEEDBACK.format}`}
-            >
-              <span className="text-[15px]">⚠</span>
-              <span>{formatError}</span>
-            </div>
+          {/* Answer + feedback live in `answerBlock`/`feedbackBlock` above —
+              on desktop with the workspace on they relocate to the pane's
+              footer (charter: answer at the bottom of the pane); everywhere
+              else they render here exactly as before. */}
+          {relocateAnswer && layout === "desktop" && ws ? null : (
+            <>
+              {answerBlock}
+              {feedbackBlock}
+            </>
           )}
 
           {hintsShown > 0 &&
@@ -349,6 +409,28 @@ export function DrillCard({
             </div>
           )}
         </div>
+        {ws && layout === "tablet" && (
+          <Workspace key={wsKey} itemId={wsKey} onCopyToAnswer={copyToAnswer} variant="inline" />
+        )}
+          </div>
+          {ws && layout === "desktop" && (
+            <aside className={WS_PANE}>
+              <Workspace
+                key={wsKey}
+                itemId={wsKey}
+                onCopyToAnswer={copyToAnswer}
+                variant="pane"
+                footer={
+                  relocateAnswer ? (
+                    <>
+                      {answerBlock}
+                      {feedbackBlock}
+                    </>
+                  ) : null
+                }
+              />
+            </aside>
+          )}
         </div>
       </main>
 
@@ -407,6 +489,16 @@ export function DrillCard({
           )}
         </div>
       </footer>
+
+      {ws && layout === "phone" && sheetOpen && (
+        <Workspace
+          key={wsKey}
+          itemId={wsKey}
+          onCopyToAnswer={copyToAnswer}
+          variant="sheet"
+          onClose={() => setSheetOpen(false)}
+        />
+      )}
     </>
   );
 }

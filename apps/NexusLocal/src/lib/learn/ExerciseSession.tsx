@@ -84,6 +84,15 @@ import { applyGrade, defaultMemoryState } from "./memory";
 import { Markdown } from "./Markdown";
 import { useCourse } from "./CourseContext";
 import { CARD, DOCK_SHELL, DOCK_STACK, MAIN_SHELL, PLAYER_STYLE, READING_COL } from "./player/tokens";
+import {
+  Workspace,
+  WorkspaceToggle,
+  useWorkspaceLayout,
+  scratchLineCount,
+  WS_SPLIT_ROW,
+  WS_SPLIT_MAIN,
+  WS_PANE,
+} from "./player/Workspace";
 
 /** One item's grading credit is capped so it can never out-weigh a whole
  * unit's worth of drill practice — LEARN_PLAN.md's "weighted by q-matrix
@@ -372,6 +381,8 @@ export function ExerciseSession({ onClose }: { onClose: () => void }) {
   const [queueIndex, setQueueIndex] = useState(0);
   const [problemsCompleted, setProblemsCompleted] = useState(0);
   const [partStates, setPartStates] = useState<Record<number, PartState>>({});
+  const layout = useWorkspaceLayout();
+  const [sheetOpen, setSheetOpen] = useState(false);
 
   useEffect(() => {
     let alive = true;
@@ -523,6 +534,10 @@ export function ExerciseSession({ onClose }: { onClose: () => void }) {
   }
 
   const sourceLabel = current ? deriveSourceLabel(current.source) : "";
+  // One scratch pad per problem group — one group is one screen even when it
+  // has several parts. No answer input on this surface, so `onCopyToAnswer`
+  // is omitted everywhere below and "→ svar" never renders.
+  const wsKey = `exgroup:${current?.group_key ?? ""}`;
 
   return (
     <div className="fixed inset-0 z-50 flex flex-col animate-[learn-overlay_.22s_ease-out] bg-[#F6F5F1]/97 backdrop-blur-xl text-[#1A1A24]">
@@ -593,7 +608,8 @@ export function ExerciseSession({ onClose }: { onClose: () => void }) {
       {current && !poolExhausted && (
         <>
           <main className={`${MAIN_SHELL} pb-32`}>
-            <div className={READING_COL}>
+            <div className={layout === "desktop" ? WS_SPLIT_ROW : READING_COL}>
+              <div className={layout === "desktop" ? WS_SPLIT_MAIN : "contents"}>
               <div key={current.group_key} className="mt-2 animate-[learn-step-in_.18s_ease-out] md:mt-3">
                 <span className="text-[10px] font-semibold uppercase tracking-[0.14em] text-[#6E6E78]/70">
                   ∞ EXERCISE
@@ -635,12 +651,23 @@ export function ExerciseSession({ onClose }: { onClose: () => void }) {
                     </Markdown>
                   </div>
                 )}
+
+                {layout === "tablet" && <Workspace key={wsKey} itemId={wsKey} variant="inline" />}
               </div>
+              </div>
+              {layout === "desktop" && (
+                <aside className={WS_PANE}>
+                  <Workspace key={wsKey} itemId={wsKey} variant="pane" />
+                </aside>
+              )}
             </div>
           </main>
 
           <footer className={DOCK_SHELL}>
             <div className={DOCK_STACK}>
+              {layout === "phone" && (
+                <WorkspaceToggle onClick={() => setSheetOpen(true)} count={scratchLineCount(wsKey)} />
+              )}
               <button
                 type="button"
                 onClick={handleNextProblem}
@@ -651,6 +678,10 @@ export function ExerciseSession({ onClose }: { onClose: () => void }) {
               </button>
             </div>
           </footer>
+
+          {layout === "phone" && sheetOpen && (
+            <Workspace key={wsKey} itemId={wsKey} variant="sheet" onClose={() => setSheetOpen(false)} />
+          )}
         </>
       )}
     </div>

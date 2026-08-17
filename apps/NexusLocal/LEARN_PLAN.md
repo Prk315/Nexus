@@ -594,6 +594,91 @@ Also pinned: ⚡ chapter checkpoints are suppressed for chapters whose scoped
 drill pool is empty (LA 0); eksamensværksteder scale to every chapter with
 mastered units (LA 1/3/4 now; parent_unit_id = the chapter's last lr_unit row).
 
+## Arbejdsrum — exercise workspace + math writer (pinned, 2026-08-17)
+
+A user-experience layer on SOLVING, applied wherever a drill/exercise renders
+(DrillCard in units, ExerciseSession's infinite exercises, workshops). Two
+parts, user-approved 2026-08-17:
+
+**1. Device-adjusted layout.** Three breakpoints, one component tree:
+- **Mac/desktop (≥1024px)**: problem and workspace side-by-side — problem in
+  the reading column, workspace as a right pane (~34rem) that keeps the answer
+  input at its bottom. No more dead space beside the problem.
+- **iPad (768–1023px)**: workspace below the problem, min-height ~40vh,
+  generous touch targets.
+- **Phone (<768px)**: workspace is a slide-up sheet toggled by a "Kladde"
+  button next to the answer input — full-height overlay with its own close,
+  so the problem stays readable when closed.
+
+**2. Math writer ("Kladde").** Typed, live-rendered working lines — NOT
+handwriting (decided: pencil effort goes to the Generalprøve canvas instead):
+- A stack of lines; each line is a text input whose content live-renders as
+  KaTeX below/beside it as you type. Enter appends a new line; lines are
+  reorderable-by-delete only (keep it simple, it's scratch).
+- Input syntax = the SAME grammar answers.ts already accepts (matrices
+  `(1 2; 3 4)`, vectors, fractions, `=` chains), extended leniently: anything
+  the parser can't structure is still rendered raw through KaTeX (a `\`-free
+  best-effort transform: `sqrt(x)` → `\sqrt{x}`, `1/2` stays, `x^2`, greek
+  names). The writer NEVER grades — it is workspace, not answer. One button
+  per line: "→ svar" copies the line into the answer input.
+- Persistence: per-item scratch kept in a session-scoped Map (keyed by item
+  id) so navigating away and back within a session restores it; NOT persisted
+  to Supabase (scratch is private, ephemeral; usage_intervals-style privacy
+  posture costs nothing to keep here).
+- Lives in `player/Workspace.tsx` + a pure `mathWriter.ts` (the lenient
+  transform, unit-tested against the answers.ts grammar so the two never
+  drift apart).
+
+## Generalprøve — the final canvas node (pinned, 2026-08-17 — build AFTER Arbejdsrum ships)
+
+THE last stage of a course path, rendered after the final chapter: a
+whiteboard-feel canvas where you rehearse PRESENTING a topic exactly as at
+the oral exam. Unlocks when every content-bearing unit in the course is
+mastered. User-approved shape 2026-08-17:
+
+**Reference material**: the six official exam dispositions
+(`/Users/bastianthomsen/Repositories/LinAlgContext/dispositioner.md`) become
+`lr_disposition` rows (course-scoped, JSONB: ordered beats, each beat naming
+concept_ids + the statements/proofs to present). Authored once via the usual
+Opus-author → verify → draft → Godkend pipeline.
+
+**The canvas**: pan/zoom surface (reuse Vault's canvas patterns; NOT a new
+engine). The course's formal statements (the Formelsamling inventory — same
+theory-box derivation, so no new data) are draggable CARDS you pull from a
+tray onto the canvas and arrange into a presentation flow, drawing arrows
+between them (uses/depends-on/example-of). DAG prereq edges light up
+automatically when both endpoints are placed — you SEE the structure you're
+claiming.
+
+**The rounds — fast-paced by design**: draw a random disposition → a timed
+round (5–8 min) where you assemble the presentation: place the statements
+you'd present, order them (numbered on drop), connect them, and jot canvas
+notes. Then INSTANT feedback:
+- **Computed (free, deterministic)**: coverage vs the reference beats (which
+  concepts/statements missing or extra), order sanity (prereq before
+  dependent, per the DAG), missing links between placed-but-unconnected
+  related cards. Rendered as the same fraction-bar report language as Samlet
+  prøve.
+- **One coach line per round (LLM)**: socratic-judge pattern — a second mode
+  on the same edge function (`disposition` mode), same cost posture
+  (~$0.004, sonnet, strict schema), same fail-open → computed-only. Input:
+  the delta (missed/extra/misordered), NOT the whole canvas. Output: one
+  concrete tip ("Du glemte at binde rang sammen med invertibilitet — det er
+  broen mellem 4a og 4b").
+- Repeat immediately: new draw or same disposition again. Score history in
+  `lr_challenge_run`-style rows (`lr_rehearsal_run`).
+
+**iPad pencil drawing**: freehand ink ON the canvas (whiteboard mimicry for
+derivations mid-presentation) — lift Vault's drawing stack (perfect-freehand
+ink, phases 1–5, already in-tree) rather than reimplementing; strokes are
+round-scoped scratch, never persisted. Phase-gated LAST so rounds+scoring
+ship without waiting on it.
+
+**Phasing** (each phase releasable): P1 canvas + card tray + arrows +
+disposition data. P2 rounds + computed scoring + report. P3 coach line
+(edge fn mode). P4 pencil ink. Generic over courses — DBMS gets it by
+authoring dispositions, zero code.
+
 ## Conventions that bite (from CLAUDE.md — enforced)
 
 - camelCase IPC args from JS; snake_case in Rust.
