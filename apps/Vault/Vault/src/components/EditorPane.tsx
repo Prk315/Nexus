@@ -6,22 +6,32 @@ import React, {
   forwardRef,
   useImperativeHandle,
   Component,
+  Suspense,
 } from "react";
 import * as api from "../lib/api";
 import { TagBar } from "./TagBar";
-import { NoteEditor } from "./NoteEditor";
-import { CanvasEditor } from "./CanvasEditor";
-import { PdfViewer } from "./PdfViewer";
-import { ParsedViewer } from "./ParsedViewer";
-import { VideoViewer } from "./VideoViewer";
-import { WorkbookEditor } from "./WorkbookEditor";
-import { BookshelfEditor } from "./BookshelfEditor";
-import { JournalEditor } from "./JournalEditor";
-import { DatabaseEditor } from "./DatabaseEditor";
 import { HomePage } from "./HomePage";
-import { GraphView } from "./GraphView";
 import { nodeIcon } from "../nodeUtils";
 import type { VaultGraph } from "../types";
+import { lazyWithReload } from "../lib/lazyLoad";
+
+// Every editor below pulls a heavy transitive dependency (TipTap, pdfjs-dist,
+// katex, sql.js, smiles-drawer, react-force-graph-2d, …) that has no business
+// loading before the user has even picked a node. Lazy-loading them keeps
+// those libs out of the entry chunk; HomePage/TagBar above stay static since
+// they're genuinely light and render on every pane.
+const NoteEditor = lazyWithReload(() => import("./NoteEditor").then(m => ({ default: m.NoteEditor })));
+const CanvasEditor = lazyWithReload(() => import("./CanvasEditor").then(m => ({ default: m.CanvasEditor })));
+const PdfViewer = lazyWithReload(() => import("./PdfViewer").then(m => ({ default: m.PdfViewer })));
+const ParsedViewer = lazyWithReload(() => import("./ParsedViewer").then(m => ({ default: m.ParsedViewer })));
+const VideoViewer = lazyWithReload(() => import("./VideoViewer").then(m => ({ default: m.VideoViewer })));
+const WorkbookEditor = lazyWithReload(() => import("./WorkbookEditor").then(m => ({ default: m.WorkbookEditor })));
+const BookshelfEditor = lazyWithReload(() => import("./BookshelfEditor").then(m => ({ default: m.BookshelfEditor })));
+const JournalEditor = lazyWithReload(() => import("./JournalEditor").then(m => ({ default: m.JournalEditor })));
+const DatabaseEditor = lazyWithReload(() => import("./DatabaseEditor").then(m => ({ default: m.DatabaseEditor })));
+// GraphView pulls react-force-graph-2d — not "genuinely light" despite being
+// canvas-drawn, so it rides the same lazy path as the editors above.
+const GraphView = lazyWithReload(() => import("./GraphView").then(m => ({ default: m.GraphView })));
 
 // Shared across all panes for the session — avoids re-reading disk when the
 // same note is opened in a second pane or re-opened after tab close.
@@ -528,6 +538,7 @@ export const EditorPane = forwardRef<EditorPaneHandle, EditorPaneProps>(
               );
             })()}
 
+            <Suspense fallback={<div className="loading-state">Loading…</div>}>
             {isFolderSelected && folderGraphData ? (
               <div
                 ref={folderAreaRef}
@@ -607,6 +618,7 @@ export const EditorPane = forwardRef<EditorPaneHandle, EditorPaneProps>(
                 graph={graph}
               />
             )}
+            </Suspense>
           </>
         ) : (
           <div className="empty-state">
