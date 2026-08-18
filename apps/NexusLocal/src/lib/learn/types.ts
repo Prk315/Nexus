@@ -691,3 +691,74 @@ export interface PrereqEdge {
   prereqId: string;
   conceptId: string;
 }
+
+// --- Sprint — bucketed fast-feedback exam training (LEARN_PLAN.md "Sprint —
+// bucketed fast-feedback exam training", pinned 2026-08-18 — DBMS pilot).
+// Mirrors `lr_sprint_drill` (migration `20260818120000_learn_sprint_drills.sql`)
+// and the OPUS content brief's §B schemas. Deliberately a FLAT optional-field
+// shape (mirrors `Drill`'s own `answer_type`-keyed flat interface above)
+// rather than a discriminated union — `format` is a sibling COLUMN, not a tag
+// inside `content`, so a caller branches on `drill.format` and reads whichever
+// fields that format populates; the others are simply absent. -------------
+
+export type SprintFormat = "mcq" | "truefalse" | "blank" | "tiles" | "why";
+
+export type SprintAcceptMode = "exact" | "set" | "numeric";
+
+export interface SprintDrillContent {
+  v: 1;
+  /** Every format except `truefalse` (which uses `statement_md` instead —
+   * §B.2's "no `prompt_md` — `statement_md` replaces it"). */
+  prompt_md?: string;
+  /** `truefalse` only. */
+  statement_md?: string;
+  lens: Lens | null;
+  concept_ids: string[];
+  difficulty: number;
+  why_md: string;
+  how_md: string;
+  tip_md: string;
+
+  // mcq / why
+  choices?: string[];
+  answer_idx?: number;
+  /** `why` only — the given correct result the learner justifies. */
+  given_md?: string;
+
+  // truefalse
+  answer?: boolean;
+
+  // blank
+  accept?: string[];
+  accept_mode?: SprintAcceptMode;
+  placeholder?: string;
+
+  // tiles
+  mode?: TileMode;
+  tiles?: Tile[];
+  /** `tiles` mode "build" only. */
+  sequence?: string[];
+}
+
+export interface LrSprintDrill {
+  drill_id: number;
+  course_id: number;
+  bucket: string;
+  code: string;
+  source_slug: string | null;
+  format: SprintFormat;
+  content: SprintDrillContent;
+  status: ContentStatus;
+}
+
+/** One row of `lr_sprint_bucket_stats(course_id, user_id)` — see
+ * `api.fetchSprintBuckets`. `accuracy` is `null` iff `attempts = 0` (never
+ * `0`, which would misread as "0% accuracy" — see the RPC's own comment). */
+export interface SprintBucketStat {
+  bucket: string;
+  drills: number;
+  attempts: number;
+  correct: number;
+  accuracy: number | null;
+  last_at: string | null;
+}

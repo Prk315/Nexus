@@ -35,6 +35,7 @@ import { PathPanel } from "./PathPanel";
 import { ReviewPanel } from "./ReviewPanel";
 import { InfinitePanel } from "./InfinitePanel";
 import { ChallengePanel } from "./ChallengePanel";
+import { SprintPanel } from "./SprintPanel";
 
 export function LearnPage() {
   return (
@@ -44,6 +45,7 @@ export function LearnPage() {
           <PathPanel />
           <ReviewPanel />
           <ChallengePanel />
+          <SprintPanel />
           <InfinitePanel />
         </div>
       </div>

@@ -679,6 +679,54 @@ disposition data. P2 rounds + computed scoring + report. P3 coach line
 (edge fn mode). P4 pencil ink. Generic over courses — DBMS gets it by
 authoring dispositions, zero code.
 
+## Sprint — bucketed fast-feedback exam training (pinned, 2026-08-18 — DBMS pilot)
+
+High-pace, mentally exhausting drilling on HOW to solve exam problems at
+their core, with zero entry redundancy (user-directed). Model economics for
+the build, per the user: Haiku for bulk transformation, Sonnet for
+classification/verification/UI, only a little Opus (taxonomy + UX brief).
+
+**Buckets.** Every part of the dbms-* exam corpus (174 lr_item rows, format
+'written', most with solutions) is classified into a problem-TYPE bucket
+(e.g. ra-queries, sql-queries, join-mechanics, fd-closure-keys,
+normalization-bcnf — the classifier derives the real set from the corpus;
+the taxonomy is part of the design brief, not guessed). One bucket at a
+time in the UI.
+
+**Fast answer formats ONLY** — typing LaTeX is the waste this mode removes.
+Each exam part becomes 1+ sprint drills in lr_sprint_drill, format one of:
+- mcq — choices carry the classic WRONG paths as distractors
+- truefalse — statement about the technique/result
+- blank — fill-in ONE short token (an attribute set, a join result count,
+  a normal form name); accept-list matching, never parsed math
+- tiles — build the answer from blocks (RA operator chains, SQL clauses)
+- why — given a CORRECT answer, pick the justification that makes it correct
+Every drill carries why_md (why the right answer is right) and how_md (the
+compressed solve-recipe: 'sådan løser du typen' steps) + tip_md (the trick).
+
+**Session loop (SprintSession.tsx).** Current bucket → drill → answer →
+instant verdict. WRONG → the how_md recipe + why_md shown before the next
+drill (that pause IS the teaching moment). THREE CORRECT IN A ROW in the
+bucket → advance. Next bucket = never-practiced first, then lowest
+accuracy (stats from lr_attempt_log joined on lr_sprint_drill.code — no new
+stats table). Attempts log with weight 0.5 (practice posture, like
+Lynudfordring). Minimal chrome: prompt, answer surface, streak dots ×3,
+bucket chip, instant flash. English content (DBMS course language).
+
+**Generators.** Shallow buckets (< ~12 drills) get a numpy permutation
+script in apps/NexusLocal/scripts/sprint_generators/<bucket>.py —
+parameterized instances (random FD sets w/ computed closures, join
+cardinality counts, etc.), deterministic via a --seed argument, emitting
+drill JSON validated by the same checker as authored drills; inserted with
+authored_by='generator:<script>'. Generated drills are still status=draft
+until Godkend.
+
+**Data.** lr_sprint_drill (drill_id, course_id, bucket, code unique,
+source_slug → lr_item.slug or NULL for generated, format, content jsonb,
+status draft|live, authored_by, created_at), anon_all RLS like siblings.
+Entry point: a Sprint card on the Learn page (renders when the course has
+any live/draft sprint drills; KLADDE chip while drafts).
+
 ## Conventions that bite (from CLAUDE.md — enforced)
 
 - camelCase IPC args from JS; snake_case in Rust.

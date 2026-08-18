@@ -26,6 +26,7 @@ import type {
   LrProofProgress,
   LrProofUnit,
   LrSocraticContentRow,
+  LrSprintDrill,
   LrUnit,
   LrUnitContentRow,
   LrUnitProgress,
@@ -36,6 +37,7 @@ import type {
   ProofUnitEntry,
   SocraticExchangeTurn,
   SocraticQuestion,
+  SprintBucketStat,
   UnitProgressStatus,
 } from "./types";
 
@@ -1215,6 +1217,107 @@ export async function fetchPrereqEdges(courseId: number): Promise<PrereqEdge[]> 
       if (seen.has(key)) continue;
       seen.add(key);
       out.push({ prereqId: row.prereq_id, conceptId: row.concept_id });
+    }
+  }
+  return out;
+}
+
+// ── Sprint — bucketed fast-feedback exam training (LEARN_PLAN.md "Sprint —
+// bucketed fast-feedback exam training", pinned 2026-08-18 — DBMS pilot; UI
+// brief §D.5). Same anon-keyed `supabasePublic` posture as everything above.
+//
+// Deviation from the sprint UI brief, verified against the live table
+// 2026-08-18: the brief's `fetchSprintAttemptIndex` doc comment and its
+// "namespaced sprint codes" §D.4 note both describe the prefix as
+// `dbms-sp-`. The rows the content pipeline actually inserted
+// (`20260818120000_learn_sprint_drills.sql`) use `spr-dbms-...`
+// (e.g. `spr-dbms-sql-query-007`, `spr-dbms-evaluation-cost-g410-0002`) — the
+// generator/authoring scripts settled on `spr-<course>-` in practice. The
+// bucket-stats RPC itself is unaffected (it joins on exact `code` equality,
+// not a prefix), but this file's own `LIKE` filter is built from the real
+// prefix so a never-practiced-first ordering doesn't quietly starve on a
+// pattern that matches zero rows. Also deliberately uses `nodeUserId()`
+// rather than a literal `"default"` (the brief's example) — every OTHER
+// grading/read path in this file (`logAttempt`, `fetchMemoryStates`, …)
+// resolves through `nodeUserId()`, and hardcoding `"default"` here would
+// silently orphan attempt history the moment a machine's node config ever
+// diverges from that fallback (CLAUDE.md's "empty set, not error" trap).
+
+/** This course's bucket stats — drills/attempts/correct/accuracy/last_at per
+ * bucket, via the `lr_sprint_bucket_stats` RPC (joined on `lr_attempt_log`,
+ * no separate stats table). Powers both `SprintPanel`'s "Next: …" readout
+ * and `SprintSession`'s once-at-session-start bucket ordering (§D.4). */
+export async function fetchSprintBuckets(courseId: number): Promise<SprintBucketStat[]> {
+  const { data, error } = await supabasePublic.rpc("lr_sprint_bucket_stats", {
+    p_course_id: courseId,
+    p_user_id: await nodeUserId(),
+  });
+  if (error) throw error;
+  return (data ?? []) as SprintBucketStat[];
+}
+
+/**
+ * Whether ANY sprint drill in this course is still `status === "draft"` —
+ * powers `SprintPanel`'s KLADDE chip (§D.2). A one-column, `limit(1)`
+ * existence probe, not a drill fetch. Not one of the brief's pinned "3 new
+ * exported functions" (§D.1) — added because `lr_sprint_bucket_stats`
+ * deliberately folds draft+live into one `drills` count (so a bucket doesn't
+ * flicker in and out of the ordering the moment it's curated), which leaves
+ * no other way to answer "is anything here still a draft" without this.
+ */
+export async function fetchSprintHasDraft(courseId: number): Promise<boolean> {
+  const { data, error } = await supabasePublic
+    .from("lr_sprint_drill")
+    .select("drill_id")
+    .eq("course_id", courseId)
+    .eq("status", "draft")
+    .limit(1);
+  if (error) throw error;
+  return (data ?? []).length > 0;
+}
+
+/** Every draft/live sprint drill for this course, one round trip — the whole
+ * session runs from this in memory afterward (§D.5: "no network on the hot
+ * path between drills"). */
+export async function fetchSprintDrills(courseId: number): Promise<LrSprintDrill[]> {
+  const { data, error } = await supabasePublic
+    .from("lr_sprint_drill")
+    .select("drill_id, course_id, bucket, code, format, content, status, source_slug")
+    .eq("course_id", courseId)
+    .in("status", ["draft", "live"]);
+  if (error) throw error;
+  return (data ?? []) as LrSprintDrill[];
+}
+
+/**
+ * This user's sprint attempt history, keyed by drill `code` — `n` = attempt
+ * count, `lastAt` = most recent attempt's timestamp. Drives within-bucket
+ * drill ordering (§D.5: never-attempted first — shuffled — then least
+ * recently seen, then fewest attempts). `coursePrefix` is the course's own
+ * sprint-code prefix (`"spr-dbms"` for DBMS — see the file-header deviation
+ * note; NOT `CourseDef.itemSlugPrefix`, which is the unrelated `lr_item`
+ * pool prefix). Capped at 2000 rows, most recent first, same as the brief.
+ */
+export async function fetchSprintAttemptIndex(
+  coursePrefix: string
+): Promise<Map<string, { n: number; lastAt: string }>> {
+  const { data, error } = await supabasePublic
+    .from("lr_attempt_log")
+    .select("item_ref, grade, at")
+    .eq("user_id", await nodeUserId())
+    .like("item_ref", `${coursePrefix}-%`)
+    .order("at", { ascending: false })
+    .limit(2000);
+  if (error) throw error;
+  const out = new Map<string, { n: number; lastAt: string }>();
+  for (const row of (data ?? []) as { item_ref: string; at: string }[]) {
+    const existing = out.get(row.item_ref);
+    if (existing) {
+      existing.n += 1;
+      // Rows arrive newest-first, so the first hit per item_ref is already
+      // the most recent — lastAt never needs updating after that.
+    } else {
+      out.set(row.item_ref, { n: 1, lastAt: row.at });
     }
   }
   return out;
