@@ -168,6 +168,7 @@ import { SocraticSession } from "./SocraticSession";
 import { AggregateTestSession } from "./AggregateTestSession";
 import { collectUnitMcqs } from "./aggregateTest";
 import { ReferencePanel } from "./ReferencePanel";
+import { GeneralproveSession } from "./GeneralproveSession";
 
 /** Node renders only above this many derived items (LEARN_PLAN.md's pinned
  * charter) — below it, a "Samlet prøve" would be a near-empty quiz. */
@@ -245,6 +246,10 @@ export function PathPanel() {
   // file-header note. Own overlay (`AggregateTestSession`), no reload needed
   // on close since it mutates no path/progress state.
   const [selectedAggregateUnitId, setSelectedAggregateUnitId] = useState<number | null>(null);
+  // Generalprøve — the final canvas node (LEARN_PLAN.md, pinned 2026-08-17).
+  // Own overlay (`GeneralproveSession`); no reload on close — P1 persists
+  // nothing and mutates no progress state, same as `AggregateTestSession`.
+  const [generalproveOpen, setGeneralproveOpen] = useState(false);
   // Every deck card id this user has ≥1 `lr_attempt_log` row for, across
   // every unit in the course — one batched query per load, not per node.
   const [deckSolvedIds, setDeckSolvedIds] = useState<Set<string>>(new Set());
@@ -424,6 +429,25 @@ export function PathPanel() {
     }
     return ids;
   }, [statusByUnit]);
+
+  // Every content-bearing unit mastered — the charter's "unlocks when every
+  // content-bearing unit in the course is mastered". Reads `pu.progress`
+  // (lr_unit_progress ground truth), NOT statusByUnit: content-less scaffold
+  // units map to "no_content" and are deliberately transparent to the unlock
+  // chain (see the statusByUnit note above), so they must not count here
+  // either — as denominator or as numerator. (`masteredCount` is also not
+  // reusable as the numerator: it counts every mastered unit including
+  // content-less ones, so it can equal the bearing total while a
+  // content-bearing unit is still unmastered.)
+  const { generalproveUnlocked, generalproveMastered, generalproveTotal } = useMemo(() => {
+    const bearing = (path ?? []).filter((pu) => pu.hasContent);
+    const done = bearing.filter((pu) => pu.progress === "mastered").length;
+    return {
+      generalproveTotal: bearing.length,
+      generalproveMastered: done,
+      generalproveUnlocked: bearing.length > 0 && done === bearing.length,
+    };
+  }, [path]);
 
   const chapters = useMemo(() => {
     if (!path) return [] as Array<[string, PathUnit[]]>;
@@ -717,6 +741,21 @@ export function PathPanel() {
               );
             })}
 
+            {/* Generalprøve — THE last stage of a complete course's path
+                (LEARN_PLAN.md, pinned 2026-08-17). Gated on `course.complete`:
+                an incomplete course ends in the "More sections on the way"
+                horizon below instead, and a *final* node in front of that
+                horizon would be a lie — the two are mutually exclusive by
+                construction. */}
+            {course.complete && (
+              <GeneralproveNode
+                unlocked={generalproveUnlocked}
+                mastered={generalproveMastered}
+                total={generalproveTotal}
+                onOpen={() => setGeneralproveOpen(true)}
+              />
+            )}
+
             {/* Partial-path horizon — LEARN_PLAN.md "App course support":
                 "the DBMS path ends in a 'more to come' horizon (built
                 sections only — no ghost units)". A course being built
@@ -787,6 +826,15 @@ export function PathPanel() {
 
       {selectedAggregateUnitId !== null && (
         <AggregateTestSession unitId={selectedAggregateUnitId} onClose={() => setSelectedAggregateUnitId(null)} />
+      )}
+
+      {generalproveOpen && path && (
+        <GeneralproveSession
+          path={path}
+          contentByUnit={contentByUnit}
+          unlockedUnitIds={unlockedUnitIds}
+          onClose={() => setGeneralproveOpen(false)}
+        />
       )}
     </section>
   );
@@ -1186,6 +1234,65 @@ function ChapterChallengeNode({ chapter, onOpen }: { chapter: string; onOpen: ()
  * state; completion swaps the glyph to the shared "✓ done" language (same
  * swap `ProofNode` makes) without changing the disc's gradient.
  */
+/**
+ * The Generalprøve node — LEARN_PLAN.md "Generalprøve — the final canvas
+ * node" (pinned 2026-08-17). THE last stage of a complete course's path,
+ * rendered after the final chapter; mirrors `ChapterChallengeNode`'s shape
+ * exactly (full-width row, 7×7 disc, title + subtitle + ›). "◎" is unique in
+ * the node glyph vocabulary (◆/◇/✓/· = unit, ∴ = proof, ⚡ = checkpoint,
+ * § = workshop, ▤ = deck, ? = socratic, Σ = samlet prøve) — a board you
+ * stand at, ringed like a target. Unlike the checkpoint it CAN render
+ * locked: the final node previews the summit (dashed dim disc + a
+ * "mestret x/y" subtitle) rather than staying absent, since "master
+ * everything, then rehearse the exam" is the whole point of the spine.
+ */
+function GeneralproveNode({
+  unlocked,
+  mastered,
+  total,
+  onOpen,
+}: {
+  unlocked: boolean;
+  mastered: number;
+  total: number;
+  onOpen: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      disabled={!unlocked}
+      aria-disabled={!unlocked}
+      onClick={unlocked ? onOpen : undefined}
+      className={`group flex w-full items-center gap-3 rounded-xl px-1 py-2 text-left transition-colors md:gap-4 md:py-2.5 ${
+        unlocked ? "active:bg-black/[0.03] md:hover:bg-black/[0.025]" : "cursor-default"
+      }`}
+    >
+      <span
+        className={`relative z-10 grid h-7 w-7 shrink-0 place-items-center rounded-full text-[12px] ${
+          unlocked
+            ? "bg-gradient-to-br from-indigo-500 to-fuchsia-600 text-white shadow-[0_0_14px_-4px_rgba(217,70,239,0.55)]"
+            : "bg-black/[0.03] text-[#6E6E78]/45 ring-1 ring-dashed ring-black/10"
+        }`}
+      >
+        ◎
+      </span>
+      <span className="min-w-0 flex-1 pt-0.5">
+        <span
+          className={`block truncate text-[13px] font-medium md:text-[14px] ${
+            unlocked ? "text-[#1A1A24]/80" : "text-[#6E6E78]/55"
+          }`}
+        >
+          Generalprøve
+        </span>
+        <span className="mt-0.5 block text-[10px] text-[#6E6E78]/70 md:text-[11px]">
+          {unlocked ? "Tavle · kort, pile og dispositioner" : `Låst · ${mastered}/${total} lektioner mestret`}
+        </span>
+      </span>
+      {unlocked && <span className="pt-1 text-[#6E6E78]/45 group-active:text-[#1A1A24]/60">›</span>}
+    </button>
+  );
+}
+
 function WorkshopNode({ entry, title, onOpen }: { entry: ProofUnitEntry; title: string; onOpen: () => void }) {
   const completed = entry.progress === "completed";
   return (

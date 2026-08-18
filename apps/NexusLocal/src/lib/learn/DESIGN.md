@@ -51,6 +51,12 @@ are the product's own vocabulary — plus the lens names, which are the course's
 | `KLADDE` | draft-content badge |
 | `Rækkebilledet` / `Matrixformen` / `Søjlebilledet` | lens names (short: `Række` / `Matrix` / `Søjle`) |
 
+Exception (2026-08-18): the Generalprøve canvas (`GeneralproveSession`) is
+Danish end-to-end — every noun on that surface is course vocabulary (the tray's
+group headers are already *Sætninger*/*Definitioner*, plus *Kort*, *Pil*,
+*Disposition*), so English verbs beside them would read worse than either pure
+option.
+
 ---
 
 ## 1. Design tokens

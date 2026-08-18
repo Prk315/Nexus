@@ -639,3 +639,55 @@ export interface JudgeResult {
   misconception: string | null;
   coach_md: string;
 }
+
+// --- Generalprøve (LEARN_PLAN.md "Generalprøve — the final canvas node",
+// pinned 2026-08-17 — P1 slice). Mirrors the live `lr_disposition` table
+// (verified against information_schema 2026-08-18); `lr_rehearsal_run` exists
+// too but is unused until P2. --------------------------------------------
+
+/** One ordered beat of a disposition. ALL-optional on purpose: the DATA
+ * agent authors `content` jsonb in parallel with this slice, so the renderer
+ * must tolerate any shape and never throw (same posture as
+ * `LrItemRenderRow`'s fallback contract). Two spellings are live for two of
+ * the fields — the planned `idx`/`statements` and the authored
+ * `order`/`statement_titles` (sampled from the six `la-disp-*` rows,
+ * 2026-08-18); consumers read both, preferring the planned name. */
+export interface DispositionBeat {
+  idx?: number;
+  /** Authored spelling of `idx` (live rows carry this one). */
+  order?: number;
+  title?: string;
+  concept_ids?: string[];
+  statements?: string[];
+  /** Authored spelling of `statements` (live rows carry this one). */
+  statement_titles?: string[];
+  notes_md?: string;
+  /** Suggested minutes for this beat — present on live rows. */
+  minutes?: number;
+}
+
+export interface DispositionContent {
+  beats?: DispositionBeat[];
+  intro_md?: string;
+  [k: string]: unknown;
+}
+
+export interface LrDisposition {
+  disposition_id: number; // bigint, NOT NULL
+  course_id: number; // bigint, NOT NULL
+  code: string; // text, NOT NULL
+  title: string; // text, NOT NULL
+  status: ContentStatus; // text NOT NULL DEFAULT 'draft' → draft|approved|live
+  content: DispositionContent; // jsonb, NOT NULL
+  authored_by: string | null;
+  notes: string | null;
+  created_at: string; // timestamptz NOT NULL DEFAULT now()
+}
+
+/** One `lr_concept_prereq` edge with both endpoints inside one course —
+ * `prereqId` must be presented before `conceptId` (see
+ * `api.fetchPrereqEdges`). */
+export interface PrereqEdge {
+  prereqId: string;
+  conceptId: string;
+}

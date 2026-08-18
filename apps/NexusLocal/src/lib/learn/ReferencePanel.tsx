@@ -35,91 +35,23 @@
  *    library is unreachable mid-session. A test whose questions are drawn
  *    from these very statements must not have the answer sheet floating
  *    next to it.
+ *
+ * 6. The derivation itself now lives in `referenceData.ts` because
+ *    `GeneralproveSession` builds its card tray from the same inventory;
+ *    this file owns only the drawer.
  */
 
 import { useEffect, useMemo, useState } from "react";
-import type { PathUnit, TheoryBox, UnitContent } from "./types";
+import type { PathUnit, UnitContent } from "./types";
 import { Markdown } from "./Markdown";
 import { useLensTokens } from "./player/tokens";
-
-interface RefEntry {
-  box: TheoryBox;
-  /** Source unit's code ("LA 3 · U2") — rendered as the row's origin chip. */
-  unitCode: string;
-  /** Spine order of the source unit — tiebreak so equal titles dedupe to
-   * their earliest appearance. */
-  unitIdx: number;
-  group: GroupKey;
-  /** Parsed statement number ("6.3.6" -> [6,3,6]), empty when unnumbered. */
-  num: number[];
-}
-
-type GroupKey =
-  | "saetninger"
-  | "definitioner"
-  | "lemmaer"
-  | "korollarer"
-  | "identiteter"
-  | "algoritmer"
-  | "objekter"
-  | "bemaerkninger";
-
-const GROUP_ORDER: GroupKey[] = [
-  "saetninger",
-  "definitioner",
-  "lemmaer",
-  "korollarer",
-  "identiteter",
-  "algoritmer",
-  "objekter",
-  "bemaerkninger",
-];
-
-const GROUP_LABEL: Record<GroupKey, string> = {
-  saetninger: "Sætninger",
-  definitioner: "Definitioner",
-  lemmaer: "Lemmaer",
-  korollarer: "Korollarer",
-  identiteter: "Identiteter",
-  algoritmer: "Algoritmer & metoder",
-  objekter: "Objekter & begreber",
-  bemaerkninger: "Bemærkninger",
-};
-
-function classify(box: TheoryBox): GroupKey {
-  const t = box.title.trim().toLowerCase();
-  if (/^(sætning|saetning|theorem)\b/.test(t)) return "saetninger";
-  if (/^definition\b/.test(t)) return "definitioner";
-  if (/^lemma\b/.test(t)) return "lemmaer";
-  if (/^(korollar|corollary)\b/.test(t)) return "korollarer";
-  if (/identitet/.test(t) || /identity/.test(t)) return "identiteter";
-  if (/^(bemærkning|bemaerkning|remark)\b/.test(t)) return "bemaerkninger";
-  if (/^(algoritme|algorithm|metode|proceduren?)\b/.test(t)) return "algoritmer";
-  if (/^(notation|objekt)\b/.test(t)) return "objekter";
-  if (box.kind === "theorem") return "saetninger";
-  if (box.kind === "remark") return "bemaerkninger";
-  return "objekter";
-}
-
-function parseNum(title: string): number[] {
-  const m = title.match(/(\d+(?:\.\d+)*)/);
-  return m ? m[1].split(".").map((s) => parseInt(s, 10)) : [];
-}
-
-/** Segment-wise numeric compare; unnumbered ([]) sorts after numbered. */
-function compareEntries(a: RefEntry, b: RefEntry): number {
-  if (a.num.length && b.num.length) {
-    const n = Math.max(a.num.length, b.num.length);
-    for (let i = 0; i < n; i++) {
-      const d = (a.num[i] ?? -1) - (b.num[i] ?? -1);
-      if (d !== 0) return d;
-    }
-    return a.box.title.localeCompare(b.box.title, "da");
-  }
-  if (a.num.length) return -1;
-  if (b.num.length) return 1;
-  return a.box.title.localeCompare(b.box.title, "da");
-}
+import {
+  REF_GROUP_LABEL,
+  collectReferenceEntries,
+  filterRefEntries,
+  groupRefEntries,
+  refEntryKey,
+} from "./referenceData";
 
 export function ReferencePanel({
   path,
@@ -144,47 +76,10 @@ export function ReferencePanel({
     return () => window.removeEventListener("keydown", onKey);
   }, [open]);
 
-  const groups = useMemo(() => {
-    if (!path) return [] as Array<[GroupKey, RefEntry[]]>;
-    const entries: RefEntry[] = [];
-    const seenTitles = new Set<string>();
-    const sorted = [...path].sort((a, b) => a.unit.idx - b.unit.idx);
-    for (const pu of sorted) {
-      if (!unlockedUnitIds.has(pu.unit.unit_id)) continue;
-      const content = contentByUnit.get(pu.unit.unit_id);
-      if (!content) continue;
-      for (const box of content.theory) {
-        // Same statement restated in a later unit dedupes to its first
-        // appearance — keyed on the normalized title, which is unique for
-        // numbered statements ("Sætning 5.2") and harmless for free-form
-        // ones (an identically titled box IS the same object).
-        const key = box.title.trim().toLowerCase();
-        if (seenTitles.has(key)) continue;
-        seenTitles.add(key);
-        entries.push({
-          box,
-          unitCode: pu.unit.code,
-          unitIdx: pu.unit.idx,
-          group: classify(box),
-          num: parseNum(box.title),
-        });
-      }
-    }
-    const q = query.trim().toLowerCase();
-    const filtered = q
-      ? entries.filter(
-          (e) => e.box.title.toLowerCase().includes(q) || e.box.statement_md.toLowerCase().includes(q)
-        )
-      : entries;
-    const byGroup = new Map<GroupKey, RefEntry[]>();
-    for (const e of filtered) {
-      const list = byGroup.get(e.group) ?? [];
-      list.push(e);
-      byGroup.set(e.group, list);
-    }
-    for (const list of byGroup.values()) list.sort(compareEntries);
-    return GROUP_ORDER.filter((g) => byGroup.has(g)).map((g) => [g, byGroup.get(g)!] as [GroupKey, RefEntry[]]);
-  }, [path, contentByUnit, unlockedUnitIds, query]);
+  const groups = useMemo(
+    () => groupRefEntries(filterRefEntries(collectReferenceEntries(path, contentByUnit, unlockedUnitIds), query)),
+    [path, contentByUnit, unlockedUnitIds, query]
+  );
 
   const totalCount = useMemo(() => groups.reduce((n, [, list]) => n + list.length, 0), [groups]);
 
@@ -245,10 +140,10 @@ export function ReferencePanel({
               {groups.map(([group, list]) => (
                 <div key={group}>
                   <div className="sticky top-0 z-10 bg-[#F6F5F1]/95 px-3 pb-1 pt-4 text-[10px] font-semibold uppercase tracking-[0.14em] text-[#6E6E78] backdrop-blur">
-                    {GROUP_LABEL[group]} · {list.length}
+                    {REF_GROUP_LABEL[group]} · {list.length}
                   </div>
                   {list.map((e) => {
-                    const key = `${e.group}:${e.box.title}:${e.unitIdx}`;
+                    const key = refEntryKey(e);
                     const expanded = expandedKey === key;
                     const lens = e.box.perspective ? LENS[e.box.perspective] : null;
                     return (

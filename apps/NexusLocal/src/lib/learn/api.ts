@@ -17,6 +17,7 @@ import type {
   JudgeResult,
   Lens,
   LrChallengeRun,
+  LrDisposition,
   LrItemFeedback,
   LrItemRenderRow,
   LrLearnState,
@@ -30,6 +31,7 @@ import type {
   LrUnitProgress,
   PathUnit,
   PracticeGroup,
+  PrereqEdge,
   ProofProgressStatus,
   ProofUnitEntry,
   SocraticExchangeTurn,
@@ -1140,4 +1142,80 @@ export async function submitChallengeRun(row: {
     rounds: { scope: row.scope ?? null, rounds: row.rounds },
   });
   if (error) throw error;
+}
+
+// ── Generalprøve (LEARN_PLAN.md "Generalprøve — the final canvas node",
+// pinned 2026-08-17 — P1 slice). Same anon-keyed `supabasePublic` posture as
+// everything else in this file: `lr_disposition` / `lr_concept_prereq` /
+// `lr_unit_concept` all carry `anon_all` RLS (verified 2026-08-18), so the
+// authenticated client would return an empty set, not an error. ────────────
+
+/**
+ * Every disposition authored for one course, in code order. Unlike
+ * lr_unit_content there is NO version column and no live>approved>draft
+ * resolution — each row is its own artefact, and draft rows are RETURNED,
+ * badged KLADDE by the caller (Player.tsx's convention). Empty is the normal
+ * state today: lr_disposition has 0 rows until the authoring pass lands.
+ */
+export async function fetchDispositions(courseId: number): Promise<LrDisposition[]> {
+  const { data, error } = await supabasePublic
+    .from("lr_disposition")
+    .select("disposition_id, course_id, code, title, status, content, authored_by, notes, created_at")
+    .eq("course_id", courseId)
+    .order("code", { ascending: true });
+  if (error) throw error;
+  return (data ?? []) as LrDisposition[];
+}
+
+/**
+ * Prerequisite edges among ONE course's concepts — the DAG the canvas lights
+ * up automatically when two placed cards happen to be an edge.
+ *
+ * Course scoping goes through `lr_unit_concept` because neither
+ * `lr_concept_prereq` nor `lr_concept` carries a course_id (verified against
+ * information_schema, 2026-08-18). Verified sound for LA (course 2): 180
+ * concepts via lr_unit_concept, and all 138 distinct concept_ids appearing in
+ * the course's theory boxes are inside that set — so no card can be silently
+ * edgeless because of scoping. 269 edges have both endpoints in the course;
+ * 196 of them join two theory-box concepts.
+ *
+ * Note the existing `fetchDirectPrereqs` above is a DIFFERENT query with a
+ * different contract (one-hop blame propagation, keyed by concept, returns a
+ * Record) — the canvas needs the edge list, filtered to a course, in both
+ * directions, so the two are deliberately not merged.
+ */
+export async function fetchPrereqEdges(courseId: number): Promise<PrereqEdge[]> {
+  // FK `lr_unit_concept_unit_id_fkey` makes the !inner embed resolvable.
+  const ucRes = await supabasePublic
+    .from("lr_unit_concept")
+    .select("concept_id, lr_unit!inner(course_id)")
+    .eq("lr_unit.course_id", courseId)
+    .limit(5000);
+  if (ucRes.error) throw ucRes.error;
+
+  const ids = Array.from(new Set((ucRes.data ?? []).map((r: { concept_id: string }) => r.concept_id)));
+  if (ids.length === 0) return [];
+  const inCourse = new Set(ids);
+
+  // Chunked: LA's 180 ids total 4005 chars, and a single `.in()` builds a ~6 KB
+  // GET URL — uncomfortably close to proxy header limits. 60 per chunk keeps
+  // each request ~2 KB and makes this deterministic rather than lucky.
+  const CHUNK = 60;
+  const out: PrereqEdge[] = [];
+  const seen = new Set<string>();
+  for (let i = 0; i < ids.length; i += CHUNK) {
+    const { data, error } = await supabasePublic
+      .from("lr_concept_prereq")
+      .select("concept_id, prereq_id")
+      .in("concept_id", ids.slice(i, i + CHUNK));
+    if (error) throw error;
+    for (const row of (data ?? []) as { concept_id: string; prereq_id: string }[]) {
+      if (!inCourse.has(row.prereq_id)) continue; // both endpoints must be in-course
+      const key = `${row.prereq_id}\u0000${row.concept_id}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      out.push({ prereqId: row.prereq_id, conceptId: row.concept_id });
+    }
+  }
+  return out;
 }
