@@ -36,6 +36,7 @@ import { ReviewPanel } from "./ReviewPanel";
 import { InfinitePanel } from "./InfinitePanel";
 import { ChallengePanel } from "./ChallengePanel";
 import { SprintPanel } from "./SprintPanel";
+import { StatsPanel } from "./StatsPanel";
 
 export function LearnPage() {
   return (
@@ -47,6 +48,7 @@ export function LearnPage() {
           <ChallengePanel />
           <SprintPanel />
           <InfinitePanel />
+          <StatsPanel />
         </div>
       </div>
     </CourseProvider>

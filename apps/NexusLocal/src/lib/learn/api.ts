@@ -40,6 +40,7 @@ import type {
   SprintBucketStat,
   UnitProgressStatus,
 } from "./types";
+import type { AttemptRow } from "./stats";
 
 import { nodeUserId } from "../nodeUser";
 import { applyBlame } from "./memory";
@@ -1321,4 +1322,119 @@ export async function fetchSprintAttemptIndex(
     }
   }
   return out;
+}
+
+// ── Statistik board (stats.ts) — read-only fetches feeding the pure
+// aggregation functions in `./stats`. Same anon-keyed `supabasePublic`
+// posture as everything else in this file; every function here returns
+// GLOBAL (all-course) rows and leaves course scoping to the caller (via
+// `stats.courseOfItemRef` for attempts, or a `course_id` join for units) —
+// matching `stats.ts`'s own "course-agnostic in, course-scoped by the
+// caller" contract. ─────────────────────────────────────────────────────
+
+const STATS_ATTEMPT_ROW_LIMIT = 20000; // generous cap, not a real pagination
+// boundary — 795 rows exist today; this only guards against an unbounded
+// query if usage grows by orders of magnitude before this gets revisited.
+
+/**
+ * Every attempt this user has logged (or every attempt since `sinceIso`,
+ * inclusive), oldest first — the raw feed every `stats.ts` chart/tile is
+ * built from. Unlike `fetchAttemptCounts` (which needs a specific set of
+ * `item_ref`s), this has no `item_ref` filter: the whole point of the stats
+ * board is aggregating across everything the learner has ever done.
+ */
+export async function fetchAttempts(opts?: { sinceIso?: string }): Promise<AttemptRow[]> {
+  let query = supabasePublic
+    .from("lr_attempt_log")
+    .select("item_ref, lens, grade, at")
+    .eq("user_id", await nodeUserId())
+    .order("at", { ascending: true })
+    .limit(STATS_ATTEMPT_ROW_LIMIT);
+  if (opts?.sinceIso) query = query.gte("at", opts.sinceIso);
+  const { data, error } = await query;
+  if (error) throw error;
+  return (data ?? []) as AttemptRow[];
+}
+
+/**
+ * Every concept this user has any memory-state evidence for, across every
+ * course — unlike `fetchMemoryStates` (which requires a specific
+ * `conceptIds` list, e.g. "this unit's concepts"), this has no filter at
+ * all. Powers `stats.weakestConcepts` and the "concepts retained" headline
+ * tile, both of which need the FULL set, not one unit's slice of it.
+ */
+export async function fetchAllMemoryStates(): Promise<LrMemoryState[]> {
+  const { data, error } = await supabasePublic
+    .from("lr_memory_state")
+    .select("*")
+    .eq("user_id", await nodeUserId());
+  if (error) throw error;
+  return (data ?? []) as LrMemoryState[];
+}
+
+/**
+ * `{ concept_id: title }` for the given concepts, chunked at 60 per request
+ * — same URL-length caution as `fetchPrereqEdges` (341 concept ids tracked
+ * live 2026-08-18 would otherwise build one very long `.in()` GET). A
+ * concept_id absent from the result (should not happen — `lr_concept` is the
+ * concept catalogue) is the caller's to fall back on; `stats.weakestConcepts`
+ * falls back to the bare concept_id rather than throwing.
+ */
+export async function fetchConceptTitles(conceptIds: string[]): Promise<Record<string, string>> {
+  if (conceptIds.length === 0) return {};
+  const CHUNK = 60;
+  const out: Record<string, string> = {};
+  for (let i = 0; i < conceptIds.length; i += CHUNK) {
+    const { data, error } = await supabasePublic
+      .from("lr_concept")
+      .select("concept_id, title")
+      .in("concept_id", conceptIds.slice(i, i + CHUNK));
+    if (error) throw error;
+    for (const row of (data ?? []) as { concept_id: string; title: string }[]) {
+      out[row.concept_id] = row.title;
+    }
+  }
+  return out;
+}
+
+/**
+ * Every `lr_unit_progress` row for this user, across every course —
+ * `fetchPath`'s own internal progress fetch is the same query but private to
+ * that function and course-filtered downstream via `lr_unit`, not exposed on
+ * its own. Powers `stats.masteryGrowth` (global cumulative curve) and
+ * `stats.masteryByCourse` (needs every course's rows to total each one).
+ */
+export async function fetchAllUnitProgress(): Promise<LrUnitProgress[]> {
+  const { data, error } = await supabasePublic
+    .from("lr_unit_progress")
+    .select("*")
+    .eq("user_id", await nodeUserId());
+  if (error) throw error;
+  return (data ?? []) as LrUnitProgress[];
+}
+
+/**
+ * `(unit_id, course_id)` for every unit in every course, unfiltered — the
+ * join `stats.masteryByCourse` needs to turn a flat `lr_unit_progress` list
+ * into a per-course "X/total" breakdown, since `lr_unit_progress` itself
+ * carries no `course_id`.
+ */
+export async function fetchUnitCourseMap(): Promise<Array<{ unit_id: number; course_id: number | null }>> {
+  const { data, error } = await supabasePublic.from("lr_unit").select("unit_id, course_id");
+  if (error) throw error;
+  return (data ?? []) as Array<{ unit_id: number; course_id: number | null }>;
+}
+
+/** This user's Lynudfordring run history, most recent first, capped at
+ * `limit` (default 50 — plenty for a "best score" callout; this table grows
+ * one row per completed run, not one per attempt). */
+export async function fetchChallengeRuns(limit: number = 50): Promise<LrChallengeRun[]> {
+  const { data, error } = await supabasePublic
+    .from("lr_challenge_run")
+    .select("*")
+    .eq("user_id", await nodeUserId())
+    .order("at", { ascending: false })
+    .limit(limit);
+  if (error) throw error;
+  return (data ?? []) as LrChallengeRun[];
 }
