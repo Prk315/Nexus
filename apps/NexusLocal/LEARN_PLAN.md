@@ -704,6 +704,30 @@ Each exam part becomes 1+ sprint drills in lr_sprint_drill, format one of:
 Every drill carries why_md (why the right answer is right) and how_md (the
 compressed solve-recipe: 'sådan løser du typen' steps) + tip_md (the trick).
 
+**context_md — the exam problem's reference material.** A bucket-style
+drill (esp. bcnf-normalization, fd-closure-keys, er-modeling, query-to-nl,
+ra-write, rc-write, sql-query) is often unanswerable from prompt_md alone —
+the question is about a relational schema, FD set, or table/relation data
+that lives on the ORIGINAL exam problem, not on the drill. `content.context_md`
+carries that material (walked from `lr_item_render.intro_md`, a defining
+`lr_item.prompt`, or an earlier group of the same exam for a back-reference
+like "same schema as the previous exercise") as a fenced ` ```text ` block —
+never KaTeX, per the DBMS corpus convention. All 171 course_id=3 drills were
+audited: 131 got a resolved context_md, 8 regex-words drills correctly have
+none (the pattern is already restated in each drill's own prompt/statement,
+no external schema exists), 32 generator drills were untouched because each
+instance's own R/S/T relations or B+-tree state is self-contained by
+construction. It's optional in `_validate.py` for exactly that reason — no
+external schema, no context_md, and that's correct, not a gap. `SprintSession.tsx`
+renders it through `Markdown` (fenced blocks stay monospace, scroll
+horizontally) in a `SchemaPanel`: a beside-the-question pane on desktop
+(≥1024px, only when context_md exists — no schema, no split, the reading
+column stays centered), inline above the card on iPad, and inline-but-
+collapsible on phone (`Vis`/`Skjul`, remembered for the session once
+collapsed). It's duplicated at the top of the wrong-answer teach sheet,
+always expanded, since how_md/why_md/tip_md there routinely reference it.
+Absent cleanly — no empty panel — when a drill carries no context_md.
+
 **Session loop (SprintSession.tsx).** Current bucket → drill → answer →
 instant verdict. WRONG → the how_md recipe + why_md shown before the next
 drill (that pause IS the teaching moment). THREE CORRECT IN A ROW in the
@@ -719,7 +743,15 @@ parameterized instances (random FD sets w/ computed closures, join
 cardinality counts, etc.), deterministic via a --seed argument, emitting
 drill JSON validated by the same checker as authored drills; inserted with
 authored_by='generator:<script>'. Generated drills are still status=draft
-until Godkend.
+until Godkend. Where a generated instance has its own reference material
+(eval_cost.py's R/S/T relation instances, B+-tree state; ra_write.py's tiny
+synthetic schema line) the generator emits it as `context_md`, a fenced
+` ```text ` block, so it renders in the same SchemaPanel as resolved exam
+schemas rather than living inline inside prompt_md. regex_words.py
+correctly emits none — the regex pattern is the whole prompt, there is no
+external schema to show. ra_write.py's `why` format also omits it: that
+format's `given_md` already renders the schema inline in the answer card,
+so a duplicate context_md panel would be redundant.
 
 **Data.** lr_sprint_drill (drill_id, course_id, bucket, code unique,
 source_slug → lr_item.slug or NULL for generated, format, content jsonb,

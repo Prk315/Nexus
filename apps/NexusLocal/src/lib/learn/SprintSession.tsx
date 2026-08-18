@@ -41,6 +41,7 @@ import type { Grade, Lens, LrSprintDrill, SprintDrillContent } from "./types";
 import { Markdown } from "./Markdown";
 import { useCourse } from "./CourseContext";
 import { TileDrill } from "./player/TileDrill";
+import { useWorkspaceLayout, WS_PANE, WS_SPLIT_MAIN, WS_SPLIT_ROW } from "./player/Workspace";
 import {
   ANSWER_COL,
   CARD,
@@ -237,6 +238,59 @@ function correctAnswerNode(drill: LrSprintDrill) {
   }
 }
 
+// ── Schema/reference panel (the fix — LEARN_PLAN.md: the exam problem's ────
+// relational schema / FD sets / table data must be VISIBLE, not just its
+// question). Copies ExerciseSession's `intro_md` recessed-card treatment
+// (border-black/[0.05] bg-black/[0.025], same rounded-xl→2xl step) so the
+// two surfaces read as one system, with a "SKEMA" label — Danish chrome,
+// English content, matching the app's existing convention (e.g. "KLADDE").
+// `collapsible` is phone-only per the three-breakpoint idiom in
+// `Workspace.tsx`/`DESIGN.md`; desktop's pane copy and the teach-sheet copy
+// both pass `collapsible={false}` and always render open. ─────────────────
+
+function SchemaPanel({
+  contextMd,
+  collapsible,
+  collapsed,
+  onToggleCollapse,
+  className = "",
+}: {
+  contextMd: string;
+  collapsible: boolean;
+  collapsed: boolean;
+  onToggleCollapse: () => void;
+  className?: string;
+}) {
+  const open = !collapsible || !collapsed;
+  return (
+    <div className={`relative overflow-hidden rounded-xl border border-black/[0.05] bg-black/[0.025] md:rounded-2xl ${className}`}>
+      <div className={`flex items-center justify-between gap-2 px-3 md:px-7 ${open ? "pt-3 md:pt-6" : "py-3 md:py-5"}`}>
+        <span className="text-[10px] font-semibold uppercase tracking-[0.14em] text-[#6E6E78]/70">SKEMA</span>
+        {collapsible && (
+          <button
+            type="button"
+            onClick={onToggleCollapse}
+            className="min-h-[28px] text-[11px] font-medium text-[#6E6E78] underline decoration-black/15 underline-offset-4 active:text-[#1A1A24]/70"
+          >
+            {collapsed ? "Vis" : "Skjul"}
+          </button>
+        )}
+      </div>
+      {/* Schema code blocks WRAP rather than scrolling sideways: a relation
+          line like `Mammal (mid : int, … , location : int)` is wider than any
+          panel, and a hidden tail is the exact bug this panel exists to fix —
+          an attribute you cannot see is an attribute you cannot use. Wrapping
+          is safe because these blocks are declarations, not code whose
+          indentation carries meaning. */}
+      {open && (
+        <div className="max-h-[42vh] overflow-y-auto overscroll-contain px-3 pb-3 pt-1.5 [&_code]:whitespace-pre-wrap [&_pre]:whitespace-pre-wrap [&_pre]:break-words md:max-h-[56vh] md:px-7 md:pb-6 md:pt-2.5">
+          <Markdown className="text-[13px] leading-relaxed text-[#1A1A24]/75 md:text-[14.5px]">{contextMd}</Markdown>
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ── Session ──────────────────────────────────────────────────────────────
 
 type Phase = "loading" | "error" | "empty" | "drill" | "cleared";
@@ -245,8 +299,13 @@ export function SprintSession({ onClose }: { onClose: () => void }) {
   const { course } = useCourse();
   const LENS = useLensTokens();
   const SOLID_BAR = useSolidBar();
+  const layout = useWorkspaceLayout();
 
   const [phase, setPhase] = useState<Phase>("loading");
+  // Schema panel starts expanded (the whole point — an invisible schema is
+  // the bug) and, once the learner collapses it on phone, stays collapsed
+  // for the rest of the session rather than resetting per drill/bucket.
+  const [schemaCollapsed, setSchemaCollapsed] = useState(false);
   const [queues, setQueues] = useState<BucketQueue[]>([]);
   const [bucketIdx, setBucketIdx] = useState(0);
   const [servedCount, setServedCount] = useState(0);
@@ -314,6 +373,9 @@ export function SprintSession({ onClose }: { onClose: () => void }) {
   const currentQueue = currentBucketEntry?.drills ?? [];
   const currentDrill = currentQueue.length > 0 ? currentQueue[servedCount % currentQueue.length] : null;
   const content = currentDrill?.content;
+  // Desktop only splits into a beside-pane when there's actually a schema to
+  // show — otherwise the reading column stays centred as before (req. 2).
+  const useSplitSchema = layout === "desktop" && !!content?.context_md;
 
   function resetAnswerState() {
     setSelectedIdx(null);
@@ -495,7 +557,17 @@ export function SprintSession({ onClose }: { onClose: () => void }) {
 
       {phase === "drill" && currentDrill && content && (
         <main className={`${MAIN_SHELL} pb-40`}>
-          <div className={READING_COL}>
+          <div className={useSplitSchema ? WS_SPLIT_ROW : READING_COL}>
+            <div className={useSplitSchema ? WS_SPLIT_MAIN : "contents"}>
+            {content.context_md && layout !== "desktop" && (
+              <SchemaPanel
+                contextMd={content.context_md}
+                collapsible={layout === "phone"}
+                collapsed={schemaCollapsed}
+                onToggleCollapse={() => setSchemaCollapsed((c) => !c)}
+                className="mb-3 md:mb-5"
+              />
+            )}
             <div
               className={`relative overflow-hidden ${CARD} p-3 transition-shadow duration-150 md:p-8 ${
                 checked ? (result ? "ring-2 ring-emerald-400/70" : "ring-2 ring-red-400/70") : ""
@@ -614,6 +686,17 @@ export function SprintSession({ onClose }: { onClose: () => void }) {
                 </div>
               )}
             </div>
+            </div>
+            {useSplitSchema && content.context_md && (
+              <aside className={WS_PANE}>
+                <SchemaPanel
+                  contextMd={content.context_md}
+                  collapsible={false}
+                  collapsed={false}
+                  onToggleCollapse={() => {}}
+                />
+              </aside>
+            )}
           </div>
         </main>
       )}
@@ -640,6 +723,21 @@ export function SprintSession({ onClose }: { onClose: () => void }) {
       {phase === "drill" && currentDrill && teachOpen && (
         <div className="absolute inset-x-0 bottom-0 z-10 max-h-[72vh] overflow-y-auto overscroll-contain rounded-t-2xl border-t border-black/[0.08] bg-white px-4 pb-[max(1rem,env(safe-area-inset-bottom))] pt-4 shadow-[0_-8px_32px_rgba(0,0,0,0.10)] animate-[learn-step-in_.18s_ease-out] md:px-8">
           <div className={READING_COL}>
+            {/* Only when the schema is NOT already pinned beside the question:
+                on desktop `useSplitSchema` keeps the pane visible behind this
+                sheet, so repeating it here would show the same block twice and
+                push the solve-recipe — the thing you opened the sheet for —
+                below the fold. */}
+            {currentDrill.content.context_md && !useSplitSchema && (
+              <SchemaPanel
+                contextMd={currentDrill.content.context_md}
+                collapsible={false}
+                collapsed={false}
+                onToggleCollapse={() => {}}
+                className="mb-4"
+              />
+            )}
+
             <p className="mb-1 text-[10px] uppercase tracking-wide text-[#6E6E78]/70">Correct answer</p>
             <div className="mb-4 text-[14px] text-[#1A1A24]/90">{correctAnswerNode(currentDrill)}</div>
 

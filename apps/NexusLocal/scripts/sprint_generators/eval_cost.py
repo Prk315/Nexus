@@ -160,10 +160,13 @@ def _build_cardinality_drill(rng, seed, i, fmt, instance):
     tip = "Sum matches per tuple; a negated atom filters against the active domain, it never adds rows."
     prompt = f"Count the result of: {query_txt}"
 
+    context_md = f"```text\n{given}\n```"
+
     if fmt == "blank":
         content = {
             **_envelope(2 if len(R) + len(S) <= 20 else 3),
-            "prompt_md": f"```text\n{given}\n```\n{prompt}. Answer: ___",
+            "prompt_md": f"{prompt}. Answer: ___",
+            "context_md": context_md,
             "why_md": why,
             "how_md": HOW_MD_CARD,
             "tip_md": tip,
@@ -184,7 +187,8 @@ def _build_cardinality_drill(rng, seed, i, fmt, instance):
         answer_idx = choices_vals.index(answer)
         content = {
             **_envelope(2 if len(R) + len(S) <= 20 else 3),
-            "prompt_md": f"```text\n{given}\n```\n{prompt}",
+            "prompt_md": prompt,
+            "context_md": context_md,
             "why_md": why,
             "how_md": HOW_MD_CARD,
             "tip_md": tip,
@@ -337,11 +341,13 @@ def _build_btree_drill(rng, seed, i, fmt, instance):
     given = f"B+ tree, order d={d} (max {2*d} keys/node):\n{before}"
 
     prompt = f"Insert {key_phrase}{order_suffix}. How many nodes split, in total?"
+    context_md = f"```text\n{given}\n```"
 
     if fmt == "blank":
         content = {
             **_envelope(2 if d == 2 else 3),
-            "prompt_md": f"```text\n{given}\n```\n{prompt} ___",
+            "prompt_md": f"{prompt} ___",
+            "context_md": context_md,
             "why_md": why,
             "how_md": HOW_MD_BTREE,
             "tip_md": tip,
@@ -366,7 +372,8 @@ def _build_btree_drill(rng, seed, i, fmt, instance):
         answer_idx = choices.index(correct)
         content = {
             **_envelope(2 if d == 2 else 3),
-            "prompt_md": f"```text\n{given}\n```\nAfter inserting {key_phrase}{order_suffix}, what is the tree?",
+            "prompt_md": f"After inserting {key_phrase}{order_suffix}, what is the tree?",
+            "context_md": context_md,
             "why_md": why,
             "how_md": HOW_MD_BTREE,
             "tip_md": tip,

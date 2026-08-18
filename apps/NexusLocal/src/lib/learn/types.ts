@@ -712,6 +712,13 @@ export interface SprintDrillContent {
   prompt_md?: string;
   /** `truefalse` only. */
   statement_md?: string;
+  /** The exam problem's reference material (relational schema, FD sets,
+   * table/relation data) resolved from `lr_item_render.intro_md` or a
+   * defining `lr_item.prompt` — fenced `text` code blocks, never KaTeX (the
+   * DBMS corpus convention). Absent when the drill's own `prompt_md` already
+   * restates everything needed, or when nothing was resolvable. See
+   * LEARN_PLAN.md "Sprint — bucketed fast-feedback exam training". */
+  context_md?: string;
   lens: Lens | null;
   concept_ids: string[];
   difficulty: number;

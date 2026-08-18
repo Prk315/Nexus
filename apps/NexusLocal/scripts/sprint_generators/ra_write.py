@@ -326,6 +326,7 @@ def _build_tiles(rng, seed, i, inst):
     content = {
         **_envelope(inst["difficulty"]),
         "prompt_md": _prompt_txt(inst),
+        "context_md": f"```text\n{_schema_line(inst)}\n```",
         "why_md": f"σ must run before π drops `{inst['cond_attr']}` — projecting first makes the filter attribute unavailable.",
         "how_md": HOW_MD,
         "tip_md": "π last, always — if the σ you need comes after π in the tile order, you've dropped the column first.",
@@ -368,6 +369,7 @@ def _build_mcq(rng, seed, i, inst):
     content = {
         **_envelope(inst["difficulty"]),
         "prompt_md": _prompt_txt(inst) + " Which RA is correct?",
+        "context_md": f"```text\n{_schema_line(inst)}\n```",
         "why_md": why,
         "how_md": HOW_MD,
         "tip_md": "π last, always — if σ needs a column π already dropped, the expression is broken, not just inefficient.",

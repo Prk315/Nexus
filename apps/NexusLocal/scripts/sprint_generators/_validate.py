@@ -61,6 +61,20 @@ def validate_content_common(content: dict[str, Any]) -> list[str]:
     elif len(tip_md) > 120:
         errs.append(f"tip_md {len(tip_md)} chars > 120")
 
+    # Optional: the exam problem's reference material (schema / FD sets /
+    # relation instances / B+-tree state) — see LEARN_PLAN.md "Sprint —
+    # bucketed fast-feedback exam training". Not required: some formats
+    # (e.g. regex-words) have no external schema and legitimately omit it —
+    # the pattern/instance is already restated in prompt_md/statement_md.
+    # When present it must actually carry content, since the UI renders an
+    # empty panel for a present-but-blank string rather than hiding it.
+    if "context_md" in content:
+        context_md = content.get("context_md")
+        if not isinstance(context_md, str) or not context_md.strip():
+            errs.append("context_md must be a non-empty string when present")
+        elif len(context_md) > 2000:
+            errs.append(f"context_md {len(context_md)} chars > 2000")
+
     return errs
 
 
