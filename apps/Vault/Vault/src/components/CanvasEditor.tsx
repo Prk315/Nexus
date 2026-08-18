@@ -3585,6 +3585,14 @@ export function CanvasEditor({ content, onChange, nodeId }: Props) {
       }
       activePenId.current = e.pointerId;
       inkActive.current = [{ x: wx, y: wy, p: pressureOf(e) }];
+      // inkPredicted is overwritten on every move of THIS stroke (see
+      // onPointerMove) but was never cleared at the start of one — it still
+      // held the previous stroke's last predicted tail. drawInkPreview
+      // concats inkActive with it unconditionally, so the first frame of a
+      // new stroke drew a phantom line from the fresh pen-down point out to
+      // wherever the last stroke's prediction was heading, for one frame
+      // until the new stroke's own first move overwrote it.
+      inkPredicted.current = [];
       // Draw-and-hold snap: pen tool only, never the highlighter.
       if (inkToolRef.current === "pen") {
         if (snapHold.current) clearTimeout(snapHold.current.timer);
