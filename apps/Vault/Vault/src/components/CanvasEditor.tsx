@@ -82,6 +82,18 @@ const DRAW_FILLS  = ["none","rgba(239,68,68,0.15)","rgba(249,115,22,0.15)","rgba
 // component state to compute.
 const INK_PREFS_KEY = "vault.ink.prefs";
 const DEFAULT_HL_COLOR = "#eab308";
+// How long a writing pause has to be before the wet-ink buffer flushes into
+// `data` (see the "Wet-ink buffer" section below). Every data.blocks-keyed
+// useMemo in this component (inkStrokeBlocks, arrowElements, contentBounds,
+// …) re-scans the WHOLE block list on each flush, not just the newly wet
+// strokes — cheap on an empty canvas, but on a heavily annotated page that
+// per-flush scan is the real cost, and it's paid once per flush regardless
+// of how many strokes that flush carries. Raised from 250ms so a fast
+// continuous writing burst batches more strokes per scan instead of paying
+// it near-per-stroke; every other flush trigger (undo/redo, tool switch,
+// eraser/lasso start, unmount) still commits immediately, so this only
+// delays how long an active, uninterrupted stroke of writing stays wet.
+const WET_FLUSH_IDLE_MS = 900;
 interface InkPrefs { pen: { color: string; width: number }; highlighter: { color: string; width: number }; recents: string[]; }
 function loadInkPrefs(): InkPrefs {
   const fallback: InkPrefs = { pen: { color: DRAW_COLORS[0], width: 2.5 }, highlighter: { color: DEFAULT_HL_COLOR, width: 14 }, recents: [] };
@@ -2655,7 +2667,7 @@ export function CanvasEditor({ content, onChange, nodeId }: Props) {
   // setData — a setData per stroke forces a full re-render of the SVG ink
   // layer (inkStrokePaths.map) on every pen-up, which is what capped fast
   // handwriting throughput on a populated page. wetStrokes drains into one
-  // batched setData either on a 250ms writing pause (flushWetStrokes,
+  // batched setData either on a WET_FLUSH_IDLE_MS writing pause (flushWetStrokes,
   // defined below pushUndo) or immediately at any of the flush-trigger call
   // sites (undo/redo, tool switches, eraser/lasso start, viewport change,
   // unmount) that need `data` to actually contain the buffered strokes.
@@ -2705,8 +2717,8 @@ export function CanvasEditor({ content, onChange, nodeId }: Props) {
   }, [data]);
 
   // A stroke can still be sitting unflushed in wetStrokes when this component
-  // unmounts (closing/switching away from this canvas within 250ms of the
-  // last pen-up) — the 300ms save-debounce above only ever sees `data`, and
+  // unmounts (closing/switching away from this canvas within WET_FLUSH_IDLE_MS
+  // of the last pen-up) — the 300ms save-debounce above only ever sees `data`, and
   // `data` never had the wet strokes. Bypass setData (the component is
   // dying, nothing will render the result).
   //
@@ -4107,7 +4119,7 @@ export function CanvasEditor({ content, onChange, nodeId }: Props) {
           // flush effect wipes it in the same paint the SVG picks it up.
           wetStrokes.current.push(mkInkStroke(pts, color, width, isHighlighter ? "highlighter" : undefined));
           if (wetFlushTimer.current) clearTimeout(wetFlushTimer.current);
-          wetFlushTimer.current = window.setTimeout(flushWetStrokes, 250);
+          wetFlushTimer.current = window.setTimeout(flushWetStrokes, WET_FLUSH_IDLE_MS);
           scheduleInkDraw();
         } else {
           // Too short to commit (a tap, effectively) — nothing to keep wet.
