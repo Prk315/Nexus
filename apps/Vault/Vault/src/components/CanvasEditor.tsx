@@ -2665,6 +2665,16 @@ export function CanvasEditor({ content, onChange, nodeId }: Props) {
   // strokes stay painted on the preview canvas (their finished, final look)
   // until the SVG has them too, so the swap is invisible.
   const wetClearPending  = useRef(false);
+  // drawInkPreview repaints every rAF tick while a stroke is in flight (each
+  // pointermove calls scheduleInkDraw), and it repaints every already-wet
+  // stroke each time so the buffer's contents stay visible under the live
+  // one. Without this cache it recomputed inkOutline (perfect-freehand's
+  // getStroke, an O(points) spline fit) for every buffered stroke on every
+  // one of those frames — so writing a second word before the first flushed
+  // made each new frame redo all of the first word's outlines too, which is
+  // exactly the stutter this buffer exists to avoid, just one layer up.
+  // Keyed by stroke id, populated once per stroke, cleared as strokes flush.
+  const wetOutlineCache  = useRef(new Map<string, number[][]>());
 
   const touchStartRef    = useRef<{ dist: number; midX: number; midY: number } | null>(null);
   // Two/three-finger tap → undo/redo, tracked independently of the pinch
@@ -2831,7 +2841,11 @@ export function CanvasEditor({ content, onChange, nodeId }: Props) {
           ctx.globalCompositeOperation = "source-over";
         }
       } else {
-        const outline = inkOutline(ws.points, ws.strokeWidth, true);
+        let outline = wetOutlineCache.current.get(ws.id);
+        if (!outline) {
+          outline = inkOutline(ws.points, ws.strokeWidth, true);
+          wetOutlineCache.current.set(ws.id, outline);
+        }
         if (outline.length >= 4) {
           const pts = outline.map(([x, y]) => ({ x: x * vp.zoom + vp.x, y: y * vp.zoom + vp.y }));
           ctx.fillStyle = ws.color;
@@ -3082,6 +3096,9 @@ export function CanvasEditor({ content, onChange, nodeId }: Props) {
     for (const s of wet) {
       pushUndo(base);
       base = { blocks: [...base.blocks, s], arrows: base.arrows };
+      // The committed copy gets its own cache entry in inkStrokePaths — this
+      // one only ever served the wet-preview loop.
+      wetOutlineCache.current.delete(s.id);
     }
     // Anticipate the commit on dataRef before setData's updater actually
     // runs — a gesture armed synchronously right after this call (eraser,
