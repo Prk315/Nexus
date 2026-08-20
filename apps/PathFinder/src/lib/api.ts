@@ -86,6 +86,22 @@ const TASK_SELECT = "*, pf_task_planning(*)";
 const TASK_SELECT_CTX = "*, pf_task_planning(*), pf_plans(id, title, goal_id, pf_goals(id, title))";
 
 function mapPlanning(r: any): TaskPlanning | null {
+  // Two very different situations both end in `null`, and only one is legitimate:
+  //
+  //   key present, value null -> a sparse subtype. Correct: it has no planning row.
+  //   key absent entirely     -> the caller's `select` omitted the embed. The task
+  //                              silently reads as default urgency and stage.
+  //
+  // The second is a bug that cannot fail loudly on its own — PostgREST returns
+  // 200 and the UI just shows the wrong axes. Callers should use TASK_SELECT /
+  // TASK_SELECT_CTX; this catches the ones that don't.
+  if (import.meta.env.DEV && r?.task_type === "task" && !("pf_task_planning" in (r ?? {}))) {
+    console.warn(
+      `[pf_tasks] task ${r?.id} was read without the pf_task_planning embed — ` +
+      "urgency and stage will fall back to defaults. Use TASK_SELECT or TASK_SELECT_CTX.",
+    );
+  }
+
   // PostgREST gives a one-to-one embed as an object, but returns an array when
   // it can only infer a one-to-many. Accept both so a relationship-cache change
   // can't silently blank out every task's planning row.
@@ -1058,7 +1074,7 @@ export const setTaskKanbanStatus = async (id: number, status: string): Promise<T
     .from("pf_tasks")
     .update({ kanban_status: status })
     .eq("id", id)
-    .select()
+    .select(TASK_SELECT)
     .single();
   if (error) err(error);
   return mapTask(data!);
@@ -1070,7 +1086,7 @@ export const moveTask = async (id: number, planId: number | null): Promise<Task>
     .from("pf_tasks")
     .update({ plan_id: planId })
     .eq("id", id)
-    .select()
+    .select(TASK_SELECT)
     .single();
   if (error) err(error);
   return mapTask(data!);
@@ -1254,7 +1270,7 @@ export const getTodayFocus = async (): Promise<TodayFocus> => {
 
   const [{ data: plans }, { data: tasks }, { data: systems }] = await Promise.all([
     supabase.from("pf_plans").select("id, title, goal_id, pf_goals(id, title)").eq("user_id", getUserId()),
-    supabase.from("pf_tasks").select("*").eq("user_id", getUserId()).eq("done", false)
+    supabase.from("pf_tasks").select(TASK_SELECT).eq("user_id", getUserId()).eq("done", false)
       .not("due_date", "is", null).lte("due_date", today),
     supabase.from("pf_systems").select("*").eq("user_id", getUserId()),
   ]);
