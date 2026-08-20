@@ -12,6 +12,7 @@ import {
   createPlan, updatePlan, deletePlan,
   createSystem, updateSystem, deleteSystem, markSystemDone,
   getCalBlocks, createCalBlock, updateCalBlock, deleteCalBlock,
+  getTaskSessionsInRange, logTaskSession, unlogTaskOccurrence,
   createRecurringCalBlock, updateRecurringCalBlock, deleteRecurringCalBlock,
   getDeadlines, getReminders, toggleDeadline, toggleReminder, updateCourseAssignment,
   getCaSubtasks, toggleCaSubtask,
@@ -20,8 +21,9 @@ import { loadActualWeek, type ActualDay } from "../lib/actual";
 import { type Span, dayStartMs } from "@nexus/core/coverage";
 import { Button } from "../components/ui/button";
 import { cn, layoutCalItems } from "../lib/utils";
+import { blockMinutes } from "../lib/taskTree";
 import { isDue } from "../components/workspace/systemForms";
-import type { Goal, Plan, TaskWithContext, SystemEntry, WeekItems, CalBlock, Deadline, Reminder, CourseAssignment, CaSubtask, ScheduleEntry } from "../types";
+import type { Goal, Plan, TaskWithContext, SystemEntry, WeekItems, CalBlock, Deadline, Reminder, CourseAssignment, CaSubtask, ScheduleEntry, TaskSession } from "../types";
 
 // ── Date helpers ──────────────────────────────────────────────────────────────
 
@@ -693,15 +695,18 @@ function TaskPopupChip({ t, onToggle, onEdit }: {
 
 // ── Time column ───────────────────────────────────────────────────────────────
 
-function TimeColumn({ date, isToday, blocks, systems, courseAssignments, scheduleEntries, actual, onClickSlot, onClickBlock }: {
+function TimeColumn({ date, isToday, blocks, systems, courseAssignments, scheduleEntries, actual, sessionsByBlock, onClickSlot, onClickBlock, onToggleWorked }: {
   date: Date; isToday: boolean;
   blocks: CalBlock[];
   systems: SystemEntry[];
   courseAssignments: CourseAssignment[];
   scheduleEntries: ScheduleEntry[];
   actual?: ActualDay;
+  /** Sessions already logged, keyed by the occurrence's cal_block_id. */
+  sessionsByBlock: Map<number, TaskSession>;
   onClickSlot: (date: string, time: string) => void;
   onClickBlock: (b: CalBlock) => void;
+  onToggleWorked: (b: CalBlock) => void;
 }) {
   const iso = toISO(date);
   const colRef = useRef<HTMLDivElement>(null);
@@ -906,9 +911,14 @@ function TimeColumn({ date, isToday, blocks, systems, courseAssignments, schedul
             const clr = BLOCK_COLORS[b.color] ?? BLOCK_COLORS.blue;
             const cbId = `cb-${b.recurring_id ?? b.id}-${b.date}`;
             const cbHidden = hiddenIds.has(cbId);
+            // A block committed to a task can be worked off right here: ticking
+            // it logs a session against this occurrence, which is what advances
+            // sessions- and time-mode completion. Untickable blocks (no task)
+            // show nothing, so the calendar is unchanged for everything else.
+            const worked = b.task_id != null && sessionsByBlock.has(b.id);
             return (
               <div key={`${b.is_recurring ? "r" : "b"}-${b.recurring_id ?? b.id}-${b.date}`}
-                className={cn("absolute rounded border px-1.5 py-0.5 cursor-pointer overflow-hidden group", clr.bg, clr.border, cbHidden && "opacity-15")}
+                className={cn("absolute rounded border px-1.5 py-0.5 cursor-pointer overflow-hidden group", clr.bg, clr.border, cbHidden && "opacity-15", worked && "ring-1 ring-emerald-400/60")}
                 style={{ top, height, left, right }}
                 onClick={(e) => { e.stopPropagation(); onClickBlock(b); }}
               >
@@ -919,8 +929,22 @@ function TimeColumn({ date, isToday, blocks, systems, courseAssignments, schedul
                   {cbHidden ? <EyeOff className={cn("h-3.5 w-3.5", clr.text)} /> : <Eye className={cn("h-3.5 w-3.5", clr.text)} />}
                 </button>
                 <div className="flex items-center gap-1">
+                  {b.task_id != null && (
+                    <button
+                      title={worked ? "Worked — click to undo" : "Mark this block as worked"}
+                      onClick={(e) => { e.stopPropagation(); onToggleWorked(b); }}
+                      className={cn(
+                        "flex h-3 w-3 shrink-0 items-center justify-center rounded-[3px] border transition-colors",
+                        worked
+                          ? "bg-emerald-500 border-emerald-500 text-white"
+                          : cn("border-current opacity-50 hover:opacity-100", clr.text),
+                      )}
+                    >
+                      {worked && <Check className="h-2 w-2" />}
+                    </button>
+                  )}
                   {b.is_recurring && <Repeat2 className={cn("h-2.5 w-2.5 shrink-0 opacity-70", clr.text)} />}
-                  <p className={cn("text-[11px] font-semibold leading-tight truncate", clr.text)}>{b.title}</p>
+                  <p className={cn("text-[11px] font-semibold leading-tight truncate", clr.text, worked && "line-through opacity-70")}>{b.title}</p>
                 </div>
                 {height > 30 && (
                   <p className={cn("text-[10px] leading-tight opacity-70", clr.text)}>{b.start_time}–{b.end_time}</p>
@@ -1695,6 +1719,11 @@ export function Week() {
   const [allDeadlines, setAllDeadlines] = useState<Deadline[]>([]);
   const [allReminders, setAllReminders] = useState<Reminder[]>([]);
   const [allTasks,     setAllTasks]    = useState<TaskWithContext[]>([]);
+  // Sessions logged against calendar occurrences in the visible range. Keyed by
+  // cal_block_id so a block can tell whether it has already been worked — for a
+  // recurring series that id is the occurrence's virtual negative id, so ticking
+  // one Wednesday off doesn't mark every Wednesday.
+  const [sessionsByBlock, setSessionsByBlock] = useState<Map<number, TaskSession>>(new Map());
   const [modal,        setModal]       = useState<ModalState | null>(null);
   const gridRef = useRef<HTMLDivElement>(null);
 
@@ -1737,12 +1766,16 @@ export function Week() {
   const queryEnd   = view === "week" ? end   : toISO(monthGridEnd);
 
   const load = useCallback(async () => {
-    const [wi, gp, pl, sy, cb, dl, rm, at] = await Promise.all([
+    const [wi, gp, pl, sy, cb, dl, rm, at, ts] = await Promise.all([
       getWeekItems(queryStart, queryEnd), getGoals(), getPlans(), getSystems(),
       getCalBlocks(queryStart, queryEnd), getDeadlines(), getReminders(), getAllTasks(),
+      getTaskSessionsInRange(queryStart, queryEnd),
     ]);
     setItems(wi); setAllGoals(gp); setAllPlans(pl); setSystems(sy); setCalBlocks(cb);
     setAllDeadlines(dl); setAllReminders(rm); setAllTasks(at);
+    setSessionsByBlock(new Map(
+      ts.filter((x) => x.cal_block_id != null).map((x) => [x.cal_block_id!, x]),
+    ));
   }, [queryStart, queryEnd]);
 
   useEffect(() => { load(); }, [load]);
@@ -1928,6 +1961,50 @@ export function Week() {
       setCalBlocks((prev) => prev.map((x) => x.id === block.id ? b : x));
     }
     setModal(null);
+  };
+
+  /**
+   * Ticks a scheduled block off as worked, or un-ticks it.
+   *
+   * This is the step that closes the loop: the planner commits calendar time,
+   * and this records that the time was actually spent. A session is what moves
+   * sessions- and time-mode completion, so without it a recurring step could be
+   * scheduled forever and never complete.
+   *
+   * The session is keyed to `block.id` — for a recurring series that is the
+   * occurrence's virtual negative id, so ticking one Wednesday does not mark
+   * every Wednesday. Minutes come from the block's own duration.
+   */
+  const handleToggleWorked = async (block: CalBlock) => {
+    if (block.task_id == null) return;
+    const existing = sessionsByBlock.get(block.id);
+
+    // Optimistic: the tick must feel instant, and a failure re-syncs via load().
+    setSessionsByBlock((prev) => {
+      const next = new Map(prev);
+      if (existing) next.delete(block.id);
+      else next.set(block.id, {
+        id: -1, task_id: block.task_id!, date: block.date,
+        minutes: blockMinutes(block.start_time, block.end_time),
+        cal_block_id: block.id, note: null, created_at: new Date().toISOString(),
+      });
+      return next;
+    });
+
+    try {
+      if (existing) {
+        await unlogTaskOccurrence(block.task_id, block.id);
+      } else {
+        await logTaskSession({
+          task_id: block.task_id,
+          date: block.date,
+          minutes: blockMinutes(block.start_time, block.end_time),
+          cal_block_id: block.id,
+        });
+      }
+    } finally {
+      load();
+    }
   };
 
   const handleDeleteBlock = async (block: CalBlock) => {
@@ -2140,8 +2217,10 @@ export function Week() {
               systems={systems}
               courseAssignments={selCAAll}
               scheduleEntries={scheduleEntriesFor(selectedDay)}
+              sessionsByBlock={sessionsByBlock}
               onClickSlot={(date, time) => setModal({ kind: "create-block", date, startTime: time })}
               onClickBlock={(b) => setModal({ kind: "edit-block", block: b })}
+              onToggleWorked={handleToggleWorked}
             />
           </div>
         </div>
@@ -2390,8 +2469,10 @@ export function Week() {
                       courseAssignments={items.course_assignments.filter((a) => a.due_date === iso)}
                       scheduleEntries={scheduleEntriesFor(iso)}
                       actual={showActual ? actualByDate.get(iso) : undefined}
+                      sessionsByBlock={sessionsByBlock}
                       onClickSlot={(date, time) => setModal({ kind: "create-block", date, startTime: time })}
                       onClickBlock={(b) => setModal({ kind: "edit-block", block: b })}
+                      onToggleWorked={handleToggleWorked}
                     />
                   );
                 })}

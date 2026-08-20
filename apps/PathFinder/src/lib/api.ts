@@ -941,6 +941,24 @@ export const getTaskBlocks = async (taskIds: number[]): Promise<CalBlock[]> => {
 
 // ─── Work sessions ──────────────────────────────────────────────────────────
 
+/**
+ * Every session logged in a date range, for the calendar surfaces.
+ *
+ * Week and Dashboard need to know which *occurrences* have been ticked off, and
+ * they know their date window rather than a task list — so this is scoped by
+ * date, unlike `getTaskSessions` which is scoped by subtree.
+ */
+export const getTaskSessionsInRange = async (
+  startDate: string, endDate: string,
+): Promise<TaskSession[]> => {
+  const { data, error } = await supabase
+    .from("pf_task_sessions").select("*")
+    .eq("user_id", getUserId())
+    .gte("date", startDate).lte("date", endDate);
+  if (error) err(error);
+  return (data ?? []).map(mapTaskSession);
+};
+
 export const getTaskSessions = async (taskIds: number[]): Promise<TaskSession[]> => {
   if (taskIds.length === 0) return [];
   const { data, error } = await supabase

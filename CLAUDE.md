@@ -711,6 +711,21 @@ frozen until the refetch lands.
   so "4h of a 6h task is committed" is just a sum. Recurring series are counted
   by *occurrence* over a bounded 365-day horizon — an open-ended series would
   otherwise contribute infinite scheduled time.
+- **`pf_task_sessions.cal_block_id` is not a foreign key, and its unique index
+  is not partial.** Ticking a *recurring* occurrence off stores the occurrence's
+  **virtual negative id** (`-(recurring_id × 100 000 + dayOffset)`), for which no
+  row exists — that is what stops one Wednesday's tick marking the whole series.
+  The `(task_id, cal_block_id)` index was first written partial (`where
+  cal_block_id is not null`) and the upsert failed outright: PostgREST cannot
+  infer a partial index for `on_conflict`. Same trap as garmin-import's
+  `(user_id, external_id)`, same fix — drop the WHERE. NULLs are distinct anyway,
+  so freehand sessions stay unconstrained.
+
+**Working a task** happens on the calendar surfaces, not in the planner: a block
+with a `task_id` renders a tick in Week and Dashboard, and ticking it logs a
+session. That is the only thing that advances `sessions`- and `time`-mode
+completion, so a recurring step that is never ticked never finishes no matter how
+often it is scheduled.
 
 **Vault data layer** (`apps/Vault/Vault/src/lib/`):
 - `supabase.ts` — shared client from `VITE_SUPABASE_URL` / `VITE_SUPABASE_ANON_KEY`.
