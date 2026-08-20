@@ -7,6 +7,7 @@ import {
 import {
   getWeekItems, getAllTasks, getGoals, getPlans, getSystems,
   createTask, updateTask, deleteTask, toggleTask,
+  toTaskWithContext,
   createGoal, updateGoal, deleteGoal,
   createPlan, updatePlan, deletePlan,
   createSystem, updateSystem, deleteSystem, markSystemDone,
@@ -1907,14 +1908,7 @@ export function Week() {
           due_date: modal.date,
         });
         taskId = newTask.id;
-        setAllTasks((prev) => [{
-          id: newTask.id, plan_id: null, plan_title: null,
-          goal_id: null, goal_title: null, title: newTask.title,
-          done: newTask.done, sort_order: newTask.sort_order,
-          priority: newTask.priority, due_date: newTask.due_date,
-          created_at: newTask.created_at, time_estimate: newTask.time_estimate,
-          category: newTask.category,
-        }, ...prev]);
+        setAllTasks((prev) => [toTaskWithContext(newTask), ...prev]);
       }
       const b = await createCalBlock(modal.date, d.title, d.start_time, d.end_time, d.color, desc, loc, taskId);
       setCalBlocks((prev) => [...prev, b]);

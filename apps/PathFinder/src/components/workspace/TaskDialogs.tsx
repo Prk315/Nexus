@@ -1,11 +1,16 @@
 import { useState } from "react";
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
-import type { TaskWithContext, Priority, Plan } from "../../types";
+import { URGENCY_LABEL } from "../../lib/utils";
+import { planningOf } from "../../lib/taskTree";
+import type { TaskWithContext, Priority, Urgency, Plan, TaskType } from "../../types";
 
 export interface TaskFormState {
   title: string;
+  /** The importance axis. */
   priority: Priority;
+  /** The urgency axis — its complement. Together they place the task on the matrix. */
+  urgency: Urgency;
   due_date: string;
   time_estimate: string;
   plan_id: string; // "" = no plan
@@ -62,7 +67,7 @@ function TaskForm({ initial, plans, submitLabel, onSubmit, onClose }: {
       </div>
       <div className="grid grid-cols-2 gap-2">
         <div className="flex flex-col gap-1">
-          <label className="text-xs text-muted-foreground">Priority</label>
+          <label className="text-xs text-muted-foreground">Importance</label>
           <select
             className="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
             value={form.priority}
@@ -74,13 +79,25 @@ function TaskForm({ initial, plans, submitLabel, onSubmit, onClose }: {
           </select>
         </div>
         <div className="flex flex-col gap-1">
-          <label className="text-xs text-muted-foreground">Due date</label>
-          <Input
-            type="date"
-            value={form.due_date}
-            onChange={(e) => setForm((f) => ({ ...f, due_date: e.target.value }))}
-          />
+          <label className="text-xs text-muted-foreground">Urgency</label>
+          <select
+            className="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+            value={form.urgency}
+            onChange={(e) => setForm((f) => ({ ...f, urgency: e.target.value as Urgency }))}
+          >
+            {(["high", "medium", "low"] as Urgency[]).map((u) => (
+              <option key={u} value={u}>{URGENCY_LABEL[u]}</option>
+            ))}
+          </select>
         </div>
+      </div>
+      <div className="flex flex-col gap-1">
+        <label className="text-xs text-muted-foreground">Due date</label>
+        <Input
+          type="date"
+          value={form.due_date}
+          onChange={(e) => setForm((f) => ({ ...f, due_date: e.target.value }))}
+        />
       </div>
       <div className="flex flex-col gap-1">
         <label className="text-xs text-muted-foreground">
@@ -117,6 +134,7 @@ export function EditTaskForm({ task, plans, onSave, onClose }: {
       initial={{
         title: task.title,
         priority: task.priority,
+        urgency: planningOf(task).urgency,
         due_date: task.due_date ?? "",
         time_estimate: task.time_estimate != null ? String(task.time_estimate) : "",
         plan_id: task.plan_id != null ? String(task.plan_id) : "",
@@ -141,11 +159,101 @@ export function AddTaskForm({ plans, defaultPlanId, defaultDue, onAdd, onClose }
       initial={{
         title: "",
         priority: "medium",
+        urgency: "medium",
         due_date: defaultDue ?? "",
         time_estimate: "",
         plan_id: defaultPlanId != null ? String(defaultPlanId) : "",
       }}
     />
+  );
+}
+
+/**
+ * The attributes that belong to a sparse subtype, and only to it.
+ *
+ * Two or three fields each — that sparseness is the whole point of the ISA
+ * split. A reminder gets a bell and a lead time; it does not get a lifecycle, a
+ * breakdown tree or a completion mode, because none of those mean anything for
+ * "remember to call the dentist".
+ */
+export function SubtypeFields({ type, value, onChange }: {
+  type: Exclude<TaskType, "task">;
+  value: Record<string, any>;
+  onChange: (patch: Record<string, any>) => void;
+}) {
+  const field = (label: string, node: React.ReactNode) => (
+    <div className="flex flex-col gap-1 flex-1 min-w-[120px]">
+      <label className="text-xs text-muted-foreground">{label}</label>
+      {node}
+    </div>
+  );
+
+  const numeric = (v: string) => (v.trim() === "" ? null : Math.max(0, Number(v) || 0));
+
+  return (
+    <div className="flex flex-wrap gap-2 rounded-lg border border-border p-3">
+      <span className="w-full text-[11px] font-medium text-muted-foreground capitalize">
+        {type} details
+      </span>
+
+      {type === "reminder" && (
+        <>
+          {field("Remind at", (
+            <Input
+              type="datetime-local"
+              // Stored as timestamptz; the input wants a local "YYYY-MM-DDTHH:mm".
+              value={value.remind_at ? String(value.remind_at).slice(0, 16) : ""}
+              onChange={(e) => onChange({ remind_at: e.target.value ? new Date(e.target.value).toISOString() : null })}
+            />
+          ))}
+          {field("Lead (min)", (
+            <Input
+              type="number" min={0} placeholder="0"
+              value={value.lead_minutes ?? ""}
+              onChange={(e) => onChange({ lead_minutes: numeric(e.target.value) })}
+            />
+          ))}
+        </>
+      )}
+
+      {type === "chore" && (
+        <>
+          {field("Area", (
+            <Input
+              placeholder="kitchen, bathroom…"
+              value={value.area ?? ""}
+              onChange={(e) => onChange({ area: e.target.value || null })}
+            />
+          ))}
+          {field("Repeats every (days)", (
+            <Input
+              type="number" min={0} placeholder="one-off"
+              value={value.rotation_days ?? ""}
+              onChange={(e) => onChange({ rotation_days: numeric(e.target.value) })}
+            />
+          ))}
+        </>
+      )}
+
+      {type === "shopping" && (
+        <>
+          {field("Quantity", (
+            <Input
+              placeholder="2 × 500g"
+              value={value.quantity ?? ""}
+              onChange={(e) => onChange({ quantity: e.target.value || null })}
+            />
+          ))}
+          {field("Store", (
+            <Input
+              placeholder="Netto"
+              value={value.store ?? ""}
+              onChange={(e) => onChange({ store: e.target.value || null })}
+            />
+          ))}
+        </>
+      )}
+    </div>
   );
 }
 

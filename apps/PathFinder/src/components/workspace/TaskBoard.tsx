@@ -4,26 +4,38 @@ import {
   DndContext, DragOverlay, PointerSensor, useSensor, useSensors,
   useDraggable, useDroppable, type DragEndEvent, type DragStartEvent,
 } from "@dnd-kit/core";
-import { Plus, Search, ListChecks } from "lucide-react";
+import { Plus, Search, ListChecks, AlertTriangle, ListTree } from "lucide-react";
 import {
   useTasks, usePlans, useToggleTask, useDeleteTask, useUpdateTask,
   useRescheduleTask, useMoveTask, useCreateTask, useReorderTasks,
   useSetKanbanStatus, useSetPriority,
 } from "../../hooks/useTasks";
+import { useTaskScheduling, useSetTaskMatrix, useSetTaskStage } from "../../hooks/useTaskPlanning";
 import { qk } from "../../lib/queryClient";
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
 import { Dialog, DialogContent } from "../ui/dialog";
-import { cn } from "../../lib/utils";
-import type { TaskWithContext, Priority } from "../../types";
-import { TaskRow } from "./TaskRow";
-import { EditTaskForm, AddTaskForm, ReschedulePopover, type TaskFormState } from "./TaskDialogs";
+import { cn, STAGE_LABEL, STAGE_ORDER, STAGE_HINT } from "../../lib/utils";
+import {
+  AXIS, buildForest, cellAdvice, cellKey, parseCellKey, flatten,
+  rollupEstimate, rollupCoverage, isWorkable, isFullTask, planningOf,
+  type TaskNode,
+} from "../../lib/taskTree";
+import type { TaskWithContext, Priority, Urgency, TaskStage } from "../../types";
+import { TaskRow, type RowPlanning } from "./TaskRow";
+import {
+  AddTaskForm, EditTaskForm, ReschedulePopover, SubtypeFields, type TaskFormState,
+} from "./TaskDialogs";
+import { getTaskSubtype, saveTaskSubtype } from "../../lib/api";
+import { TaskPlanner } from "./TaskPlanner";
 import { StudySection } from "./StudySection";
 
-type GroupMode = "time" | "plan" | "goal" | "priority" | "status";
+type GroupMode = "time" | "matrix" | "stage" | "plan" | "goal" | "priority" | "status";
 
 const GROUP_MODES: { id: GroupMode; label: string }[] = [
   { id: "time", label: "Time" },
+  { id: "matrix", label: "Matrix" },
+  { id: "stage", label: "Stage" },
   { id: "plan", label: "Plan" },
   { id: "goal", label: "Goal" },
   { id: "priority", label: "Priority" },
@@ -49,7 +61,7 @@ function laterDate(): string {
 const LATER_DATE = laterDate();
 
 // Which lenses support cross-bucket dragging, and how a drop is interpreted.
-const DND_LENSES = new Set<GroupMode>(["time", "plan", "priority", "status"]);
+const DND_LENSES = new Set<GroupMode>(["time", "matrix", "stage", "plan", "priority", "status"]);
 
 // The bucket key a task currently lives in, for a given lens (mirrors `buckets`).
 function bucketKeyForTask(t: TaskWithContext, group: GroupMode): string {
@@ -60,6 +72,8 @@ function bucketKeyForTask(t: TaskWithContext, group: GroupMode): string {
     if (t.due_date <= WEEK_END) return "week";
     return "later";
   }
+  if (group === "matrix") return cellKey(t.priority, planningOf(t).urgency);
+  if (group === "stage") return planningOf(t).stage;
   if (group === "plan") return String(t.plan_id);
   if (group === "priority") return t.priority;
   if (group === "status") return t.kanban_status || "backlog";
@@ -82,10 +96,12 @@ function DraggableRow({ id, children }: { id: number; children: React.ReactNode 
   );
 }
 
-function DroppableSection({ id, isSource, children }: { id: string; isSource: boolean; children: React.ReactNode }) {
-  const { setNodeRef, isOver, active } = useDroppable({ id });
+function DroppableSection({ id, isSource, disabled, children }: {
+  id: string; isSource: boolean; disabled?: boolean; children: React.ReactNode;
+}) {
+  const { setNodeRef, isOver, active } = useDroppable({ id, disabled });
   // Highlight only when a drag is in flight and this isn't the task's own bucket.
-  const armed = active != null && !isSource;
+  const armed = active != null && !isSource && !disabled;
   return (
     <div
       ref={setNodeRef}
@@ -119,14 +135,23 @@ export function TaskBoard({ selectedPlanId, selectedGoalId, reloadSignal }: {
 }) {
   const { data: tasks = [] } = useTasks();
   const { data: plans = [] } = usePlans();
+  const { data: coverage = new Map() } = useTaskScheduling();
   const [group, setGroup] = useState<GroupMode>("time");
   const [search, setSearch] = useState("");
   const [showDone, setShowDone] = useState(false);
+  // Subtasks are steps *inside* a task, not board items. Showing them by default
+  // would flood the board with fragments the moment anything is broken down.
+  const [showSteps, setShowSteps] = useState(false);
   const [planFilter, setPlanFilter] = useState<string>(""); // "" = all
 
-  const [editing, setEditing] = useState<TaskWithContext | null>(null);
+  // Editing splits by subtype: a full task opens the three-step planner, a sparse
+  // kind opens the small form. Handing a shopping item a breakdown tree and a
+  // lifecycle rail would be the single-wide-table mistake all over again.
+  const [planning, setPlanning] = useState<number | null>(null);
+  const [editingSimple, setEditingSimple] = useState<TaskWithContext | null>(null);
   const [adding, setAdding] = useState(false);
   const [rescheduling, setRescheduling] = useState<TaskWithContext | null>(null);
+  const [gateError, setGateError] = useState<string | null>(null);
 
   // Sibling rails (Navigator, Systems) still mutate via direct api calls and bump
   // `reloadSignal`; refresh our cached reads when that happens (skip the initial mount).
@@ -151,17 +176,43 @@ export function TaskBoard({ selectedPlanId, selectedGoalId, reloadSignal }: {
   const reorder = useReorderTasks();
   const setStatus = useSetKanbanStatus();
   const setPriority = useSetPriority();
+  const setMatrix = useSetTaskMatrix();
+  const setStage = useSetTaskStage();
+
+  // ── Breakdown-aware facts, computed once per task list ──────────────────────
+  // The forest is built from every task (not the filtered view) so a parent's
+  // roll-up stays correct even when its steps are hidden or filtered out.
+  const nodesById = useMemo(() => {
+    const map = new Map<number, TaskNode>();
+    for (const root of buildForest(tasks)) {
+      for (const n of flatten(root)) map.set(n.task.id, n);
+    }
+    return map;
+  }, [tasks]);
+
+  const planningFor = (t: TaskWithContext): RowPlanning | undefined => {
+    const node = nodesById.get(t.id);
+    if (!node) return undefined;
+    return {
+      subtaskCount: node.children.length,
+      doneSubtasks: node.children.filter((c) => c.task.done).length,
+      estimateMin: rollupEstimate(node),
+      scheduledMin: rollupCoverage(node, coverage).scheduledMin,
+      workable: isWorkable(node, coverage),
+    };
+  };
 
   // ── Drag and drop ────────────────────────────────────────────────────────────
   // Drag a task onto another bucket to act on it — the action depends on the lens:
-  //   time → reschedule · plan → move plan · priority → set priority · status → set status.
+  //   time → reschedule · matrix → set both axes · stage → advance lifecycle
+  //   plan → move plan · priority → set priority · status → set status.
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 6 } }));
   const [dragId, setDragId] = useState<number | null>(null);
   const dndOn = DND_LENSES.has(group);
   const draggingTask = dragId != null ? tasks.find((t) => t.id === dragId) ?? null : null;
 
-  const onDragStart = (e: DragStartEvent) => setDragId(Number(e.active.id));
-  const onDragEnd = (e: DragEndEvent) => {
+  const onDragStart = (e: DragStartEvent) => { setGateError(null); setDragId(Number(e.active.id)); };
+  const onDragEnd = async (e: DragEndEvent) => {
     setDragId(null);
     const { active, over } = e;
     if (!over) return;
@@ -176,6 +227,17 @@ export function TaskBoard({ selectedPlanId, selectedGoalId, reloadSignal }: {
       else if (target === "later") reschedule.mutate({ task, due_date: LATER_DATE });
       else if (target === "unscheduled") reschedule.mutate({ task, due_date: null });
       // overdue / done are not valid drop destinations — ignore.
+    } else if (group === "matrix") {
+      const cell = parseCellKey(target);
+      if (cell) setMatrix.mutate({ id: task.id, importance: cell.importance, urgency: cell.urgency });
+    } else if (group === "stage") {
+      // The gate lives in setTaskStage and rejects `active` for unscheduled work.
+      // Surface the refusal — a drag that silently snaps back reads as a bug.
+      try {
+        await setStage.mutateAsync({ id: task.id, stage: target as TaskStage });
+      } catch (err) {
+        setGateError(typeof err === "string" ? err : "Could not change stage.");
+      }
     } else if (group === "plan") {
       move.mutate({ id: task.id, planId: target === "null" ? null : Number(target) });
     } else if (group === "priority") {
@@ -190,13 +252,14 @@ export function TaskBoard({ selectedPlanId, selectedGoalId, reloadSignal }: {
     const q = search.trim().toLowerCase();
     return tasks.filter((t) => {
       if (!showDone && t.done) return false;
+      if (!showSteps && t.parent_id != null) return false;
       if (q && !t.title.toLowerCase().includes(q)) return false;
       if (selectedPlanId != null && t.plan_id !== selectedPlanId) return false;
       if (selectedGoalId != null && t.goal_id !== selectedGoalId) return false;
       if (planFilter && String(t.plan_id) !== planFilter) return false;
       return true;
     });
-  }, [tasks, search, showDone, planFilter, selectedPlanId, selectedGoalId]);
+  }, [tasks, search, showDone, showSteps, planFilter, selectedPlanId, selectedGoalId]);
 
   const buckets = useMemo<Bucket[]>(() => {
     const open = filtered.filter((t) => !t.done);
@@ -220,6 +283,34 @@ export function TaskBoard({ selectedPlanId, selectedGoalId, reloadSignal }: {
       ].filter((x) => x.tasks.length > 0);
       if (showDone && done.length) out.push({ key: "done", label: "Completed", accent: "text-muted-foreground", tasks: done.sort(byDueThenPriority) });
       return out;
+    }
+
+    if (group === "matrix") {
+      // Every cell is emitted, empty or not — an empty quadrant is the useful
+      // signal ("nothing is urgent-and-important"), and a grid with holes in it
+      // would not read as a matrix.
+      // Only full tasks sit on the matrix — the sparse kinds have no urgency
+      // axis, and scattering shopping items across nine cells would be noise.
+      const all = (showDone ? [...open, ...done] : open).filter(isFullTask);
+      return AXIS.flatMap((imp) =>
+        AXIS.map((urg) => ({
+          key: cellKey(imp as Priority, urg as Urgency),
+          label: cellAdvice(imp as Priority, urg as Urgency),
+          tasks: all
+            .filter((t) => t.priority === imp && planningOf(t).urgency === urg)
+            .sort(byDueThenPriority),
+        })),
+      );
+    }
+
+    if (group === "stage") {
+      // Likewise: only the `task` subtype has a lifecycle to be grouped by.
+      const all = [...open, ...(showDone ? done : [])].filter(isFullTask);
+      return STAGE_ORDER.map((s) => ({
+        key: s,
+        label: STAGE_LABEL[s],
+        tasks: all.filter((t) => planningOf(t).stage === s).sort(byDueThenPriority),
+      })).filter((x) => x.tasks.length > 0 || x.key !== "done");
     }
 
     if (group === "priority") {
@@ -275,25 +366,12 @@ export function TaskBoard({ selectedPlanId, selectedGoalId, reloadSignal }: {
     setRescheduling(null);
   };
 
-  const saveEdit = async (form: TaskFormState) => {
-    if (!editing) return;
-    update.mutate({
-      id: editing.id,
-      title: form.title.trim(),
-      priority: form.priority,
-      due_date: form.due_date || null,
-      time_estimate: form.time_estimate ? Number(form.time_estimate) : null,
-    });
-    const newPlan = form.plan_id ? Number(form.plan_id) : null;
-    if (newPlan !== editing.plan_id) move.mutate({ id: editing.id, planId: newPlan });
-    setEditing(null);
-  };
-
   const addTask = async (form: TaskFormState) => {
     await create.mutateAsync({
       plan_id: form.plan_id ? Number(form.plan_id) : null,
       title: form.title.trim(),
       priority: form.priority,
+      urgency: form.urgency,
       due_date: form.due_date || null,
       time_estimate: form.time_estimate ? Number(form.time_estimate) : null,
     });
@@ -307,6 +385,33 @@ export function TaskBoard({ selectedPlanId, selectedGoalId, reloadSignal }: {
     if (j < 0 || j >= ids.length) return;
     [ids[index], ids[j]] = [ids[j], ids[index]];
     reorder.mutate(ids);
+  };
+
+  const renderRow = (t: TaskWithContext, extra?: { reorder?: Parameters<typeof TaskRow>[0]["reorder"] }) => (
+    <TaskRow
+      task={t}
+      showContext={group !== "plan"}
+      planning={planningFor(t)}
+      reorder={extra?.reorder}
+      onToggle={() => handleToggle(t.id)}
+      onEdit={() => isFullTask(t) ? setPlanning(t.id) : setEditingSimple(t)}
+      onDelete={() => handleDelete(t.id)}
+      onReschedule={() => setRescheduling(t)}
+    />
+  );
+
+  const saveSimpleEdit = async (form: TaskFormState) => {
+    if (!editingSimple) return;
+    update.mutate({
+      id: editingSimple.id,
+      title: form.title.trim(),
+      priority: form.priority,
+      due_date: form.due_date || null,
+      time_estimate: form.time_estimate ? Number(form.time_estimate) : null,
+    });
+    const newPlan = form.plan_id ? Number(form.plan_id) : null;
+    if (newPlan !== editingSimple.plan_id) move.mutate({ id: editingSimple.id, planId: newPlan });
+    setEditingSimple(null);
   };
 
   return (
@@ -356,6 +461,18 @@ export function TaskBoard({ selectedPlanId, selectedGoalId, reloadSignal }: {
         )}
 
         <button
+          onClick={() => setShowSteps((v) => !v)}
+          title="Show subtasks as board items as well as inside their parent"
+          className={cn(
+            "h-8 px-2.5 text-xs font-medium rounded-md border transition-colors inline-flex items-center gap-1",
+            showSteps ? "border-primary/40 text-primary bg-primary/5" : "border-border text-muted-foreground hover:text-foreground",
+          )}
+        >
+          <ListTree className="h-3 w-3" />
+          Steps
+        </button>
+
+        <button
           onClick={() => setShowDone((v) => !v)}
           className={cn(
             "h-8 px-2.5 text-xs font-medium rounded-md border transition-colors",
@@ -372,62 +489,76 @@ export function TaskBoard({ selectedPlanId, selectedGoalId, reloadSignal }: {
         </Button>
       </div>
 
+      {gateError && (
+        <div className="shrink-0 flex items-start gap-2 mx-4 mt-2 rounded-lg border border-amber-400/30 bg-amber-500/5 px-3 py-2 text-xs text-amber-600 dark:text-amber-400">
+          <AlertTriangle className="h-3.5 w-3.5 shrink-0 mt-0.5" />
+          <span className="flex-1">{gateError}</span>
+          <button onClick={() => setGateError(null)} className="shrink-0 hover:underline">Dismiss</button>
+        </div>
+      )}
+
       {/* Groups */}
       <div className="flex-1 min-h-0 overflow-y-auto px-4 py-3">
         <DndContext sensors={sensors} onDragStart={onDragStart} onDragEnd={onDragEnd}>
-          <div className="flex flex-col gap-5">
-            {buckets.length === 0 ? (
-              <div className="flex flex-col items-center justify-center gap-2 py-20 text-center">
-                <ListChecks className="h-10 w-10 text-muted-foreground/30" />
-                <p className="text-sm font-medium text-muted-foreground">No tasks here</p>
-                <p className="text-xs text-muted-foreground/60">Adjust filters or add a task.</p>
-              </div>
-            ) : buckets.map((bkt) => {
-              const body = (
-                <section>
-                  <div className="flex items-center gap-2 mb-1.5">
-                    <h2 className={cn("text-sm font-semibold", bkt.accent ?? "text-foreground")}>{bkt.label}</h2>
-                    <span className="text-xs text-muted-foreground">({bkt.tasks.length})</span>
-                  </div>
-                  <div className="flex flex-col gap-0.5 min-h-[2px]">
-                    {bkt.tasks.map((t, i) => {
-                      const row = (
-                        <TaskRow
-                          task={t}
-                          showContext={group !== "plan"}
-                          reorder={group === "plan" && !t.done ? {
+          {group === "matrix" ? (
+            <MatrixGrid
+              buckets={buckets}
+              draggingTask={draggingTask}
+              renderRow={renderRow}
+              dndOn={dndOn}
+            />
+          ) : (
+            <div className="flex flex-col gap-5">
+              {buckets.length === 0 ? (
+                <div className="flex flex-col items-center justify-center gap-2 py-20 text-center">
+                  <ListChecks className="h-10 w-10 text-muted-foreground/30" />
+                  <p className="text-sm font-medium text-muted-foreground">No tasks here</p>
+                  <p className="text-xs text-muted-foreground/60">Adjust filters or add a task.</p>
+                </div>
+              ) : buckets.map((bkt) => {
+                const body = (
+                  <section>
+                    <div className="flex items-center gap-2 mb-1.5">
+                      <h2 className={cn("text-sm font-semibold", bkt.accent ?? "text-foreground")}>{bkt.label}</h2>
+                      <span className="text-xs text-muted-foreground">({bkt.tasks.length})</span>
+                      {group === "stage" && (
+                        <span className="text-[11px] text-muted-foreground/60">
+                          {STAGE_HINT[bkt.key as TaskStage]}
+                        </span>
+                      )}
+                    </div>
+                    <div className="flex flex-col gap-0.5 min-h-[2px]">
+                      {bkt.tasks.map((t, i) => {
+                        const row = renderRow(t, {
+                          reorder: group === "plan" && !t.done ? {
                             canUp: i > 0, canDown: i < bkt.tasks.length - 1,
                             onUp: () => reorderWithin(bkt.tasks, i, -1),
                             onDown: () => reorderWithin(bkt.tasks, i, 1),
-                          } : undefined}
-                          onToggle={() => handleToggle(t.id)}
-                          onEdit={() => setEditing(t)}
-                          onDelete={() => handleDelete(t.id)}
-                          onReschedule={() => setRescheduling(t)}
-                        />
-                      );
-                      return dndOn && !t.done
-                        ? <DraggableRow key={t.id} id={t.id}>{row}</DraggableRow>
-                        : <div key={t.id}>{row}</div>;
-                    })}
-                  </div>
-                </section>
-              );
-              return dndOn ? (
-                <DroppableSection
-                  key={bkt.key}
-                  id={bkt.key}
-                  isSource={draggingTask ? bucketKeyForTask(draggingTask, group) === bkt.key : false}
-                >
-                  {body}
-                </DroppableSection>
-              ) : (
-                <div key={bkt.key}>{body}</div>
-              );
-            })}
+                          } : undefined,
+                        });
+                        return dndOn && !t.done
+                          ? <DraggableRow key={t.id} id={t.id}>{row}</DraggableRow>
+                          : <div key={t.id}>{row}</div>;
+                      })}
+                    </div>
+                  </section>
+                );
+                return dndOn ? (
+                  <DroppableSection
+                    key={bkt.key}
+                    id={bkt.key}
+                    isSource={draggingTask ? bucketKeyForTask(draggingTask, group) === bkt.key : false}
+                  >
+                    {body}
+                  </DroppableSection>
+                ) : (
+                  <div key={bkt.key}>{body}</div>
+                );
+              })}
 
-            <StudySection />
-          </div>
+              <StudySection />
+            </div>
+          )}
 
           <DragOverlay dropAnimation={null}>
             {draggingTask ? (
@@ -440,10 +571,19 @@ export function TaskBoard({ selectedPlanId, selectedGoalId, reloadSignal }: {
       </div>
 
       {/* Dialogs */}
-      {editing && (
-        <Dialog open onOpenChange={(o) => { if (!o) setEditing(null); }}>
-          <DialogContent title="Edit task">
-            <EditTaskForm task={editing} plans={taskPlans} onSave={saveEdit} onClose={() => setEditing(null)} />
+      {planning != null && (
+        <TaskPlanner rootId={planning} onClose={() => setPlanning(null)} />
+      )}
+      {editingSimple && (
+        <Dialog open onOpenChange={(o) => { if (!o) setEditingSimple(null); }}>
+          <DialogContent title={`Edit ${editingSimple.task_type}`}>
+            <SparseSubtypeEditor task={editingSimple} />
+            <EditTaskForm
+              task={editingSimple}
+              plans={taskPlans}
+              onSave={saveSimpleEdit}
+              onClose={() => setEditingSimple(null)}
+            />
           </DialogContent>
         </Dialog>
       )}
@@ -462,6 +602,125 @@ export function TaskBoard({ selectedPlanId, selectedGoalId, reloadSignal }: {
       {rescheduling && (
         <ReschedulePopover onReschedule={handleReschedule} onClose={() => setRescheduling(null)} />
       )}
+    </div>
+  );
+}
+
+/**
+ * Loads and saves the subtype attributes of a sparse task.
+ *
+ * Kept separate from `EditTaskForm` because it writes to a different relation:
+ * the form patches the supertype, this upserts the subtype row. Saving on blur
+ * rather than on submit means the two don't have to be transactional — each
+ * lands independently, and a failure in one doesn't silently discard the other.
+ */
+function SparseSubtypeEditor({ task }: { task: TaskWithContext }) {
+  const type = task.task_type as Exclude<typeof task.task_type, "task">;
+  const [attrs, setAttrs] = useState<Record<string, any>>({});
+
+  useEffect(() => {
+    let live = true;
+    getTaskSubtype(task.id, type).then((r) => { if (live) setAttrs(r ?? {}); }).catch(() => {});
+    return () => { live = false; };
+  }, [task.id, type]);
+
+  return (
+    <div
+      className="mb-3"
+      onBlur={() => { saveTaskSubtype(task.id, type, attrs).catch(() => {}); }}
+    >
+      <SubtypeFields
+        type={type}
+        value={attrs}
+        onChange={(patch) => setAttrs((a) => ({ ...a, ...patch }))}
+      />
+    </div>
+  );
+}
+
+/**
+ * The importance x urgency board.
+ *
+ * Laid out as an actual 3x3 grid rather than nine stacked lists, because the
+ * whole value of the second axis is spatial: you see at a glance that the
+ * urgent-and-important cell is overloaded while the important-but-not-urgent one
+ * — the cell that actually moves goals — is empty. Dragging a task between cells
+ * sets both axes in one write.
+ */
+function MatrixGrid({ buckets, draggingTask, renderRow, dndOn }: {
+  buckets: Bucket[];
+  draggingTask: TaskWithContext | null;
+  renderRow: (t: TaskWithContext) => React.ReactNode;
+  dndOn: boolean;
+}) {
+  const byKey = new Map(buckets.map((b) => [b.key, b]));
+
+  return (
+    <div className="flex flex-col gap-2">
+      <div className="grid grid-cols-[auto_repeat(3,minmax(0,1fr))] gap-2">
+        <div />
+        {["Urgent", "Soon", "Whenever"].map((label) => (
+          <div key={label} className="text-center text-[11px] font-medium text-muted-foreground pb-0.5">
+            {label}
+          </div>
+        ))}
+
+        {AXIS.map((imp) => (
+          <div key={imp} className="contents">
+            <div className="flex items-center justify-end pr-1">
+              <span className="text-[11px] font-medium text-muted-foreground whitespace-nowrap">
+                {imp === "high" ? "Important" : imp === "medium" ? "Medium" : "Minor"}
+              </span>
+            </div>
+
+            {AXIS.map((urg) => {
+              const key = cellKey(imp as Priority, urg as Urgency);
+              const bkt = byKey.get(key);
+              const advice = cellAdvice(imp as Priority, urg as Urgency);
+              const isSource = draggingTask
+                ? draggingTask.priority === imp && planningOf(draggingTask).urgency === urg
+                : false;
+
+              const cell = (
+                <div
+                  className={cn(
+                    "min-h-[104px] rounded-lg border p-2 flex flex-col gap-1",
+                    imp === "high" && urg === "high" && "border-rose-400/40 bg-rose-500/[0.03]",
+                    imp === "high" && urg === "low" && "border-emerald-400/40 bg-emerald-500/[0.03]",
+                    !(imp === "high" && (urg === "high" || urg === "low")) && "border-border/60",
+                  )}
+                >
+                  <div className="flex items-baseline gap-1.5 mb-0.5">
+                    {advice && (
+                      <span className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground/70">
+                        {advice}
+                      </span>
+                    )}
+                    <span className="text-[10px] text-muted-foreground/50 tabular-nums">
+                      {bkt?.tasks.length ?? 0}
+                    </span>
+                  </div>
+                  <div className="flex flex-col gap-0.5">
+                    {(bkt?.tasks ?? []).map((t) =>
+                      dndOn && !t.done
+                        ? <DraggableRow key={t.id} id={t.id}>{renderRow(t)}</DraggableRow>
+                        : <div key={t.id}>{renderRow(t)}</div>,
+                    )}
+                  </div>
+                </div>
+              );
+
+              return dndOn
+                ? <DroppableSection key={key} id={key} isSource={isSource}>{cell}</DroppableSection>
+                : <div key={key}>{cell}</div>;
+            })}
+          </div>
+        ))}
+      </div>
+
+      <p className="text-[11px] text-muted-foreground/60">
+        Drag a task to a cell to set its importance and urgency together.
+      </p>
     </div>
   );
 }

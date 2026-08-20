@@ -624,7 +624,7 @@ migration are separate steps.
 | *(none)*   | `time_entries`, `active_sessions`, `blocked_sites`, `blocked_apps`, `focus_blocks`, `unlock_rules` (TimeTracker) |
 | *(none)*   | `blocking_state`, `pomodoro_config`, `schedule_block_apps`, `schedule_block_sites` (Nexus Local productivity stack) |
 | *(none)*   | `nexus_local_nodes`, `nexus_local_commands` (grid queue), `nexus_ble_captures` |
-| `pf_`      | 45 tables — goals, plans, tasks, systems, calendar, pipelines, habits, games, … (PathFinder) |
+| `pf_`      | 50 tables — goals, plans, tasks (an ISA hierarchy: `pf_tasks` + `pf_task_{planning,reminders,chores,shopping}`), `pf_task_sessions`, systems, calendar, pipelines, habits, games, … (PathFinder) |
 | `vault_`   | `vault_nodes`, `vault_edges`, `vault_tag_colors`, `vault_content`, `vault_journals` + Storage bucket `vault-assets` (Vault) |
 | `protocol_`| 28 tables — health/fitness. Body/sleep (`protocol_body_metrics`, `protocol_sleep`), workouts (`protocol_workout_sessions`/`_routines`/`_plans`, `protocol_exercises`, `protocol_exercise_sets`/`_library`/`_aliases`, `protocol_running_sessions`/`_plans`), nutrition (`protocol_foods` + static `protocol_foods_dk`, `protocol_meals`/`_meal_items`/`_meal_plan_entries`/`_nutrition_goals`, `protocol_supplements`/`_logs`), habits, config (`protocol_data_source_settings`, `protocol_progress_config`), Oura auth (`protocol_oura_tokens`, `protocol_oauth_states`). **`protocol_foods`, `protocol_meals`, `protocol_meal_items` are shared read-all / write-own** — any user sees & logs another's foods/meals, edit/delete owner-only; most other tables are owner-only `auth.uid()`; `protocol_foods_dk` is public-read reference data (Protocol) |
 
@@ -656,6 +656,61 @@ Supabase Auth is introduced.
 **`user_id` convention**: all root-level tables carry `user_id TEXT DEFAULT
 'default'`. When Supabase Auth is added, replace `'default'` with
 `auth.uid()` and update RLS policies accordingly.
+
+### PathFinder tasks are an ISA hierarchy, not one wide table
+
+`pf_tasks` is a **supertype**. Each kind of task has its own subtype table, and
+they are deliberately unequal in size — this is the whole point, so do not
+"simplify" it back into nullable columns on `pf_tasks`:
+
+| discriminator | subtype table | columns |
+|---|---|---|
+| `task` | `pf_task_planning` | urgency, stage, completion_mode, target_count, notes |
+| `reminder` | `pf_task_reminders` | remind_at, lead_minutes |
+| `chore` | `pf_task_chores` | area, rotation_days |
+| `shopping` | `pf_task_shopping` | quantity, store |
+
+`task_type` is a **generated column** (`coalesce(category, 'task')`), so it can
+never drift from the `category` that existing writers — the `task-quick` edge
+function, the iOS widgets, Nexus Local — already set. Nothing had to change to
+adopt it.
+
+What belongs where is a modelling call: `priority`, `due_date` and
+`time_estimate` stay on the supertype because they mean something for a chore
+("medium, 15 min, by Friday"). `stage` and `completion_mode` do not — a reminder
+has no lifecycle to gate and nothing to measure.
+
+Specialization is **disjoint** (a trigger refuses a subtype row whose supertype
+has the wrong `task_type`) and **total for `task`** (a trigger materialises the
+planning row, and drops it if the task is re-typed to a sparse kind — demotion is
+lossy by construction). Read tasks with the embed `*, pf_task_planning(*)`:
+PostgREST returns an object for a full task and **`null`** for the sparse kinds,
+which is exactly the ISA shape. `api.ts` `splitPatch` routes a flat patch to the
+right relation so callers never have to know; `taskTree.ts` `applyTaskPatch` is
+its client-side mirror for optimistic updates — spreading a patch containing
+`urgency` straight onto a task sets a dead property, and the matrix pad appears
+frozen until the refetch lands.
+
+**Three more traps in the task model:**
+
+- **`aggregate_estimate` is trigger-maintained; never write it.** `time_estimate`
+  is what a task claims for *itself*, and stops being true the moment it is
+  broken down. The trigger keeps `aggregate_estimate` = sum of children's
+  aggregates (or own estimate for a leaf) up the whole ancestor chain, so
+  `select *` gives every consumer the real total. `taskTree.ts`'s
+  `rollupEstimate` mirrors that rule **exactly** — an unset estimate contributes
+  0, not a guessed default. If the two rules diverge the number visibly jumps on
+  refresh.
+- **The scheduling gate lives in `api.ts` `setTaskStage`, not in the database.**
+  A task cannot reach `stage = 'active'` without calendar minutes behind it. The
+  predicate spans three tables, so a trigger evaluating it on every task write
+  would tax unrelated bulk updates (reorder writes one row per task). That means
+  it is only enforced through that one function — add new stage writers there.
+- **Partial scheduling needs no new table.** A task may have many
+  `pf_cal_blocks` rows, and `pf_recurring_cal_blocks` now carries `task_id` too,
+  so "4h of a 6h task is committed" is just a sum. Recurring series are counted
+  by *occurrence* over a bounded 365-day horizon — an open-ended series would
+  otherwise contribute infinite scheduled time.
 
 **Vault data layer** (`apps/Vault/Vault/src/lib/`):
 - `supabase.ts` — shared client from `VITE_SUPABASE_URL` / `VITE_SUPABASE_ANON_KEY`.

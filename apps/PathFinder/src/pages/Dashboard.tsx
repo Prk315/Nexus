@@ -7,6 +7,7 @@ import {
 import {
   getGoals, getPlans, getAllTasks, getSystems,
   markSystemDone, unmarkSystemDone, toggleTask, createTask, updateTask, deleteTask,
+  toTaskWithContext,
   getCalBlocks, createCalBlock, updateCalBlock, deleteCalBlock,
   getSystemSubtasks, toggleSystemSubtask,
   getGoalGroups,
@@ -2609,14 +2610,7 @@ export function Dashboard() {
         due_date: date,
       });
       taskId = newTask.id;
-      setTasks((prev) => [{
-        id: newTask.id, plan_id: null, plan_title: null,
-        goal_id: null, goal_title: null, title: newTask.title,
-        done: newTask.done, sort_order: newTask.sort_order,
-        priority: newTask.priority, due_date: newTask.due_date,
-        created_at: newTask.created_at, time_estimate: newTask.time_estimate,
-        category: newTask.category,
-      }, ...prev]);
+      setTasks((prev) => [toTaskWithContext(newTask), ...prev]);
     }
     const b = await createCalBlock(date, d.title, d.start_time, d.end_time, d.color, d.description || null, d.location || null, taskId);
     setCalBlocks((prev) => [...prev, b].sort((a, x) => a.start_time.localeCompare(x.start_time)));
