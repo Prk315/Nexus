@@ -28,8 +28,9 @@ import { Progress } from "../components/ui/progress";
 import { Button } from "../components/ui/button";
 import { Badge } from "../components/ui/badge";
 import { PriorityDot } from "../components/PriorityDot";
-import { daysUntil, deadlineLabel, deadlineVariant, cn, layoutCalItems } from "../lib/utils";
-import { blockMinutes } from "../lib/taskTree";
+import { daysUntil, deadlineLabel, deadlineVariant, cn, layoutCalItems, formatDateShort } from "../lib/utils";
+import { blockMinutes, planningOf, isFullTask } from "../lib/taskTree";
+import { UrgencyMeter } from "../components/UrgencyMeter";
 import { isDue } from "../components/workspace/systemForms";
 import type { Goal, GoalGroup, Plan, TaskWithContext, SystemEntry, SystemSubtask, CalBlock, DailyGoals, DailyPrimaryGoal, DailySecGoal, Reminder, QuickNote, BrainEntry, CalEvent, Deadline, Agreement, CourseAssignment, ScheduleEntry, HabitWithCompletion, HabitStack, HabitSubtask, TrainingSession, TaskSession } from "../types";
 
@@ -1042,14 +1043,20 @@ function WelcomeBox({
     setEditingEstId(null);
   }
 
-  // Stat pills
+  // Stat pills.
+  //
+  // Every count here is over *top-level* tasks only. A subtask is a step inside
+  // a task, not a task of its own — counting both would report a task broken
+  // into five steps as six things to do, and the number would grow the more
+  // carefully you planned.
+  const rootTasks   = tasks.filter((t) => t.parent_id == null);
   const activeGoals = goals.filter((g) => g.status === "active").length;
-  const openTasks   = tasks.filter((t) => !t.done).length;
+  const openTasks   = rootTasks.filter((t) => !t.done).length;
   const activePlans = plans.filter((p) => p.status === "active").length;
   const systemsDue  = systems.filter(isDue).length;
 
   // Today's task progress (tasks due today + assignments + training sessions)
-  const todayTasks = tasks.filter((t) => t.due_date === date);
+  const todayTasks = rootTasks.filter((t) => t.due_date === date);
   const totalToday = todayTasks.length + courseAssignments.length + todaySessions.length;
   const doneToday  = todayTasks.filter((t) => t.done).length
                    + courseAssignments.filter((ca) => ca.status === "done").length
@@ -1063,7 +1070,11 @@ function WelcomeBox({
   let doneMin = 0, pendingMin = 0;
 
   for (const t of todayTasks) {
-    const min = t.time_estimate ?? TASK_MIN;
+    // `aggregate_estimate` is the trigger-maintained roll-up of the whole
+    // breakdown, so a task split into steps contributes its real total exactly
+    // once. Falling back to its own estimate covers leaves and any row read
+    // before the aggregate was computed.
+    const min = t.aggregate_estimate || t.time_estimate || TASK_MIN;
     (t.done ? (doneMin += min) : (pendingMin += min));
   }
   for (const ca of courseAssignments) {
@@ -1113,7 +1124,9 @@ function WelcomeBox({
   const pieItems: PieItem[] = [
     ...todayTasks.map((t) => ({
       id: t.id, label: t.title, subtitle: t.plan_title ?? undefined,
-      minutes: t.time_estimate ?? TASK_MIN, done: t.done, kind: "task" as const,
+      // Same roll-up the totals above use, so the slices sum to the ring.
+      minutes: t.aggregate_estimate || t.time_estimate || TASK_MIN,
+      done: t.done, kind: "task" as const,
     })),
     ...courseAssignments.map((ca) => {
       let min: number;
@@ -1932,6 +1945,162 @@ function TopGoals({ goals, groups }: { goals: Goal[]; groups: GoalGroup[] }) {
 
 // ── To-Do List ────────────────────────────────────────────────────────────────
 
+// ── Dashboard task row ───────────────────────────────────────────────────────
+
+/** Left accent bar per importance — scannable down a column in a way a dot isn't. */
+const PRIORITY_BAR: Record<string, string> = {
+  high: "bg-rose-500",
+  medium: "bg-amber-400",
+  low: "bg-slate-400/50",
+};
+
+/**
+ * A due-date chip that says how urgent the date actually is.
+ *
+ * Overdue and today are the only two states worth colour: everything else is a
+ * quiet grey date. Colouring every future date turns the list into confetti and
+ * makes the two states that need attention stop standing out.
+ */
+function DueChip({ due, today }: { due: string; today: string }) {
+  const overdue = due < today;
+  const isToday = due === today;
+  if (!overdue && !isToday) {
+    return (
+      <span className="shrink-0 text-[10px] tabular-nums text-muted-foreground/50">
+        {formatDateShort(due)}
+      </span>
+    );
+  }
+  return (
+    <span
+      className={cn(
+        "shrink-0 rounded px-1 py-px text-[10px] font-medium tabular-nums",
+        overdue
+          ? "bg-rose-500/15 text-rose-600 dark:text-rose-400"
+          : "bg-amber-500/15 text-amber-600 dark:text-amber-400",
+      )}
+    >
+      {overdue ? `${daysUntil(due) * -1}d late` : "Today"}
+    </span>
+  );
+}
+
+/**
+ * One task on the dashboard.
+ *
+ * Rewritten from a bare dot-and-title line for three reasons the old row got
+ * wrong: its checkbox rendered no tick at all (so completing a task gave no
+ * feedback), nothing showed a due date or an estimate on a *today*-focused
+ * screen, and the hover affordances were driven by React state, re-rendering the
+ * whole list on every mouse move. Hover is now pure CSS via `group/task`.
+ *
+ * Steps expand inline — a breakdown you can't see from the dashboard may as well
+ * not exist, and the whole point of the recursive model is that today's work is
+ * usually a step, not a whole task.
+ */
+function DashTaskRow({
+  task, steps, today, expanded, onToggleExpand, onToggle, onEdit, onDelete,
+}: {
+  task: TaskWithContext;
+  /** Direct subtasks. Named `steps`, not `children` — that prop name is React's. */
+  steps: TaskWithContext[];
+  today: string;
+  expanded: boolean;
+  onToggleExpand: () => void;
+  onToggle: (id: number) => void;
+  onEdit: () => void;
+  onDelete: (id: number) => void;
+}) {
+  const doneKids = steps.filter((c) => c.done).length;
+  const hasKids = steps.length > 0;
+  const effort = task.aggregate_estimate || task.time_estimate || 0;
+  const plan = planningOf(task);
+
+  return (
+    <div className="flex flex-col">
+      <div className="group/task flex items-center gap-2 rounded-md pr-1 py-1 hover:bg-secondary/50 transition-colors">
+        {/* Importance as a left accent bar. */}
+        <span className={cn("w-0.5 self-stretch rounded-full shrink-0", PRIORITY_BAR[task.priority] ?? PRIORITY_BAR.medium)} />
+
+        <button
+          onClick={() => onToggle(task.id)}
+          disabled={hasKids}
+          title={hasKids ? "Finish its steps to complete this" : "Mark done"}
+          className={cn(
+            "flex h-4 w-4 shrink-0 items-center justify-center rounded-[5px] border transition-colors",
+            "border-border hover:border-primary hover:bg-primary/10",
+            hasKids && "opacity-40 cursor-default hover:bg-transparent hover:border-border",
+          )}
+        >
+          <Check className="h-2.5 w-2.5 opacity-0 group-hover/task:opacity-40 transition-opacity" />
+        </button>
+
+        {isFullTask(task) && <UrgencyMeter urgency={plan.urgency} />}
+
+        <button
+          onClick={onEdit}
+          className="flex-1 min-w-0 text-left text-sm truncate hover:text-primary transition-colors"
+          title={task.title}
+        >
+          {task.title}
+        </button>
+
+        {/* Steps — click to reveal them inline. */}
+        {hasKids && (
+          <button
+            onClick={onToggleExpand}
+            title={`${doneKids} of ${steps.length} steps done`}
+            className="shrink-0 inline-flex items-center gap-1 rounded px-1 py-px text-[10px] tabular-nums text-muted-foreground hover:bg-secondary hover:text-foreground transition-colors"
+          >
+            {expanded ? <ChevronDown className="h-2.5 w-2.5" /> : <ChevronRight className="h-2.5 w-2.5" />}
+            {doneKids}/{steps.length}
+          </button>
+        )}
+
+        {effort > 0 && <TimeEstimateBadge min={effort} />}
+        {task.due_date && <DueChip due={task.due_date} today={today} />}
+
+        <button
+          onClick={() => onDelete(task.id)}
+          title="Delete"
+          className="shrink-0 p-0.5 rounded text-muted-foreground opacity-0 group-hover/task:opacity-100 hover:text-destructive hover:bg-destructive/10 transition-all"
+        >
+          <X className="h-3 w-3" />
+        </button>
+      </div>
+
+      {expanded && hasKids && (
+        <div className="flex flex-col gap-0.5 ml-4 pl-2 border-l border-border/60">
+          {steps.map((c) => (
+            <div key={c.id} className="group/step flex items-center gap-2 rounded-md pr-1 py-0.5 hover:bg-secondary/40 transition-colors">
+              <button
+                onClick={() => onToggle(c.id)}
+                className={cn(
+                  "flex h-3 w-3 shrink-0 items-center justify-center rounded-[4px] border transition-colors",
+                  c.done
+                    ? "bg-primary border-primary text-primary-foreground"
+                    : "border-border hover:border-primary",
+                )}
+              >
+                {c.done && <Check className="h-2 w-2" />}
+              </button>
+              <span className={cn("flex-1 min-w-0 truncate text-xs", c.done && "line-through text-muted-foreground")}>
+                {c.title}
+              </span>
+              {c.time_estimate ? (
+                <span className="shrink-0 text-[10px] tabular-nums text-muted-foreground/60">
+                  {formatMinutes(c.time_estimate)}
+                </span>
+              ) : null}
+              {c.due_date && <DueChip due={c.due_date} today={today} />}
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function TodoList({
   tasks, plans, systems, courseAssignments, onToggleTask, onCreateTask, onDeleteTask, onUpdateTask, onMarkSystem, onUnmarkSystem, onToggleSubtask, subtaskMap, onToggleAssignment,
 }: {
@@ -1971,8 +2140,15 @@ function TodoList({
   const [editDueDate, setEditDueDate] = useState("");
   const [editCategory, setEditCategory] = useState<string>("");
 
-  // Hover state for delete button
-  const [hoveredId, setHoveredId] = useState<number | null>(null);
+  // Which tasks have their steps revealed. Hover affordances are pure CSS now
+  // (see DashTaskRow's group/task), so no mouse-move state lives here.
+  const [expandedTasks, setExpandedTasks] = useState<Set<number>>(new Set());
+  const toggleTaskExpand = (id: number) =>
+    setExpandedTasks((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id); else next.add(id);
+      return next;
+    });
 
   const activePlans = plans.filter((p) => p.status === "active");
 
@@ -2013,11 +2189,33 @@ function TodoList({
       return next;
     });
 
+  // Steps live inside their parent row, not beside it. Without this filter a
+  // task broken into five steps would occupy six lines on the dashboard, and
+  // planning a task more carefully would make the day look busier.
+  const childrenByParent = useMemo(() => {
+    const m = new Map<number, TaskWithContext[]>();
+    for (const t of tasks) {
+      if (t.parent_id == null) continue;
+      const b = m.get(t.parent_id);
+      if (b) b.push(t); else m.set(t.parent_id, [t]);
+    }
+    for (const list of m.values()) list.sort((a, b) => a.sort_order - b.sort_order || a.id - b.id);
+    return m;
+  }, [tasks]);
+
   const open = useMemo(() => {
     const p = { high: 0, medium: 1, low: 2 } as Record<string, number>;
     return [...tasks]
-      .filter((t) => !t.done)
-      .sort((a, b) => (p[a.priority] ?? 1) - (p[b.priority] ?? 1));
+      .filter((t) => !t.done && t.parent_id == null)
+      // Overdue first, then by importance — the dashboard's job is to surface
+      // what is slipping, and a high-priority task due next month should not
+      // outrank one that was due yesterday.
+      .sort((a, b) => {
+        const aLate = a.due_date != null && a.due_date < todayDate() ? 0 : 1;
+        const bLate = b.due_date != null && b.due_date < todayDate() ? 0 : 1;
+        if (aLate !== bLate) return aLate - bLate;
+        return (p[a.priority] ?? 1) - (p[b.priority] ?? 1);
+      });
   }, [tasks]);
 
   // Group open tasks by plan. Quick tasks (category set) group under their
@@ -2185,17 +2383,23 @@ function TodoList({
                       <div className="flex flex-col gap-0.5 pl-4 border-l border-border ml-1">
                         {group.tasks.map((task) => {
                           const isEditing = editingId === task.id;
-                          return (
-                            <div
-                              key={task.id}
-                              className="flex items-start gap-2 py-0.5 group/task"
-                              onMouseEnter={() => setHoveredId(task.id)}
-                              onMouseLeave={() => setHoveredId(null)}
-                            >
-                              <button
-                                onClick={() => onToggleTask(task.id)}
-                                className="mt-0.5 flex h-4 w-4 shrink-0 items-center justify-center rounded border border-border hover:border-primary transition-colors"
+                          if (!isEditing) {
+                            return (
+                              <DashTaskRow
+                                key={task.id}
+                                task={task}
+                                steps={childrenByParent.get(task.id) ?? []}
+                                today={todayDate()}
+                                expanded={expandedTasks.has(task.id)}
+                                onToggleExpand={() => toggleTaskExpand(task.id)}
+                                onToggle={onToggleTask}
+                                onEdit={() => startEdit(task)}
+                                onDelete={onDeleteTask}
                               />
+                            );
+                          }
+                          return (
+                            <div key={task.id} className="flex items-start gap-2 py-0.5">
                               <div className="flex-1 min-w-0">
                                 {isEditing ? (
                                   <div className="flex flex-col gap-1">
@@ -2235,26 +2439,8 @@ function TodoList({
                                       />
                                     </div>
                                   </div>
-                                ) : (
-                                  <div
-                                    className="flex items-center gap-1.5 min-w-0 cursor-pointer"
-                                    onClick={() => startEdit(task)}
-                                  >
-                                    <PriorityDot priority={task.priority} />
-                                    <span className="text-sm truncate">
-                                      {task.title}
-                                    </span>
-                                  </div>
-                                )}
+                                ) : null}
                               </div>
-                              {!isEditing && hoveredId === task.id && (
-                                <button
-                                  onClick={() => onDeleteTask(task.id)}
-                                  className="mt-0.5 p-0.5 rounded text-muted-foreground hover:text-destructive hover:bg-destructive/10 transition-colors shrink-0"
-                                >
-                                  <X className="h-3 w-3" />
-                                </button>
-                              )}
                             </div>
                           );
                         })}
