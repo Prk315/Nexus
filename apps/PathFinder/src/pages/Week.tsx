@@ -2,6 +2,7 @@ import { useEffect, useState, useCallback, useRef, useMemo } from "react";
 import {
   ChevronLeft, ChevronRight, ChevronDown, Plus, X, Check, Target, ListChecks,
   CheckSquare, RefreshCw, Flame, Trash2, Repeat2, MapPin, Flag, Bell, GraduationCap,
+  CalendarOff,
   PanelLeft, PanelRight, PanelBottom, PanelTop, CalendarRange, Eye, EyeOff,
 } from "lucide-react";
 import {
@@ -13,6 +14,7 @@ import {
   createSystem, updateSystem, deleteSystem, markSystemDone,
   getCalBlocks, createCalBlock, updateCalBlock, deleteCalBlock,
   getTaskSessionsInRange, logTaskSession, unlogTaskOccurrence,
+  getTaskScheduling,
   createRecurringCalBlock, updateRecurringCalBlock, deleteRecurringCalBlock,
   getDeadlines, getReminders, toggleDeadline, toggleReminder, updateCourseAssignment,
   getCaSubtasks, toggleCaSubtask,
@@ -21,9 +23,11 @@ import { loadActualWeek, type ActualDay } from "../lib/actual";
 import { type Span, dayStartMs } from "@nexus/core/coverage";
 import { Button } from "../components/ui/button";
 import { cn, layoutCalItems } from "../lib/utils";
-import { blockMinutes } from "../lib/taskTree";
+import { blockMinutes, planningOf, isFullTask } from "../lib/taskTree";
+import { UrgencyMeter } from "../components/UrgencyMeter";
+import { URGENCY_LABEL, STAGE_LABEL, STAGE_CLASSES } from "../lib/utils";
 import { isDue } from "../components/workspace/systemForms";
-import type { Goal, Plan, TaskWithContext, SystemEntry, WeekItems, CalBlock, Deadline, Reminder, CourseAssignment, CaSubtask, ScheduleEntry, TaskSession } from "../types";
+import type { Goal, Plan, TaskWithContext, SystemEntry, WeekItems, CalBlock, Deadline, Reminder, CourseAssignment, CaSubtask, ScheduleEntry, TaskSession, TaskCoverage } from "../types";
 
 // ── Date helpers ──────────────────────────────────────────────────────────────
 
@@ -588,8 +592,22 @@ function TypePickerModal({ date, onPick, onClose }: {
 
 // ── Task popup chip ───────────────────────────────────────────────────────────
 
-function TaskPopupChip({ t, onToggle, onEdit }: {
+/** Minutes -> "1h30" for the task popup. */
+function fmtWeekMinutes(min: number): string {
+  const n = Math.max(0, Math.round(min));
+  if (n < 60) return `${n}m`;
+  const h = Math.floor(n / 60), m = n % 60;
+  return m === 0 ? `${h}h` : `${h}h${m}`;
+}
+
+function TaskPopupChip({ t, parentTitle, scheduledMin, hasSteps, onToggle, onEdit }: {
   t: TaskWithContext;
+  /** Set when this is a step of a larger task — shown so it isn't an orphan line. */
+  parentTitle?: string | null;
+  /** Committed calendar minutes across the task's subtree, all time. */
+  scheduledMin: number;
+  /** True when the task is broken down — completing it means completing its steps. */
+  hasSteps?: boolean;
   onToggle: () => void;
   onEdit: () => void;
 }) {
@@ -640,14 +658,30 @@ function TaskPopupChip({ t, onToggle, onEdit }: {
         className={cn("flex items-center gap-1 px-1.5 py-0.5 rounded border cursor-pointer transition-colors select-none", chip)}
       >
         <button
-          onClick={(e) => { e.stopPropagation(); onToggle(); }}
-          className={cn("flex h-3 w-3 shrink-0 items-center justify-center rounded border transition-colors", check)}
+          onClick={(e) => { e.stopPropagation(); if (!hasSteps) onToggle(); }}
+          disabled={hasSteps}
+          title={hasSteps ? "Finish its steps to complete this" : undefined}
+          className={cn(
+            "flex h-3 w-3 shrink-0 items-center justify-center rounded border transition-colors",
+            check,
+            hasSteps && "opacity-40 cursor-default",
+          )}
         >
           {t.done && <Check className="h-2 w-2 text-white" />}
         </button>
+        {isFullTask(t) && <UrgencyMeter urgency={planningOf(t).urgency} />}
         <span className={cn("text-[11px] truncate flex-1", t.done ? "line-through text-muted-foreground" : "text-foreground")}>
+          {parentTitle && <span className="opacity-50">{parentTitle} › </span>}
           {t.title}
         </span>
+        {/*
+          Due here, but no time committed anywhere. This is the one fact a weekly
+          overview can tell you that a task list can't, and it is the same
+          predicate the board's stage gate uses — so the two views agree.
+        */}
+        {!t.done && isFullTask(t) && scheduledMin === 0 && (
+          <CalendarOff className="h-2.5 w-2.5 shrink-0 text-amber-500" />
+        )}
       </div>
 
       {pos && (
@@ -670,15 +704,35 @@ function TaskPopupChip({ t, onToggle, onEdit }: {
             <span className={cn("text-[11px] font-medium", priorityColor[t.priority] ?? "text-muted-foreground")}>
               {priorityLabel[t.priority] ?? t.priority} priority
             </span>
+            {isFullTask(t) && (
+              <span className="text-[11px] text-muted-foreground">
+                · {URGENCY_LABEL[planningOf(t).urgency]}
+              </span>
+            )}
             {t.done && <span className="text-[11px] font-medium text-emerald-500 ml-auto">✓ Done</span>}
           </div>
 
+          {isFullTask(t) && (
+            <div className="flex items-center justify-between gap-2 text-[11px]">
+              <span className={cn("rounded-full border px-1.5 py-px font-medium", STAGE_CLASSES[planningOf(t).stage])}>
+                {STAGE_LABEL[planningOf(t).stage]}
+              </span>
+              <span className={cn("tabular-nums", scheduledMin === 0 ? "text-amber-500" : "text-muted-foreground")}>
+                {scheduledMin === 0
+                  ? "No time booked"
+                  : `${fmtWeekMinutes(scheduledMin)} booked${t.aggregate_estimate ? ` of ${fmtWeekMinutes(t.aggregate_estimate)}` : ""}`}
+              </span>
+            </div>
+          )}
+
           <div className="flex gap-2 pt-1 border-t border-border">
             <button
-              onClick={(e) => { e.stopPropagation(); onToggle(); setPos(null); }}
-              className="flex-1 text-[11px] py-1 rounded-md border border-border hover:bg-secondary transition-colors text-foreground"
+              onClick={(e) => { e.stopPropagation(); if (!hasSteps) { onToggle(); setPos(null); } }}
+              disabled={hasSteps}
+              title={hasSteps ? "Finish its steps to complete this" : undefined}
+              className="flex-1 text-[11px] py-1 rounded-md border border-border hover:bg-secondary transition-colors text-foreground disabled:opacity-40 disabled:hover:bg-transparent"
             >
-              {t.done ? "Mark undone" : "Mark done"}
+              {hasSteps ? "Has steps" : t.done ? "Mark undone" : "Mark done"}
             </button>
             <button
               onClick={(e) => { e.stopPropagation(); setPos(null); onEdit(); }}
@@ -1724,6 +1778,11 @@ export function Week() {
   // recurring series that id is the occurrence's virtual negative id, so ticking
   // one Wednesday off doesn't mark every Wednesday.
   const [sessionsByBlock, setSessionsByBlock] = useState<Map<number, TaskSession>>(new Map());
+  // Committed calendar minutes per task — the SAME source the board's stage gate
+  // uses, so "unscheduled" means the same thing in both places. Deliberately not
+  // derived from this week's calBlocks: a task due Thursday may be scheduled next
+  // month, and calling that unscheduled would be wrong.
+  const [taskCoverage, setTaskCoverage] = useState<Map<number, TaskCoverage>>(new Map());
   const [modal,        setModal]       = useState<ModalState | null>(null);
   const gridRef = useRef<HTMLDivElement>(null);
 
@@ -1766,16 +1825,17 @@ export function Week() {
   const queryEnd   = view === "week" ? end   : toISO(monthGridEnd);
 
   const load = useCallback(async () => {
-    const [wi, gp, pl, sy, cb, dl, rm, at, ts] = await Promise.all([
+    const [wi, gp, pl, sy, cb, dl, rm, at, ts, tc] = await Promise.all([
       getWeekItems(queryStart, queryEnd), getGoals(), getPlans(), getSystems(),
       getCalBlocks(queryStart, queryEnd), getDeadlines(), getReminders(), getAllTasks(),
-      getTaskSessionsInRange(queryStart, queryEnd),
+      getTaskSessionsInRange(queryStart, queryEnd), getTaskScheduling(),
     ]);
     setItems(wi); setAllGoals(gp); setAllPlans(pl); setSystems(sy); setCalBlocks(cb);
     setAllDeadlines(dl); setAllReminders(rm); setAllTasks(at);
     setSessionsByBlock(new Map(
       ts.filter((x) => x.cal_block_id != null).map((x) => [x.cal_block_id!, x]),
     ));
+    setTaskCoverage(tc);
   }, [queryStart, queryEnd]);
 
   useEffect(() => { load(); }, [load]);
@@ -1834,6 +1894,30 @@ export function Week() {
   const nextMonth = () => setMonthStart((d) => new Date(d.getFullYear(), d.getMonth() + 1, 1));
 
   const tasksFor             = (iso: string) => items.tasks.filter((t) => t.due_date === iso);
+  // A step that carries its own due date belongs in the week — but shown bare it
+  // reads as an orphan, so it gets its parent as a breadcrumb.
+  const taskTitleById = useMemo(
+    () => new Map(allTasks.map((t) => [t.id, t.title])),
+    [allTasks],
+  );
+  // Which tasks have steps under them. `items.tasks` only holds what is due in
+  // range, so this comes from the full list — otherwise a parent whose steps are
+  // undated would look childless here and stay tickable, disagreeing with the
+  // board and the dashboard.
+  const stepCountByParent = useMemo(() => {
+    const m = new Map<number, number>();
+    for (const t of allTasks) {
+      if (t.parent_id == null) continue;
+      m.set(t.parent_id, (m.get(t.parent_id) ?? 0) + 1);
+    }
+    return m;
+  }, [allTasks]);
+
+  const chipProps = (t: TaskWithContext) => ({
+    parentTitle: t.parent_id != null ? taskTitleById.get(t.parent_id) ?? null : null,
+    scheduledMin: taskCoverage.get(t.id)?.scheduledMin ?? 0,
+    hasSteps: (stepCountByParent.get(t.id) ?? 0) > 0,
+  });
   const goalsFor             = (iso: string) => items.goals.filter((g) => g.deadline  === iso);
   const deadlinesFor         = (iso: string) => items.deadlines.filter((d) => d.due_date === iso);
   const remindersFor         = (iso: string) => items.reminders.filter((r) => r.due_date === iso);
@@ -2169,7 +2253,7 @@ export function Week() {
               </button>
             ))}
             {selTasks.map((t) => (
-              <TaskPopupChip key={`t-${t.id}`} t={t}
+              <TaskPopupChip key={`t-${t.id}`} t={t} {...chipProps(t)}
                 onToggle={() => handleToggleTask(t.id)}
                 onEdit={() => setModal({ kind: "edit-task", task: t })} />
             ))}
@@ -2382,6 +2466,7 @@ export function Week() {
                       <TaskPopupChip
                         key={`t-${t.id}`}
                         t={t}
+                        {...chipProps(t)}
                         onToggle={() => handleToggleTask(t.id)}
                         onEdit={() => setModal({ kind: "edit-task", task: t })}
                       />

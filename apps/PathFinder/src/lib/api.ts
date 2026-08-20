@@ -805,10 +805,13 @@ export const addSubtask = async (
     // surface. Breaking a chore down keeps the children chores.
     category: (parent!.category ?? null) as any,
     urgency: mapPlanning(parent)?.urgency ?? "medium",
-    // A subtask's deadline is its own. It defaults to the parent's only as a
-    // starting point — the whole point of the breakdown is that steps land on
-    // different dates than the thing they add up to.
-    due_date: opts?.due_date ?? parent!.due_date ?? null,
+    // A step starts with NO due date, and deliberately does not inherit the
+    // parent's. Inheriting looked helpful and was actively harmful: every step
+    // landed on the parent's date, so the week overview showed a task broken
+    // into five steps as six separate items all due the same day. The whole
+    // point of the breakdown is that steps land on their own dates — so the
+    // date is something you set, not something you have to clear.
+    due_date: opts?.due_date ?? null,
     time_estimate: opts?.time_estimate ?? null,
     sort_order: nextOrder,
     stage: "refine",
@@ -1316,8 +1319,12 @@ export const getWeekItems = async (startDate: string, endDate: string): Promise<
     { data: trainingSessions },
     { data: recurringTrainingSessions },
   ] = await Promise.all([
+    // TASK_SELECT_CTX, not a hand-written select: omitting the
+    // pf_task_planning embed does not fail, it silently yields planning: null,
+    // and every task then reads as default urgency/stage. A task that is urgent
+    // on the board would quietly look ordinary here.
     supabase.from("pf_tasks")
-      .select("*, pf_plans(id, title, goal_id, pf_goals(id, title))")
+      .select(TASK_SELECT_CTX)
       .eq("user_id", getUserId()).eq("done", false)
       .gte("due_date", startDate).lte("due_date", endDate),
     supabase.from("pf_plans")
