@@ -10,6 +10,12 @@ export type Urgency = "high" | "medium" | "low";
 // the home-screen quick-task widget) that don't belong to any plan.
 export type TaskCategory = "reminder" | "chore" | "shopping";
 export type Frequency = "daily" | "weekly" | "monthly";
+/**
+ * A system's cadence. The calendar kinds recur on dates; `interval` recurs a
+ * fixed number of days after the last completion, which is what a chore wants
+ * ("wash the clothes weekly" should follow you, not the calendar).
+ */
+export type SystemFrequency = Frequency | "interval";
 
 // ── The task ISA hierarchy ───────────────────────────────────────────────────
 //
@@ -210,7 +216,13 @@ export interface SystemEntry {
   id: number;
   title: string;
   description: string | null;
-  frequency: Frequency;
+  frequency: SystemFrequency;
+  /**
+   * Days between completions when `frequency === "interval"`; NULL otherwise.
+   * Interval recurrence floats with `last_done` rather than the calendar — see
+   * lib/systems.ts.
+   */
+  interval_days: number | null;
   days_of_week: string | null;
   last_done: string | null;
   streak_count: number;

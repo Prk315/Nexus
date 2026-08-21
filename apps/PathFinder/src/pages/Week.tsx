@@ -24,6 +24,7 @@ import { type Span, dayStartMs } from "@nexus/core/coverage";
 import { Button } from "../components/ui/button";
 import { cn, layoutCalItems } from "../lib/utils";
 import { blockMinutes, planningOf, isFullTask } from "../lib/taskTree";
+import { isSystemScheduledOn } from "../lib/systems";
 import { UrgencyMeter } from "../components/UrgencyMeter";
 import { URGENCY_LABEL, STAGE_LABEL, STAGE_CLASSES } from "../lib/utils";
 import { isDue } from "../components/workspace/systemForms";
@@ -48,15 +49,6 @@ function todayISO() { return toISO(new Date()); }
 const DAY_NAMES = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 
 // Returns true if the system should appear on the given ISO date
-function systemScheduledFor(sys: import("../types").SystemEntry, iso: string): boolean {
-  if (sys.frequency === "daily") return true;
-  if (sys.frequency === "weekly") {
-    const days = sys.days_of_week ? sys.days_of_week.split(",").map(Number) : [];
-    if (days.length === 0) return true;
-    return days.includes(new Date(iso + "T12:00:00").getDay());
-  }
-  return false; // monthly: not shown in time grid
-}
 const MONTHS    = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
 
 // ── Time grid constants ───────────────────────────────────────────────────────
@@ -816,7 +808,7 @@ function TimeColumn({ date, isToday, blocks, systems, courseAssignments, schedul
 
         {/* All timed events — unified overlap layout */}
         {(() => {
-          const timedSys = systems.filter((s) => s.start_time && systemScheduledFor(s, iso));
+          const timedSys = systems.filter((s) => s.start_time && isSystemScheduledOn(s, iso));
           const timedCAs = courseAssignments.filter((a) => a.start_time);
           const timedSEs = scheduleEntries.filter((e) => e.start_time);
 

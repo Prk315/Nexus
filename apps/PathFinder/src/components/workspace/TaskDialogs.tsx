@@ -225,13 +225,17 @@ export function SubtypeFields({ type, value, onChange }: {
               onChange={(e) => onChange({ area: e.target.value || null })}
             />
           ))}
-          {field("Repeats every (days)", (
-            <Input
-              type="number" min={0} placeholder="one-off"
-              value={value.rotation_days ?? ""}
-              onChange={(e) => onChange({ rotation_days: numeric(e.target.value) })}
-            />
-          ))}
+          {/*
+            `rotation_days` is deliberately no longer edited here. Recurrence is
+            Systems' job — a chore that comes back is a system with
+            `frequency: 'interval'`, which already has streaks and a due rule.
+            Two recurrence engines would drift. The column still exists because
+            deployed code reads it; it gets dropped after this ships.
+          */}
+          <p className="w-full text-[10px] text-muted-foreground/70 leading-snug">
+            Should this come back on its own? Use <strong className="font-medium">Make recurring</strong> —
+            repeating work lives in Systems, which tracks streaks and when it's next due.
+          </p>
         </>
       )}
 
