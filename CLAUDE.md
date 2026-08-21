@@ -806,6 +806,80 @@ its `deleteNode` prop), and it resolves `false` on cancel so callers skip their
 post-delete cleanup. Wire new delete entry points to that function rather than to
 `useGraph().deleteNode`.
 
+## Vault: the note editor (Tiptap)
+
+`NoteEditor.tsx` is the Tiptap surface for the plain **Note** kind — and the
+fallback for any kind `EditorPane`'s switch doesn't special-case. Its schema is
+built in exactly one place, `extensions/noteExtensions.ts`. Never inline an
+extension list anywhere else: `lib/noteSchemaGuard.ts` derives the schema from
+that same function to audit stored content *before* an editor is mounted, and a
+second copy would make the guard validate against a schema the editor doesn't
+have.
+
+⚠️ **An unknown node type does not get dropped — it blanks the whole note.**
+`@tiptap/core`'s `createNodeFromContent` catches ProseMirror's "Unknown node
+type" and returns `createNodeFromContent("")`, i.e. an empty document. The first
+keystroke then autosaves that blank, and `vault_content` keeps no history. Web,
+Mac and iPad update independently, so from the moment one note holds one new
+block type the race is live. That is what the guard exists for: it names the
+unknown types and refuses to mount an editor. **Deploy a schema addition
+everywhere — including a fresh `npm run ios:vault` — before creating content
+that uses it.** `enableContentCheck` alone is not enough; `setContent` forwards
+the flag and does *not* catch, so it turns a bad load into a sync throw inside a
+React effect.
+
+**A destroyed or not-yet-mounted editor is still truthy.** `if (!editor) return`
+is not a sufficient guard and this white-screened production once already:
+teardown only nulls the internals, so `editor.commands` reaches
+`get commands() { return this.commandManager.commands }` with a null
+`commandManager`. Guard with `editor.isDestroyed`, and wrap `editor.view` in a
+try/catch — in v3 that getter *throws* before the view exists, which a layout
+effect can hit during React's remount. Anywhere async work can outlive the
+editor (a content effect, an image upload, a pointerup listener on `window`)
+needs both.
+
+**Custom nodes with keymaps need `priority: 1000`.** Tiptap sorts extensions by
+priority descending and collects keymap plugins in that order, so at the default
+100 StarterKit's baseKeymap claims Backspace first and a container's handlers
+never run — `joinBackward` then merges across an `isolating` boundary that is
+correctly set in the schema. The symptom is a callout's text silently absorbed
+into the paragraph above it.
+
+**Structural blocks are a family, not one-offs**
+(`extensions/structural/`): `createContainerNode` supplies the schema flags,
+serialization and shared keymap for callout, container, toggle and columns.
+`isolating` is load-bearing on all of them, and because ProseMirror gives up
+*politely* at an isolating boundary, each needs explicit Backspace/Enter/Mod-Enter
+rescues or the keys read as a freeze. Containment is schema-enforced: `column`
+and the toggle parts are deliberately **not** in `group: "block"`, which is what
+makes them unplaceable anywhere else.
+
+**Costly drags dispatch nothing until pointerup.** Column resize writes
+`flexGrow` straight to the DOM while the pointer moves and commits one
+transaction on release; a transaction per `pointermove` would be ~60 document
+rewrites a second, each waking the 400 ms autosave — the shape of the
+2026-08-15 incident. Same rule for the block drag handle.
+
+**Images go to Storage, never inline.** `allowBase64` is off and paste, drop and
+the file picker all route through `api.uploadCanvasImage`. On failure they
+insert *nothing* rather than falling back to a data URI.
+
+Two dependency traps: `@tiptap/extension-drag-handle` imports
+`extension-collaboration` and `y-tiptap` at the top level, so it drags the whole
+yjs stack in for a grip icon — the handle here is hand-rolled instead. And every
+`@tiptap/*` package peer-depends on the others at an **exact** version, so a new
+one added with a caret range resolves to the newest release, fails to hoist, and
+nests **a second `@tiptap/core`** under `apps/Vault/Vault/node_modules` — the
+same dual-instance class as the React and three.js rules above. Pin new
+`@tiptap/*` deps to the version the tree is on and check `@tiptap/core` appears
+once in `package-lock.json`.
+
+Tests live in `apps/Vault/Vault` (`npm test`, vitest + a happy-dom setup file —
+vitest resolves `environment:` from its own install location, which is the repo
+root, hence the setup file). The HTML round-trip cases are the highest-value
+ones: a `renderHTML`/`parseHTML` mismatch is invisible to `tsc`, survives every
+manual click-through, and only shows up as content quietly vanishing on paste.
+
 ## Scheduled server-side work (pg_cron)
 
 Three jobs run in the database, and this is the pattern for anything that must happen
