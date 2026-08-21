@@ -2363,24 +2363,32 @@ function TodoList({
               </div>
             )
           ) : (
-            <div className="flex flex-col gap-2">
+            /*
+              A grid of group cards, not one long column.
+              Each group holds a handful of short titles ("retinol", "mælk"), so a
+              full-width row spent ~1000px of horizontal space on ~80px of text and
+              pushed everything else below the fold. Cards let the groups sit
+              side by side and make each one a scannable unit.
+              `items-start` keeps a 2-task card from stretching to match a 6-task
+              one — equal-height cards would just reintroduce the empty space.
+            */
+            <div className="grid gap-2.5 items-start auto-rows-min [grid-template-columns:repeat(auto-fill,minmax(280px,1fr))]">
               {byPlan.map(([planId, group]) => {
                 const isPlanCollapsed = collapsedPlans.has(planId);
                 return (
-                  <div key={planId} className="flex flex-col gap-0.5">
+                  <div key={planId} className="flex flex-col gap-0.5 rounded-lg border border-border/60 bg-card/40 p-2">
                     {/* Plan group header */}
                     <button
                       onClick={() => togglePlan(planId)}
-                      className="flex items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground transition-colors w-fit"
+                      className="flex items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground transition-colors w-full min-w-0"
                     >
-                      {isPlanCollapsed ? <ChevronRight className="h-3 w-3" /> : <ChevronDown className="h-3 w-3" />}
-                      <span className="font-medium">{group.planTitle ?? "No plan"}</span>
-                      {group.goalTitle && <span className="opacity-60">· {group.goalTitle}</span>}
-                      <span className="opacity-50">({group.tasks.length})</span>
+                      {isPlanCollapsed ? <ChevronRight className="h-3 w-3 shrink-0" /> : <ChevronDown className="h-3 w-3 shrink-0" />}
+                      <span className="font-medium truncate" title={[group.planTitle ?? "No plan", group.goalTitle].filter(Boolean).join(" · ")}>{group.planTitle ?? "No plan"}</span>
+                      <span className="opacity-50 shrink-0">({group.tasks.length})</span>
                     </button>
 
                     {!isPlanCollapsed && (
-                      <div className="flex flex-col gap-0.5 pl-4 border-l border-border ml-1">
+                      <div className="flex flex-col gap-0.5">
                         {group.tasks.map((task) => {
                           const isEditing = editingId === task.id;
                           if (!isEditing) {

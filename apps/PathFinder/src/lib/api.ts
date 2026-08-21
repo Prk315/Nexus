@@ -1339,9 +1339,16 @@ export const getWeekItems = async (startDate: string, endDate: string): Promise<
     // pf_task_planning embed does not fail, it silently yields planning: null,
     // and every task then reads as default urgency/stage. A task that is urgent
     // on the board would quietly look ordinary here.
+    // Completed tasks ARE returned. Filtering them out here made the week
+    // completion score structurally impossible: HeaderPanel computes
+    // `tasks.filter(t => t.done).length / tasks.length`, so with no done rows the
+    // numerator was always 0 and finishing a task merely shrank the denominator
+    // — the score could only ever read 0%. The consumers all filter for
+    // themselves (the right rail even has a done-tasks section that had never
+    // once been populated), so the fix belongs here rather than at each of them.
     supabase.from("pf_tasks")
       .select(TASK_SELECT_CTX)
-      .eq("user_id", getUserId()).eq("done", false)
+      .eq("user_id", getUserId())
       .gte("due_date", startDate).lte("due_date", endDate),
     supabase.from("pf_plans")
       .select("*").eq("user_id", getUserId()).eq("status", "active")
