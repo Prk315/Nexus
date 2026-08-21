@@ -3432,6 +3432,49 @@ body.vault-col-resizing * {
 }
 
 
+/* ── Block drag handle ───────────────────────────────────────────────────────
+   Hand-rolled rather than @tiptap/extension-drag-handle, which imports
+   extension-collaboration and y-tiptap at the top level and would drag the
+   whole yjs stack into the bundle for a grip icon. Lives outside .ProseMirror
+   (appended next to it) so it can sit in the left gutter without being part of
+   the editable content. */
+.tiptap-editor { position: relative; }
+
+.block-handle {
+  position: absolute;
+  z-index: 5;
+  display: none;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 26px;
+  border-radius: 6px;
+  color: var(--fg-invisible);
+  background: transparent;
+  cursor: grab;
+  user-select: none;
+  transition: background var(--duration) var(--ease), color var(--duration) var(--ease);
+}
+
+.block-handle:hover {
+  background: var(--bg-muted);
+  color: var(--fg-muted);
+}
+
+.block-handle.is-dragging { cursor: grabbing; }
+
+.block-handle-grip {
+  font-size: 13px;
+  line-height: 1;
+  letter-spacing: -1px;
+}
+
+/* Hidden on touch: there is no hover to reveal it, and a permanently visible
+   grip beside every block is noise. Reordering on iPad is cut-and-paste. */
+@media (pointer: coarse) {
+  .block-handle { display: none !important; }
+}
+
 /* ── Gap cursor & node selection ─────────────────────────────────────────────
    prosemirror-gapcursor ships CSS that this app never imported, so the gap
    cursor has always been invisible — already a latent problem next to tables

@@ -23,6 +23,7 @@ import { Callout } from "./structural/Callout";
 import { Container } from "./structural/Container";
 import { ToggleBlock, ToggleSummary, ToggleContent } from "./structural/Toggle";
 import { ColumnBlock, Column } from "./structural/Columns";
+import { BlockHandle } from "./structural/BlockHandle";
 import { KATEX_OPTS } from "../lib/katexShared";
 
 export interface NoteExtensionOpts {
@@ -71,6 +72,8 @@ export function buildNoteExtensions(opts: NoteExtensionOpts = {}): Extensions {
     ToggleContent,
     ColumnBlock,
     Column,
+    // Behaviour only, no schema — but it lives with the family it serves.
+    BlockHandle,
     Table.configure({ resizable: true }),
     TableRow,
     TableHeader,
