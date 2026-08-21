@@ -18,6 +18,7 @@ import { CALLOUT_VARIANTS, CALLOUT_LABELS, CALLOUT_ICONS } from "./structural/Ca
 import { CONTAINER_STYLES, CONTAINER_LABELS } from "./structural/Container";
 import { unwrapNearestContainer } from "./structural/containerCommands";
 import { insertToggle } from "./structural/toggleCommands";
+import { insertColumns, addColumn, deleteColumn } from "./structural/columnCommands";
 
 /** Every node in the structural family that "remove surrounding box" applies to. */
 export const STRUCTURAL_CONTAINERS = ["calloutBlock", "containerBlock"] as const;
@@ -261,6 +262,55 @@ export function buildBlockRegistry(opts: BlockRegistryOptions = {}): BlockAction
       },
       isActive: (editor) => editor.isActive("containerBlock", { style }),
     })),
+
+    // ── Columns ─────────────────────────────────────────────────────────────
+    ...([2, 3, 4] as const).map((count): BlockAction => ({
+      id: `columns:${count}`,
+      title: `${count} columns`,
+      icon: "▥",
+      group: "container",
+      surfaces: ["slash", "toolbar"],
+      keywords: ["column", "columns", "row", "side by side", "split", "grid"],
+      run: (editor, ctx) => {
+        if (ctx?.range) editor.chain().focus().deleteRange(ctx.range).run();
+        editor.commands.focus();
+        insertColumns(count)({
+          state: editor.state,
+          dispatch: (tr: any) => editor.view.dispatch(tr),
+        });
+      },
+      // Nesting a row inside a column is legal in the schema but a usability
+      // trap at this width, so it isn't offered.
+      isAvailable: (e) => !e.isActive("columnBlock"),
+    })),
+    {
+      id: "columnAdd",
+      title: "Add column",
+      icon: "+▥",
+      group: "container",
+      surfaces: ["toolbar"],
+      isAvailable: (e) => e.isActive("columnBlock"),
+      run: (e) => {
+        e.commands.focus();
+        addColumn()({ state: e.state, dispatch: (tr: any) => e.view.dispatch(tr) });
+      },
+    },
+    {
+      id: "columnDelete",
+      title: "Delete column",
+      icon: "−▥",
+      group: "container",
+      surfaces: ["toolbar"],
+      danger: true,
+      isAvailable: (e) => e.isActive("columnBlock"),
+      run: (e) => {
+        e.commands.focus();
+        // At two columns this collapses the whole row: `column{2,}` makes a
+        // one-column row invalid, so deleting the node alone would leave a
+        // document the schema rejects.
+        deleteColumn()({ state: e.state, dispatch: (tr: any) => e.view.dispatch(tr) });
+      },
+    },
 
     // Offered only from inside one, because "unwrap" has no meaning outside.
     // Backspace-at-start does the same thing; this is the discoverable route.

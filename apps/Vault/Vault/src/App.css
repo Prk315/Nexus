@@ -1504,7 +1504,10 @@ body {
   font-size: 15px;
   line-height: 1.75;
   color: var(--fg-main);
-  max-width: 720px;
+  /* 720px is a reading measure. Columns need more room than that, so a note
+     containing a row widens itself — three columns inside 640px of usable
+     width is ~200px each, which is not a column, it's a gutter. */
+  max-width: var(--note-measure, 720px);
 }
 
 .tiptap-editor .ProseMirror h1,
@@ -3352,6 +3355,82 @@ body {
   }
   .tiptap-editor .ProseMirror .toggle-caret-glyph { font-size: 11px; }
 }
+
+/* ── Columns ─────────────────────────────────────────────────────────────────
+   Widths are flex-grow values on each column, written into the style attribute
+   by the node's renderHTML — so a saved document lays itself out with no JS,
+   re-solves at any container width, and survives an HTML round trip. */
+.tiptap-editor .ProseMirror .columns-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 0;
+  margin: 1em 0;
+}
+
+.tiptap-editor .ProseMirror .column {
+  /* min-width: 0 is load-bearing in a flex row: without it a long unbroken
+     word sets the column's min-content width and the flex-grow ratios are
+     silently ignored, so dragging the gutter appears to do nothing. */
+  min-width: 0;
+  padding: 0 14px;
+}
+
+.tiptap-editor .ProseMirror .column:first-child { padding-left: 0; }
+.tiptap-editor .ProseMirror .column:last-child { padding-right: 0; }
+.tiptap-editor .ProseMirror .column > :first-child { margin-top: 0; }
+.tiptap-editor .ProseMirror .column > :last-child { margin-bottom: 0; }
+
+.column-gutter {
+  flex: 0 0 auto;
+  align-self: stretch;
+  position: relative;
+  width: 9px;
+  margin: 0 -4px;      /* a 9px grab area over a 1px visual line */
+  cursor: col-resize;
+  /* Without this a drag on iPad scrolls the page instead of resizing. */
+  touch-action: none;
+  user-select: none;
+}
+
+.column-gutter::after {
+  content: "";
+  position: absolute;
+  inset: 2px auto 2px 50%;
+  width: 1px;
+  transform: translateX(-50%);
+  background: var(--border-faint);
+  transition: background var(--duration) var(--ease);
+}
+
+.column-gutter:hover::after,
+.column-gutter.is-dragging::after {
+  background: var(--edge-in);
+  width: 2px;
+}
+
+/* Set on <body> for the duration of a drag so the cursor doesn't flicker back
+   to a text caret every time the pointer crosses a column's text. */
+body.vault-col-resizing,
+body.vault-col-resizing * {
+  cursor: col-resize !important;
+  user-select: none !important;
+}
+
+@media (pointer: coarse) {
+  .column-gutter {
+    width: 22px;
+    margin: 0 -10px;
+  }
+}
+
+/* A note that actually uses columns widens itself, rather than every note
+   paying for the possibility. :has() is well supported in both WebKit and the
+   Chromium WebView2 this ships in; a browser without it simply keeps the
+   reading measure, which is a degradation and not a break. */
+.tiptap-editor .ProseMirror:has(.columns-row) {
+  --note-measure: 980px;
+}
+
 
 /* ── Gap cursor & node selection ─────────────────────────────────────────────
    prosemirror-gapcursor ships CSS that this app never imported, so the gap

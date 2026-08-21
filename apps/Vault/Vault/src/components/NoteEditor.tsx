@@ -438,35 +438,83 @@ function NoteEditorInner({ content, onChange, nodeId, graph }: Props) {
   function resolveMathPos(kind: "inline" | "block", pos: number): number | null {
     if (!editor) return null;
     const typeName = kind === "inline" ? "inlineMath" : "blockMath";
-    const at = editor.state.doc.nodeAt(pos);
-    if (at?.type.name === typeName) return pos;
+    const doc = editor.state.doc;
+    if (pos >= 0 && pos <= doc.content.size && doc.nodeAt(pos)?.type.name === typeName) return pos;
+
+    // The fallback used to be "nearest node of this type anywhere in the doc",
+    // measured by absolute position distance. That was already a guess, and
+    // columns make it actively wrong: positions in a two-column row interleave
+    // in a way unrelated to visual proximity, so a math node in column 1 can be
+    // numerically closer than the one you just clicked in column 2 — and Save
+    // would silently rewrite the wrong equation.
+    //
+    // Restricting the search to the caret's own ancestor keeps a stale position
+    // from escaping into a sibling column, a callout, or a table cell.
+    let scopeFrom = 0;
+    let scopeTo = doc.content.size;
+    if (pos >= 0 && pos <= doc.content.size) {
+      const $pos = doc.resolve(Math.min(pos, doc.content.size));
+      for (let d = $pos.depth; d > 0; d--) {
+        const name = $pos.node(d).type.name;
+        if (name === "column" || name === "calloutBlock" || name === "containerBlock" ||
+            name === "toggleContent" || name === "tableCell" || name === "tableHeader") {
+          scopeFrom = $pos.before(d);
+          scopeTo = $pos.after(d);
+          break;
+        }
+      }
+    }
+
     let found: number | null = null;
     let best = Infinity;
-    editor.state.doc.descendants((n, p) => {
+    doc.nodesBetween(scopeFrom, scopeTo, (n, p) => {
       if (n.type.name === typeName) {
         const d = Math.abs(p - pos);
         if (d < best) { best = d; found = p; }
       }
+      return true;
     });
     return found;
   }
 
   // Insert a placeholder math node at the cursor, then immediately open the
-  // popover on it so the user types the real expression right away. The
-  // popover's pos is resolved from the document AFTER the insert lands.
-  function insertInlineMathAtCursor() {
+  // popover on it so the user types the real expression right away.
+  //
+  // The position comes from the insert's own step map, not from
+  // selection.from: a *block* insert does not leave the selection on the node
+  // it created, so reading the selection afterwards was a guess that only
+  // happened to work in a flat document.
+  function insertMathAtCursor(kind: "inline" | "block") {
     if (!editor) return;
-    editor.chain().focus().insertInlineMath({ latex: "x" }).run();
-    const pos = resolveMathPos("inline", editor.state.selection.from);
-    if (pos !== null) setMathEdit({ kind: "inline", pos, latex: "x" });
+    const before = editor.state.doc;
+    const chain = editor.chain().focus();
+    (kind === "inline"
+      ? chain.insertInlineMath({ latex: "x" })
+      : chain.insertBlockMath({ latex: "x" })
+    ).run();
+
+    const typeName = kind === "inline" ? "inlineMath" : "blockMath";
+    const doc = editor.state.doc;
+    if (doc === before) return; // the insert was refused
+
+    // The newly created node is the one nearest the caret that wasn't there a
+    // moment ago; scanning from the selection outward finds it without relying
+    // on where the command chose to leave the cursor.
+    const from = editor.state.selection.from;
+    let pos: number | null = null;
+    let best = Infinity;
+    doc.descendants((n, p) => {
+      if (n.type.name === typeName) {
+        const d = Math.abs(p - from);
+        if (d < best) { best = d; pos = p; }
+      }
+      return true;
+    });
+    if (pos !== null) setMathEdit({ kind, pos, latex: "x" });
   }
 
-  function insertBlockMathAtCursor() {
-    if (!editor) return;
-    editor.chain().focus().insertBlockMath({ latex: "x" }).run();
-    const pos = resolveMathPos("block", editor.state.selection.from);
-    if (pos !== null) setMathEdit({ kind: "block", pos, latex: "x" });
-  }
+  function insertInlineMathAtCursor() { insertMathAtCursor("inline"); }
+  function insertBlockMathAtCursor() { insertMathAtCursor("block"); }
 
   function saveMathEdit() {
     if (!editor || !mathEdit) return;

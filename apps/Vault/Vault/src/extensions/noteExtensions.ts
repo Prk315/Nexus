@@ -22,6 +22,7 @@ import { CategoryHighlight } from "./CategoryHighlight";
 import { Callout } from "./structural/Callout";
 import { Container } from "./structural/Container";
 import { ToggleBlock, ToggleSummary, ToggleContent } from "./structural/Toggle";
+import { ColumnBlock, Column } from "./structural/Columns";
 import { KATEX_OPTS } from "../lib/katexShared";
 
 export interface NoteExtensionOpts {
@@ -68,6 +69,8 @@ export function buildNoteExtensions(opts: NoteExtensionOpts = {}): Extensions {
     ToggleBlock,
     ToggleSummary,
     ToggleContent,
+    ColumnBlock,
+    Column,
     Table.configure({ resizable: true }),
     TableRow,
     TableHeader,
