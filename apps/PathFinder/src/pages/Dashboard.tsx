@@ -1,6 +1,7 @@
 import { useEffect, useState, useCallback, useMemo, useRef } from "react";
 import {
-  CheckCircle, Target, CheckSquare, Check, ChevronDown, ChevronRight,
+  PanelRight, PanelRightClose,
+  CheckCircle, CheckSquare, Check, ChevronDown, ChevronRight,
   Plus, X, Clock, Star, Pencil, BookOpen,
   Eye, EyeOff,
 } from "lucide-react";
@@ -9,7 +10,6 @@ import {
   toggleTask, createTask, updateTask, deleteTask,
   toTaskWithContext, getTaskSessionsInRange, logTaskSession, unlogTaskOccurrence,
   getCalBlocks, createCalBlock, updateCalBlock, deleteCalBlock,
-  getGoalGroups,
   getDailyGoals, setDailyPrimaryGoal, clearDailyPrimaryGoal, addDailySecondaryGoal, updateDailySecondaryGoal, deleteDailySecondaryGoal,
   getCourseAssignments, updateCourseAssignment,
   getScheduleEntriesForDate,
@@ -17,14 +17,12 @@ import {
   getHabitSubtasks, toggleHabitSubtask,
   getTrainingSessionsForDate,
 } from "../lib/api";
-import { Progress } from "../components/ui/progress";
-import { Badge } from "../components/ui/badge";
 import { PriorityDot } from "../components/PriorityDot";
-import { daysUntil, deadlineLabel, deadlineVariant, cn, layoutCalItems, formatDateShort } from "../lib/utils";
+import { daysUntil, cn, layoutCalItems, formatDateShort } from "../lib/utils";
 import { blockMinutes, planningOf, isFullTask } from "../lib/taskTree";
 import { UrgencyMeter } from "../components/UrgencyMeter";
 import { isDue } from "../components/workspace/systemForms";
-import type { Goal, GoalGroup, Plan, TaskWithContext, SystemEntry, CalBlock, DailyGoals, DailyPrimaryGoal, DailySecGoal, CourseAssignment, ScheduleEntry, HabitWithCompletion, HabitStack, HabitSubtask, TrainingSession, TaskSession } from "../types";
+import type { Goal, Plan, TaskWithContext, SystemEntry, CalBlock, DailyGoals, DailyPrimaryGoal, DailySecGoal, CourseAssignment, ScheduleEntry, HabitWithCompletion, HabitStack, HabitSubtask, TrainingSession, TaskSession } from "../types";
 
 const todayDate = () => new Date().toISOString().slice(0, 10);
 
@@ -985,6 +983,64 @@ function TodayPie({ doneMin, pendingMin, freeMin, capTotal, items }: {
 
 // ── Welcome Box ───────────────────────────────────────────────────────────────
 
+/**
+ * Active goals, compacted into the header.
+ *
+ * They used to be a full-width block above the task list, which spent a whole
+ * row and ~1000px of width on two short titles and two progress bars. Goals are
+ * *context* for the day rather than something you act on hourly, so they belong
+ * beside the other at-a-glance header readouts — next to the pie, not above the
+ * work.
+ *
+ * Same ordering as the old block (priority, then nearest deadline) so the goal
+ * that mattered most still reads first. Scrolls past three rather than growing
+ * the header.
+ */
+function HeaderGoals({ goals }: { goals: Goal[] }) {
+  const active = [...goals]
+    .filter((g) => g.status === "active")
+    .sort((a, b) => {
+      const p = { high: 0, medium: 1, low: 2 } as Record<string, number>;
+      const pd = (p[a.priority] ?? 1) - (p[b.priority] ?? 1);
+      if (pd !== 0) return pd;
+      if (a.deadline && b.deadline) return a.deadline.localeCompare(b.deadline);
+      return a.deadline ? -1 : b.deadline ? 1 : 0;
+    });
+
+  if (active.length === 0) return null;
+
+  return (
+    <div className="hidden lg:flex shrink-0 w-56 max-h-16 flex-col gap-1 overflow-y-auto rounded-lg border border-border bg-background px-2 py-1.5">
+      {active.map((g) => {
+        const pct  = g.task_count === 0 ? 0 : Math.round((g.done_count / g.task_count) * 100);
+        const days = g.deadline ? daysUntil(g.deadline) : null;
+        return (
+          <div key={g.id} className="flex flex-col gap-0.5">
+            <div className="flex items-center gap-1.5 min-w-0">
+              <PriorityDot priority={g.priority} />
+              <span className="flex-1 min-w-0 truncate text-[11px] font-medium text-foreground" title={g.title}>
+                {g.title}
+              </span>
+              {days !== null && (
+                <span className={cn(
+                  "shrink-0 text-[10px] tabular-nums",
+                  days < 0 ? "text-rose-500" : days <= 7 ? "text-amber-500" : "text-muted-foreground/60",
+                )}>
+                  {days < 0 ? `${-days}d late` : `${days}d`}
+                </span>
+              )}
+              <span className="shrink-0 text-[10px] tabular-nums text-muted-foreground/60 w-7 text-right">{pct}%</span>
+            </div>
+            <div className="h-1 w-full overflow-hidden rounded-full bg-secondary">
+              <div className="h-full rounded-full bg-primary transition-all" style={{ width: `${pct}%` }} />
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
 function WelcomeBox({
   goals, plans, tasks, systems, dailyGoals, courseAssignments, date,
   goalPrimaryDone, goalSecDone, todaySessions,
@@ -1283,6 +1339,11 @@ function WelcomeBox({
         )}
       </div>
 
+      <div className="hidden lg:block h-10 w-px bg-border shrink-0" />
+
+      {/* Active goals — context for the day, beside the other header readouts */}
+      <HeaderGoals goals={goals} />
+
       <div className="hidden md:block h-10 w-px bg-border shrink-0" />
 
       {/* Pie chart */}
@@ -1361,111 +1422,6 @@ function TimeEstimateInput({ value, onChange, onBlur, className }: {
 // ── Quick Cards ───────────────────────────────────────────────────────────────
 
 // ── Top Goals ─────────────────────────────────────────────────────────────────
-
-const GROUP_COLOR_MAP: Record<string, { bg: string; text: string }> = {
-  slate:  { bg: "bg-slate-500/15",  text: "text-slate-600 dark:text-slate-400" },
-  red:    { bg: "bg-red-500/15",    text: "text-red-600 dark:text-red-400" },
-  orange: { bg: "bg-orange-500/15", text: "text-orange-600 dark:text-orange-400" },
-  yellow: { bg: "bg-yellow-400/15", text: "text-yellow-600 dark:text-yellow-400" },
-  green:  { bg: "bg-green-500/15",  text: "text-green-600 dark:text-green-400" },
-  teal:   { bg: "bg-teal-500/15",   text: "text-teal-600 dark:text-teal-400" },
-  blue:   { bg: "bg-blue-500/15",   text: "text-blue-600 dark:text-blue-400" },
-  purple: { bg: "bg-purple-500/15", text: "text-purple-600 dark:text-purple-400" },
-  pink:   { bg: "bg-pink-500/15",   text: "text-pink-600 dark:text-pink-400" },
-};
-
-function TopGoals({ goals, groups }: { goals: Goal[]; groups: GoalGroup[] }) {
-  const [groupFilter, setGroupFilter] = useState<number | null>(null);
-
-  const visibleGoals = [...goals]
-    .filter((g) => groupFilter === null || g.group_id === groupFilter)
-    .sort((a, b) => {
-      const p = { high: 0, medium: 1, low: 2 } as Record<string, number>;
-      const pd = (p[a.priority] ?? 1) - (p[b.priority] ?? 1);
-      if (pd !== 0) return pd;
-      if (a.deadline && b.deadline) return a.deadline.localeCompare(b.deadline);
-      return a.deadline ? -1 : b.deadline ? 1 : 0;
-    });
-
-  return (
-    <div className="flex flex-col gap-2">
-      {/* Header + group toggles */}
-      <div className="flex items-center gap-2 flex-wrap">
-        <h2 className="text-xs font-semibold text-muted-foreground uppercase tracking-wide flex items-center gap-1.5 shrink-0">
-          <Target className="h-3.5 w-3.5" /> Goals
-        </h2>
-        {groups.length > 0 && (
-          <div className="flex gap-1 flex-wrap">
-            <button
-              onClick={() => setGroupFilter(null)}
-              className={cn(
-                "px-2 py-0.5 text-xs rounded-full border transition-colors font-medium",
-                groupFilter === null
-                  ? "bg-foreground text-background border-foreground"
-                  : "text-muted-foreground border-border hover:text-foreground"
-              )}
-            >
-              All
-            </button>
-            {groups.map((g) => {
-              const col = GROUP_COLOR_MAP[g.color] ?? GROUP_COLOR_MAP.slate;
-              const active = groupFilter === g.id;
-              return (
-                <button
-                  key={g.id}
-                  onClick={() => setGroupFilter(active ? null : g.id)}
-                  className={cn(
-                    "px-2 py-0.5 text-xs rounded-full border transition-colors font-medium",
-                    active
-                      ? cn("border-transparent", col.bg, col.text)
-                      : "text-muted-foreground border-border hover:text-foreground"
-                  )}
-                >
-                  {g.name}
-                </button>
-              );
-            })}
-          </div>
-        )}
-      </div>
-
-      {/* Goal list — scrollable, capped height */}
-      <div className="flex flex-col gap-2 overflow-y-auto max-h-48 pr-1">
-        {visibleGoals.length === 0 ? (
-          <p className="text-sm text-muted-foreground italic">No active goals.</p>
-        ) : visibleGoals.map((goal) => {
-          const pct  = goal.task_count === 0 ? 0 : Math.round((goal.done_count / goal.task_count) * 100);
-          const days = goal.deadline ? daysUntil(goal.deadline) : null;
-          const col  = goal.group_color ? GROUP_COLOR_MAP[goal.group_color] : null;
-          return (
-            <div key={goal.id} className="flex flex-col gap-1 shrink-0">
-              <div className="flex items-center gap-2 min-w-0">
-                <PriorityDot priority={goal.priority} />
-                <span className="text-sm font-medium text-foreground truncate flex-1">{goal.title}</span>
-                {col && goal.group_name && (
-                  <span className={cn("text-xs px-1.5 py-0 rounded-full shrink-0 font-medium", col.bg, col.text)}>
-                    {goal.group_name}
-                  </span>
-                )}
-                {days !== null && (
-                  <Badge variant={deadlineVariant(days)} className="text-xs shrink-0 px-1.5 py-0">
-                    {deadlineLabel(days)}
-                  </Badge>
-                )}
-              </div>
-              <div className="flex items-center gap-2">
-                <Progress value={goal.done_count} max={goal.task_count || 1} className="flex-1" />
-                <span className="text-xs text-muted-foreground tabular-nums w-8 text-right">{pct}%</span>
-              </div>
-            </div>
-          );
-        })}
-      </div>
-    </div>
-  );
-}
-
-// ── To-Do List ────────────────────────────────────────────────────────────────
 
 // ── Dashboard task row ───────────────────────────────────────────────────────
 
@@ -2012,7 +1968,6 @@ function TodoList({
 
 export function Dashboard() {
   const [goals,      setGoals]      = useState<Goal[]>([]);
-  const [groups,     setGroups]     = useState<GoalGroup[]>([]);
   const [plans,      setPlans]      = useState<Plan[]>([]);
   const [tasks,      setTasks]      = useState<TaskWithContext[]>([]);
   const [systems,    setSystems]    = useState<SystemEntry[]>([]);
@@ -2058,13 +2013,13 @@ export function Dashboard() {
     // The six side-tools (reminders, notes, brain dump, events, deadlines,
     // agreements) are no longer loaded here — they live in the sidebar and fetch
     // their own data on first open. See components/QuickPanels.tsx.
-    const [g, gr, p, t, s, cb, dg, cas, ses, hb, hs, ts, wk] = await Promise.all([
-      getGoals(), getGoalGroups(), getPlans(), getAllTasks(), getSystems(), getCalBlocks(date, date),
+    const [g, p, t, s, cb, dg, cas, ses, hb, hs, ts, wk] = await Promise.all([
+      getGoals(), getPlans(), getAllTasks(), getSystems(), getCalBlocks(date, date),
       getDailyGoals(date),
       getCourseAssignments(), getScheduleEntriesForDate(date), getHabitsForDate(date), getHabitStacks(),
       getTrainingSessionsForDate(date), getTaskSessionsInRange(date, date),
     ]);
-    setGoals(g); setGroups(gr); setPlans(p); setTasks(t); setSystems(s); setCalBlocks(cb);
+    setGoals(g); setPlans(p); setTasks(t); setSystems(s); setCalBlocks(cb);
     setDailyGoals(dg);
     setCourseAssignments(cas.filter((ca) => ca.due_date === date));
     setScheduleEntries(ses);
@@ -2078,7 +2033,55 @@ export function Dashboard() {
 
   useEffect(() => { load(); }, [load]);
 
-  const activeGoals  = useMemo(() => goals.filter((g) => g.status === "active"), [goals]);
+  // ── Day-calendar rail: collapsible + drag-resizable ───────────────────────
+  const RAIL_MIN = 220, RAIL_MAX = 620, RAIL_DEFAULT = 288;
+  const [railOpen, setRailOpen] = useState(
+    () => localStorage.getItem("pf-dash-rail-open") !== "0",
+  );
+  const [railWidth, setRailWidth] = useState(() => {
+    const v = Number(localStorage.getItem("pf-dash-rail-w"));
+    return Number.isFinite(v) && v >= RAIL_MIN && v <= RAIL_MAX ? v : RAIL_DEFAULT;
+  });
+
+  useEffect(() => { localStorage.setItem("pf-dash-rail-open", railOpen ? "1" : "0"); }, [railOpen]);
+  useEffect(() => { localStorage.setItem("pf-dash-rail-w", String(railWidth)); }, [railWidth]);
+
+  /**
+   * Drag the divider to resize.
+   *
+   * Width is read from the pointer's distance to the window's right edge rather
+   * than accumulated deltas — accumulating drifts whenever a move event is
+   * coalesced or the clamp bites, so the handle slowly desyncs from the cursor.
+   * Pointer capture keeps the drag alive when the cursor outruns the 4px handle.
+   */
+  const startResize = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
+    e.preventDefault();
+
+    // Listeners go on `window`, not on the handle with setPointerCapture.
+    // Capture retargets events to the element in theory, but in practice moves
+    // went missing and the rail barely tracked the cursor. Window listeners are
+    // the conventional shape here and also keep the drag alive when the pointer
+    // outruns the handle or leaves the viewport entirely.
+    const onMove = (ev: PointerEvent) => {
+      setRailWidth(Math.min(RAIL_MAX, Math.max(RAIL_MIN, window.innerWidth - ev.clientX)));
+    };
+    const onUp = () => {
+      window.removeEventListener("pointermove", onMove);
+      window.removeEventListener("pointerup", onUp);
+      window.removeEventListener("pointercancel", onUp);
+      document.body.style.userSelect = "";
+      document.body.style.cursor = "";
+    };
+
+    // Without these, dragging selects the text it sweeps over and the cursor
+    // flickers back to a caret whenever it crosses the content.
+    document.body.style.userSelect = "none";
+    document.body.style.cursor = "col-resize";
+    window.addEventListener("pointermove", onMove);
+    window.addEventListener("pointerup", onUp);
+    window.addEventListener("pointercancel", onUp);
+  }, []);
+
   // Quick tasks (reminders / chores / shopping) are standing lists — they show
   // regardless of due date, unlike project tasks which only surface on their day.
   const todayTasks   = useMemo(
@@ -2224,15 +2227,10 @@ export function Dashboard() {
         onAddSecondary={handleAddSecondary} onUpdateSecondaryEstimate={handleUpdateSecondaryEstimate}
         onDeleteSecondary={handleDeleteSecondary} />
 
-      <div className="flex-1 min-h-0 flex flex-col md:flex-row overflow-hidden">
+      <div className="flex-1 min-h-0 flex flex-col md:flex-row overflow-hidden relative">
 
         {/* ── Left column ─────────────────────────────────────────────────── */}
         <div className="flex-1 min-w-0 overflow-y-auto border-r border-border px-3 py-2 md:px-4 md:py-3 flex flex-col gap-3 md:gap-4">
-
-          {/* Top Goals */}
-          <TopGoals goals={activeGoals} groups={groups} />
-
-          <div className="h-px bg-border" />
 
           {/* To-Do List */}
           <TodoList
@@ -2249,7 +2247,48 @@ export function Dashboard() {
         </div>
 
         {/* ── Right column: Habits + Day Calendar ─────────────────────────── */}
-        <div className="hidden md:flex w-72 shrink-0 flex-col overflow-hidden px-3 py-3 gap-3">
+        {/*
+          Collapsible and resizable. The day calendar is the densest thing on the
+          page and how much room it deserves depends entirely on what the day
+          looks like — a wall of blocks wants width, an empty Sunday wants none.
+          Both the width and the open/closed state persist, because a layout you
+          have to re-adjust on every visit is worse than a fixed one.
+        */}
+        {!railOpen && (
+          <button
+            onClick={() => setRailOpen(true)}
+            title="Show day calendar"
+            className="hidden md:flex absolute bottom-3 right-3 z-10 h-8 w-8 items-center justify-center rounded-md border border-border bg-card shadow-sm text-muted-foreground hover:text-foreground transition-colors"
+          >
+            <PanelRight className="h-4 w-4" />
+          </button>
+        )}
+
+        {/* 12px hit area around a 1px line. A hairline divider is the right
+            *look* but a terrible target; separating the two means the handle is
+            easy to grab without drawing a thick bar down the page.
+            touch-none stops the browser claiming the gesture for scrolling. */}
+        {railOpen && (
+        <div
+          onPointerDown={startResize}
+          title="Drag to resize"
+          className="hidden md:flex w-3 shrink-0 cursor-col-resize items-stretch justify-center touch-none group/resize"
+        >
+          <div className="w-px bg-border transition-colors group-hover/resize:bg-primary group-active/resize:bg-primary" />
+        </div>
+        )}
+
+        {railOpen && (
+        <div
+          style={{ width: railWidth }}
+          className="hidden md:flex shrink-0 flex-col overflow-hidden px-3 py-3 gap-3 relative">
+          <button
+            onClick={() => setRailOpen(false)}
+            title="Hide day calendar"
+            className="absolute top-1 right-1 z-10 p-1 rounded text-muted-foreground/50 hover:text-foreground hover:bg-secondary transition-colors"
+          >
+            <PanelRightClose className="h-3.5 w-3.5" />
+          </button>
           <HabitsStrip habits={habits} stacks={habitStacks} onToggle={handleToggleHabit} today={date} />
           <DayCalendar
             date={date}
@@ -2265,6 +2304,7 @@ export function Dashboard() {
             onDeleteBlock={handleDeleteCalBlock}
           />
         </div>
+        )}
 
       </div>
 
