@@ -3591,7 +3591,54 @@ body.vault-col-resizing * {
   color: var(--fg-muted);
 }
 
-.block-handle.is-dragging { cursor: grabbing; }
+.block-handle.is-dragging {
+  cursor: grabbing;
+  background: var(--bg-muted);
+  color: var(--fg-main);
+}
+
+/* Where the block will land. A line, not a ghost — a translucent copy of a
+   whole table tells you nothing about the insertion point. */
+.block-drop-indicator {
+  position: absolute;
+  z-index: 6;
+  height: 2px;
+  border-radius: 2px;
+  background: var(--edge-in);
+  pointer-events: none;
+}
+
+.block-drop-indicator::before {
+  content: "";
+  position: absolute;
+  left: -4px;
+  top: -3px;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--edge-in);
+}
+
+/* Held for the duration of a drag so the cursor doesn't flicker back to a text
+   caret every time it crosses the content, and so a drag can't select text. */
+body.vault-block-dragging,
+body.vault-block-dragging * {
+  cursor: grabbing !important;
+  user-select: none !important;
+}
+
+/* No formatting UI while a block is in flight — it covers the very drop target
+   you're aiming at.
+
+   This is CSS rather than a `shouldShow` predicate for two reasons. shouldShow
+   is only re-evaluated on a transaction, and the drag class is added on the
+   first pointermove PAST the threshold — after the selection transaction — so
+   the menu would already be open and never re-asked. And selecting a table
+   doesn't stay a NodeSelection: prosemirror-tables normalises it into a
+   CellSelection, which has no `.node` for a predicate to test. */
+body.vault-block-dragging .tt-bubble {
+  display: none !important;
+}
 
 .block-handle-grip {
   font-size: 13px;

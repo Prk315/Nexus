@@ -676,6 +676,11 @@ function NoteEditorInner({ content, onChange, nodeId, graph, variant = "full" }:
         options={{ placement: "top" }}
         shouldShow={({ editor: ed, state }) =>
           !state.selection.empty &&
+          // A NodeSelection is a whole block picked up by the drag handle, not
+          // a run of text. Bold/italic/link mean nothing for one, and worse:
+          // it pops the menu open the moment a drag starts and covers the very
+          // drop target you're aiming at.
+          !(state.selection as any).node &&
           // A selection inside a code block or a math node has nothing here
           // worth applying, and the menu would just cover the content.
           !ed.isActive("codeBlock") &&

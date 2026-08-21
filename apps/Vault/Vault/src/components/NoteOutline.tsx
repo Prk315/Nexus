@@ -73,8 +73,25 @@ export function NoteOutline({ editor, scrollRef, onClose }: Props) {
   // lookup never outlives its position by more than a render.
   const domFor = useCallback(
     (pos: number): HTMLElement | null => {
-      const dom = editor.view.nodeDOM(pos);
-      return dom && (dom as HTMLElement).nodeType === 1 ? (dom as HTMLElement) : null;
+      // Tiptap v3's `editor.view` getter THROWS when the view doesn't exist
+      // yet — "The editor view is not available… may not be mounted yet" — and
+      // this runs from a layout effect, which React can fire while remounting
+      // a subtree (reappearLayoutEffects) before ProseMirror has a view. That
+      // threw straight through the outline and tripped the error boundary on
+      // opening a note.
+      //
+      // Two unusable states to survive, not one: destroyed (after) and
+      // not-yet-mounted (before). isDestroyed covers the first; only a
+      // try/catch covers the second, since there is no public "has view" flag.
+      // Returning null is harmless — the settle pass re-measures once the view
+      // exists.
+      try {
+        if (!editor || editor.isDestroyed) return null;
+        const dom = editor.view.nodeDOM(pos);
+        return dom && (dom as HTMLElement).nodeType === 1 ? (dom as HTMLElement) : null;
+      } catch {
+        return null;
+      }
     },
     [editor]
   );
@@ -267,6 +284,10 @@ export function NoteOutline({ editor, scrollRef, onClose }: Props) {
  * before measuring.
  */
 function openCollapsedAncestors(editor: Editor, pos: number): boolean {
+  // Same two unusable states as domFor above. This one only runs from a click,
+  // so it's far less exposed, but the guard costs nothing and the failure mode
+  // (a throw out of an onClick) is just as ugly.
+  if (!editor || editor.isDestroyed) return false;
   const { state } = editor;
   if (pos < 0 || pos > state.doc.content.size) return false;
   const $pos = state.doc.resolve(pos);
@@ -284,6 +305,10 @@ function openCollapsedAncestors(editor: Editor, pos: number): boolean {
   // Same reasoning as a manual collapse: this is a view concern, not an edit,
   // and Cmd-Z should not undo "the outline expanded a section for me".
   tr.setMeta("addToHistory", false);
-  editor.view.dispatch(tr);
+  try {
+    editor.view.dispatch(tr);
+  } catch {
+    return false;
+  }
   return true;
 }
