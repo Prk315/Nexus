@@ -38,7 +38,7 @@ export const getAllTasks = async (): Promise<TaskWithContext[]> => {
  * `task` subtype and is routed to pf_task_planning — see `splitPatch`.
  */
 const BASE_COLUMNS = new Set([
-  "plan_id", "parent_id", "title", "done", "sort_order", "priority",
+  "plan_id", "parent_id", "goal_id", "title", "done", "sort_order", "priority",
   "due_date", "time_estimate", "kanban_status", "category",
 ]);
 
@@ -65,7 +65,7 @@ export const createTask = async (payload: {
   plan_id?: number | null; title: string; priority?: string;
   due_date?: string | null; time_estimate?: number | null;
   category?: string | null;
-  parent_id?: number | null; urgency?: Urgency; stage?: TaskStage;
+  parent_id?: number | null; goal_id?: number | null; urgency?: Urgency; stage?: TaskStage;
   completion_mode?: CompletionMode; target_count?: number | null;
   notes?: string | null; sort_order?: number;
 }): Promise<Task> => {
@@ -154,6 +154,15 @@ export const patchTask = async (
   }
   return getTask(id);
 };
+
+/**
+ * Points a task at a goal, or clears it.
+ *
+ * Clearing does not orphan the task from its goal entirely — it falls back to
+ * whatever its plan reaches, which is the pre-existing behaviour.
+ */
+export const setTaskGoal = async (id: number, goalId: number | null): Promise<Task> =>
+  patchTask(id, { goal_id: goalId });
 
 /** Both axes of the matrix at once, so a drag lands as one action. */
 export const setTaskMatrix = async (
@@ -308,7 +317,7 @@ export const addSubtask = async (
 ): Promise<Task> => {
   const { data: parent, error: e1 } = await supabase
     .from("pf_tasks")
-    .select("plan_id, priority, due_date, category, pf_task_planning(urgency)")
+    .select("plan_id, goal_id, priority, due_date, category, pf_task_planning(urgency)")
     .eq("id", parentId).single();
   if (e1) err(e1);
 
@@ -319,6 +328,8 @@ export const addSubtask = async (
 
   return createTask({
     plan_id: parent!.plan_id ? num(parent!.plan_id) : null,
+    // A step serves the same goal as the task it decomposes.
+    goal_id: parent!.goal_id ? num(parent!.goal_id) : null,
     parent_id: parentId,
     title,
     priority: parent!.priority,
