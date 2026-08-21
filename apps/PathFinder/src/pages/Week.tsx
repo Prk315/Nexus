@@ -16,6 +16,7 @@ import { BLOCK_COLORS, DAY_NAMES, DEFAULT_SCROLL_HOUR, HOURS, HOUR_PX, HOUR_STAR
 import { CalBlockModal, TaskModal, GoalModal, PlanModal, SystemModal, TypePickerModal } from "../components/week/modals";
 import { TaskPopupChip, TimeColumn } from "../components/week/TimeColumn";
 import { SystemsBar, HeaderPanel, LeftPanel, RightPanel } from "../components/week/panels";
+import { WeekTimeStrip } from "../components/week/WeekTimeStrip";
 import { MonthView } from "../components/week/MonthView";
 import type { TaskDraft, GoalDraft, PlanDraft, SystemDraft } from "../components/week/modals";
 import type { BlockDraft } from "../components/week/_shared";
@@ -49,6 +50,9 @@ export function Week() {
   // recurring series that id is the occurrence's virtual negative id, so ticking
   // one Wednesday off doesn't mark every Wednesday.
   const [sessionsByBlock, setSessionsByBlock] = useState<Map<number, TaskSession>>(new Map());
+  // The raw list as well: sessionsByBlock drops freehand sessions (no
+  // cal_block_id), and those are still time actually worked.
+  const [sessionsInRange, setSessionsInRange] = useState<TaskSession[]>([]);
   // Committed calendar minutes per task — the SAME source the board's stage gate
   // uses, so "unscheduled" means the same thing in both places. Deliberately not
   // derived from this week's calBlocks: a task due Thursday may be scheduled next
@@ -118,6 +122,7 @@ export function Week() {
     setSessionsByBlock(new Map(
       ts.filter((x) => x.cal_block_id != null).map((x) => [x.cal_block_id!, x]),
     ));
+    setSessionsInRange(ts);
     setTaskCoverage(tc);
   }, [queryStart, queryEnd]);
 
@@ -669,7 +674,21 @@ export function Week() {
       </div>
 
       {/* ── Header panel ─────────────────────────────────────────────────── */}
-      {showHeader && <HeaderPanel items={items} today={today} days={days} view={view} />}
+      {showHeader && (
+        <div className="flex items-center gap-4 pr-4">
+          <div className="flex-1 min-w-0">
+            <HeaderPanel items={items} today={today} days={days} view={view} />
+          </div>
+          {view === "week" && (
+            <WeekTimeStrip
+              days={days.map(toISO)}
+              today={today}
+              blocks={calBlocks}
+              sessions={sessionsInRange}
+            />
+          )}
+        </div>
+      )}
 
       {/* ── Main content row ─────────────────────────────────────────────── */}
       <div className="flex-1 min-h-0 flex overflow-hidden">
