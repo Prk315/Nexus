@@ -34,7 +34,9 @@ export type BlockGroup =
   | "callout"    // admonition boxes
   | "container"  // generic grouping panels
   | "math"
-  | "table"
+  | "table"       // insert a table
+  | "tableOps"    // row/column editing, inline, only inside a table
+  | "tableMore"   // header toggles, merge/split, delete — behind a menu
   | "media"      // images
   | "align"
   | "color"
@@ -424,11 +426,26 @@ export function buildBlockRegistry(opts: BlockRegistryOptions = {}): BlockAction
       // availability means the slash menu gets the same rule for free.
       isAvailable: (e) => !inTable(e),
     },
-    { id: "tableRowAfter", title: "Row below", icon: "+row", group: "table", surfaces: ["toolbar"], isAvailable: inTable, run: (e) => e.chain().focus().addRowAfter().run() },
-    { id: "tableRowDelete", title: "Delete row", icon: "−row", group: "table", surfaces: ["toolbar"], isAvailable: inTable, run: (e) => e.chain().focus().deleteRow().run() },
-    { id: "tableColAfter", title: "Column right", icon: "+col", group: "table", surfaces: ["toolbar"], isAvailable: inTable, run: (e) => e.chain().focus().addColumnAfter().run() },
-    { id: "tableColDelete", title: "Delete column", icon: "−col", group: "table", surfaces: ["toolbar"], isAvailable: inTable, run: (e) => e.chain().focus().deleteColumn().run() },
-    { id: "tableDelete", title: "Delete table", icon: "del⊞", group: "table", surfaces: ["toolbar"], isAvailable: inTable, danger: true, run: (e) => e.chain().focus().deleteTable().run() },
+    // ── Table editing ───────────────────────────────────────────────────────
+    // `tableOps` is INLINE, not folded into "Insert ▾" like the rest of the
+    // table group. These only exist while the caret is in a table, and when
+    // you're in one they're the whole point — burying row/column editing two
+    // clicks deep in an insert menu made the table feel read-only.
+    { id: "tableRowBefore", title: "Insert row above", icon: "⤒row", group: "tableOps", surfaces: ["toolbar"], isAvailable: inTable, run: (e) => e.chain().focus().addRowBefore().run() },
+    { id: "tableRowAfter", title: "Insert row below", icon: "⤓row", group: "tableOps", surfaces: ["toolbar"], isAvailable: inTable, run: (e) => e.chain().focus().addRowAfter().run() },
+    { id: "tableRowDelete", title: "Delete row", icon: "−row", group: "tableOps", surfaces: ["toolbar"], isAvailable: inTable, danger: true, run: (e) => e.chain().focus().deleteRow().run() },
+    { id: "tableColBefore", title: "Insert column left", icon: "⇤col", group: "tableOps", surfaces: ["toolbar"], isAvailable: inTable, run: (e) => e.chain().focus().addColumnBefore().run() },
+    { id: "tableColAfter", title: "Insert column right", icon: "⇥col", group: "tableOps", surfaces: ["toolbar"], isAvailable: inTable, run: (e) => e.chain().focus().addColumnAfter().run() },
+    { id: "tableColDelete", title: "Delete column", icon: "−col", group: "tableOps", surfaces: ["toolbar"], isAvailable: inTable, danger: true, run: (e) => e.chain().focus().deleteColumn().run() },
+
+    // The rest live behind a "Table ▾" menu that also only appears inside a
+    // table — useful, but not worth six more permanent buttons in a toolbar
+    // that already doesn't wrap.
+    { id: "tableHeaderRow", title: "Toggle header row", icon: "▤", group: "tableMore", surfaces: ["toolbar"], isAvailable: inTable, run: (e) => e.chain().focus().toggleHeaderRow().run() },
+    { id: "tableHeaderCol", title: "Toggle header column", icon: "▥", group: "tableMore", surfaces: ["toolbar"], isAvailable: inTable, run: (e) => e.chain().focus().toggleHeaderColumn().run() },
+    { id: "tableMergeSplit", title: "Merge / split cells", icon: "⿴", group: "tableMore", surfaces: ["toolbar"], isAvailable: inTable, run: (e) => e.chain().focus().mergeOrSplit().run() },
+    { id: "tableFix", title: "Repair table", icon: "⚒", group: "tableMore", surfaces: ["toolbar"], keywords: ["fix", "repair"], isAvailable: inTable, run: (e) => e.chain().focus().fixTables().run() },
+    { id: "tableDelete", title: "Delete table", icon: "⌫", group: "tableMore", surfaces: ["toolbar"], isAvailable: inTable, danger: true, run: (e) => e.chain().focus().deleteTable().run() },
   ];
 
   // ── Link ──────────────────────────────────────────────────────────────────
@@ -543,6 +560,8 @@ export const GROUP_LABELS: Record<BlockGroup, string> = {
   color: "Colour",
   code: "Language",
   table: "Table",
+  tableOps: "Table",
+  tableMore: "Table",
   vault: "Vault",
   history: "History",
 };

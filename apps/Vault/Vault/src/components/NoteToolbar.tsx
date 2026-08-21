@@ -11,10 +11,20 @@ import type { Editor } from "@tiptap/core";
 import { actionsFor, GROUP_LABELS, type BlockAction, type BlockGroup } from "../extensions/blockRegistry";
 
 // Groups shown as bare buttons, in this order.
-const INLINE_GROUPS: BlockGroup[] = ["format", "text", "lists", "align"];
+//
+// `tableOps` is here rather than in the Insert menu on purpose: every action in
+// it is gated on the caret being inside a table, so it costs nothing the rest
+// of the time — and when you ARE in a table, adding and removing rows and
+// columns is the whole job. Folding it into "Insert ▾" made tables feel
+// read-only, which is the regression this ordering fixes.
+const INLINE_GROUPS: BlockGroup[] = ["format", "text", "lists", "align", "tableOps"];
 // Groups folded behind a single "Insert ▾" menu — they're occasional, and
 // .tiptap-toolbar doesn't wrap, so ~25 bare buttons would simply clip.
 const MENU_GROUPS: BlockGroup[] = ["structure", "callout", "container", "media", "math", "table", "code"];
+// Its own menu, which only materialises inside a table: header toggles,
+// merge/split, repair and delete are worth having but not worth five more
+// permanent buttons.
+const TABLE_MENU_GROUPS: BlockGroup[] = ["tableMore"];
 // Trailing groups, shown inline after the menu.
 const TAIL_GROUPS: BlockGroup[] = ["vault", "history"];
 
@@ -71,6 +81,7 @@ export function NoteToolbar({ editor, registry, swatches, trailing }: Props) {
 
   const inlineSections = INLINE_GROUPS.map(byGroup).filter((g) => g.length > 0);
   const menuSections = MENU_GROUPS.map((g) => [g, byGroup(g)] as const).filter(([, a]) => a.length > 0);
+  const tableMenuSections = TABLE_MENU_GROUPS.map((g) => [g, byGroup(g)] as const).filter(([, a]) => a.length > 0);
   const tailSections = TAIL_GROUPS.map(byGroup).filter((g) => g.length > 0);
 
   return (
@@ -86,6 +97,15 @@ export function NoteToolbar({ editor, registry, swatches, trailing }: Props) {
         <>
           <span className="tt-sep" />
           <ToolbarMenu label="Insert" sections={menuSections} editor={editor} flags={flags} />
+        </>
+      )}
+
+      {/* Appears only while the caret is inside a table — every action in it is
+          gated on that, so outside one this renders nothing at all. */}
+      {tableMenuSections.length > 0 && (
+        <>
+          <span className="tt-sep" />
+          <ToolbarMenu label="Table" sections={tableMenuSections} editor={editor} flags={flags} />
         </>
       )}
 
