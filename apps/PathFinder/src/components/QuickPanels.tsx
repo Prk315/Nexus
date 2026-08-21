@@ -5,10 +5,12 @@ import {
 import {
   Bell, FileText, Zap, Calendar, Clock, Handshake,
   Check, ChevronDown, ChevronRight, Plus, X,
+  Brush, ShoppingCart, RefreshCw, Flame,
 } from "lucide-react";
 import { cn } from "../lib/utils";
 import {
-  getReminders, addReminder, toggleReminder, deleteReminder,
+  getQuickTasks, createTask, toggleTask, deleteTask,
+  getSystems, markSystemDone, unmarkSystemDone, getSystemSubtasks, toggleSystemSubtask,
   getQuickNotes, addQuickNote, deleteQuickNote,
   getBrainDump, addBrainEntry, deleteBrainEntry,
   getEvents, addEvent, deleteEvent,
@@ -16,7 +18,8 @@ import {
   getAgreements, addAgreement, deleteAgreement,
 } from "../lib/api";
 import type {
-  Reminder, QuickNote, BrainEntry, CalEvent, Deadline, Agreement,
+  QuickNote, BrainEntry, CalEvent, Deadline, Agreement,
+  Task, TaskCategory, SystemEntry, SystemSubtask,
 } from "../types";
 
 /**
@@ -35,87 +38,214 @@ import type {
  * only the dashboard.
  */
 
-function RemindersPanel({ reminders, onAdd, onToggle, onDelete }: {
-  reminders: Reminder[];
-  onAdd: (title: string) => void;
+
+/**
+ * A quick-task list: one of the reminder / chore / shopping categories.
+ *
+ * These are created on the phone via Nexus Local's quick-capture, so the panel
+ * is deliberately thin — a title, a checkbox and a delete. They carry no plan,
+ * no breakdown and no lifecycle, which is exactly what the sparse ISA subtypes
+ * say about them.
+ *
+ * Note this REPLACED a panel backed by the legacy `pf_reminders` table. That
+ * table holds zero rows; every reminder the user actually has is a quick task,
+ * so pointing the Reminders icon at the empty table while the real ones sat in
+ * the dashboard's task list was the routing bug this fixes.
+ */
+function QuickTaskPanel({ tasks, category, onToggle, onDelete, onAdd }: {
+  tasks: Task[];
+  category: TaskCategory;
   onToggle: (id: number) => void;
   onDelete: (id: number) => void;
+  onAdd: (title: string, category: TaskCategory) => void;
 }) {
   const [draft, setDraft] = useState("");
+  const open = tasks.filter((t) => !t.done);
+  const done = tasks.filter((t) => t.done);
 
-  function handleKeyDown(e: React.KeyboardEvent<HTMLInputElement>) {
-    if (e.key === "Enter" && draft.trim()) {
-      onAdd(draft.trim());
-      setDraft("");
-    }
-  }
-
-  const open = reminders.filter((r) => !r.done);
-  const done = reminders.filter((r) => r.done);
+  const submit = () => {
+    const v = draft.trim();
+    if (!v) return;
+    onAdd(v, category);
+    setDraft("");
+  };
 
   return (
-    <div className="flex flex-col gap-2 pt-1">
-      {/* Add input */}
-      <div className="flex items-center gap-1.5">
+    <div className="flex flex-col gap-2">
+      <div className="flex gap-1.5">
         <input
-          className="flex-1 h-7 rounded border border-input bg-transparent px-2 text-xs placeholder:text-muted-foreground/50 focus:outline-none focus:ring-1 focus:ring-ring"
-          placeholder="Add reminder… (Enter)"
           value={draft}
           onChange={(e) => setDraft(e.target.value)}
-          onKeyDown={handleKeyDown}
+          onKeyDown={(e) => { if (e.key === "Enter") submit(); }}
+          placeholder="Add… (Enter)"
+          className="flex-1 min-w-0 rounded-md border border-border bg-transparent px-2 py-1 text-xs outline-none focus:ring-1 focus:ring-ring placeholder:text-muted-foreground/50"
         />
         <button
-          onClick={() => { if (draft.trim()) { onAdd(draft.trim()); setDraft(""); } }}
-          className="flex h-7 w-7 shrink-0 items-center justify-center rounded border border-input text-muted-foreground hover:text-foreground hover:bg-secondary transition-colors"
+          onClick={submit}
+          disabled={!draft.trim()}
+          className="shrink-0 rounded-md border border-border px-1.5 text-muted-foreground hover:text-foreground hover:bg-secondary transition-colors disabled:opacity-30"
         >
           <Plus className="h-3.5 w-3.5" />
         </button>
       </div>
 
-      {/* Open reminders */}
-      {open.length === 0 && done.length === 0 ? (
-        <p className="text-xs text-muted-foreground italic">No reminders yet.</p>
-      ) : (
-        <div className="flex flex-col gap-0.5">
-          {open.map((r) => (
-            <div key={r.id} className="flex items-center gap-2 group py-0.5">
-              <button
-                onClick={() => onToggle(r.id)}
-                className="h-3.5 w-3.5 shrink-0 rounded border border-border hover:border-primary transition-colors"
-              />
-              <span className="text-xs flex-1 truncate">{r.title}</span>
-              <button onClick={() => onDelete(r.id)} className="opacity-0 group-hover:opacity-100 transition-opacity text-muted-foreground hover:text-destructive">
-                <X className="h-3 w-3" />
-              </button>
-            </div>
-          ))}
+      {open.length === 0 && done.length === 0 && (
+        <p className="text-xs text-muted-foreground italic">Nothing here.</p>
+      )}
 
-          {done.length > 0 && (
-            <>
-              {open.length > 0 && <div className="h-px bg-border my-1" />}
-              {done.map((r) => (
-                <div key={r.id} className="flex items-center gap-2 group py-0.5 opacity-50">
-                  <button
-                    onClick={() => onToggle(r.id)}
-                    className="flex h-3.5 w-3.5 shrink-0 items-center justify-center rounded border border-primary bg-primary transition-colors"
-                  >
-                    <Check className="h-2.5 w-2.5 text-primary-foreground" />
-                  </button>
-                  <span className="text-xs flex-1 truncate line-through">{r.title}</span>
-                  <button onClick={() => onDelete(r.id)} className="opacity-0 group-hover:opacity-100 transition-opacity text-muted-foreground hover:text-destructive">
-                    <X className="h-3 w-3" />
-                  </button>
-                </div>
-              ))}
-            </>
-          )}
+      <div className="flex flex-col gap-0.5">
+        {open.map((t) => (
+          <QuickTaskRow key={t.id} task={t} onToggle={onToggle} onDelete={onDelete} />
+        ))}
+      </div>
+
+      {done.length > 0 && (
+        <div className="flex flex-col gap-0.5 pt-1.5 border-t border-border/60">
+          {done.map((t) => (
+            <QuickTaskRow key={t.id} task={t} onToggle={onToggle} onDelete={onDelete} />
+          ))}
         </div>
       )}
     </div>
   );
 }
 
-// ── Quick Notes Panel ─────────────────────────────────────────────────────────
+function QuickTaskRow({ task, onToggle, onDelete }: {
+  task: Task; onToggle: (id: number) => void; onDelete: (id: number) => void;
+}) {
+  return (
+    <div className="group flex items-center gap-2 rounded-md px-1 py-1 hover:bg-secondary/50 transition-colors">
+      <button
+        onClick={() => onToggle(task.id)}
+        className={cn(
+          "flex h-3.5 w-3.5 shrink-0 items-center justify-center rounded-[4px] border transition-colors",
+          task.done ? "bg-primary border-primary text-primary-foreground" : "border-border hover:border-primary",
+        )}
+      >
+        {task.done && <Check className="h-2 w-2" />}
+      </button>
+      <span className={cn("flex-1 min-w-0 truncate text-xs", task.done && "line-through text-muted-foreground")}>
+        {task.title}
+      </span>
+      <button
+        onClick={() => onDelete(task.id)}
+        className="shrink-0 p-0.5 rounded text-muted-foreground opacity-0 group-hover:opacity-100 hover:text-destructive transition-all"
+      >
+        <X className="h-3 w-3" />
+      </button>
+    </div>
+  );
+}
+
+/**
+ * Recurring systems, moved out of the dashboard.
+ *
+ * A system is a standing commitment rather than something due today, so it
+ * belongs with the tools, not in the day's task list. Systems with subtasks
+ * auto-collapse once every subtask is done — the same rule the dashboard used.
+ */
+function SystemsPanel({ systems, subtaskMap, onMark, onUnmark, onToggleSubtask }: {
+  systems: SystemEntry[];
+  subtaskMap: Record<number, SystemSubtask[]>;
+  onMark: (id: number) => void;
+  onUnmark: (id: number) => void;
+  onToggleSubtask: (subtaskId: number, systemId: number) => void;
+}) {
+  const [expanded, setExpanded] = useState<Set<number>>(new Set());
+  const toggleExpand = (id: number) =>
+    setExpanded((p) => { const n = new Set(p); n.has(id) ? n.delete(id) : n.add(id); return n; });
+
+  if (systems.length === 0) {
+    return <p className="text-xs text-muted-foreground italic">No systems yet.</p>;
+  }
+
+  return (
+    <div className="flex flex-col gap-1">
+      {systems.map((sys) => {
+        const due = isSystemDue(sys);
+        const subtasks = subtaskMap[sys.id] ?? [];
+        const hasSubs = subtasks.length > 0;
+        const allDone = hasSubs && subtasks.every((s) => s.done);
+        const subsVisible = hasSubs && (!allDone || expanded.has(sys.id));
+
+        return (
+          <div key={sys.id} className={cn("flex flex-col gap-0.5", !due && "opacity-60")}>
+            <div className="flex items-center gap-1.5 py-0.5">
+              {hasSubs && (
+                <button
+                  onClick={() => toggleExpand(sys.id)}
+                  className="shrink-0 text-muted-foreground hover:text-foreground transition-colors"
+                >
+                  {subsVisible ? <ChevronDown className="h-3 w-3" /> : <ChevronRight className="h-3 w-3" />}
+                </button>
+              )}
+              <span className={cn("text-xs truncate flex-1", due ? "text-foreground" : "text-muted-foreground")}>
+                {sys.title}
+              </span>
+              {sys.streak_count > 1 && (
+                <span className="flex items-center gap-0.5 text-[10px] text-orange-500 shrink-0">
+                  <Flame className="h-2.5 w-2.5" />{sys.streak_count}
+                </span>
+              )}
+              {!hasSubs && (
+                due ? (
+                  <button
+                    onClick={() => onMark(sys.id)}
+                    className="shrink-0 rounded border border-border px-1.5 py-px text-[10px] text-muted-foreground hover:text-foreground hover:bg-secondary transition-colors"
+                  >
+                    Done
+                  </button>
+                ) : (
+                  <button onClick={() => onUnmark(sys.id)} title="Mark as not done" className="shrink-0">
+                    <Check className="h-3.5 w-3.5 text-emerald-500" />
+                  </button>
+                )
+              )}
+              {hasSubs && (
+                <span className="text-[10px] text-muted-foreground tabular-nums shrink-0">
+                  {subtasks.filter((s) => s.done).length}/{subtasks.length}
+                </span>
+              )}
+            </div>
+
+            {subsVisible && (
+              <div className="flex flex-col gap-0.5 pl-3 border-l border-border ml-1">
+                {subtasks.map((sub) => (
+                  <div key={sub.id} className="flex items-center gap-2 py-0.5">
+                    <button
+                      onClick={() => onToggleSubtask(sub.id, sys.id)}
+                      className={cn(
+                        "flex h-3 w-3 shrink-0 items-center justify-center rounded-[3px] border transition-colors",
+                        sub.done ? "bg-primary border-primary" : "border-border hover:border-primary",
+                      )}
+                    >
+                      {sub.done && <Check className="h-2 w-2 text-primary-foreground" />}
+                    </button>
+                    <span className={cn("text-[11px] flex-1 truncate", sub.done ? "line-through text-muted-foreground" : "text-foreground")}>
+                      {sub.title}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+/** Mirrors the dashboard's rule for whether a system is due today. */
+function isSystemDue(s: SystemEntry): boolean {
+  const today = new Date().toISOString().slice(0, 10);
+  if (s.last_done === today) return false;
+  if (s.frequency === "daily") return true;
+  if (s.frequency === "weekly") {
+    if (!s.days_of_week) return false;
+    return s.days_of_week.split(",").map(Number).includes(new Date().getDay());
+  }
+  return true;
+}
 
 function QuickNotesPanel({ notes, onAdd, onDelete }: {
   notes: QuickNote[];
@@ -429,7 +559,9 @@ function AgreementsPanel({ agreements, onAdd, onDelete }: {
 
 // ── The sidebar-mounted tool set ─────────────────────────────────────────────
 
-export type QuickPanelId = "reminders" | "notes" | "brain" | "events" | "deadlines" | "agreements";
+export type QuickPanelId =
+  | "reminders" | "chores" | "shopping" | "systems"
+  | "notes" | "brain" | "events" | "deadlines" | "agreements";
 
 export interface QuickPanelDef {
   id: QuickPanelId;
@@ -456,7 +588,11 @@ export function useQuickPanels(): QuickPanelsCtx {
 }
 
 export function QuickPanelsProvider({ children }: { children: React.ReactNode }) {
-  const [reminders, setReminders]       = useState<Reminder[]>([]);
+  // Quick tasks (reminder / chore / shopping) — created almost entirely from
+  // Nexus Local on the phone. One query, grouped by category here.
+  const [quickTasks, setQuickTasks]     = useState<Task[]>([]);
+  const [systems, setSystems]           = useState<SystemEntry[]>([]);
+  const [subtaskMap, setSubtaskMap]     = useState<Record<number, SystemSubtask[]>>({});
   const [notes, setNotes]               = useState<QuickNote[]>([]);
   const [brainEntries, setBrainEntries] = useState<BrainEntry[]>([]);
   const [events, setEvents]             = useState<CalEvent[]>([]);
@@ -465,23 +601,43 @@ export function QuickPanelsProvider({ children }: { children: React.ReactNode })
   const [open, setOpen]                 = useState<QuickPanelId | null>(null);
   const [loaded, setLoaded]             = useState(false);
 
-  // Loaded once on first open, not on mount: these six reads are for tools the
-  // user may never touch in a session, and paying for them on every app start
-  // would slow the first paint of whatever page they actually wanted.
+  // Loaded on mount, not lazily on first open.
+  //
+  // Lazy was the obvious optimisation and it broke the feature: the badges are
+  // meant to tell you how many unchecked items are waiting, and a badge that
+  // only appears after you have already opened the panel tells you nothing. The
+  // counts have to be true before the first click.
+  //
+  // The cost is small and not new — the dashboard used to issue six of these
+  // reads on every visit, and they are tiny tables.
   const load = useCallback(async () => {
-    const [r, n, b, e, d, a] = await Promise.all([
-      getReminders(), getQuickNotes(), getBrainDump(),
+    const [qt, sys, n, b, e, d, a] = await Promise.all([
+      getQuickTasks(), getSystems(), getQuickNotes(), getBrainDump(),
       getEvents(), getDeadlines(), getAgreements(),
     ]);
-    setReminders(r); setNotes(n); setBrainEntries(b);
+    setQuickTasks(qt); setSystems(sys); setNotes(n); setBrainEntries(b);
     setEvents(e); setDeadlines(d); setAgreements(a);
+
+    // Subtasks are per-system, so they can only be fetched once the systems are
+    // known. Failing here must not blank the panel — a system with no subtasks
+    // and a system whose subtasks failed to load look the same to the UI, so we
+    // keep whatever we had rather than clearing.
+    const today = new Date().toISOString().slice(0, 10);
+    try {
+      const entries = await Promise.all(
+        sys.map(async (x) => [x.id, await getSystemSubtasks(x.id, today)] as [number, SystemSubtask[]]),
+      );
+      setSubtaskMap(Object.fromEntries(entries));
+    } catch { /* keep the previous map */ }
+
     setLoaded(true);
   }, []);
 
+  useEffect(() => { load().catch(() => {}); }, [load]);
+
   const toggle = useCallback((id: QuickPanelId) => {
     setOpen((prev) => (prev === id ? null : id));
-    if (!loaded) load().catch(() => {});
-  }, [loaded, load]);
+  }, []);
 
   const close = useCallback(() => setOpen(null), []);
 
@@ -490,24 +646,49 @@ export function QuickPanelsProvider({ children }: { children: React.ReactNode })
   // about data that simply hasn't been read yet.
   const n = (v: number) => (loaded && v > 0 ? v : undefined);
 
+  const byCategory = (c: TaskCategory) => quickTasks.filter((t) => t.category === c);
+  const openIn = (c: TaskCategory) => byCategory(c).filter((t) => !t.done).length;
+
   const panels: QuickPanelDef[] = [
-    { id: "reminders",  label: "Reminders",  icon: Bell,     count: n(reminders.filter((r) => !r.done).length) },
-    { id: "notes",      label: "Quick Notes", icon: FileText, count: n(notes.length) },
-    { id: "brain",      label: "Brain Dump",  icon: Zap,      count: n(brainEntries.length) },
-    { id: "events",     label: "Events",      icon: Calendar, count: n(events.filter((e) => e.date >= today).length) },
-    { id: "deadlines",  label: "Deadlines",   icon: Clock,    count: n(deadlines.filter((d) => !d.done).length) },
-    { id: "agreements", label: "Agreements",  icon: Handshake, count: n(agreements.length) },
+    // The three phone-captured kinds first — these are the ones with live counts
+    // you act on, and they are why the rail exists.
+    { id: "reminders",  label: "Reminders",   icon: Bell,         count: n(openIn("reminder")) },
+    { id: "chores",     label: "Chores",      icon: Brush,        count: n(openIn("chore")) },
+    { id: "shopping",   label: "Shopping",    icon: ShoppingCart, count: n(openIn("shopping")) },
+    { id: "systems",    label: "Systems",     icon: RefreshCw,    count: n(systems.filter(isSystemDue).length) },
+    { id: "notes",      label: "Quick Notes", icon: FileText,     count: n(notes.length) },
+    { id: "brain",      label: "Brain Dump",  icon: Zap,          count: n(brainEntries.length) },
+    { id: "events",     label: "Events",      icon: Calendar,     count: n(events.filter((e) => e.date >= today).length) },
+    { id: "deadlines",  label: "Deadlines",   icon: Clock,        count: n(deadlines.filter((d) => !d.done).length) },
+    { id: "agreements", label: "Agreements",  icon: Handshake,    count: n(agreements.length) },
   ];
 
   // ── Handlers (moved verbatim from Dashboard) ──
-  const handleAddReminder = async (title: string) => {
-    const r = await addReminder(title); setReminders((p) => [r, ...p]);
+  const handleToggleQuickTask = async (id: number) => {
+    // Optimistic — a checkbox that waits on the network feels broken.
+    setQuickTasks((p) => p.map((t) => (t.id === id ? { ...t, done: !t.done } : t)));
+    try { await toggleTask(id); } catch { load().catch(() => {}); }
   };
-  const handleToggleReminder = async (id: number) => {
-    const r = await toggleReminder(id); setReminders((p) => p.map((x) => (x.id === id ? r : x)));
+  const handleDeleteQuickTask = async (id: number) => {
+    setQuickTasks((p) => p.filter((t) => t.id !== id));
+    try { await deleteTask(id); } catch { load().catch(() => {}); }
   };
-  const handleDeleteReminder = async (id: number) => {
-    await deleteReminder(id); setReminders((p) => p.filter((x) => x.id !== id));
+  const handleAddQuickTask = async (title: string, category: TaskCategory) => {
+    const t = await createTask({ title, category, plan_id: null });
+    setQuickTasks((p) => [t, ...p]);
+  };
+
+  const handleMarkSystem = async (id: number) => {
+    const x = await markSystemDone(id); setSystems((p) => p.map((y) => (y.id === id ? x : y)));
+  };
+  const handleUnmarkSystem = async (id: number) => {
+    const x = await unmarkSystemDone(id); setSystems((p) => p.map((y) => (y.id === id ? x : y)));
+  };
+  const handleToggleSubtask = async (subtaskId: number, systemId: number) => {
+    const today = new Date().toISOString().slice(0, 10);
+    const res = await toggleSystemSubtask(subtaskId, today);
+    setSubtaskMap((p) => ({ ...p, [systemId]: res.subtasks }));
+    setSystems((p) => p.map((y) => (y.id === systemId ? res.system : y)));
   };
   const handleAddNote = async (title: string, body: string | null) => {
     const x = await addQuickNote(title, body); setNotes((p) => [x, ...p]);
@@ -545,7 +726,10 @@ export function QuickPanelsProvider({ children }: { children: React.ReactNode })
 
   const body = (() => {
     switch (open) {
-      case "reminders":  return <RemindersPanel  reminders={reminders}   onAdd={handleAddReminder}  onToggle={handleToggleReminder} onDelete={handleDeleteReminder} />;
+      case "reminders":  return <QuickTaskPanel tasks={byCategory("reminder")} category="reminder" onToggle={handleToggleQuickTask} onDelete={handleDeleteQuickTask} onAdd={handleAddQuickTask} />;
+      case "chores":     return <QuickTaskPanel tasks={byCategory("chore")}    category="chore"    onToggle={handleToggleQuickTask} onDelete={handleDeleteQuickTask} onAdd={handleAddQuickTask} />;
+      case "shopping":   return <QuickTaskPanel tasks={byCategory("shopping")} category="shopping" onToggle={handleToggleQuickTask} onDelete={handleDeleteQuickTask} onAdd={handleAddQuickTask} />;
+      case "systems":    return <SystemsPanel systems={systems} subtaskMap={subtaskMap} onMark={handleMarkSystem} onUnmark={handleUnmarkSystem} onToggleSubtask={handleToggleSubtask} />;
       case "notes":      return <QuickNotesPanel notes={notes}           onAdd={handleAddNote}      onDelete={handleDeleteNote} />;
       case "brain":      return <BrainDumpPanel  entries={brainEntries}  onAdd={handleAddBrain}     onDelete={handleDeleteBrain} />;
       case "events":     return <EventsPanel     events={events}         onAdd={handleAddEvent}     onDelete={handleDeleteEvent} />;

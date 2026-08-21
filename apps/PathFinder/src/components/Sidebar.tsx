@@ -120,7 +120,9 @@ function QuickPanelRail({ collapsed }: { collapsed: boolean }) {
     <div className="shrink-0 border-t border-border px-2 py-2">
       {/* A fixed grid, not flex-wrap: six icons in a 208px sidebar wrap to 5+1,
           which reads as a mistake. Two rows of three reads as a set. */}
-      <div className={cn("grid gap-1 justify-items-center", collapsed ? "grid-cols-1" : "grid-cols-3")}>
+      {/* Extra row gap: the badge sits above the button box (-top-1), so a
+            uniform gap-1 let a badge nearly touch the icon on the row above. */}
+        <div className={cn("grid gap-x-1 gap-y-2.5 justify-items-center", collapsed ? "grid-cols-1" : "grid-cols-3")}>
         {panels.map(({ id, label, icon: Icon, count }) => (
           <button
             key={id}
@@ -139,9 +141,11 @@ function QuickPanelRail({ collapsed }: { collapsed: boolean }) {
             )}
           >
             <Icon className="h-4 w-4" />
+            {/* Superscript count of unchecked items. Capped at "9+" so a long
+                shopping list can't widen the badge past the icon it sits on. */}
             {count != null && (
-              <span className="absolute -top-0.5 -right-0.5 flex h-3.5 min-w-3.5 items-center justify-center rounded-full bg-primary px-1 text-[9px] font-medium text-primary-foreground">
-                {count}
+              <span className="absolute -top-1 -right-1 flex h-4 min-w-4 items-center justify-center rounded-full bg-blue-500 px-1 text-[9px] font-semibold leading-none text-white ring-2 ring-sidebar">
+                {count > 9 ? "9+" : count}
               </span>
             )}
           </button>

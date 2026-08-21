@@ -1,15 +1,14 @@
 import { useEffect, useState, useCallback, useMemo, useRef } from "react";
 import {
-  CheckCircle, Flame, RefreshCw, Target, CheckSquare, Check, ChevronDown, ChevronRight,
+  CheckCircle, Target, CheckSquare, Check, ChevronDown, ChevronRight,
   Plus, X, Clock, Star, Pencil, BookOpen,
   Eye, EyeOff,
 } from "lucide-react";
 import {
   getGoals, getPlans, getAllTasks, getSystems,
-  markSystemDone, unmarkSystemDone, toggleTask, createTask, updateTask, deleteTask,
+  toggleTask, createTask, updateTask, deleteTask,
   toTaskWithContext, getTaskSessionsInRange, logTaskSession, unlogTaskOccurrence,
   getCalBlocks, createCalBlock, updateCalBlock, deleteCalBlock,
-  getSystemSubtasks, toggleSystemSubtask,
   getGoalGroups,
   getDailyGoals, setDailyPrimaryGoal, clearDailyPrimaryGoal, addDailySecondaryGoal, updateDailySecondaryGoal, deleteDailySecondaryGoal,
   getCourseAssignments, updateCourseAssignment,
@@ -19,14 +18,13 @@ import {
   getTrainingSessionsForDate,
 } from "../lib/api";
 import { Progress } from "../components/ui/progress";
-import { Button } from "../components/ui/button";
 import { Badge } from "../components/ui/badge";
 import { PriorityDot } from "../components/PriorityDot";
 import { daysUntil, deadlineLabel, deadlineVariant, cn, layoutCalItems, formatDateShort } from "../lib/utils";
 import { blockMinutes, planningOf, isFullTask } from "../lib/taskTree";
 import { UrgencyMeter } from "../components/UrgencyMeter";
 import { isDue } from "../components/workspace/systemForms";
-import type { Goal, GoalGroup, Plan, TaskWithContext, SystemEntry, SystemSubtask, CalBlock, DailyGoals, DailyPrimaryGoal, DailySecGoal, CourseAssignment, ScheduleEntry, HabitWithCompletion, HabitStack, HabitSubtask, TrainingSession, TaskSession } from "../types";
+import type { Goal, GoalGroup, Plan, TaskWithContext, SystemEntry, CalBlock, DailyGoals, DailyPrimaryGoal, DailySecGoal, CourseAssignment, ScheduleEntry, HabitWithCompletion, HabitStack, HabitSubtask, TrainingSession, TaskSession } from "../types";
 
 const todayDate = () => new Date().toISOString().slice(0, 10);
 
@@ -1626,28 +1624,20 @@ function DashTaskRow({
 }
 
 function TodoList({
-  tasks, plans, systems, courseAssignments, onToggleTask, onCreateTask, onDeleteTask, onUpdateTask, onMarkSystem, onUnmarkSystem, onToggleSubtask, subtaskMap, onToggleAssignment,
+  tasks, plans, courseAssignments, onToggleTask, onCreateTask, onDeleteTask, onUpdateTask, onToggleAssignment,
 }: {
   tasks: TaskWithContext[];
   plans: Plan[];
-  systems: SystemEntry[];
   courseAssignments: CourseAssignment[];
   onToggleTask: (id: number) => void;
   onCreateTask: (payload: { plan_id?: number | null; title: string; priority?: string; due_date?: string | null; category?: string | null }) => void;
   onDeleteTask: (id: number) => void;
   onUpdateTask: (id: number, payload: { title: string; priority: string; due_date?: string | null; category?: string | null }) => void;
-  onMarkSystem: (id: number) => void;
-  onUnmarkSystem: (id: number) => void;
-  onToggleSubtask: (subtaskId: number, systemId: number) => void;
-  subtaskMap: Record<number, SystemSubtask[]>;
   onToggleAssignment: (ca: CourseAssignment) => void;
 }) {
   const [tasksCollapsed, setTasksCollapsed] = useState(false);
-  const [systemsCollapsed, setSystemsCollapsed] = useState(false);
   const [studyCollapsed, setStudyCollapsed] = useState(false);
   const [collapsedPlans, setCollapsedPlans] = useState<Set<number | null>>(new Set());
-  // Systems where the user has manually expanded subtasks even after completion
-  const [expandedSystems, setExpandedSystems] = useState<Set<number>>(new Set());
 
   // Create form state
   const [showAdd, setShowAdd] = useState(false);
@@ -1706,13 +1696,11 @@ function TodoList({
     setEditingId(null);
   };
 
-  const toggleSystemExpand = (id: number) =>
-    setExpandedSystems((prev) => {
-      const next = new Set(prev);
-      if (next.has(id)) next.delete(id); else next.add(id);
-      return next;
-    });
-
+  // Quick tasks (reminder / chore / shopping) are captured on the phone via
+  // Nexus Local and are not project work — they now live in the sidebar rail,
+  // one panel per category. Leaving them here meant a shopping list competed for
+  // attention with the day's actual tasks.
+  //
   // Steps live inside their parent row, not beside it. Without this filter a
   // task broken into five steps would occupy six lines on the dashboard, and
   // planning a task more carefully would make the day look busier.
@@ -1730,7 +1718,7 @@ function TodoList({
   const open = useMemo(() => {
     const p = { high: 0, medium: 1, low: 2 } as Record<string, number>;
     return [...tasks]
-      .filter((t) => !t.done && t.parent_id == null)
+      .filter((t) => !t.done && t.parent_id == null && t.category == null)
       // Overdue first, then by importance — the dashboard's job is to surface
       // what is slipping, and a high-priority task due next month should not
       // outrank one that was due yesterday.
@@ -1746,29 +1734,18 @@ function TodoList({
   // category instead — a shopping list under "No plan" reads as clutter, not
   // as a list. Category groups use negative pseudo-ids so they can share the
   // collapse mechanism without colliding with real plan ids.
-  const CATEGORY_GROUPS: Record<string, { pseudoId: number; label: string }> = {
-    reminder: { pseudoId: -101, label: "🔔 Reminders" },
-    chore:    { pseudoId: -102, label: "🧹 Chores" },
-    shopping: { pseudoId: -103, label: "🛒 Shopping" },
-  };
   const byPlan = useMemo(() => {
     const map = new Map<number | null, { planTitle: string | null; goalTitle: string | null; tasks: TaskWithContext[] }>();
     for (const t of open) {
-      const cat = t.category ? CATEGORY_GROUPS[t.category] : undefined;
-      const key = cat ? cat.pseudoId : t.plan_id;
+      const key = t.plan_id;
       if (!map.has(key)) {
-        map.set(key, cat
-          ? { planTitle: cat.label, goalTitle: null, tasks: [] }
-          : { planTitle: t.plan_title, goalTitle: t.goal_title, tasks: [] });
+        map.set(key, { planTitle: t.plan_title, goalTitle: t.goal_title, tasks: [] });
       }
       map.get(key)!.tasks.push(t);
     }
-    // Category groups first — they're the glanceable lists; plan groups follow.
-    return Array.from(map.entries()).sort(([a], [b]) => {
-      const aCat = a != null && a < 0 ? 0 : 1;
-      const bCat = b != null && b < 0 ? 0 : 1;
-      return aCat - bCat;
-    });
+    // Unplanned work last; named plans keep their natural order otherwise.
+    return Array.from(map.entries()).sort(([a], [b]) =>
+      (a == null ? 1 : 0) - (b == null ? 1 : 0));
   }, [open]);
 
   const togglePlan = (planId: number | null) => {
@@ -2027,100 +2004,6 @@ function TodoList({
         </div>
       )}
 
-      {/* ── Systems section ── */}
-      {systems.length > 0 && (
-        <div className="flex flex-col gap-2">
-          <SectionHeader
-            icon={<RefreshCw className="h-3.5 w-3.5" />}
-            label="Systems"
-            collapsed={systemsCollapsed}
-            onToggle={() => setSystemsCollapsed((v) => !v)}
-          />
-
-          {!systemsCollapsed && (
-            <div className="flex flex-col gap-1">
-              {systems.map((sys) => {
-                const due = isDue(sys);
-                const subtasks = subtaskMap[sys.id] ?? [];
-                const hasSubtasks = subtasks.length > 0;
-                const allSubtasksDone = hasSubtasks && subtasks.every((s) => s.done);
-                // Auto-collapse when all done; user can manually re-expand
-                const subtasksVisible = hasSubtasks && (!allSubtasksDone || expandedSystems.has(sys.id));
-
-                return (
-                  <div key={sys.id} className={cn("flex flex-col gap-0.5", !due && "opacity-60")}>
-                    <div className="flex items-center gap-2 py-0.5">
-                      {/* Chevron toggle for systems with subtasks */}
-                      {hasSubtasks && (
-                        <button
-                          onClick={() => toggleSystemExpand(sys.id)}
-                          className="shrink-0 text-muted-foreground hover:text-foreground transition-colors"
-                        >
-                          {subtasksVisible ? <ChevronDown className="h-3 w-3" /> : <ChevronRight className="h-3 w-3" />}
-                        </button>
-                      )}
-                      <span className={cn("text-sm truncate flex-1", due ? "text-foreground" : "text-muted-foreground")}>
-                        {sys.title}
-                      </span>
-                      {sys.streak_count > 1 && (
-                        <span className="flex items-center gap-0.5 text-xs text-orange-500 shrink-0">
-                          <Flame className="h-3 w-3" />{sys.streak_count}
-                        </span>
-                      )}
-                      {!hasSubtasks && (
-                        due ? (
-                          <Button size="sm" variant="outline" className="h-6 px-2 text-xs shrink-0"
-                            onClick={() => onMarkSystem(sys.id)}>
-                            Done
-                          </Button>
-                        ) : (
-                          <button onClick={() => onUnmarkSystem(sys.id)} title="Mark as not done"
-                            className="shrink-0 hover:opacity-70 transition-opacity">
-                            <CheckCircle className="h-4 w-4 text-green-500" />
-                          </button>
-                        )
-                      )}
-                      {hasSubtasks && (
-                        allSubtasksDone ? (
-                          <CheckCircle className="h-4 w-4 text-green-500 shrink-0" />
-                        ) : (
-                          <span className="text-xs text-muted-foreground tabular-nums shrink-0">
-                            {subtasks.filter((s) => s.done).length}/{subtasks.length}
-                          </span>
-                        )
-                      )}
-                    </div>
-
-                    {subtasksVisible && (
-                      <div className="flex flex-col gap-0.5 pl-3 border-l border-border ml-1">
-                        {subtasks.map((sub) => (
-                          <div key={sub.id} className="flex items-center gap-2 py-0.5">
-                            <button
-                              onClick={() => onToggleSubtask(sub.id, sys.id)}
-                              className={cn(
-                                "flex h-3.5 w-3.5 shrink-0 items-center justify-center rounded border transition-colors",
-                                sub.done ? "bg-primary border-primary" : "border-border hover:border-primary"
-                              )}
-                            >
-                              {sub.done && <Check className="h-2.5 w-2.5 text-primary-foreground" />}
-                            </button>
-                            <span className={cn(
-                              "text-xs flex-1 truncate",
-                              sub.done ? "line-through text-muted-foreground" : "text-foreground"
-                            )}>
-                              {sub.title}
-                            </span>
-                          </div>
-                        ))}
-                      </div>
-                    )}
-                  </div>
-                );
-              })}
-            </div>
-          )}
-        </div>
-      )}
     </div>
   );
 }
@@ -2133,7 +2016,6 @@ export function Dashboard() {
   const [plans,      setPlans]      = useState<Plan[]>([]);
   const [tasks,      setTasks]      = useState<TaskWithContext[]>([]);
   const [systems,    setSystems]    = useState<SystemEntry[]>([]);
-  const [subtaskMap, setSubtaskMap] = useState<Record<number, SystemSubtask[]>>({});
   const [calBlocks,  setCalBlocks]  = useState<CalBlock[]>([]);
   // Sessions logged against today's calendar occurrences, keyed by cal_block_id.
   const [sessionsByBlock, setSessionsByBlock] = useState<Map<number, TaskSession>>(new Map());
@@ -2172,13 +2054,6 @@ export function Dashboard() {
     persistGoalDone(goalPrimaryDone, next);
   }
 
-  const loadSubtasks = useCallback(async (sysList: SystemEntry[]) => {
-    const entries = await Promise.all(
-      sysList.map(async (s) => [s.id, await getSystemSubtasks(s.id, date)] as [number, SystemSubtask[]])
-    );
-    setSubtaskMap(Object.fromEntries(entries));
-  }, [date]);
-
   const load = useCallback(async () => {
     // The six side-tools (reminders, notes, brain dump, events, deadlines,
     // agreements) are no longer loaded here — they live in the sidebar and fetch
@@ -2199,8 +2074,7 @@ export function Dashboard() {
     setSessionsByBlock(new Map(
       wk.filter((x) => x.cal_block_id != null).map((x) => [x.cal_block_id!, x]),
     ));
-    loadSubtasks(s);
-  }, [date, loadSubtasks]);
+  }, [date]);
 
   useEffect(() => { load(); }, [load]);
 
@@ -2232,26 +2106,6 @@ export function Dashboard() {
     await updateTask(id, payload);
     const t = await getAllTasks();
     setTasks(t);
-  };
-
-  const handleMarkSystem = async (id: number) => {
-    await markSystemDone(id);
-    const s = await getSystems();
-    setSystems(s);
-    loadSubtasks(s);
-  };
-
-  const handleUnmarkSystem = async (id: number) => {
-    await unmarkSystemDone(id);
-    const s = await getSystems();
-    setSystems(s);
-    loadSubtasks(s);
-  };
-
-  const handleToggleSubtask = async (subtaskId: number, systemId: number) => {
-    const result = await toggleSystemSubtask(subtaskId, date);
-    setSubtaskMap((prev) => ({ ...prev, [systemId]: result.subtasks }));
-    setSystems((prev) => prev.map((s) => s.id === result.system.id ? result.system : s));
   };
 
   const handleSetPrimary = async (payload: DailyPrimaryGoal) => {
@@ -2384,16 +2238,11 @@ export function Dashboard() {
           <TodoList
             tasks={todayTasks}
             plans={plans}
-            systems={systems}
             courseAssignments={courseAssignments}
             onToggleTask={handleToggleTask}
             onCreateTask={handleCreateTask}
             onDeleteTask={handleDeleteTask}
             onUpdateTask={handleUpdateTask}
-            onMarkSystem={handleMarkSystem}
-            onUnmarkSystem={handleUnmarkSystem}
-            onToggleSubtask={handleToggleSubtask}
-            subtaskMap={subtaskMap}
             onToggleAssignment={handleToggleAssignment}
           />
 

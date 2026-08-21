@@ -719,6 +719,25 @@ export const setTaskMatrix = async (
   id: number, importance: Priority, urgency: Urgency,
 ): Promise<Task> => patchTask(id, { priority: importance, urgency });
 
+/**
+ * Every quick task — the reminder / chore / shopping kinds.
+ *
+ * These are created almost entirely from Nexus Local on the phone, so they
+ * arrive without a plan and without a deadline and were never meant to sit in
+ * the dashboard's project-task list. One query covers all three categories;
+ * callers group by `category` themselves.
+ */
+export const getQuickTasks = async (): Promise<Task[]> => {
+  const { data, error } = await supabase
+    .from("pf_tasks")
+    .select(TASK_SELECT)
+    .eq("user_id", getUserId())
+    .not("category", "is", null)
+    .order("created_at", { ascending: false });
+  if (error) err(error);
+  return (data ?? []).map(mapTask);
+};
+
 // ─── Sparse subtypes ────────────────────────────────────────────────────────
 //
 // One accessor pair per non-'task' kind. They are deliberately tiny: a reminder
