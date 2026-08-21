@@ -1,0 +1,204 @@
+/* Learn & Retain observatory. Vault's shell is a LIGHT theme (App.css:2, Luma);
+   this surface is deliberately dark — LEARN_PLAN.md's "Vault-native dark
+   aesthetic". Every token is scoped to .learn-root and NEVER to :root, so it
+   cannot leak into the Vault workspace rendered above it. JS-side mirrors of
+   these values live in learn/palette.ts (three.js can't read CSS variables) —
+   change both or the map and the panel drift apart. */
+.learn-root {
+  --lr-void: #05060A;  --lr-deep: #0B0E17;
+  --lr-panel: rgba(14,17,26,0.90);  --lr-panel-solid: #0E1119;
+  --lr-border: rgba(150,165,200,0.14);  --lr-border-strong: rgba(150,165,200,0.30);
+  --lr-fg: #E6EAF2;  --lr-fg-soft: #A8B0C2;  --lr-fg-muted: #6C7488;  --lr-fg-dim: #454C5C;
+  --lr-ease: cubic-bezier(0.25, 0, 0, 1);  --lr-dur: 160ms;
+
+  position: relative; flex: 1; min-width: 0; min-height: 0;
+  background: var(--lr-void); color: var(--lr-fg); overflow: hidden;
+  font-family: -apple-system, system-ui, sans-serif;
+}
+
+/* Overrides App.css's `.learn-fullbleed { background:#c6c5cb }` (the old
+   iframe's light backdrop). Two classes = specificity 0,2,0, so it wins
+   regardless of which stylesheet the bundler injects first — an order-only
+   override would be a coin flip once this chunk loads lazily. */
+.learn-fullbleed.learn-host { background: var(--lr-void, #05060A); display: flex; }
+
+.learn-map { position: absolute; inset: 0;
+  background: radial-gradient(circle at 50% 44%, #0B0E17 0%, #07080F 58%, #05060A 100%); }
+
+/* ── Full-bleed loading / error panels — never an empty map, which is
+   indistinguishable from "you have learned nothing". ── */
+.learn-panel {
+  position: absolute; inset: 0; z-index: 2;
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  gap: 12px; text-align: center; padding: 32px;
+  background: radial-gradient(circle at 50% 44%, #0B0E17 0%, #07080F 58%, #05060A 100%);
+}
+.learn-panel-title { font-size: 15px; font-weight: 600; color: var(--lr-fg-soft);
+  letter-spacing: 0.01em; }
+.learn-panel-detail { font-size: 12.5px; color: var(--lr-fg-muted); max-width: 440px;
+  line-height: 1.5; word-break: break-word; }
+.learn-retry {
+  margin-top: 6px; padding: 7px 18px; border-radius: 8px; cursor: pointer;
+  background: transparent; border: 1px solid var(--lr-border-strong);
+  color: var(--lr-fg); font-size: 13px;
+  transition: background var(--lr-dur) var(--lr-ease), border-color var(--lr-dur) var(--lr-ease);
+}
+.learn-retry:hover { background: rgba(150,165,200,0.10); border-color: var(--lr-fg-muted); }
+
+/* ── HUD ── */
+.learn-hud { position: absolute; top: 14px; left: 14px; z-index: 3;
+  display: flex; flex-direction: column; gap: 8px;
+  padding: 12px 14px; border-radius: 14px;
+  background: var(--lr-panel); border: 1px solid var(--lr-border);
+  backdrop-filter: blur(10px); box-shadow: 0 8px 32px rgba(0,0,0,0.45);
+  max-width: min(460px, calc(100% - 28px)); }
+
+.learn-hud-row { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; }
+
+/* Course chips — dot in var(--chip); active = 1px solid var(--chip) + tinted bg. */
+.learn-chip {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 4px 10px; border-radius: 999px; cursor: pointer;
+  background: transparent; border: 1px solid var(--lr-border);
+  color: var(--lr-fg-soft); font-size: 12px; line-height: 1.4; white-space: nowrap;
+  transition: border-color var(--lr-dur) var(--lr-ease),
+              background var(--lr-dur) var(--lr-ease),
+              color var(--lr-dur) var(--lr-ease);
+}
+.learn-chip:hover { border-color: var(--lr-border-strong); color: var(--lr-fg); }
+.learn-chip.active {
+  border-color: var(--chip, var(--lr-fg-soft));
+  background: color-mix(in srgb, var(--chip, #8A93A6) 14%, transparent);
+  color: var(--lr-fg);
+}
+.learn-chip-dot { width: 7px; height: 7px; border-radius: 50%;
+  background: var(--chip, var(--lr-fg-muted)); flex: none; }
+.learn-chip-n { color: var(--lr-fg-muted); font-size: 11px; font-variant-numeric: tabular-nums; }
+.learn-chip.active .learn-chip-n { color: var(--lr-fg-soft); }
+
+/* Lens switcher */
+.learn-lenses { gap: 4px; }
+.learn-lens {
+  padding: 4px 11px; border-radius: 8px; cursor: pointer;
+  background: transparent; border: 1px solid transparent;
+  color: var(--lr-fg-muted); font-size: 12px; font-weight: 500;
+  transition: color var(--lr-dur) var(--lr-ease), background var(--lr-dur) var(--lr-ease);
+}
+.learn-lens:hover { color: var(--lr-fg-soft); }
+.learn-lens.active { background: rgba(150,165,200,0.12); border-color: var(--lr-border);
+  color: var(--lr-fg); }
+
+/* Meta row + refresh */
+.learn-meta { justify-content: space-between; font-size: 11.5px; color: var(--lr-fg-muted);
+  font-variant-numeric: tabular-nums; }
+.learn-refresh {
+  width: 24px; height: 24px; border-radius: 7px; cursor: pointer;
+  display: inline-flex; align-items: center; justify-content: center;
+  background: transparent; border: 1px solid var(--lr-border);
+  color: var(--lr-fg-soft); font-size: 13px;
+  transition: background var(--lr-dur) var(--lr-ease), color var(--lr-dur) var(--lr-ease);
+}
+.learn-refresh:hover:not(:disabled) { background: rgba(150,165,200,0.12); color: var(--lr-fg); }
+.learn-refresh:disabled { opacity: 0.4; cursor: default; }
+
+/* Lens legend */
+.learn-legend { gap: 10px; font-size: 11px; color: var(--lr-fg-muted);
+  border-top: 1px solid var(--lr-border); margin-top: 2px; padding-top: 8px; }
+.learn-legend-stop { display: inline-flex; align-items: center; gap: 5px; white-space: nowrap; }
+.learn-legend-dot { border-radius: 50%; flex: none; }
+.learn-legend-caption { flex-basis: 100%; color: var(--lr-fg-dim); font-size: 10.5px;
+  line-height: 1.4; }
+
+/* ── Inspector ── */
+@keyframes learn-slide-in {
+  from { transform: translateX(100%); }
+  to   { transform: translateX(0); }
+}
+.learn-inspector { position: absolute; top: 0; right: 0; bottom: 0; width: 380px; z-index: 4;
+  background: var(--lr-panel); border-left: 1px solid var(--lr-border);
+  backdrop-filter: blur(10px); overflow-y: auto; padding: 20px 22px;
+  animation: learn-slide-in var(--lr-dur) var(--lr-ease); }
+
+.learn-insp-close {
+  position: absolute; top: 12px; right: 14px;
+  width: 26px; height: 26px; border-radius: 8px; cursor: pointer;
+  display: flex; align-items: center; justify-content: center;
+  background: transparent; border: none;
+  color: var(--lr-fg-muted); font-size: 18px; line-height: 1;
+  transition: color var(--lr-dur) var(--lr-ease), background var(--lr-dur) var(--lr-ease);
+}
+.learn-insp-close:hover { color: var(--lr-fg); background: rgba(150,165,200,0.12); }
+
+.learn-insp-title { font-size: 18px; font-weight: 700; line-height: 1.3;
+  color: var(--lr-fg); padding-right: 28px; margin-bottom: 8px; }
+
+.learn-insp-badges { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 10px; }
+.learn-badge {
+  padding: 2px 9px; border-radius: 999px; font-size: 11px; font-weight: 500;
+  background: rgba(150,165,200,0.10); border: 1px solid var(--lr-border);
+  color: var(--lr-fg-soft); text-transform: lowercase;
+}
+.learn-badge-intuition { border-color: rgba(90,169,255,0.35); color: #9CC8FF; }
+.learn-badge-retained { border-color: rgba(74,222,128,0.35); color: #86EFAC; }
+
+.learn-insp-course { font-size: 12.5px; margin-bottom: 16px; line-height: 1.4; }
+.learn-insp-sep { color: var(--lr-fg-dim); }
+.learn-insp-topic { color: var(--lr-fg-muted); }
+
+/* Readout bars */
+.learn-insp-readouts { display: flex; flex-direction: column; gap: 13px; margin-bottom: 18px; }
+.learn-readout-label { display: flex; justify-content: space-between; align-items: baseline;
+  font-size: 12px; color: var(--lr-fg-soft); margin-bottom: 5px;
+  font-variant-numeric: tabular-nums; }
+.learn-readout-label > span:first-child { font-weight: 600; color: var(--lr-fg);
+  font-size: 11.5px; text-transform: uppercase; letter-spacing: 0.05em; }
+.learn-readout-dim { color: var(--lr-fg-dim); font-style: italic; }
+.learn-stable { color: #86EFAC; font-size: 11px; }
+.learn-bar { height: 7px; border-radius: 4px; background: #1A1E27; overflow: hidden; }
+.learn-bar-fill { height: 100%; border-radius: 4px;
+  transition: width var(--lr-dur) var(--lr-ease); }
+.learn-readout-sub { font-size: 11px; color: var(--lr-fg-muted); margin-top: 4px;
+  font-variant-numeric: tabular-nums; }
+
+/* Description — plain text in P1 (Markdown/KaTeX is P2). */
+.learn-insp-desc { white-space: pre-wrap; color: var(--lr-fg-soft);
+  font-size: 13px; line-height: 1.55; margin-bottom: 16px; }
+
+/* Proof — conditional (186 of 1067 concepts). */
+.learn-proof { margin-bottom: 16px; border-left: 2px solid var(--lr-border-strong);
+  padding-left: 12px; }
+.learn-proof summary { cursor: pointer; font-size: 12px; font-weight: 600;
+  color: var(--lr-fg-soft); text-transform: uppercase; letter-spacing: 0.05em;
+  user-select: none; }
+.learn-proof summary:hover { color: var(--lr-fg); }
+.learn-proof-body { white-space: pre-wrap; margin-top: 8px;
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  font-size: 12px; line-height: 1.55; color: var(--lr-fg-soft); }
+
+/* Prereq / unlock neighbour lists */
+.learn-insp-section { margin-bottom: 16px; }
+.learn-insp-header { font-size: 11px; font-weight: 700; letter-spacing: 0.08em;
+  margin-bottom: 7px; font-variant-numeric: tabular-nums; }
+.learn-neighbor {
+  display: flex; align-items: center; gap: 8px; width: 100%; text-align: left;
+  padding: 6px 8px; margin-bottom: 3px; border-radius: 0 7px 7px 0; cursor: pointer;
+  background: transparent; border: none; border-left: 2px solid var(--lr-border);
+  color: var(--lr-fg-soft); font-size: 12.5px; line-height: 1.35;
+  transition: background var(--lr-dur) var(--lr-ease), color var(--lr-dur) var(--lr-ease);
+}
+.learn-neighbor:hover { background: rgba(150,165,200,0.08); color: var(--lr-fg); }
+.learn-neighbor-dot { width: 6px; height: 6px; border-radius: 50%; flex: none; }
+.learn-neighbor-title { overflow: hidden; text-overflow: ellipsis; }
+
+.learn-show-all {
+  padding: 5px 8px; border-radius: 7px; cursor: pointer; width: 100%; text-align: left;
+  background: transparent; border: none;
+  color: var(--lr-fg-muted); font-size: 11.5px;
+  transition: color var(--lr-dur) var(--lr-ease);
+}
+.learn-show-all:hover { color: var(--lr-fg-soft); }
+
+/* concept_id footer — the join key into NexusLocal, copyable. */
+.learn-insp-id { font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  font-size: 10.5px; color: var(--lr-fg-dim); user-select: all;
+  padding-top: 10px; border-top: 1px solid var(--lr-border); word-break: break-all; }

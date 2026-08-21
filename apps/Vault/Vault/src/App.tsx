@@ -22,6 +22,9 @@ import "./App.css";
 // react-force-graph-2d too, so it rides the same lazy path.
 const ForceGraphView = lazyWithReload(() => import("./components/ForceGraphView").then(m => ({ default: m.ForceGraphView })));
 const GraphView = lazyWithReload(() => import("./components/GraphView").then(m => ({ default: m.GraphView })));
+// Learn & Retain — native observatory (src/learn/). Pulls react-force-graph-3d,
+// so it rides the same lazy path and only loads when the mode is first opened.
+const LearnMode = lazyWithReload(() => import("./learn/LearnMode").then(m => ({ default: m.LearnMode })));
 
 // Some WebViews / browsers (hardware accel off, sandboxed GPU) can't create a
 // WebGL context. ForceGraph3D throws synchronously in that case and white-screens
@@ -81,7 +84,6 @@ function App() {
   const [is3D, setIs3D] = useState(webglSupported);
 
   const graphContainerRef = useRef<HTMLDivElement>(null);
-  const learnFrameRef = useRef<HTMLIFrameElement>(null);
   const [graphSize, setGraphSize] = useState({ width: 240, height: 400 });
   const newNameInputRef = useRef<HTMLInputElement>(null);
   const pdfImportRef = useRef<HTMLInputElement>(null);
@@ -124,18 +126,6 @@ function App() {
   useEffect(() => {
     if (!searchOpen) setSearchQuery("");
   }, [searchOpen]);
-
-  // Learn & Retain visibility handshake. The iframe stays mounted (so its JS/DOM
-  // state and camera position survive), but we tell it to release its WebGL
-  // context + pause its render loop whenever it's hidden, and restore on return.
-  // Keeps at most one live GL context (this or the Vault graph), which is what
-  // stops Chrome's GPU process from crashing — without reloading the Learn app.
-  useEffect(() => {
-    if (!learnMounted) return;
-    const win = learnFrameRef.current?.contentWindow;
-    if (!win) return;
-    win.postMessage({ type: appMode === "learn" ? "vault:visible" : "vault:hidden" }, "*");
-  }, [appMode, learnMounted]);
 
   function addPaneAfter(afterPaneId: string) {
     const newPane = { id: crypto.randomUUID() };
@@ -739,16 +729,17 @@ function App() {
       </main>
     </div>
     {learnMounted && (
-      // Mounted once and kept alive so its state/camera survive. It releases its
-      // WebGL context while hidden via the visibility-handshake effect above, so
-      // keeping it mounted no longer costs a live GL context.
-      <iframe
-        ref={learnFrameRef}
-        src="/conceptmap.html"
-        title="Learn & Retain"
-        className="learn-fullbleed"
-        style={{ display: appMode === "learn" ? "block" : "none" }}
-      />
+      // Mounted once and kept alive so its graph/camera state survive. Map3D
+      // pauses its render loop via `active` while hidden, so keeping it mounted
+      // doesn't cost animation frames next to the Vault graph's GL context.
+      <div
+        className="learn-fullbleed learn-host"
+        style={{ display: appMode === "learn" ? undefined : "none" }}
+      >
+        <Suspense fallback={null}>
+          <LearnMode active={appMode === "learn"} />
+        </Suspense>
+      </div>
     )}
     </div>
       <CalendarSidebar
