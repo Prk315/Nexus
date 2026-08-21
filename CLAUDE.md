@@ -619,6 +619,24 @@ Migrations live at `supabase/migrations/` (`YYYYMMDDHHMMSS_slug.sql`, forward-on
 own under `apps/Protocol/supabase/functions/`. Deploying a function and applying a
 migration are separate steps.
 
+⚠️ **One database, every branch — so schema REMOVALS are strictly ordered.**
+There is no staging project. The apps Vercel serves are built from `main`, and
+they talk to the same Supabase project a feature branch does. Additive changes
+(new columns, tables, indexes) are therefore safe in any order — deployed code
+simply ignores them. **Removals are not.** Dropping a table or column that
+deployed code still queries breaks production the moment it is applied, before
+anything is merged.
+
+This is not theoretical: `pf_reminders` was dropped while it was empty and
+believed orphaned, but `main`'s `getReminders()` ends in `if (error) err(error)`
+and the dashboard calls it inside a `Promise.all` — so the missing table did not
+degrade to an empty list, it rejected the entire dashboard load. Emptiness was
+never the relevant fact; *deployed code still reading it* was. It had to be
+recreated (`20260821130000_restore_pf_reminders.sql`).
+
+The order is: **stop reading it → merge → deploy → then drop.** Before applying
+any removal, grep `origin/main` — not your branch — for the thing being removed.
+
 | App prefix | Tables |
 |------------|--------|
 | *(none)*   | `time_entries`, `active_sessions`, `blocked_sites`, `blocked_apps`, `focus_blocks`, `unlock_rules` (TimeTracker) |
