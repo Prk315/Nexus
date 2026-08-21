@@ -5,11 +5,13 @@ import {
 import {
   Bell, FileText, Zap, Calendar, Clock, Handshake,
   Check, ChevronDown, ChevronRight, Plus, X,
-  Brush, ShoppingCart, RefreshCw, Flame,
+  Brush, ShoppingCart, RefreshCw, Flame, Repeat, AlarmClock,
 } from "lucide-react";
 import { cn } from "../lib/utils";
+import { isSystemDue, frequencyLabel } from "../lib/systems";
 import {
   getQuickTasks, createTask, toggleTask, deleteTask,
+  getTaskSubtypeRows, promoteChoreToSystem,
   getSystems, markSystemDone, unmarkSystemDone, getSystemSubtasks, toggleSystemSubtask,
   getQuickNotes, addQuickNote, deleteQuickNote,
   getBrainDump, addBrainEntry, deleteBrainEntry,
@@ -30,6 +32,22 @@ import type {
  * dashboard's content, which spent a prominent row on things that are relevant
  * a few times a day. They now live as icons in the sidebar, below a divider that
  * separates them from navigation: they are *tools*, not places.
+ *
+ * NEXT STEPS — reminders do not actually fire yet.
+ *
+ * `pf_task_reminders.remind_at` is currently *surfaced*, not delivered: due
+ * reminders sort to the top of the panel, turn amber, and are what the sidebar
+ * badge counts. Nothing notifies you, because nothing in this ecosystem can —
+ * there is no UNUserNotificationCenter anywhere in the repo, and the free
+ * sideload tier has neither silent push nor BGTaskScheduler (see CLAUDE.md).
+ *
+ * The intended home for real delivery is Nexus Local, which already runs a
+ * daemon loop on the Mac and is the one native app on the phone:
+ *   - Mac:   a grid-module tick reads due reminders and posts a notification.
+ *   - Phone: schedule UNCalendarNotificationTrigger alerts on foreground, for
+ *            the reminders known at that moment.
+ * `lead_minutes` is stored and unused until then — it only means something once
+ * something can fire early.
  *
  * Owning their own data is what makes that possible. Nothing else on the
  * dashboard ever read these six slices, so lifting them out of that page removed
@@ -53,15 +71,31 @@ import type {
  * dashboard's task list was the routing bug this fixed. The table has since been
  * dropped.
  */
-function QuickTaskPanel({ tasks, category, onToggle, onDelete, onAdd }: {
+function QuickTaskPanel({ tasks, category, remindAt, onToggle, onDelete, onAdd, onMakeRecurring }: {
   tasks: Task[];
   category: TaskCategory;
+  /** task_id -> remind_at ISO, for the reminder category only. */
+  remindAt?: Map<number, string>;
   onToggle: (id: number) => void;
   onDelete: (id: number) => void;
   onAdd: (title: string, category: TaskCategory) => void;
+  /** Chores only — promotes into a recurring system. */
+  onMakeRecurring?: (id: number, intervalDays: number) => void;
 }) {
   const [draft, setDraft] = useState("");
-  const open = tasks.filter((t) => !t.done);
+  const now = Date.now();
+
+  // Reminders sort by when they are due, soonest first, with undated ones last —
+  // an unsorted reminder list buries the thing that is actually due today. The
+  // other categories keep their natural order.
+  const byDue = (a: Task, b: Task) => {
+    const ra = remindAt?.get(a.id), rb = remindAt?.get(b.id);
+    if (ra && rb) return ra.localeCompare(rb);
+    if (ra) return -1;
+    if (rb) return 1;
+    return 0;
+  };
+  const open = tasks.filter((t) => !t.done).sort(remindAt ? byDue : () => 0);
   const done = tasks.filter((t) => t.done);
 
   const submit = () => {
@@ -96,14 +130,22 @@ function QuickTaskPanel({ tasks, category, onToggle, onDelete, onAdd }: {
 
       <div className="flex flex-col gap-0.5">
         {open.map((t) => (
-          <QuickTaskRow key={t.id} task={t} onToggle={onToggle} onDelete={onDelete} />
+          <QuickTaskRow
+            key={t.id}
+            task={t}
+            remindAt={remindAt?.get(t.id)}
+            now={now}
+            onToggle={onToggle}
+            onDelete={onDelete}
+            onMakeRecurring={onMakeRecurring}
+          />
         ))}
       </div>
 
       {done.length > 0 && (
         <div className="flex flex-col gap-0.5 pt-1.5 border-t border-border/60">
           {done.map((t) => (
-            <QuickTaskRow key={t.id} task={t} onToggle={onToggle} onDelete={onDelete} />
+            <QuickTaskRow key={t.id} task={t} now={now} onToggle={onToggle} onDelete={onDelete} />
           ))}
         </div>
       )}
@@ -111,11 +153,20 @@ function QuickTaskPanel({ tasks, category, onToggle, onDelete, onAdd }: {
   );
 }
 
-function QuickTaskRow({ task, onToggle, onDelete }: {
-  task: Task; onToggle: (id: number) => void; onDelete: (id: number) => void;
+function QuickTaskRow({ task, remindAt, now, onToggle, onDelete, onMakeRecurring }: {
+  task: Task;
+  remindAt?: string;
+  now: number;
+  onToggle: (id: number) => void;
+  onDelete: (id: number) => void;
+  onMakeRecurring?: (id: number, intervalDays: number) => void;
 }) {
+  const [everyDraft, setEveryDraft] = useState<string | null>(null);
+  const due = remindAt != null && new Date(remindAt).getTime() <= now;
+
   return (
-    <div className="group flex items-center gap-2 rounded-md px-1 py-1 hover:bg-secondary/50 transition-colors">
+    <div className="group flex flex-col gap-1 rounded-md px-1 py-1 hover:bg-secondary/50 transition-colors">
+      <div className="flex items-center gap-2">
       <button
         onClick={() => onToggle(task.id)}
         className={cn(
@@ -128,12 +179,76 @@ function QuickTaskRow({ task, onToggle, onDelete }: {
       <span className={cn("flex-1 min-w-0 truncate text-xs", task.done && "line-through text-muted-foreground")}>
         {task.title}
       </span>
+      {/*
+        remind_at surfaces here rather than firing a notification: nothing in
+        this ecosystem can deliver one yet (no UNUserNotificationCenter anywhere,
+        and the sideload tier has no push or BGTaskScheduler). Due reminders sort
+        to the top and turn amber; that is honest about what the field currently
+        does. See NEXT STEPS at the top of this file.
+      */}
+      {remindAt && (
+        <span
+          className={cn(
+            "shrink-0 inline-flex items-center gap-0.5 text-[10px] tabular-nums",
+            due ? "text-amber-500 font-medium" : "text-muted-foreground/60",
+          )}
+          title={due ? "Due" : "Scheduled"}
+        >
+          <AlarmClock className="h-2.5 w-2.5" />
+          {new Date(remindAt).toLocaleString(undefined, {
+            day: "numeric", month: "short", hour: "2-digit", minute: "2-digit",
+          })}
+        </span>
+      )}
+
+      {onMakeRecurring && (
+        <button
+          onClick={() => setEveryDraft(everyDraft == null ? "7" : null)}
+          title="Make recurring — moves it to Systems"
+          className="shrink-0 p-0.5 rounded text-muted-foreground opacity-0 group-hover:opacity-100 hover:text-foreground transition-all"
+        >
+          <Repeat className="h-3 w-3" />
+        </button>
+      )}
+
       <button
         onClick={() => onDelete(task.id)}
         className="shrink-0 p-0.5 rounded text-muted-foreground opacity-0 group-hover:opacity-100 hover:text-destructive transition-all"
       >
         <X className="h-3 w-3" />
       </button>
+      </div>
+
+      {everyDraft != null && onMakeRecurring && (
+        <div className="flex items-center gap-1.5 pl-5 pb-0.5">
+          <span className="text-[10px] text-muted-foreground">Every</span>
+          <input
+            autoFocus
+            type="number"
+            min={1}
+            value={everyDraft}
+            onChange={(e) => setEveryDraft(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Escape") setEveryDraft(null);
+              if (e.key === "Enter") {
+                const n = Number(everyDraft);
+                if (Number.isFinite(n) && n >= 1) { onMakeRecurring(task.id, n); setEveryDraft(null); }
+              }
+            }}
+            className="w-12 rounded border border-border bg-transparent px-1 py-px text-[10px] tabular-nums outline-none focus:ring-1 focus:ring-ring"
+          />
+          <span className="text-[10px] text-muted-foreground">days</span>
+          <button
+            onClick={() => {
+              const n = Number(everyDraft);
+              if (Number.isFinite(n) && n >= 1) { onMakeRecurring(task.id, n); setEveryDraft(null); }
+            }}
+            className="rounded border border-border px-1.5 py-px text-[10px] text-muted-foreground hover:text-foreground hover:bg-secondary transition-colors"
+          >
+            Move to Systems
+          </button>
+        </div>
+      )}
     </div>
   );
 }
@@ -182,6 +297,9 @@ function SystemsPanel({ systems, subtaskMap, onMark, onUnmark, onToggleSubtask }
               )}
               <span className={cn("text-xs truncate flex-1", due ? "text-foreground" : "text-muted-foreground")}>
                 {sys.title}
+              </span>
+              <span className="shrink-0 text-[10px] text-muted-foreground/60" title="Cadence">
+                {frequencyLabel(sys)}
               </span>
               {sys.streak_count > 1 && (
                 <span className="flex items-center gap-0.5 text-[10px] text-orange-500 shrink-0">
@@ -234,18 +352,6 @@ function SystemsPanel({ systems, subtaskMap, onMark, onUnmark, onToggleSubtask }
       })}
     </div>
   );
-}
-
-/** Mirrors the dashboard's rule for whether a system is due today. */
-function isSystemDue(s: SystemEntry): boolean {
-  const today = new Date().toISOString().slice(0, 10);
-  if (s.last_done === today) return false;
-  if (s.frequency === "daily") return true;
-  if (s.frequency === "weekly") {
-    if (!s.days_of_week) return false;
-    return s.days_of_week.split(",").map(Number).includes(new Date().getDay());
-  }
-  return true;
 }
 
 function QuickNotesPanel({ notes, onAdd, onDelete }: {
@@ -593,6 +699,8 @@ export function QuickPanelsProvider({ children }: { children: React.ReactNode })
   // Nexus Local on the phone. One query, grouped by category here.
   const [quickTasks, setQuickTasks]     = useState<Task[]>([]);
   const [systems, setSystems]           = useState<SystemEntry[]>([]);
+  // task_id -> remind_at, from the pf_task_reminders subtype.
+  const [remindAt, setRemindAt]         = useState<Map<number, string>>(new Map());
   const [subtaskMap, setSubtaskMap]     = useState<Record<number, SystemSubtask[]>>({});
   const [notes, setNotes]               = useState<QuickNote[]>([]);
   const [brainEntries, setBrainEntries] = useState<BrainEntry[]>([]);
@@ -612,12 +720,15 @@ export function QuickPanelsProvider({ children }: { children: React.ReactNode })
   // The cost is small and not new — the dashboard used to issue six of these
   // reads on every visit, and they are tiny tables.
   const load = useCallback(async () => {
-    const [qt, sys, n, b, e, d, a] = await Promise.all([
-      getQuickTasks(), getSystems(), getQuickNotes(), getBrainDump(),
-      getEvents(), getDeadlines(), getAgreements(),
+    const [qt, sys, rem, n, b, e, d, a] = await Promise.all([
+      getQuickTasks(), getSystems(), getTaskSubtypeRows("reminder"), getQuickNotes(),
+      getBrainDump(), getEvents(), getDeadlines(), getAgreements(),
     ]);
     setQuickTasks(qt); setSystems(sys); setNotes(n); setBrainEntries(b);
     setEvents(e); setDeadlines(d); setAgreements(a);
+    setRemindAt(new Map(
+      rem.filter((r) => r.remind_at).map((r) => [Number(r.task_id), String(r.remind_at)]),
+    ));
 
     // Subtasks are per-system, so they can only be fetched once the systems are
     // known. Failing here must not blank the panel — a system with no subtasks
@@ -648,15 +759,24 @@ export function QuickPanelsProvider({ children }: { children: React.ReactNode })
   const n = (v: number) => (loaded && v > 0 ? v : undefined);
 
   const byCategory = (c: TaskCategory) => quickTasks.filter((t) => t.category === c);
+  const nowMs = Date.now();
+  const actionableReminders = byCategory("reminder").filter((t) => {
+    if (t.done) return false;
+    const at = remindAt.get(t.id);
+    return !at || new Date(at).getTime() <= nowMs;
+  }).length;
   const openIn = (c: TaskCategory) => byCategory(c).filter((t) => !t.done).length;
 
   const panels: QuickPanelDef[] = [
     // The three phone-captured kinds first — these are the ones with live counts
     // you act on, and they are why the rail exists.
-    { id: "reminders",  label: "Reminders",   icon: Bell,         count: n(openIn("reminder")) },
+    // Counts what is ACTIONABLE now: undated reminders plus those whose time has
+    // passed. A reminder set for next week shouldn't sit on the badge all week —
+    // that is how a badge stops meaning anything.
+    { id: "reminders",  label: "Reminders",   icon: Bell,         count: n(actionableReminders) },
     { id: "chores",     label: "Chores",      icon: Brush,        count: n(openIn("chore")) },
     { id: "shopping",   label: "Shopping",    icon: ShoppingCart, count: n(openIn("shopping")) },
-    { id: "systems",    label: "Systems",     icon: RefreshCw,    count: n(systems.filter(isSystemDue).length) },
+    { id: "systems",    label: "Systems",     icon: RefreshCw,    count: n(systems.filter((x) => isSystemDue(x)).length) },
     { id: "notes",      label: "Quick Notes", icon: FileText,     count: n(notes.length) },
     { id: "brain",      label: "Brain Dump",  icon: Zap,          count: n(brainEntries.length) },
     { id: "events",     label: "Events",      icon: Calendar,     count: n(events.filter((e) => e.date >= today).length) },
@@ -677,6 +797,12 @@ export function QuickPanelsProvider({ children }: { children: React.ReactNode })
   const handleAddQuickTask = async (title: string, category: TaskCategory) => {
     const t = await createTask({ title, category, plan_id: null });
     setQuickTasks((p) => [t, ...p]);
+  };
+
+  const handleMakeRecurring = async (id: number, intervalDays: number) => {
+    await promoteChoreToSystem(id, intervalDays);
+    await load();      // the chore is gone and a system exists — reload both
+    setOpen("systems"); // land the user where the thing now lives
   };
 
   const handleMarkSystem = async (id: number) => {
@@ -727,8 +853,8 @@ export function QuickPanelsProvider({ children }: { children: React.ReactNode })
 
   const body = (() => {
     switch (open) {
-      case "reminders":  return <QuickTaskPanel tasks={byCategory("reminder")} category="reminder" onToggle={handleToggleQuickTask} onDelete={handleDeleteQuickTask} onAdd={handleAddQuickTask} />;
-      case "chores":     return <QuickTaskPanel tasks={byCategory("chore")}    category="chore"    onToggle={handleToggleQuickTask} onDelete={handleDeleteQuickTask} onAdd={handleAddQuickTask} />;
+      case "reminders":  return <QuickTaskPanel tasks={byCategory("reminder")} category="reminder" remindAt={remindAt} onToggle={handleToggleQuickTask} onDelete={handleDeleteQuickTask} onAdd={handleAddQuickTask} />;
+      case "chores":     return <QuickTaskPanel tasks={byCategory("chore")}    category="chore"    onToggle={handleToggleQuickTask} onDelete={handleDeleteQuickTask} onAdd={handleAddQuickTask} onMakeRecurring={handleMakeRecurring} />;
       case "shopping":   return <QuickTaskPanel tasks={byCategory("shopping")} category="shopping" onToggle={handleToggleQuickTask} onDelete={handleDeleteQuickTask} onAdd={handleAddQuickTask} />;
       case "systems":    return <SystemsPanel systems={systems} subtaskMap={subtaskMap} onMark={handleMarkSystem} onUnmark={handleUnmarkSystem} onToggleSubtask={handleToggleSubtask} />;
       case "notes":      return <QuickNotesPanel notes={notes}           onAdd={handleAddNote}      onDelete={handleDeleteNote} />;

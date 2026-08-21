@@ -39,6 +39,7 @@ import { MealsPanel } from "./MealsPanel";
 import { EnforcementPanel } from "./EnforcementPanel";
 import { UsagePanel } from "./UsagePanel";
 import { DayCoveragePanel } from "./DayCoveragePanel";
+import { CategoryBreakdown } from "./CategoryBreakdown";
 
 // --- Visible panels -------------------------------------------------------
 // Work units append their panel component to ONE of the two lists below.
@@ -67,6 +68,9 @@ const DASHBOARD_PANELS: Array<() => ReactElement | null> = [
   // The rest of the day: sleep (Protocol) + PathFinder blocks fill what the
   // tracker can't see, and the leftover gaps are the to-log list.
   DayCoveragePanel,
+  // Directly after DayCoveragePanel: same day, split by category instead of
+  // by source, plus the weekly budgets that source-level view has no room for.
+  CategoryBreakdown,
 ];
 
 const SETTINGS_PANELS: Array<() => ReactElement | null> = [

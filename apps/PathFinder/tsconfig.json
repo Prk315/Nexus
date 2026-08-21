@@ -22,6 +22,8 @@
     "baseUrl": ".",
     "paths": {
       "@/*": ["./src/*"],
+      "@nexus/core/coverage": ["../../packages/nexus-core/src/coverage.ts"],
+      "@nexus/core/categories": ["../../packages/nexus-core/src/categories.ts"],
       "@nexus/core": ["../../packages/nexus-core/src/index.ts"],
       "@nexus/core/*": ["../../packages/nexus-core/src/*"]
     }

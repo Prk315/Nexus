@@ -18,12 +18,14 @@ import {
   createRecurringCalBlock, updateRecurringCalBlock, deleteRecurringCalBlock,
   getDeadlines, toggleDeadline, updateCourseAssignment,
   getCaSubtasks, toggleCaSubtask,
+  getCoverageCategories, type CoverageCategoryOption,
 } from "../lib/api";
-import { loadActualWeek, type ActualDay } from "../lib/actual";
-import { type Span, dayStartMs } from "@nexus/core/coverage";
+import { loadActualWeek, loadSleepWeek, type ActualDay } from "../lib/actual";
+import { type Span, dayStartMs, hm } from "@nexus/core/coverage";
 import { Button } from "../components/ui/button";
 import { cn, layoutCalItems } from "../lib/utils";
 import { blockMinutes, planningOf, isFullTask } from "../lib/taskTree";
+import { isSystemScheduledOn } from "../lib/systems";
 import { UrgencyMeter } from "../components/UrgencyMeter";
 import { URGENCY_LABEL, STAGE_LABEL, STAGE_CLASSES } from "../lib/utils";
 import { isDue } from "../components/workspace/systemForms";
@@ -48,23 +50,29 @@ function todayISO() { return toISO(new Date()); }
 const DAY_NAMES = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 
 // Returns true if the system should appear on the given ISO date
-function systemScheduledFor(sys: import("../types").SystemEntry, iso: string): boolean {
-  if (sys.frequency === "daily") return true;
-  if (sys.frequency === "weekly") {
-    const days = sys.days_of_week ? sys.days_of_week.split(",").map(Number) : [];
-    if (days.length === 0) return true;
-    return days.includes(new Date(iso + "T12:00:00").getDay());
-  }
-  return false; // monthly: not shown in time grid
-}
 const MONTHS    = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
 
 // ── Time grid constants ───────────────────────────────────────────────────────
+//
+// Full 24h day (Phase E §6, "a big goal should be to make the weekly review
+// be full 24 hours a day"). HOUR_START/HOUR_END name the first/last *hour
+// row* rendered (0..23) — matching the meaning they always had here, just
+// widened from the old bounded 5..23 window. GRID_END_MIN is the absolute
+// grid boundary in minutes-since-midnight (the bottom of the 23:00 row, i.e.
+// the next day's midnight) and is what every span-clipping / now-line /
+// click-time computation should use instead of `HOUR_END * 60` — using the
+// row label directly there silently drops the whole last hour (see below).
 
-const HOUR_START = 5;
+const HOUR_START = 0;
 const HOUR_END   = 23;
 const HOURS      = Array.from({ length: HOUR_END - HOUR_START + 1 }, (_, i) => HOUR_START + i);
-const HOUR_PX    = 56; // pixels per hour
+const HOUR_PX    = 56; // pixels per hour — unchanged, so a 24h day scrolls instead of compressing rows
+const GRID_END_MIN = (HOUR_END + 1) * 60;
+
+/** The previous bounded window's start, kept as the initial scroll position
+ *  now that the grid always renders the full day — see the mount-scroll
+ *  effects in Week(). */
+const DEFAULT_SCROLL_HOUR = 5;
 
 function timeToMinutes(t: string): number {
   const [h, m] = t.split(":").map(Number);
@@ -76,13 +84,21 @@ function minutesToPx(min: number): number {
 function pxToTime(px: number, containerHeight: number): string {
   const clamped = Math.max(0, Math.min(px, containerHeight));
   const totalMin = HOUR_START * 60 + (clamped / HOUR_PX) * 60;
-  const rounded  = Math.round(totalMin / 30) * 30;
-  const h = Math.min(HOUR_END, Math.floor(rounded / 60));
+  // Clamp to the grid's actual last selectable half-hour slot (23:30), not
+  // `HOUR_END * 60` (23:00) — the old formula capped `h` at HOUR_END *after*
+  // rounding, which mapped every click in the grid's final hour to :00 and
+  // could even produce an end-time earlier than the click's own start-time
+  // (see addHour below). Same bug, same fix.
+  const rounded = Math.min(GRID_END_MIN - 30, Math.round(totalMin / 30) * 30);
+  const h = Math.floor(rounded / 60);
   const m = rounded % 60;
   return `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}`;
 }
 function addHour(t: string, h: number): string {
-  const min = Math.min(HOUR_END * 60, timeToMinutes(t) + h * 60);
+  // Cap at 23:59, not `HOUR_END * 60` (23:00) — a block starting at 23:30
+  // plus a 1h default duration must still end *after* its own start, or the
+  // "ok" validation in CalBlockModal keeps Add/Save disabled.
+  const min = Math.min(GRID_END_MIN - 1, timeToMinutes(t) + h * 60);
   const hh = Math.floor(min / 60);
   const mm = min % 60;
   return `${String(hh).padStart(2, "0")}:${String(mm).padStart(2, "0")}`;
@@ -90,18 +106,25 @@ function addHour(t: string, h: number): string {
 
 // ── Actual-day overlay (sleep/screen/training behind planned blocks) ──────────
 
-/** Reuses the column's minute→pixel mapping so the overlay never drifts from the blocks. */
+/**
+ * Reuses the column's minute→pixel mapping so the overlay never drifts from
+ * the blocks. Clips to `GRID_END_MIN` (the true grid boundary, midnight),
+ * not `HOUR_END * 60` — the latter is the *label* of the last hour row
+ * (23:00) and would truncate anything in the final hour, which is exactly
+ * where a bed-time band tends to land.
+ */
 function actualSpanPx(span: Span, iso: string): { top: number; height: number } | null {
   const dayStart = dayStartMs(iso);
   const startMin = Math.max(HOUR_START * 60, (span.start - dayStart) / 60_000);
-  const endMin   = Math.min(HOUR_END   * 60, (span.end   - dayStart) / 60_000);
+  const endMin   = Math.min(GRID_END_MIN,    (span.end   - dayStart) / 60_000);
   if (endMin <= startMin) return null;
   const top = minutesToPx(startMin);
   return { top, height: Math.max(1, minutesToPx(endMin) - top) };
 }
 
-const ACTUAL_TRACKS: { key: keyof ActualDay; colorCls: string }[] = [
-  { key: "sleep",    colorCls: "bg-indigo-400"  },
+// Sleep is no longer a track here — it renders as its own always-on
+// SleepBand layer (Phase E §7), independent of the "Actual" toggle below.
+const ACTUAL_TRACKS: { key: Exclude<keyof ActualDay, "sleep">; colorCls: string }[] = [
   { key: "screen",   colorCls: "bg-sky-400"     },
   { key: "training", colorCls: "bg-emerald-400" },
 ];
@@ -123,6 +146,45 @@ function ActualOverlay({ actual, iso }: { actual: ActualDay; iso: string }) {
           );
         }),
       )}
+    </div>
+  );
+}
+
+/**
+ * Sleep band — ALWAYS visible (independent of the "Actual" toggle, which
+ * still gates screen + training). With a full 24h grid a night's sleep
+ * naturally shows as the bed-time band at the bottom of one day column and
+ * the rise-time band at the top of the next — that's the point of widening
+ * the grid to begin with. Bed/rise times are labelled at the band's edges
+ * when it's tall enough to hold them; that labelling (not just the tint) is
+ * the actual feature request.
+ */
+function SleepBand({ spans, iso }: { spans: Span[]; iso: string }) {
+  return (
+    <div className="absolute inset-0 pointer-events-none">
+      {spans.map((span, i) => {
+        const rect = actualSpanPx(span, iso);
+        if (!rect) return null;
+        const showLabels = rect.height >= 28;
+        return (
+          <div
+            key={i}
+            className="absolute left-0 right-0 rounded-sm bg-indigo-400/[0.14] border-y border-indigo-400/20"
+            style={{ top: rect.top, height: rect.height }}
+          >
+            {showLabels && (
+              <>
+                <span className="absolute left-1 top-0.5 text-[9px] leading-none tabular-nums text-indigo-500/80 dark:text-indigo-300/80">
+                  {hm(span.start)}
+                </span>
+                <span className="absolute left-1 bottom-0.5 text-[9px] leading-none tabular-nums text-indigo-500/80 dark:text-indigo-300/80">
+                  {hm(span.end)}
+                </span>
+              </>
+            )}
+          </div>
+        );
+      })}
     </div>
   );
 }
@@ -188,6 +250,8 @@ type BlockDraft = {
   days_of_week: number[];
   series_end_date: string;
   task_id: number | null;
+  /** Name of a coverage_categories row, or null for "none". */
+  category: string | null;
 };
 
 function addBlockMinutes(time: string, minutes: number): string {
@@ -207,9 +271,10 @@ function parseDaysOfWeek(s: string | null | undefined): number[] {
   return s.split(",").map(Number).filter((n) => !isNaN(n));
 }
 
-function CalBlockModal({ initial, date, startTime, tasks, onSave, onDelete, onClose }: {
+function CalBlockModal({ initial, date, startTime, tasks, categories, onSave, onDelete, onClose }: {
   initial?: CalBlock; date: string; startTime: string;
   tasks: TaskWithContext[];
+  categories: CoverageCategoryOption[];
   onSave: (d: BlockDraft) => void; onDelete?: () => void; onClose: () => void;
 }) {
   const [form, setForm] = useState<BlockDraft>({
@@ -226,7 +291,22 @@ function CalBlockModal({ initial, date, startTime, tasks, onSave, onDelete, onCl
                        : defaultDaysOfWeek(date),
     series_end_date: initial?.series_end_date ?? "",
     task_id:         initial?.task_id ?? null,
+    category:        initial?.category ?? null,
   });
+  // True once the user has clicked a color swatch directly in this modal
+  // session — after that, picking a category no longer overrides the color.
+  // Not persisted: re-opening an old block treats its stored color as the
+  // starting point, not as "explicitly chosen" for this edit.
+  const [colorTouched, setColorTouched] = useState(false);
+
+  function handleCategorySelect(name: string) {
+    const cat = name ? categories.find((c) => c.name === name) : undefined;
+    setForm((f) => ({
+      ...f,
+      category: name || null,
+      color: !colorTouched && cat ? cat.color : f.color,
+    }));
+  }
 
   const openTasks = tasks.filter((t) => !t.done);
 
@@ -303,12 +383,24 @@ function CalBlockModal({ initial, date, startTime, tasks, onSave, onDelete, onCl
       <Field label="Color">
         <div className="flex items-center gap-2 flex-wrap">
           {Object.entries(BLOCK_COLORS).map(([name, c]) => (
-            <button key={name} onClick={() => setForm({ ...form, color: name })}
+            <button key={name} onClick={() => { setColorTouched(true); setForm({ ...form, color: name }); }}
               className={cn("h-5 w-5 rounded-full transition-all", c.dot,
                 form.color === name ? "ring-2 ring-offset-2 ring-ring scale-110" : "opacity-60 hover:opacity-100"
               )} />
           ))}
         </div>
+      </Field>
+      <Field label="Category (optional)">
+        <select
+          className={selectCls}
+          value={form.category ?? ""}
+          onChange={(e) => handleCategorySelect(e.target.value)}
+        >
+          <option value="">— none —</option>
+          {categories.map((c) => (
+            <option key={c.name} value={c.name}>{c.emoji} {c.name}</option>
+          ))}
+        </select>
       </Field>
       <Field label="Location (optional)">
         <div className="relative">
@@ -749,13 +841,17 @@ function TaskPopupChip({ t, parentTitle, scheduledMin, hasSteps, onToggle, onEdi
 
 // ── Time column ───────────────────────────────────────────────────────────────
 
-function TimeColumn({ date, isToday, blocks, systems, courseAssignments, scheduleEntries, actual, sessionsByBlock, onClickSlot, onClickBlock, onToggleWorked }: {
+function TimeColumn({ date, isToday, blocks, systems, courseAssignments, scheduleEntries, actual, sleepSpans, categories, sessionsByBlock, onClickSlot, onClickBlock, onToggleWorked }: {
   date: Date; isToday: boolean;
   blocks: CalBlock[];
   systems: SystemEntry[];
   courseAssignments: CourseAssignment[];
   scheduleEntries: ScheduleEntry[];
   actual?: ActualDay;
+  /** Always-on sleep band spans for this day — independent of `actual`/the Actual toggle. */
+  sleepSpans?: Span[];
+  /** For the block-label emoji prefix; empty array renders blocks with no prefix. */
+  categories: CoverageCategoryOption[];
   /** Sessions already logged, keyed by the occurrence's cal_block_id. */
   sessionsByBlock: Map<number, TaskSession>;
   onClickSlot: (date: string, time: string) => void;
@@ -780,7 +876,10 @@ function TimeColumn({ date, isToday, blocks, systems, courseAssignments, schedul
   const now = new Date();
   const nowMin = now.getHours() * 60 + now.getMinutes();
   const nowPx = minutesToPx(nowMin);
-  const showNow = isToday && nowMin >= HOUR_START * 60 && nowMin <= HOUR_END * 60;
+  // GRID_END_MIN (midnight), not HOUR_END * 60 (23:00) — see the comment on
+  // GRID_END_MIN. With the old bound the now-line silently vanished for the
+  // whole 23:00-24:00 hour.
+  const showNow = isToday && nowMin >= HOUR_START * 60 && nowMin <= GRID_END_MIN;
 
   return (
     <div className={cn("flex-1 min-w-0 border-r border-border relative", isToday && "bg-primary/[0.03]")}>
@@ -802,7 +901,10 @@ function TimeColumn({ date, isToday, blocks, systems, courseAssignments, schedul
             style={{ top: i * HOUR_PX + HOUR_PX / 2 }} />
         ))}
 
-        {/* Actual-day overlay — behind everything else, purely visual */}
+        {/* Sleep band — ALWAYS on, independent of the Actual toggle */}
+        {sleepSpans && sleepSpans.length > 0 && <SleepBand spans={sleepSpans} iso={iso} />}
+
+        {/* Actual-day overlay (screen/training) — behind everything else, purely visual */}
         {actual && <ActualOverlay actual={actual} iso={iso} />}
 
         {/* Current time indicator */}
@@ -816,7 +918,7 @@ function TimeColumn({ date, isToday, blocks, systems, courseAssignments, schedul
 
         {/* All timed events — unified overlap layout */}
         {(() => {
-          const timedSys = systems.filter((s) => s.start_time && systemScheduledFor(s, iso));
+          const timedSys = systems.filter((s) => s.start_time && isSystemScheduledOn(s, iso));
           const timedCAs = courseAssignments.filter((a) => a.start_time);
           const timedSEs = scheduleEntries.filter((e) => e.start_time);
 
@@ -998,7 +1100,12 @@ function TimeColumn({ date, isToday, blocks, systems, courseAssignments, schedul
                     </button>
                   )}
                   {b.is_recurring && <Repeat2 className={cn("h-2.5 w-2.5 shrink-0 opacity-70", clr.text)} />}
-                  <p className={cn("text-[11px] font-semibold leading-tight truncate", clr.text, worked && "line-through opacity-70")}>{b.title}</p>
+                  <p className={cn("text-[11px] font-semibold leading-tight truncate", clr.text, worked && "line-through opacity-70")}>
+                    {b.category && categories.find((c) => c.name === b.category)?.emoji
+                      ? `${categories.find((c) => c.name === b.category)!.emoji} `
+                      : ""}
+                    {b.title}
+                  </p>
                 </div>
                 {height > 30 && (
                   <p className={cn("text-[10px] leading-tight opacity-70", clr.text)}>{b.start_time}–{b.end_time}</p>
@@ -1764,6 +1871,18 @@ export function Week() {
   const [actualByDate, setActualByDate] = useState<Map<string, ActualDay>>(new Map());
   const toggleActual = () => setShowActual((v) => { localStorage.setItem("pf-week-show-actual", v ? "0" : "1"); return !v; });
 
+  // Sleep band — ALWAYS on (Phase E §7), independent of the "Actual" toggle
+  // above (which keeps gating screen + training, the heavier fetch). Loaded
+  // once per visible week via loadSleepWeek, the lightweight half of
+  // loadActualWeek.
+  const [sleepByDate, setSleepByDate] = useState<Map<string, Span[]>>(new Map());
+
+  // Category picker options — fetched once on mount (not per-week; the list
+  // rarely changes), falling back to the CATEGORIES constant on failure
+  // inside getCoverageCategories itself.
+  const [categories, setCategories] = useState<CoverageCategoryOption[]>([]);
+  useEffect(() => { getCoverageCategories().then(setCategories); }, []);
+
   // Weekly focus note — persisted per-week in localStorage
   const [weekNote, setWeekNote] = useState("");
 
@@ -1807,16 +1926,19 @@ export function Week() {
     return () => clearTimeout(t);
   }, [weekNote, start]);
 
-  // Scroll to 8am on week change (week view only)
+  // Scroll on week change so the former bounded window's start (5am) sits at
+  // the top of the now-full-24h grid, instead of dropping the user at
+  // midnight (week view only).
   useEffect(() => {
     if (view === "week" && gridRef.current) {
-      gridRef.current.scrollTop = (8 - HOUR_START) * HOUR_PX - 8;
+      gridRef.current.scrollTop = (DEFAULT_SCROLL_HOUR - HOUR_START) * HOUR_PX;
     }
   }, [start, view]);
 
-  // Actual-day data — loads once per visible week while the toggle is on;
-  // re-runs when the week navigates (start changes), not on unrelated
-  // re-renders. Off by default, so a plain week view never fires this.
+  // Actual-day data (screen/training) — loads once per visible week while
+  // the toggle is on; re-runs when the week navigates (start changes), not
+  // on unrelated re-renders. Off by default, so a plain week view never
+  // fires this.
   useEffect(() => {
     if (!showActual || view !== "week") return;
     let cancelled = false;
@@ -1825,6 +1947,18 @@ export function Week() {
       .catch(() => { if (!cancelled) setActualByDate(new Map()); });
     return () => { cancelled = true; };
   }, [showActual, view, start]);
+
+  // Sleep band data — ALWAYS loads for the visible week (not gated by
+  // showActual); degrades to an empty map silently, same as loadActualWeek,
+  // so a bridgeless browser dev run just shows no bands rather than erroring.
+  useEffect(() => {
+    if (view !== "week") return;
+    let cancelled = false;
+    loadSleepWeek(days.map(toISO))
+      .then((map) => { if (!cancelled) setSleepByDate(map); })
+      .catch(() => { if (!cancelled) setSleepByDate(new Map()); });
+    return () => { cancelled = true; };
+  }, [view, start]);
 
   // Week navigation
   const prevWeek = () => {
@@ -1966,7 +2100,7 @@ export function Week() {
     const loc  = d.location.trim()    || null;
     if (d.is_recurring) {
       const dow = d.recurrence === "weekly" ? d.days_of_week.join(",") : null;
-      await createRecurringCalBlock(d.title, d.start_time, d.end_time, d.color, d.recurrence, dow, modal.date, d.series_end_date || null, desc, loc);
+      await createRecurringCalBlock(d.title, d.start_time, d.end_time, d.color, d.recurrence, dow, modal.date, d.series_end_date || null, desc, loc, undefined, d.category);
       load();
     } else {
       let taskId = d.task_id;
@@ -1981,7 +2115,7 @@ export function Week() {
         taskId = newTask.id;
         setAllTasks((prev) => [toTaskWithContext(newTask), ...prev]);
       }
-      const b = await createCalBlock(modal.date, d.title, d.start_time, d.end_time, d.color, desc, loc, taskId);
+      const b = await createCalBlock(modal.date, d.title, d.start_time, d.end_time, d.color, desc, loc, taskId, d.category);
       setCalBlocks((prev) => [...prev, b]);
     }
     setModal(null);
@@ -1992,10 +2126,10 @@ export function Week() {
     const loc  = d.location.trim()    || null;
     if (block.is_recurring && block.recurring_id != null) {
       const dow = d.recurrence === "weekly" ? d.days_of_week.join(",") : null;
-      await updateRecurringCalBlock(block.recurring_id, d.title, d.start_time, d.end_time, d.color, d.recurrence, dow, d.series_end_date || null, desc, loc);
+      await updateRecurringCalBlock(block.recurring_id, d.title, d.start_time, d.end_time, d.color, d.recurrence, dow, d.series_end_date || null, desc, loc, d.category);
       load();
     } else {
-      const b = await updateCalBlock(block.id, d.title, d.start_time, d.end_time, d.color, desc, loc, d.task_id);
+      const b = await updateCalBlock(block.id, d.title, d.start_time, d.end_time, d.color, desc, loc, d.task_id, d.category);
       setCalBlocks((prev) => prev.map((x) => x.id === block.id ? b : x));
     }
     setModal(null);
@@ -2077,7 +2211,7 @@ export function Week() {
   const mobileTimelineRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
     if (isMobile && mobileTimelineRef.current) {
-      mobileTimelineRef.current.scrollTop = (8 - HOUR_START) * HOUR_PX;
+      mobileTimelineRef.current.scrollTop = (DEFAULT_SCROLL_HOUR - HOUR_START) * HOUR_PX;
     }
   }, [isMobile, selectedDay]);
 
@@ -2091,11 +2225,11 @@ export function Week() {
             onClose={() => setModal(null)} />
         )}
         {modal?.kind === "create-block" && (
-          <CalBlockModal date={modal.date} startTime={modal.startTime} tasks={allTasks}
+          <CalBlockModal date={modal.date} startTime={modal.startTime} tasks={allTasks} categories={categories}
             onSave={handleCreateBlock} onClose={() => setModal(null)} />
         )}
         {modal?.kind === "edit-block" && (
-          <CalBlockModal initial={modal.block} date={modal.block.date} startTime={modal.block.start_time} tasks={allTasks}
+          <CalBlockModal initial={modal.block} date={modal.block.date} startTime={modal.block.start_time} tasks={allTasks} categories={categories}
             onSave={(d) => handleEditBlock(modal.block, d)}
             onDelete={() => handleDeleteBlock(modal.block)}
             onClose={() => setModal(null)} />
@@ -2246,6 +2380,8 @@ export function Week() {
               systems={systems}
               courseAssignments={selCAAll}
               scheduleEntries={scheduleEntriesFor(selectedDay)}
+              sleepSpans={sleepByDate.get(selectedDay)}
+              categories={categories}
               sessionsByBlock={sessionsByBlock}
               onClickSlot={(date, time) => setModal({ kind: "create-block", date, startTime: time })}
               onClickBlock={(b) => setModal({ kind: "edit-block", block: b })}
@@ -2314,13 +2450,17 @@ export function Week() {
           >
             Actual
           </button>
-          {showActual && (
-            <div className="flex items-center gap-2 pl-0.5">
-              <span className="flex items-center gap-1 text-[10px] text-muted-foreground"><span className="h-1.5 w-1.5 rounded-full bg-indigo-400" />Sleep</span>
-              <span className="flex items-center gap-1 text-[10px] text-muted-foreground"><span className="h-1.5 w-1.5 rounded-full bg-sky-400" />Screen</span>
-              <span className="flex items-center gap-1 text-[10px] text-muted-foreground"><span className="h-1.5 w-1.5 rounded-full bg-emerald-400" />Training</span>
-            </div>
-          )}
+          {/* Sleep is always-on now, so its legend dot shows regardless of the toggle;
+              Screen/Training stay behind it since they're the heavier fetch. */}
+          <div className="flex items-center gap-2 pl-0.5">
+            <span className="flex items-center gap-1 text-[10px] text-muted-foreground"><span className="h-1.5 w-1.5 rounded-full bg-indigo-400" />Sleep</span>
+            {showActual && (
+              <>
+                <span className="flex items-center gap-1 text-[10px] text-muted-foreground"><span className="h-1.5 w-1.5 rounded-full bg-sky-400" />Screen</span>
+                <span className="flex items-center gap-1 text-[10px] text-muted-foreground"><span className="h-1.5 w-1.5 rounded-full bg-emerald-400" />Training</span>
+              </>
+            )}
+          </div>
         </div>
       </div>
 
@@ -2490,6 +2630,8 @@ export function Week() {
                       courseAssignments={items.course_assignments.filter((a) => a.due_date === iso)}
                       scheduleEntries={scheduleEntriesFor(iso)}
                       actual={showActual ? actualByDate.get(iso) : undefined}
+                      sleepSpans={sleepByDate.get(iso)}
+                      categories={categories}
                       sessionsByBlock={sessionsByBlock}
                       onClickSlot={(date, time) => setModal({ kind: "create-block", date, startTime: time })}
                       onClickBlock={(b) => setModal({ kind: "edit-block", block: b })}

@@ -18,6 +18,18 @@
  * Each activation is also logged to PathFinder's calendar (`pf_cal_blocks`) so
  * the meal shows up in the Week view. That insert is best-effort: a failed log
  * must not roll back an already-running session.
+ *
+ * Protocol tie-in (added 2026-08-21): each card also shows what Protocol's
+ * meal planner says was planned for today — a read-only reminder, not a new
+ * write surface. `protocol_meal_plan_entries` / `protocol_foods` carry a
+ * `widget_anon_read` SELECT policy pinned to the owner uid (same one the iOS
+ * meal widget reads with), so the anon client can fetch today's plan. The
+ * `logged` flag is written exclusively through the `meal-log` edge function
+ * (see `supabase/functions/meal-log` and the 2026-08-13 migration comment on
+ * `widget_anon_read`) using a scoped `WIDGET_MEAL_KEY` secret — today that key
+ * is wired only into the iOS widget's CI-generated `Secrets.swift`, never
+ * into this web bundle. Until it is, there is no tap-to-log here: this reads
+ * the plan and shows it, nothing more.
  */
 
 import { useCallback, useEffect, useRef, useState } from "react";
@@ -25,6 +37,20 @@ import { supabasePublic } from "../supabase";
 import { nodeUserId } from "../nodeUser";
 
 type MealKey = "breakfast" | "lunch" | "dinner";
+
+/** A resolved (name already joined) line from today's Protocol meal plan. */
+type PlannedMealEntry = {
+  id: string;
+  slot: MealKey;
+  name: string;
+  logged: boolean;
+};
+
+// Same owner uid as `meal-log`'s OWNER_UID and the `widget_anon_read` RLS
+// policies on protocol_meal_plan_entries/protocol_foods — this is a
+// single-user app, so the plan we show is always this uid's, independent of
+// `nodeUserId()` (which scopes the *local grid node's* own tables).
+const PROTOCOL_OWNER_UID = "a33625c2-4dd2-44fa-b2e5-4d455eeac59d";
 
 type MealTarget = {
   id: string;
@@ -137,6 +163,10 @@ export function MealsPanel() {
   const [addTarget, setAddTarget] = useState("");
   // Re-render clock for the countdown; only ticks while a session is active.
   const [nowMs, setNowMs] = useState(() => Date.now());
+  // Today's Protocol meal plan, read-only — see file header for why there's
+  // no write path yet. Empty on fetch failure or no plan; never blocks the
+  // rest of the panel.
+  const [mealPlan, setMealPlan] = useState<PlannedMealEntry[]>([]);
 
   const alive = useRef(true);
   useEffect(() => {
@@ -187,6 +217,66 @@ export function MealsPanel() {
     if (!w.error) setSites((w.data ?? []) as BlockedSite[]);
     setError("");
   }, []);
+
+  // Today's Protocol meal plan — a reminder line only, so a failure here
+  // degrades silently (empty plan) instead of touching `error`, which is
+  // reserved for the meal-session machinery above.
+  const loadMealPlan = useCallback(async () => {
+    try {
+      const today = localParts(new Date()).date;
+      const { data: rows, error: rowsErr } = await supabasePublic
+        .from("protocol_meal_plan_entries")
+        .select("id,slot,logged,meal_id,food_id")
+        .eq("user_id", PROTOCOL_OWNER_UID)
+        .eq("date", today)
+        .order("sort_order", { ascending: true });
+      if (rowsErr || !rows || rows.length === 0) {
+        if (alive.current) setMealPlan([]);
+        return;
+      }
+
+      const mealIds = Array.from(
+        new Set(rows.map((r) => r.meal_id).filter((v): v is string => !!v)),
+      );
+      const foodIds = Array.from(
+        new Set(rows.map((r) => r.food_id).filter((v): v is string => !!v)),
+      );
+
+      const [mealsRes, foodsRes] = await Promise.all([
+        mealIds.length
+          ? supabasePublic.from("protocol_meals").select("id,name").in("id", mealIds)
+          : Promise.resolve({ data: [] as { id: string; name: string }[] }),
+        foodIds.length
+          ? supabasePublic.from("protocol_foods").select("id,name").in("id", foodIds)
+          : Promise.resolve({ data: [] as { id: string; name: string }[] }),
+      ]);
+
+      const nameById = new Map<string, string>();
+      for (const m of mealsRes.data ?? []) nameById.set(m.id, m.name);
+      for (const f of foodsRes.data ?? []) nameById.set(f.id, f.name);
+
+      // Only breakfast/lunch/dinner have a card; Protocol's `snack` slot (and
+      // any future slot) has nowhere to render here, so it's dropped.
+      const resolved: PlannedMealEntry[] = rows
+        .filter((r) => r.slot === "breakfast" || r.slot === "lunch" || r.slot === "dinner")
+        .map((r) => {
+          const refId = r.meal_id ?? r.food_id ?? null;
+          // A food row the owner didn't contribute stays hidden to anon
+          // (widget_anon_read is owner-scoped on protocol_foods too) — same
+          // generic fallback the iOS widget uses for the same case.
+          const name = (refId && nameById.get(refId)) || "Meal";
+          return { id: r.id as string, slot: r.slot as MealKey, name, logged: Boolean(r.logged) };
+        });
+
+      if (alive.current) setMealPlan(resolved);
+    } catch {
+      if (alive.current) setMealPlan([]);
+    }
+  }, []);
+
+  useEffect(() => {
+    loadMealPlan().catch(() => {});
+  }, [loadMealPlan]);
 
   useEffect(() => {
     load().catch(() => {});
@@ -253,6 +343,8 @@ export function MealsPanel() {
         // same date row — clamp so the calendar entry stays renderable.
         end_time: endParts.date === date ? endParts.hm : "23:59",
         color: meal.calColor,
+        // Phase E: every meal session is unambiguously the Meals category.
+        category: "Meals",
         description: `Nexus Local meal session — unblocked for ${SESSION_MINUTES} min: ${
           names.join(", ") || "no targets"
         }`,
@@ -342,6 +434,7 @@ export function MealsPanel() {
           ? Math.max(0, Math.ceil((Date.parse(running.ends_at) - nowMs) / 1000))
           : 0;
         const adding = addingFor === meal.key;
+        const planned = mealPlan.filter((p) => p.slot === meal.key);
 
         return (
           <div
@@ -375,6 +468,20 @@ export function MealsPanel() {
                 </button>
               )}
             </div>
+
+            {/* What Protocol planned for this meal today — read-only reminder,
+                reserves no space when there's nothing planned. */}
+            {planned.length > 0 && (
+              <p className="mt-1 truncate text-[10px] text-white/35">
+                🍽 planned:{" "}
+                {planned.map((p, i) => (
+                  <span key={p.id} className={p.logged ? "text-white/25 line-through" : undefined}>
+                    {i > 0 ? ", " : ""}
+                    {p.name}
+                  </span>
+                ))}
+              </p>
+            )}
 
             {/* Targets this meal opens. */}
             <div className="mt-2 flex flex-wrap items-center gap-1">

@@ -17,18 +17,23 @@ function sessionSpanEnd(startMs: number, durationSec: number): number {
   return startMs + Math.max(0, durationSec) * 1000;
 }
 
-export async function loadActualWeek(dates: string[]): Promise<Map<string, ActualDay>> {
-  const result = new Map<string, ActualDay>();
-  for (const d of dates) result.set(d, { sleep: [], screen: [], training: [] });
+/**
+ * Sleep only, clipped per day — split out of `loadActualWeek` so Week.tsx can
+ * render the always-on sleep band (Phase E §7) without paying for the
+ * screen/training queries that stay gated behind the "Actual" toggle.
+ */
+export async function loadSleepWeek(dates: string[]): Promise<Map<string, Span[]>> {
+  const result = new Map<string, Span[]>();
+  for (const d of dates) result.set(d, []);
   if (dates.length === 0) return result;
 
   const sorted = [...dates].sort();
   const first = sorted[0];
   const last = sorted[sorted.length - 1];
 
-  // Sleep — one query across the whole visible range. A night ending on day
-  // N is filed under `date = N`, tonight's bedtime under `date = N+1`; both
-  // can put minutes inside day N's window, so the range spills one day past
+  // One query across the whole visible range. A night ending on day N is
+  // filed under `date = N`, tonight's bedtime under `date = N+1`; both can
+  // put minutes inside day N's window, so the range spills one day past
   // `last`. No user_id filter: widget_anon_read already scopes anon to the
   // owner's rows.
   const { data: sleepRows } = await supabase
@@ -44,6 +49,33 @@ export async function loadActualWeek(dates: string[]): Promise<Map<string, Actua
     if (s === null || e === null || e <= s) continue;
     sleepSpans.push({ start: s, end: e, label: "Sleep" });
   }
+
+  for (const date of dates) {
+    const winStart = dayStartMs(date);
+    const winEnd = dayStartMs(shiftYmd(date, 1));
+    for (const span of sleepSpans) {
+      const clipped = clip(span, winStart, winEnd);
+      if (clipped) result.get(date)!.push(clipped);
+    }
+  }
+
+  return result;
+}
+
+export async function loadActualWeek(dates: string[]): Promise<Map<string, ActualDay>> {
+  const result = new Map<string, ActualDay>();
+  for (const d of dates) result.set(d, { sleep: [], screen: [], training: [] });
+  if (dates.length === 0) return result;
+
+  const sorted = [...dates].sort();
+  const first = sorted[0];
+  const last = sorted[sorted.length - 1];
+
+  // Sleep — reuses loadSleepWeek's own query/clipping so the two loaders
+  // never drift; loadActualWeek still returns it on ActualDay for callers
+  // that read the combined shape.
+  const sleepByDate = await loadSleepWeek(dates);
+  for (const [date, spans] of sleepByDate) result.get(date)!.sleep = spans;
 
   // Training — Garmin activities with a start instant, reconstructed exactly
   // as DayCoveragePanel does: workout end = started_at + duration_min·60s
@@ -114,15 +146,11 @@ export async function loadActualWeek(dates: string[]): Promise<Map<string, Actua
     }
   });
 
-  // Clip the whole-range sleep/training spans per day window.
+  // Clip the whole-range training spans per day window (sleep already done above).
   for (const date of dates) {
     const winStart = dayStartMs(date);
     const winEnd = dayStartMs(shiftYmd(date, 1));
     const day = result.get(date)!;
-    for (const span of sleepSpans) {
-      const clipped = clip(span, winStart, winEnd);
-      if (clipped) day.sleep.push(clipped);
-    }
     for (const span of trainingSpans) {
       const clipped = clip(span, winStart, winEnd);
       if (clipped) day.training.push(clipped);

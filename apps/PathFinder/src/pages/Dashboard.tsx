@@ -1,6 +1,6 @@
 import { useEffect, useState, useCallback, useMemo, useRef } from "react";
 import {
-  PanelRight, PanelRightClose,
+  PanelRight, PanelRightClose, CalendarClock,
   CheckCircle, CheckSquare, Check, ChevronDown, ChevronRight,
   Plus, X, Clock, Star, Pencil, BookOpen,
   Eye, EyeOff,
@@ -1463,13 +1463,18 @@ function DueChip({ due, today }: { due: string; today: string }) {
  * usually a step, not a whole task.
  */
 function DashTaskRow({
-  task, steps, today, expanded, onToggleExpand, onToggle, onEdit, onDelete,
+  task, steps, today, expanded, blocksByTask, workedBlockIds,
+  onToggleExpand, onToggle, onEdit, onDelete,
 }: {
   task: TaskWithContext;
   /** Direct subtasks. Named `steps`, not `children` — that prop name is React's. */
   steps: TaskWithContext[];
   today: string;
   expanded: boolean;
+  /** Today's calendar blocks, keyed by the task they commit time to. */
+  blocksByTask: Map<number, CalBlock[]>;
+  /** Block ids already ticked as worked, so the overview can show what's done. */
+  workedBlockIds: Set<number>;
   onToggleExpand: () => void;
   onToggle: (id: number) => void;
   onEdit: () => void;
@@ -1501,10 +1506,15 @@ function DashTaskRow({
 
         {isFullTask(task) && <UrgencyMeter urgency={plan.urgency} />}
 
+        {/*
+          With steps, clicking the title unfolds — that is the gesture people
+          reach for, and the planner is still one click away inside. Without
+          steps there is nothing to unfold, so the click opens the planner.
+        */}
         <button
-          onClick={onEdit}
+          onClick={hasKids ? onToggleExpand : onEdit}
           className="flex-1 min-w-0 text-left text-sm truncate hover:text-primary transition-colors"
-          title={task.title}
+          title={hasKids ? (expanded ? "Collapse" : "Show steps and today's plan") : task.title}
         >
           {task.title}
         </button>
@@ -1534,31 +1544,160 @@ function DashTaskRow({
       </div>
 
       {expanded && hasKids && (
-        <div className="flex flex-col gap-0.5 ml-4 pl-2 border-l border-border/60">
-          {steps.map((c) => (
-            <div key={c.id} className="group/step flex items-center gap-2 rounded-md pr-1 py-0.5 hover:bg-secondary/40 transition-colors">
-              <button
-                onClick={() => onToggle(c.id)}
-                className={cn(
-                  "flex h-3 w-3 shrink-0 items-center justify-center rounded-[4px] border transition-colors",
-                  c.done
-                    ? "bg-primary border-primary text-primary-foreground"
-                    : "border-border hover:border-primary",
-                )}
-              >
-                {c.done && <Check className="h-2 w-2" />}
-              </button>
-              <span className={cn("flex-1 min-w-0 truncate text-xs", c.done && "line-through text-muted-foreground")}>
-                {c.title}
-              </span>
-              {c.time_estimate ? (
-                <span className="shrink-0 text-[10px] tabular-nums text-muted-foreground/60">
-                  {formatMinutes(c.time_estimate)}
-                </span>
-              ) : null}
-              {c.due_date && <DueChip due={c.due_date} today={today} />}
-            </div>
-          ))}
+        <StepOverview
+          steps={steps}
+          today={today}
+          effortMin={effort}
+          doneKids={doneKids}
+          blocksByTask={blocksByTask}
+          workedBlockIds={workedBlockIds}
+          onToggle={onToggle}
+          onPlan={onEdit}
+        />
+      )}
+    </div>
+  );
+}
+
+/**
+ * The unfolded view of a broken-down task.
+ *
+ * Answers two questions the collapsed row can't: how much of this is actually
+ * done, and — the one that matters on a dashboard — *what am I supposed to do
+ * about it today*. Steps with calendar time today are lifted into their own
+ * section at the top with their times; everything else sits below as context.
+ *
+ * A breakdown that only lists steps is a worse version of the planner. The point
+ * of showing it here is the intersection with today.
+ */
+function StepOverview({
+  steps, today, effortMin, doneKids, blocksByTask, workedBlockIds, onToggle, onPlan,
+}: {
+  steps: TaskWithContext[];
+  today: string;
+  effortMin: number;
+  doneKids: number;
+  blocksByTask: Map<number, CalBlock[]>;
+  workedBlockIds: Set<number>;
+  onToggle: (id: number) => void;
+  onPlan: () => void;
+}) {
+  // Done steps are split out rather than lumped into "remaining" — a completed
+  // step listed under that heading reads as outstanding work at a glance, which
+  // is the opposite of what it is.
+  const scheduledToday = steps.filter((c) => !c.done && (blocksByTask.get(c.id)?.length ?? 0) > 0);
+  const scheduledIds = new Set(scheduledToday.map((c) => c.id));
+  const remaining = steps.filter((c) => !c.done && !scheduledIds.has(c.id));
+  const completed = steps.filter((c) => c.done);
+  const pct = steps.length === 0 ? 0 : Math.round((doneKids / steps.length) * 100);
+
+  const todayMinutes = scheduledToday.reduce(
+    (sum, c) => sum + (blocksByTask.get(c.id) ?? []).reduce(
+      (m, b) => m + blockMinutes(b.start_time, b.end_time), 0),
+    0,
+  );
+
+  const stepRow = (c: TaskWithContext, blocks: CalBlock[]) => {
+    const worked = blocks.length > 0 && blocks.every((b) => workedBlockIds.has(b.id));
+    return (
+      <div key={c.id} className="flex items-center gap-2 rounded-md px-1 py-1 hover:bg-secondary/50 transition-colors">
+        <button
+          onClick={() => onToggle(c.id)}
+          className={cn(
+            "flex h-3.5 w-3.5 shrink-0 items-center justify-center rounded-[4px] border transition-colors",
+            c.done ? "bg-primary border-primary text-primary-foreground" : "border-border hover:border-primary",
+          )}
+        >
+          {c.done && <Check className="h-2 w-2" />}
+        </button>
+        <span className={cn("flex-1 min-w-0 truncate text-xs", c.done && "line-through text-muted-foreground")}>
+          {c.title}
+        </span>
+        {blocks.map((b) => (
+          <span
+            key={b.id}
+            className={cn(
+              "shrink-0 inline-flex items-center gap-0.5 rounded px-1 py-px text-[10px] tabular-nums",
+              worked ? "bg-emerald-500/15 text-emerald-600 dark:text-emerald-400"
+                     : "bg-blue-500/15 text-blue-600 dark:text-blue-400",
+            )}
+            title={worked ? "Worked" : `Scheduled ${b.start_time}–${b.end_time}`}
+          >
+            <CalendarClock className="h-2.5 w-2.5" />{b.start_time}
+          </span>
+        ))}
+        {c.time_estimate ? (
+          <span className="shrink-0 text-[10px] tabular-nums text-muted-foreground/60">
+            {formatMinutes(c.time_estimate)}
+          </span>
+        ) : null}
+        {c.due_date && <DueChip due={c.due_date} today={today} />}
+      </div>
+    );
+  };
+
+  return (
+    <div className="mt-1 ml-1 flex flex-col gap-2 rounded-lg border border-border/60 bg-secondary/20 p-2">
+      {/* Summary strip */}
+      <div className="flex items-center gap-2">
+        <div className="h-1.5 flex-1 overflow-hidden rounded-full bg-secondary">
+          <div
+            className={cn("h-full rounded-full transition-all", pct === 100 ? "bg-emerald-500" : "bg-primary")}
+            style={{ width: `${pct}%` }}
+          />
+        </div>
+        <span className="shrink-0 text-[10px] tabular-nums text-muted-foreground">
+          {doneKids}/{steps.length} steps
+        </span>
+        {effortMin > 0 && (
+          <span className="shrink-0 text-[10px] tabular-nums text-muted-foreground/70">
+            {formatMinutes(effortMin)} total
+          </span>
+        )}
+        <button
+          onClick={onPlan}
+          className="shrink-0 rounded border border-border px-1.5 py-px text-[10px] text-muted-foreground hover:text-foreground hover:bg-secondary transition-colors"
+        >
+          Plan
+        </button>
+      </div>
+
+      {/* Today */}
+      {scheduledToday.length > 0 ? (
+        <div className="flex flex-col gap-0.5">
+          <div className="flex items-baseline gap-1.5 px-1">
+            <span className="text-[10px] font-semibold uppercase tracking-wide text-emerald-600 dark:text-emerald-400">
+              Today
+            </span>
+            <span className="text-[10px] tabular-nums text-muted-foreground/60">
+              {formatMinutes(todayMinutes)} booked
+            </span>
+          </div>
+          {scheduledToday.map((c) => stepRow(c, blocksByTask.get(c.id) ?? []))}
+        </div>
+      ) : (
+        <p className="px-1 text-[10px] text-muted-foreground/60">
+          Nothing from this task is on today's calendar.
+        </p>
+      )}
+
+      {/* Not scheduled today, still to do */}
+      {remaining.length > 0 && (
+        <div className="flex flex-col gap-0.5">
+          <span className="px-1 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground/50">
+            Not scheduled
+          </span>
+          {remaining.map((c) => stepRow(c, []))}
+        </div>
+      )}
+
+      {/* Finished */}
+      {completed.length > 0 && (
+        <div className="flex flex-col gap-0.5">
+          <span className="px-1 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground/40">
+            Done
+          </span>
+          {completed.map((c) => stepRow(c, []))}
         </div>
       )}
     </div>
@@ -1566,11 +1705,23 @@ function DashTaskRow({
 }
 
 function TodoList({
-  tasks, plans, courseAssignments, onToggleTask, onCreateTask, onDeleteTask, onUpdateTask, onToggleAssignment,
+  tasks, allTasks, plans, courseAssignments, blocksByTask, workedBlockIds, onToggleTask, onCreateTask, onDeleteTask, onUpdateTask, onToggleAssignment,
 }: {
+  /** Top-level tasks to list — already filtered to today. */
   tasks: TaskWithContext[];
+  /**
+   * Every task, used ONLY to resolve a parent's steps.
+   *
+   * `tasks` arrives filtered to today, and a step usually has no due date at
+   * all — so building the child map from it found nothing, `hasKids` was false,
+   * and clicking a broken-down task opened the edit form instead of unfolding.
+   * The rows shown stay filtered; only the lookup is global.
+   */
+  allTasks: TaskWithContext[];
   plans: Plan[];
   courseAssignments: CourseAssignment[];
+  blocksByTask: Map<number, CalBlock[]>;
+  workedBlockIds: Set<number>;
   onToggleTask: (id: number) => void;
   onCreateTask: (payload: { plan_id?: number | null; title: string; priority?: string; due_date?: string | null; category?: string | null }) => void;
   onDeleteTask: (id: number) => void;
@@ -1648,14 +1799,14 @@ function TodoList({
   // planning a task more carefully would make the day look busier.
   const childrenByParent = useMemo(() => {
     const m = new Map<number, TaskWithContext[]>();
-    for (const t of tasks) {
+    for (const t of allTasks) {
       if (t.parent_id == null) continue;
       const b = m.get(t.parent_id);
       if (b) b.push(t); else m.set(t.parent_id, [t]);
     }
     for (const list of m.values()) list.sort((a, b) => a.sort_order - b.sort_order || a.id - b.id);
     return m;
-  }, [tasks]);
+  }, [allTasks]);
 
   const open = useMemo(() => {
     const p = { high: 0, medium: 1, low: 2 } as Record<string, number>;
@@ -1842,6 +1993,8 @@ function TodoList({
                                 steps={childrenByParent.get(task.id) ?? []}
                                 today={todayDate()}
                                 expanded={expandedTasks.has(task.id)}
+                                blocksByTask={blocksByTask}
+                                workedBlockIds={workedBlockIds}
                                 onToggleExpand={() => toggleTaskExpand(task.id)}
                                 onToggle={onToggleTask}
                                 onEdit={() => startEdit(task)}
@@ -2068,6 +2221,22 @@ export function Dashboard() {
     window.addEventListener("pointercancel", onUp);
   }, []);
 
+  // Today's calendar commitments, grouped by the task they belong to. Dashboard
+  // already loads exactly one day of blocks, so "scheduled today" is free — no
+  // extra query for the unfolded task overview.
+  const blocksByTask = useMemo(() => {
+    const m = new Map<number, CalBlock[]>();
+    for (const b of calBlocks) {
+      if (b.task_id == null) continue;
+      const bucket = m.get(b.task_id);
+      if (bucket) bucket.push(b); else m.set(b.task_id, [b]);
+    }
+    for (const list of m.values()) list.sort((a, b) => a.start_time.localeCompare(b.start_time));
+    return m;
+  }, [calBlocks]);
+
+  const workedBlockIds = useMemo(() => new Set(sessionsByBlock.keys()), [sessionsByBlock]);
+
   // Quick tasks (reminders / chores / shopping) are standing lists — they show
   // regardless of due date, unlike project tasks which only surface on their day.
   const todayTasks   = useMemo(
@@ -2221,8 +2390,11 @@ export function Dashboard() {
           {/* To-Do List */}
           <TodoList
             tasks={todayTasks}
+            allTasks={tasks}
             plans={plans}
             courseAssignments={courseAssignments}
+            blocksByTask={blocksByTask}
+            workedBlockIds={workedBlockIds}
             onToggleTask={handleToggleTask}
             onCreateTask={handleCreateTask}
             onDeleteTask={handleDeleteTask}

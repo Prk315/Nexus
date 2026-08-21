@@ -15,6 +15,8 @@ import type {
   CompletionMode, TaskType,
 } from "../types";
 import { coverageByTask } from "./taskTree";
+import { isSystemDue } from "./systems";
+import { CATEGORIES } from "@nexus/core/categories";
 
 
 // ─── helpers ────────────────────────────────────────────────────────────────
@@ -243,6 +245,7 @@ function mapSystem(r: any): SystemEntry {
     frequency: r.frequency,
     days_of_week: r.days_of_week,
     last_done: r.last_done,
+    interval_days: r.interval_days ?? null,
     streak_count: r.streak_count,
     streak_updated: r.streak_updated,
     created_at: r.created_at,
@@ -407,6 +410,7 @@ function expandRecurring(block: any, startDate: string, endDate: string): CalBlo
         // Every occurrence carries the series' task link, so a recurring
         // commitment counts once per occurrence in the coverage roll-up.
         task_id: block.task_id != null ? num(block.task_id) : null,
+        category: block.category ?? null,
       });
     }
     cursor.setUTCDate(cursor.getUTCDate() + 1);
@@ -767,6 +771,51 @@ export const saveTaskSubtype = async (
   if (error) err(error);
 };
 
+/** All subtype rows of one sparse kind, for panels that need them in bulk. */
+export const getTaskSubtypeRows = async (
+  type: Exclude<TaskType, "task">,
+): Promise<Record<string, any>[]> => {
+  const { data, error } = await supabase
+    .from(SUBTYPE_TABLE[type]).select("*").eq("user_id", getUserId());
+  if (error) err(error);
+  return data ?? [];
+};
+
+/**
+ * Turns a chore into a recurring system, then deletes the chore.
+ *
+ * Recurrence lives in exactly one place — pf_systems — so a chore that should
+ * come back becomes a system with `frequency: 'interval'` rather than growing a
+ * second engine on pf_tasks. `interval` recurs N days after the last completion,
+ * which is what a chore means; 'weekly' would pin it to a fixed weekday.
+ *
+ * Destructive on the task, deliberately: leaving both behind would show the
+ * chore twice, once in Chores and once in Systems, with only one of them
+ * recurring. The title and area survive on the system.
+ */
+export const promoteChoreToSystem = async (
+  taskId: number, intervalDays: number,
+): Promise<SystemEntry> => {
+  const { data: task, error: e1 } = await supabase
+    .from("pf_tasks").select("title, task_type").eq("id", taskId).single();
+  if (e1) err(e1);
+  if (task!.task_type !== "chore") throw "Only chores can be made recurring.";
+
+  const sub = await getTaskSubtype(taskId, "chore");
+  const area = sub?.area ? String(sub.area) : null;
+
+  const system = await createSystem({
+    title: task!.title,
+    description: area ? `Area: ${area}` : null,
+    frequency: "interval",
+    interval_days: Math.max(1, Math.round(intervalDays)),
+  });
+
+  // Only after the system exists — a failure above must not lose the chore.
+  await deleteTask(taskId);
+  return system;
+};
+
 // ─── Breakdown ──────────────────────────────────────────────────────────────
 
 /** Every task in `rootId`'s subtree, including the root itself. */
@@ -948,6 +997,7 @@ export const getTaskBlocks = async (taskIds: number[]): Promise<CalBlock[]> => {
     is_recurring: false, recurring_id: null, recurrence: null,
     days_of_week: null, series_start_date: null, series_end_date: null,
     task_id: b.task_id ? num(b.task_id) : null,
+    category: b.category ?? null,
   }));
 
   // Series are returned as a single representative entry (dated at the series
@@ -960,6 +1010,7 @@ export const getTaskBlocks = async (taskIds: number[]): Promise<CalBlock[]> => {
     is_recurring: true, recurring_id: num(r.id), recurrence: r.recurrence,
     days_of_week: r.days_of_week, series_start_date: r.start_date,
     series_end_date: r.end_date, task_id: r.task_id ? num(r.task_id) : null,
+    category: r.category ?? null,
   }));
 
   return [...oneOff, ...seriesRows].sort(
@@ -1161,6 +1212,7 @@ export const createSystem = async (payload: {
   title: string; description?: string | null; frequency: string;
   days_of_week?: string | null; start_time?: string | null; end_time?: string | null;
   is_lifestyle?: boolean; lifestyle_area_id?: number | null;
+  interval_days?: number | null;
 }): Promise<SystemEntry> => {
   const { data, error } = await supabase
     .from("pf_systems").insert({ user_id: getUserId(), ...payload }).select().single();
@@ -1172,6 +1224,7 @@ export const updateSystem = async (id: number, payload: {
   title: string; description?: string | null; frequency: string;
   days_of_week?: string | null; start_time?: string | null; end_time?: string | null;
   is_lifestyle?: boolean; lifestyle_area_id?: number | null;
+  interval_days?: number | null;
 }): Promise<SystemEntry> => {
   const { data, error } = await supabase
     .from("pf_systems").update(payload).eq("id", id).select().single();
@@ -1287,16 +1340,9 @@ export const getTodayFocus = async (): Promise<TodayFocus> => {
   const plansMap = new Map((plans ?? []).map((p) => [num(p.id), p]));
   const allTasks = (tasks ?? []).map((t) => mapTaskWithContext(t, plansMap));
 
-  const systemsDue = (systems ?? []).filter((s) => {
-    if (s.last_done === today) return false;
-    if (s.frequency === "daily") return true;
-    if (s.frequency === "weekly") {
-      if (!s.days_of_week) return false;
-      const todayDow = new Date().getDay();
-      return s.days_of_week.split(",").map(Number).includes(todayDow);
-    }
-    return false;
-  }).map(mapSystem);
+  // Shared rule — see lib/systems.ts. This used to be an inline copy that
+  // disagreed with the other two about monthly and about unknown frequencies.
+  const systemsDue = (systems ?? []).map(mapSystem).filter((s) => isSystemDue(s, today));
 
   return {
     tasks_due_today: allTasks.filter((t) => t.due_date === today),
@@ -1760,6 +1806,7 @@ export const getCalBlocks = async (startDate: string, endDate: string): Promise<
     is_recurring: false, recurring_id: null, recurrence: null,
     days_of_week: null, series_start_date: null, series_end_date: null,
     task_id: b.task_id ? num(b.task_id) : null,
+    category: b.category ?? null,
   }));
 
   const virtual = (recurring ?? []).flatMap((r) => expandRecurring(r, startDate, endDate));
@@ -1769,30 +1816,57 @@ export const getCalBlocks = async (startDate: string, endDate: string): Promise<
   );
 };
 
+export type CoverageCategoryOption = { name: string; color: string; emoji: string };
+
+/**
+ * The 7 shared categories for the block category picker (Phase E), ordered by
+ * `sort`. Falls back to the `CATEGORIES` constant on any fetch failure or an
+ * empty table (e.g. the migration hasn't landed on this Supabase project yet
+ * from this machine's point of view) so the picker never renders empty.
+ */
+export const getCoverageCategories = async (): Promise<CoverageCategoryOption[]> => {
+  try {
+    const { data, error } = await supabase
+      .from("coverage_categories")
+      .select("name, color, emoji, sort")
+      .eq("user_id", getUserId())
+      .order("sort", { ascending: true });
+    if (error || !data || data.length === 0) throw error ?? new Error("coverage_categories empty");
+    return data.map((r: any) => ({ name: String(r.name), color: String(r.color), emoji: r.emoji ?? "" }));
+  } catch {
+    return CATEGORIES.map((c) => ({ name: c.name, color: c.color, emoji: c.emoji }));
+  }
+};
+
 export const createCalBlock = async (
   date: string, title: string, startTime: string, endTime: string,
   color: string, description: string | null, location: string | null,
-  taskId?: number | null,
+  taskId?: number | null, category?: string | null,
 ): Promise<CalBlock> => {
   const { data, error } = await supabase
     .from("pf_cal_blocks")
-    .insert({ user_id: getUserId(), date, title, start_time: startTime, end_time: endTime, color, description, location, task_id: taskId ?? null })
+    .insert({ user_id: getUserId(), date, title, start_time: startTime, end_time: endTime, color, description, location, task_id: taskId ?? null, category: category ?? null })
     .select().single();
   if (error) err(error);
-  return { id: num(data!.id), date: data!.date, title: data!.title, start_time: data!.start_time, end_time: data!.end_time, color: data!.color, description: data!.description, location: data!.location, created_at: data!.created_at, is_recurring: false, recurring_id: null, recurrence: null, days_of_week: null, series_start_date: null, series_end_date: null, task_id: data!.task_id ? num(data!.task_id) : null };
+  return { id: num(data!.id), date: data!.date, title: data!.title, start_time: data!.start_time, end_time: data!.end_time, color: data!.color, description: data!.description, location: data!.location, created_at: data!.created_at, is_recurring: false, recurring_id: null, recurrence: null, days_of_week: null, series_start_date: null, series_end_date: null, task_id: data!.task_id ? num(data!.task_id) : null, category: data!.category ?? null };
 };
 
 export const updateCalBlock = async (
   id: number, title: string, startTime: string, endTime: string,
   color: string, description: string | null, location: string | null,
-  taskId?: number | null,
+  taskId?: number | null, category?: string | null,
 ): Promise<CalBlock> => {
+  // `category` is only written when the caller actually passes it — omitting
+  // the argument (older call sites, e.g. Dashboard's block editor) must leave
+  // an existing category untouched rather than silently clearing it.
+  const patch: Record<string, unknown> = { title, start_time: startTime, end_time: endTime, color, description, location, task_id: taskId ?? null };
+  if (category !== undefined) patch.category = category;
   const { data, error } = await supabase
     .from("pf_cal_blocks")
-    .update({ title, start_time: startTime, end_time: endTime, color, description, location, task_id: taskId ?? null })
+    .update(patch)
     .eq("id", id).select().single();
   if (error) err(error);
-  return { id: num(data!.id), date: data!.date, title: data!.title, start_time: data!.start_time, end_time: data!.end_time, color: data!.color, description: data!.description, location: data!.location, created_at: data!.created_at, is_recurring: false, recurring_id: null, recurrence: null, days_of_week: null, series_start_date: null, series_end_date: null, task_id: data!.task_id ? num(data!.task_id) : null };
+  return { id: num(data!.id), date: data!.date, title: data!.title, start_time: data!.start_time, end_time: data!.end_time, color: data!.color, description: data!.description, location: data!.location, created_at: data!.created_at, is_recurring: false, recurring_id: null, recurrence: null, days_of_week: null, series_start_date: null, series_end_date: null, task_id: data!.task_id ? num(data!.task_id) : null, category: data!.category ?? null };
 };
 
 export const deleteCalBlock = async (id: number): Promise<void> => {
@@ -1806,11 +1880,11 @@ export const createRecurringCalBlock = async (
   title: string, startTime: string, endTime: string, color: string,
   recurrence: string, daysOfWeek: string | null, startDate: string,
   endDate: string | null, description: string | null, location: string | null,
-  taskId?: number | null,
+  taskId?: number | null, category?: string | null,
 ): Promise<RecurringCalBlock> => {
   const { data, error } = await supabase
     .from("pf_recurring_cal_blocks")
-    .insert({ user_id: getUserId(), title, start_time: startTime, end_time: endTime, color, recurrence, days_of_week: daysOfWeek, start_date: startDate, end_date: endDate, description, location, task_id: taskId ?? null })
+    .insert({ user_id: getUserId(), title, start_time: startTime, end_time: endTime, color, recurrence, days_of_week: daysOfWeek, start_date: startDate, end_date: endDate, description, location, task_id: taskId ?? null, category: category ?? null })
     .select().single();
   if (error) err(error);
   return data! as RecurringCalBlock;
@@ -1819,11 +1893,14 @@ export const createRecurringCalBlock = async (
 export const updateRecurringCalBlock = async (
   id: number, title: string, startTime: string, endTime: string, color: string,
   recurrence: string, daysOfWeek: string | null, endDate: string | null,
-  description: string | null, location: string | null,
+  description: string | null, location: string | null, category?: string | null,
 ): Promise<void> => {
+  // Same omit-means-untouched rule as updateCalBlock.
+  const patch: Record<string, unknown> = { title, start_time: startTime, end_time: endTime, color, recurrence, days_of_week: daysOfWeek, end_date: endDate, description, location };
+  if (category !== undefined) patch.category = category;
   const { error } = await supabase
     .from("pf_recurring_cal_blocks")
-    .update({ title, start_time: startTime, end_time: endTime, color, recurrence, days_of_week: daysOfWeek, end_date: endDate, description, location })
+    .update(patch)
     .eq("id", id);
   if (error) err(error);
 };
