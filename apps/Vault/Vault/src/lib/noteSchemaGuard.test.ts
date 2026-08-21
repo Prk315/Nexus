@@ -124,10 +124,12 @@ describe("auditNoteContent", () => {
 
 describe("note schema", () => {
   it("registers the block types the editor is expected to have", () => {
-    for (const name of ["doc", "paragraph", "heading", "bulletList", "orderedList", "blockquote", "codeBlock", "table", "inlineMath", "blockMath"]) {
+    for (const name of ["doc", "paragraph", "heading", "bulletList", "orderedList", "blockquote", "codeBlock", "table", "inlineMath", "blockMath", "taskList", "taskItem"]) {
       expect(Object.keys(schema.nodes), `missing node ${name}`).toContain(name);
     }
-    for (const name of ["bold", "italic", "highlight", "link"]) {
+    // link and underline come from StarterKit v3, not a separate install —
+    // if a future StarterKit drops them the toolbar buttons silently no-op.
+    for (const name of ["bold", "italic", "underline", "highlight", "link"]) {
       expect(Object.keys(schema.marks), `missing mark ${name}`).toContain(name);
     }
   });
@@ -172,6 +174,29 @@ describe("HTML round-trip", () => {
     ["blockquote", doc({ type: "blockquote", content: [para("quoted")] })],
     ["code block", doc({ type: "codeBlock", attrs: { language: null }, content: [{ type: "text", text: "x = 1" }] })],
     ["horizontal rule", doc({ type: "horizontalRule" }, para("after"))],
+    [
+      "task list",
+      doc({
+        type: "taskList",
+        content: [
+          { type: "taskItem", attrs: { checked: false }, content: [para("todo")] },
+          { type: "taskItem", attrs: { checked: true }, content: [para("done")] },
+        ],
+      }),
+    ],
+    [
+      "link mark",
+      doc({
+        type: "paragraph",
+        content: [
+          {
+            type: "text",
+            text: "a link",
+            marks: [{ type: "link", attrs: { href: "https://example.com", target: "_blank", rel: "noopener noreferrer nofollow", class: null, title: null } }],
+          },
+        ],
+      }),
+    ],
     [
       "bold + italic marks",
       doc({

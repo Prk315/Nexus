@@ -1,10 +1,15 @@
 import { useEditor, EditorContent } from "@tiptap/react";
+import { BubbleMenu } from "@tiptap/react/menus";
+import { Extension } from "@tiptap/core";
 import { useEffect, useMemo, useRef, useState } from "react";
 import katex from "katex";
 import { createSlashCommandsExtension, type SlashMenuState } from "../extensions/SlashCommands";
+import { buildBlockRegistry, actionsFor, type BlockAction } from "../extensions/blockRegistry";
 import { buildNoteExtensions, noteSchema } from "../extensions/noteExtensions";
 import { auditNoteContent, parseNoteContent } from "../lib/noteSchemaGuard";
 import { NoteSchemaError } from "./NoteSchemaError";
+import { NoteToolbar } from "./NoteToolbar";
+import { LinkDialog, type LinkDialogState } from "./LinkDialog";
 import { SlashCommandsList } from "./SlashCommandsList";
 import { HighlighterCatEditor } from "./HighlighterCatEditor";
 import { DatabaseInsertPicker } from "./DatabaseInsertPicker";
@@ -184,6 +189,7 @@ function NoteEditorInner({ content, onChange, nodeId, graph }: Props) {
   hardBlockedRef.current = hardBlocked;
   const [slashMenu, setSlashMenu] = useState<SlashMenuState | null>(null);
   const [mathEdit, setMathEdit] = useState<MathEditState | null>(null);
+  const [linkDialog, setLinkDialog] = useState<LinkDialogState | null>(null);
   const [nearRightEdge, setNearRightEdge] = useState(false);
   const [onPanel, setOnPanel] = useState(false);
   const wrapperRef = useRef<HTMLDivElement>(null);
@@ -198,16 +204,36 @@ function NoteEditorInner({ content, onChange, nodeId, graph }: Props) {
   setMenuRef.current = setSlashMenu;
 
   const keyHandlerRef = useRef<((event: KeyboardEvent) => boolean) | null>(null);
-  // Stable indirection so the slash extension (created once) always calls the
-  // latest DB-insert handler.
-  const dbInsertRef = useRef<((props: { editor: any; range: any }) => void) | null>(null);
+
+  // The registry is rebuilt whenever its inputs change (highlighters loading,
+  // a Database ancestor appearing), but the slash extension must be created
+  // exactly once — a new instance would rebuild the whole ProseMirror plugin
+  // stack. The ref is the seam between the two lifetimes.
+  const registryRef = useRef<BlockAction[]>([]);
 
   const slashExtRef = useRef(
     createSlashCommandsExtension(
+      () => registryRef.current,
       (s) => setMenuRef.current(s),
-      () => keyHandlerRef.current,
-      (props) => dbInsertRef.current?.(props)
+      () => keyHandlerRef.current
     )
+  );
+
+  // ⌘K. Bound here rather than in the Link extension because the handler opens
+  // React state, and this extension is created once so the keymap is stable.
+  const linkShortcutRef = useRef<((editor: any) => void) | null>(null);
+  const linkKeyExtRef = useRef(
+    Extension.create({
+      name: "noteLinkShortcut",
+      addKeyboardShortcuts() {
+        return {
+          "Mod-k": () => {
+            linkShortcutRef.current?.(this.editor);
+            return true;
+          },
+        };
+      },
+    })
   );
 
   // Tracks the last JSON string emitted via onChange so we can skip a
@@ -221,7 +247,7 @@ function NoteEditorInner({ content, onChange, nodeId, graph }: Props) {
     // schema this editor doesn't actually have.
     extensions: buildNoteExtensions({
       onMathClick: (kind, node, pos) => setMathEdit({ kind, pos, latex: node.attrs.latex }),
-      extra: [slashExtRef.current],
+      extra: [slashExtRef.current, linkKeyExtRef.current],
     }),
     content: parseContent(content),
     // Catches content whose types all exist but whose *nesting* is invalid —
@@ -322,11 +348,76 @@ function NoteEditorInner({ content, onChange, nodeId, graph }: Props) {
     setPicker(null);
   }
 
-  // Keep the slash-command "Insert from Database" wired to the latest handler.
-  dbInsertRef.current = ({ editor: ed, range }) => {
-    ed.chain().focus().deleteRange(range).run();
-    openDatabasePicker();
-  };
+  // ── Links ─────────────────────────────────────────────────────────────────
+
+  function openLinkDialog(ed: any) {
+    const { from, to, empty } = ed.state.selection;
+    const existing = ed.getAttributes("link")?.href ?? "";
+    // With the cursor merely inside a link (nothing selected), operate on the
+    // whole mark rather than a zero-width point — otherwise Save would apply
+    // the href to an empty range and appear to do nothing.
+    if (empty && existing) ed.chain().focus().extendMarkRange("link").run();
+    const sel = ed.state.selection;
+    const selectedText = empty && !existing ? "" : ed.state.doc.textBetween(sel.from, sel.to, " ");
+    setLinkDialog({ href: existing, label: selectedText, editing: !!existing });
+    void from; void to;
+  }
+  linkShortcutRef.current = openLinkDialog;
+
+  function saveLink(href: string, label: string) {
+    if (!editor) return;
+    const { empty } = editor.state.selection;
+    if (empty && !editor.isActive("link")) {
+      // Nothing to wrap — insert the text (or the URL) already linked.
+      const text = label.trim() || href;
+      editor.chain().focus()
+        .insertContent({ type: "text", text, marks: [{ type: "link", attrs: { href } }] })
+        // Leave the caret *outside* the mark, or the next character typed
+        // silently joins the link.
+        .unsetMark("link")
+        .run();
+    } else {
+      editor.chain().focus().extendMarkRange("link").setLink({ href }).run();
+    }
+    setLinkDialog(null);
+  }
+
+  function removeLink() {
+    editor?.chain().focus().extendMarkRange("link").unsetLink().run();
+    setLinkDialog(null);
+  }
+
+  // ── Registry ──────────────────────────────────────────────────────────────
+
+  const registry = useMemo(
+    () =>
+      buildBlockRegistry({
+        onInlineMath: insertInlineMathAtCursor,
+        onBlockMath: insertBlockMathAtCursor,
+        onEditLink: openLinkDialog,
+        // Omitted entirely when there's no note context, so the action simply
+        // doesn't exist rather than existing and failing.
+        onDatabaseInsert: nodeId
+          ? (ed, ctx) => {
+              if (ctx?.range) ed.chain().focus().deleteRange(ctx.range).run();
+              openDatabasePicker();
+            }
+          : undefined,
+        highlighters: nodeId ? highlighters : [],
+        onApplyHighlighter: applyCategory,
+        onEditHighlighters: nodeId ? () => setEditingCats((v) => !v) : undefined,
+      }),
+    // editor identity is what makes the closures above valid; the rest are the
+    // genuine inputs to the list's shape.
+    [editor, nodeId, highlighters, graph]
+  );
+  registryRef.current = registry;
+
+  const swatches = useMemo(() => {
+    const out: Record<string, string> = {};
+    for (const cat of highlighters) out[`highlight:${cat.name}`] = cat.color;
+    return out;
+  }, [highlighters]);
 
   // The extension's update/delete commands require doc.nodeAt(pos) to be
   // EXACTLY the math node — anything else silently returns false, which is
@@ -394,12 +485,6 @@ function NoteEditorInner({ content, onChange, nodeId, graph }: Props) {
     setMathEdit(null);
   }
 
-  const btn = (active: boolean, onClick: () => void, label: string) => (
-    <button className={`tt-btn${active ? " active" : ""}`} onClick={onClick} type="button">
-      {label}
-    </button>
-  );
-
   // Keyed on the doc, not on every transaction. `onTransaction` above fires a
   // re-render for pure cursor moves too, and this used to call getJSON() —
   // serializing the ENTIRE document on every keypress and arrow key. A PM doc
@@ -452,58 +537,7 @@ function NoteEditorInner({ content, onChange, nodeId, graph }: Props) {
           safely, so it has been left untouched on the server. Reload after updating Vault.
         </div>
       )}
-      <div className="tiptap-toolbar">
-        {btn(editor.isActive("bold"), () => editor.chain().focus().toggleBold().run(), "B")}
-        {btn(editor.isActive("italic"), () => editor.chain().focus().toggleItalic().run(), "I")}
-        {btn(editor.isActive("strike"), () => editor.chain().focus().toggleStrike().run(), "S")}
-        <div className="tt-sep" />
-        {btn(editor.isActive("heading", { level: 1 }), () => editor.chain().focus().toggleHeading({ level: 1 }).run(), "H1")}
-        {btn(editor.isActive("heading", { level: 2 }), () => editor.chain().focus().toggleHeading({ level: 2 }).run(), "H2")}
-        {btn(editor.isActive("heading", { level: 3 }), () => editor.chain().focus().toggleHeading({ level: 3 }).run(), "H3")}
-        <div className="tt-sep" />
-        {btn(editor.isActive("bulletList"), () => editor.chain().focus().toggleBulletList().run(), "•")}
-        {btn(editor.isActive("orderedList"), () => editor.chain().focus().toggleOrderedList().run(), "1.")}
-        {btn(editor.isActive("blockquote"), () => editor.chain().focus().toggleBlockquote().run(), "❝")}
-        {btn(editor.isActive("codeBlock"), () => editor.chain().focus().toggleCodeBlock().run(), "<>")}
-        <div className="tt-sep" />
-        {btn(editor.isActive("table"), () => {}, "⊞")}
-        {!editor.isActive("table")
-          ? <button className="tt-btn" onClick={() => editor.chain().focus().insertTable({ rows: 3, cols: 3, withHeaderRow: true }).run()} type="button">+ Table</button>
-          : <>
-              <button className="tt-btn" onClick={() => editor.chain().focus().addRowAfter().run()} type="button" title="Add row below">+row</button>
-              <button className="tt-btn" onClick={() => editor.chain().focus().deleteRow().run()} type="button" title="Delete row">−row</button>
-              <button className="tt-btn" onClick={() => editor.chain().focus().addColumnAfter().run()} type="button" title="Add column right">+col</button>
-              <button className="tt-btn" onClick={() => editor.chain().focus().deleteColumn().run()} type="button" title="Delete column">−col</button>
-              <button className="tt-btn" onClick={() => editor.chain().focus().deleteTable().run()} type="button" title="Delete table">del⊞</button>
-            </>
-        }
-        <div className="tt-sep" />
-        <button className="tt-btn" onClick={insertInlineMathAtCursor} type="button" title="Inline math">√x</button>
-        <button className="tt-btn" onClick={insertBlockMathAtCursor} type="button" title="Math block">∑</button>
-        {btn(editor.isActive("highlight"), () => editor.chain().focus().unsetHighlight().run(), "🖊")}
-        {nodeId && (
-          <>
-            {highlighters.map((cat) => (
-              <button
-                key={cat.name}
-                className="tt-btn tt-hl-btn"
-                onClick={() => applyCategory(cat)}
-                type="button"
-                title={`Highlight selection as ${cat.name}`}
-              >
-                <span className="tt-hl-swatch" style={{ background: cat.color }} />
-                {cat.name}
-              </button>
-            ))}
-            <button className="tt-btn" onClick={() => setEditingCats(v => !v)} type="button" title="Edit highlighters">✎</button>
-            <div className="tt-sep" />
-            <button className="tt-btn" onClick={openDatabasePicker} type="button" title="Insert records from the database above">◉ DB</button>
-          </>
-        )}
-        <div className="tt-sep" />
-        {btn(false, () => editor.chain().focus().undo().run(), "↩")}
-        {btn(false, () => editor.chain().focus().redo().run(), "↪")}
-      </div>
+      <NoteToolbar editor={editor} registry={registry} swatches={swatches} />
       {editingCats && (
         <HighlighterCatEditor
           cats={highlighters}
@@ -524,7 +558,47 @@ function NoteEditorInner({ content, onChange, nodeId, graph }: Props) {
           {pickerMsg}
         </div>
       )}
+      {/* Formatting where the text is. This is the iPad answer above all —
+          .tt-btn is a 13px, 4×8px-padded target, which is fine with a mouse
+          and miserable with a thumb at the top of the screen. */}
+      <BubbleMenu
+        editor={editor}
+        options={{ placement: "top" }}
+        shouldShow={({ editor: ed, state }) =>
+          !state.selection.empty &&
+          // A selection inside a code block or a math node has nothing here
+          // worth applying, and the menu would just cover the content.
+          !ed.isActive("codeBlock") &&
+          !ed.isActive("blockMath")
+        }
+      >
+        <div className="tt-bubble">
+          {actionsFor(registry, "bubble").map((a) => (
+            <button
+              key={a.id}
+              type="button"
+              className={`tt-btn${a.isActive?.(editor) ? " active" : ""}${swatches[a.id] ? " tt-hl-btn" : ""}`}
+              title={a.shortcut ? `${a.title} (${a.shortcut})` : a.title}
+              aria-label={a.title}
+              onMouseDown={(e) => e.preventDefault()}
+              onClick={() => a.run(editor)}
+            >
+              {swatches[a.id] && <span className="tt-hl-swatch" style={{ background: swatches[a.id] }} />}
+              {a.short ?? a.icon}
+            </button>
+          ))}
+        </div>
+      </BubbleMenu>
+
       <EditorContent editor={editor} className="tiptap-editor" />
+      {linkDialog && (
+        <LinkDialog
+          state={linkDialog}
+          onSave={saveLink}
+          onRemove={removeLink}
+          onCancel={() => setLinkDialog(null)}
+        />
+      )}
       {slashMenu && (
         <SlashCommandsList
           {...slashMenu}

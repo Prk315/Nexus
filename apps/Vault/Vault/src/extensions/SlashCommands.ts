@@ -1,149 +1,70 @@
-import { Extension } from "@tiptap/core";
-import Suggestion from "@tiptap/suggestion";
+// The `/` menu. It owns no command list of its own any more — it renders
+// whatever extensions/blockRegistry.ts declares for the "slash" surface.
+//
+// `getActions` is a getter, not an array, on purpose: the extension is created
+// exactly once per editor (a new extension instance would rebuild the whole
+// ProseMirror plugin stack), while the registry changes whenever the note's
+// highlighter categories load or a Database ancestor appears. The getter lets
+// one outlive the other.
 
-export interface CommandItem {
-  title: string;
-  icon: string;
-  command: (props: { editor: any; range: any }) => void;
-}
+import { Extension } from "@tiptap/core";
+import type { Editor, Range } from "@tiptap/core";
+import Suggestion from "@tiptap/suggestion";
+import { actionsFor, matchesQuery, type BlockAction } from "./blockRegistry";
 
 export interface SlashMenuState {
-  items: CommandItem[];
-  command: (item: CommandItem) => void;
+  items: BlockAction[];
+  command: (item: BlockAction) => void;
   rect: DOMRect;
 }
 
-const COMMANDS: CommandItem[] = [
-  {
-    title: "Heading 1",
-    icon: "H1",
-    command: ({ editor, range }) =>
-      editor.chain().focus().deleteRange(range).setHeading({ level: 1 }).run(),
-  },
-  {
-    title: "Heading 2",
-    icon: "H2",
-    command: ({ editor, range }) =>
-      editor.chain().focus().deleteRange(range).setHeading({ level: 2 }).run(),
-  },
-  {
-    title: "Heading 3",
-    icon: "H3",
-    command: ({ editor, range }) =>
-      editor.chain().focus().deleteRange(range).setHeading({ level: 3 }).run(),
-  },
-  {
-    title: "Bullet List",
-    icon: "•",
-    command: ({ editor, range }) =>
-      editor.chain().focus().deleteRange(range).toggleBulletList().run(),
-  },
-  {
-    title: "Numbered List",
-    icon: "1.",
-    command: ({ editor, range }) =>
-      editor.chain().focus().deleteRange(range).toggleOrderedList().run(),
-  },
-  {
-    title: "Quote",
-    icon: "❝",
-    command: ({ editor, range }) =>
-      editor.chain().focus().deleteRange(range).setBlockquote().run(),
-  },
-  {
-    title: "Code Block",
-    icon: "<>",
-    command: ({ editor, range }) =>
-      editor.chain().focus().deleteRange(range).setCodeBlock().run(),
-  },
-  {
-    title: "Divider",
-    icon: "—",
-    command: ({ editor, range }) =>
-      editor.chain().focus().deleteRange(range).setHorizontalRule().run(),
-  },
-  {
-    title: "Inline Math",
-    icon: "√x",
-    // insertInlineMath defaults its position to the *current* selection, so
-    // the deleteRange must be dispatched first — chaining both into one
-    // .run() would insert at the stale pre-delete cursor position.
-    command: ({ editor, range }) => {
-      editor.chain().focus().deleteRange(range).run();
-      editor.chain().focus().insertInlineMath({ latex: "x" }).run();
-    },
-  },
-  {
-    title: "Math Block",
-    icon: "∑",
-    command: ({ editor, range }) => {
-      editor.chain().focus().deleteRange(range).run();
-      editor.chain().focus().insertBlockMath({ latex: "x" }).run();
-    },
-  },
-  {
-    title: "Table",
-    icon: "⊞",
-    command: ({ editor, range }) =>
-      editor.chain().focus().deleteRange(range).insertTable({ rows: 3, cols: 3, withHeaderRow: true }).run(),
-  },
-];
-
 export function createSlashCommandsExtension(
+  getActions: () => BlockAction[],
   setMenu: (state: SlashMenuState | null) => void,
-  getKeyHandler: () => ((event: KeyboardEvent) => boolean) | null,
-  onDatabaseInsert?: (props: { editor: any; range: any }) => void
+  getKeyHandler: () => ((event: KeyboardEvent) => boolean) | null
 ) {
-  const commands: CommandItem[] = onDatabaseInsert
-    ? [
-        ...COMMANDS,
-        {
-          title: "Insert from Database",
-          icon: "◉",
-          command: (props) => onDatabaseInsert(props),
-        },
-      ]
-    : COMMANDS;
-
   return Extension.create({
     name: "slashCommands",
 
     addProseMirrorPlugins() {
+      const editor = this.editor;
+
       return [
-        Suggestion({
-          editor: this.editor,
+        Suggestion<BlockAction>({
+          editor,
           char: "/",
           items: ({ query }) =>
-            commands.filter((c) =>
-              c.title.toLowerCase().includes(query.toLowerCase())
-            ),
-          command: ({ editor, range, props }) => {
-            (props as CommandItem).command({ editor, range });
+            actionsFor(getActions(), "slash")
+              // Availability is evaluated against the live editor, so e.g.
+              // "Table" disappears from the menu while the cursor is already
+              // inside one instead of nesting a table in a cell.
+              .filter((a) => (a.isAvailable?.(editor) ?? true) && matchesQuery(a, query)),
+
+          command: ({ editor: ed, range, props }) => {
+            (props as BlockAction).run(ed as Editor, { range: range as Range });
           },
-          render: () => ({
-            onStart: (props) => {
+
+          render: () => {
+            const push = (props: any) =>
               setMenu({
-                items: props.items as CommandItem[],
-                command: props.command as (item: CommandItem) => void,
+                items: props.items as BlockAction[],
+                command: props.command as (item: BlockAction) => void,
                 rect: props.clientRect?.() as DOMRect,
               });
-            },
-            onUpdate: (props) => {
-              setMenu({
-                items: props.items as CommandItem[],
-                command: props.command as (item: CommandItem) => void,
-                rect: props.clientRect?.() as DOMRect,
-              });
-            },
-            onKeyDown: ({ event }) => {
-              if (event.key === "Escape") {
-                setMenu(null);
-                return true;
-              }
-              return getKeyHandler()?.(event) ?? false;
-            },
-            onExit: () => setMenu(null),
-          }),
+
+            return {
+              onStart: push,
+              onUpdate: push,
+              onKeyDown: ({ event }) => {
+                if (event.key === "Escape") {
+                  setMenu(null);
+                  return true;
+                }
+                return getKeyHandler()?.(event) ?? false;
+              },
+              onExit: () => setMenu(null),
+            };
+          },
         }),
       ];
     },

@@ -16,6 +16,8 @@ import StarterKit from "@tiptap/starter-kit";
 import Placeholder from "@tiptap/extension-placeholder";
 import Mathematics from "@tiptap/extension-mathematics";
 import { Table, TableRow, TableHeader, TableCell } from "@tiptap/extension-table";
+import { TaskList } from "@tiptap/extension-list/task-list";
+import { TaskItem } from "@tiptap/extension-list/task-item";
 import { CategoryHighlight } from "./CategoryHighlight";
 import { KATEX_OPTS } from "../lib/katexShared";
 
@@ -31,8 +33,21 @@ export function buildNoteExtensions(opts: NoteExtensionOpts = {}): Extensions {
   const { onMathClick, extra = [], placeholder = "Write here… (type / for commands)" } = opts;
 
   return [
-    StarterKit,
+    StarterKit.configure({
+      // StarterKit v3 already ships Link (and Underline). The only thing wrong
+      // with the default is `openOnClick: true`: inside an *editable* document
+      // a click should place the caret, not navigate — and with
+      // target="_blank" in a Tauri WebView that navigation is at best a
+      // surprise and at worst leaves the app. The link popover offers an
+      // explicit Open instead.
+      link: { openOnClick: false },
+    }),
     Placeholder.configure({ placeholder }),
+    // Checkboxes. Note this is a SCHEMA addition — taskList/taskItem — so it
+    // depends on the Phase 1 guard being deployed everywhere first; a client
+    // without it blanks any note containing a to-do list.
+    TaskList,
+    TaskItem.configure({ nested: true }),
     Mathematics.configure({
       katexOptions: KATEX_OPTS,
       inlineOptions: {
