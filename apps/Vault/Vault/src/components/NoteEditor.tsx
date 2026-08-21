@@ -215,7 +215,18 @@ export function NoteEditor({ content, onChange, nodeId, graph }: Props) {
   });
 
   useEffect(() => {
-    if (!editor) return;
+    // `!editor` alone is NOT enough, and that was the white screen. A DESTROYED
+    // editor is still a perfectly truthy object — Tiptap's teardown only nulls
+    // its internals — so it sails past this guard and `editor.commands` hits
+    //   get commands() { return this.commandManager.commands }
+    // with a null commandManager, throwing "Cannot read properties of null
+    // (reading 'commands')".
+    //
+    // This effect depends on [content] alone, so it can fire while holding an
+    // editor that was torn down between EditorPane's async readContent and the
+    // commit. That's why it was intermittent and why it needed another editor
+    // open first: opening a note as the very first node never reproduced it.
+    if (!editor || editor.isDestroyed) return;
     // Content came from this editor's own keystroke — no need to setContent.
     if (content === lastEmittedRef.current) return;
     lastEmittedRef.current = content;

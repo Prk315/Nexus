@@ -612,12 +612,19 @@ export const EditorPane = forwardRef<EditorPaneHandle, EditorPaneProps>(
                 />
               </EditorErrorBoundary>
             ) : (
-              <NoteEditor
-                content={content}
-                onChange={setContent}
-                nodeId={selectedId ?? undefined}
-                graph={graph}
-              />
+              // NoteEditor was the ONLY editor in this switch without a
+              // boundary, so a throw inside it took the entire app white
+              // instead of one pane. The key matters as much as the boundary:
+              // without it the boundary would latch into its error state and
+              // stay there even after navigating to a different node.
+              <EditorErrorBoundary key={selectedId} label="NoteEditor">
+                <NoteEditor
+                  content={content}
+                  onChange={setContent}
+                  nodeId={selectedId ?? undefined}
+                  graph={graph}
+                />
+              </EditorErrorBoundary>
             )}
             </Suspense>
           </>
