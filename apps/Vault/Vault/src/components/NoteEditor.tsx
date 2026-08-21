@@ -9,6 +9,7 @@ import { buildNoteExtensions, noteSchema } from "../extensions/noteExtensions";
 import { auditNoteContent, parseNoteContent } from "../lib/noteSchemaGuard";
 import { NoteSchemaError } from "./NoteSchemaError";
 import { NoteToolbar } from "./NoteToolbar";
+import { NoteOutline } from "./NoteOutline";
 import { LinkDialog, type LinkDialogState } from "./LinkDialog";
 import { SlashCommandsList } from "./SlashCommandsList";
 import { HighlighterCatEditor } from "./HighlighterCatEditor";
@@ -139,7 +140,15 @@ interface Props {
   onChange: (content: string) => void;
   nodeId?: string;
   graph?: VaultGraph;
+  /**
+   * "embedded" drops the outline. WorkbookEditor renders one NoteEditor per
+   * linked note, and N stacked outlines in a column of cards is noise, not
+   * navigation.
+   */
+  variant?: "full" | "embedded";
 }
+
+const OUTLINE_OPEN_KEY = "nexus.note.outlineOpen";
 
 function escapeHtml(s: string) {
   return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
@@ -179,7 +188,7 @@ export function NoteEditor(props: Props) {
   return <NoteEditorInner {...props} />;
 }
 
-function NoteEditorInner({ content, onChange, nodeId, graph }: Props) {
+function NoteEditorInner({ content, onChange, nodeId, graph, variant = "full" }: Props) {
   const [, forceUpdate] = useState(0);
   // Set when Tiptap itself rejects the content (structurally invalid but with
   // known types — the case the pre-flight audit deliberately doesn't cover).
@@ -190,9 +199,22 @@ function NoteEditorInner({ content, onChange, nodeId, graph }: Props) {
   const [slashMenu, setSlashMenu] = useState<SlashMenuState | null>(null);
   const [mathEdit, setMathEdit] = useState<MathEditState | null>(null);
   const [linkDialog, setLinkDialog] = useState<LinkDialogState | null>(null);
-  const [nearRightEdge, setNearRightEdge] = useState(false);
-  const [onPanel, setOnPanel] = useState(false);
   const wrapperRef = useRef<HTMLDivElement>(null);
+  const scrollRef = useRef<HTMLDivElement>(null);
+
+  // Persisted, and defaulted from the viewport ONCE rather than tracked with a
+  // resize listener — a panel that opens and closes itself as the window is
+  // dragged is worse than one that stays where it was put.
+  const [showOutline, setShowOutline] = useState(() => {
+    if (typeof window === "undefined") return false;
+    const stored = window.localStorage.getItem(OUTLINE_OPEN_KEY);
+    if (stored !== null) return stored === "1";
+    return window.matchMedia("(min-width: 1100px)").matches;
+  });
+
+  useEffect(() => {
+    window.localStorage.setItem(OUTLINE_OPEN_KEY, showOutline ? "1" : "0");
+  }, [showOutline]);
 
   // Highlighter categories (this note's own set) + database insert picker.
   const [highlighters, setHighlighters] = useState<HighlighterCategory[]>([]);
@@ -542,49 +564,10 @@ function NoteEditorInner({ content, onChange, nodeId, graph }: Props) {
     setMathEdit(null);
   }
 
-  // Keyed on the doc, not on every transaction. `onTransaction` above fires a
-  // re-render for pure cursor moves too, and this used to call getJSON() —
-  // serializing the ENTIRE document on every keypress and arrow key. A PM doc
-  // node is immutable, so its reference is stable across selection-only
-  // transactions and this recomputes only when the text actually changes.
-  // (`textContent` also picks up text the old JSON walk missed, e.g. a heading
-  // whose text sits inside a nested inline node rather than a bare text node.)
-  const headings = useMemo(() => {
-    const out: Array<{ level: number; text: string }> = [];
-    const doc = editor?.state.doc;
-    if (!doc) return out;
-    doc.forEach((node) => {
-      if (node.type.name !== "heading") return;
-      const text = node.textContent.trim();
-      if (text) out.push({ level: node.attrs?.level ?? 1, text });
-    });
-    return out;
-  }, [editor?.state.doc]);
-
   if (!editor) return null;
 
-  function scrollToHeading(text: string, level: number) {
-    const pm = wrapperRef.current?.querySelector(".ProseMirror");
-    if (!pm) return;
-    const el = Array.from(pm.querySelectorAll(`h${level}`)).find(h => h.textContent?.trim() === text);
-    el?.scrollIntoView({ behavior: "smooth", block: "start" });
-  }
-
-  function handleWrapperMouseMove(e: React.MouseEvent) {
-    const rect = wrapperRef.current?.getBoundingClientRect();
-    if (!rect) return;
-    setNearRightEdge(e.clientX > rect.right - 52);
-  }
-
-  const showOutline = (nearRightEdge || onPanel) && headings.length > 0;
-
   return (
-    <div
-      ref={wrapperRef}
-      className="tiptap-wrapper"
-      onMouseMove={handleWrapperMouseMove}
-      onMouseLeave={() => setNearRightEdge(false)}
-    >
+    <div ref={wrapperRef} className="tiptap-wrapper">
       {hardBlocked && (
         // Not merely cosmetic: onUpdate is gated on the same flag, so while
         // this is showing nothing typed here reaches the server. Say so
@@ -594,7 +577,28 @@ function NoteEditorInner({ content, onChange, nodeId, graph }: Props) {
           safely, so it has been left untouched on the server. Reload after updating Vault.
         </div>
       )}
-      <NoteToolbar editor={editor} registry={registry} swatches={swatches} />
+      <NoteToolbar
+        editor={editor}
+        registry={registry}
+        swatches={swatches}
+        trailing={
+          variant === "full" ? (
+            <span className="tt-group tt-group-end">
+              <span className="tt-sep" />
+              <button
+                className={`tt-btn${showOutline ? " active" : ""}`}
+                type="button"
+                onClick={() => setShowOutline((v) => !v)}
+                title={showOutline ? "Hide outline" : "Show outline"}
+                aria-label="Toggle outline"
+                aria-pressed={showOutline}
+              >
+                ◧
+              </button>
+            </span>
+          ) : null
+        }
+      />
       {editingCats && (
         <HighlighterCatEditor
           cats={highlighters}
@@ -647,7 +651,26 @@ function NoteEditorInner({ content, onChange, nodeId, graph }: Props) {
         </div>
       </BubbleMenu>
 
-      <EditorContent editor={editor} className="tiptap-editor" />
+      {/* Outline on the LEFT, in the flow, resizable — not a hover-revealed
+          overlay on the right. The old panel appeared only when the mouse
+          neared the right edge, which on iPad meant it could not be opened at
+          all. Its visibility is a persisted preference now. */}
+      <div className="tiptap-body">
+        {showOutline && variant === "full" && (
+          <NoteOutline
+            editor={editor}
+            scrollRef={scrollRef}
+            onClose={() => setShowOutline(false)}
+          />
+        )}
+        {/* The scroller is this wrapper, not EditorContent itself — the
+            scroll-spy needs a stable ref to it and EditorContent's own ref
+            contract isn't something to depend on. `.tiptap-editor .ProseMirror`
+            still matches, since it was always a descendant selector. */}
+        <div className="tiptap-editor" ref={scrollRef}>
+          <EditorContent editor={editor} />
+        </div>
+      </div>
       {linkDialog && (
         <LinkDialog
           state={linkDialog}
@@ -670,24 +693,6 @@ function NoteEditorInner({ content, onChange, nodeId, graph }: Props) {
           onDelete={deleteMathEdit}
           onCancel={() => setMathEdit(null)}
         />
-      )}
-
-      {showOutline && (
-        <div
-          className="outline-panel"
-          onMouseEnter={() => setOnPanel(true)}
-          onMouseLeave={() => setOnPanel(false)}
-        >
-          {headings.map((h, i) => (
-            <button
-              key={i}
-              className={`outline-item outline-h${h.level}`}
-              onClick={() => scrollToHeading(h.text, h.level)}
-            >
-              {h.text}
-            </button>
-          ))}
-        </div>
       )}
     </div>
   );

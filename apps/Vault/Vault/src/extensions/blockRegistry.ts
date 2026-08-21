@@ -147,13 +147,13 @@ export function buildBlockRegistry(opts: BlockRegistryOptions = {}): BlockAction
       run: atCursor((c) => c.setParagraph()),
       isActive: (e) => e.isActive("paragraph"),
     },
-    ...([1, 2, 3] as const).map((level): BlockAction => ({
+    ...([1, 2, 3, 4] as const).map((level): BlockAction => ({
       id: `heading${level}`,
       title: `Heading ${level}`,
       icon: `H${level}`,
       short: `H${level}`,
       group: "text",
-      surfaces: ["slash", "toolbar"],
+      surfaces: level === 4 ? ["slash"] : ["slash", "toolbar"],
       keywords: ["title", "section"],
       // setHeading in the slash menu (you asked for a heading), toggleHeading
       // from the toolbar (it's a two-state button you can press again).

@@ -1494,7 +1494,12 @@ body {
 .tiptap-editor {
   flex: 1;
   min-height: 0;
+  /* min-width matters now that this is a flex ROW sibling of the outline:
+     without it the editor's content sets a min-content floor and the outline
+     can't be dragged narrower than the widest unbreakable word in the note. */
+  min-width: 0;
   overflow-y: auto;
+  position: relative;
 }
 
 .tiptap-editor .ProseMirror {
@@ -1512,7 +1517,8 @@ body {
 
 .tiptap-editor .ProseMirror h1,
 .tiptap-editor .ProseMirror h2,
-.tiptap-editor .ProseMirror h3 {
+.tiptap-editor .ProseMirror h3,
+.tiptap-editor .ProseMirror h4 {
   margin: 1.4em 0 0.5em;
   color: var(--fg-bright);
   font-weight: 600;
@@ -1522,6 +1528,13 @@ body {
 .tiptap-editor .ProseMirror h1 { font-size: 1.7em; }
 .tiptap-editor .ProseMirror h2 { font-size: 1.3em; }
 .tiptap-editor .ProseMirror h3 { font-size: 1.1em; }
+/* h4 is styled because the outline handles four levels; with no rule it falls
+   to the browser default and renders SMALLER than body text. */
+.tiptap-editor .ProseMirror h4 {
+  font-size: 1em;
+  color: var(--fg-main);
+  letter-spacing: 0;
+}
 
 .tiptap-editor .ProseMirror p {
   margin-bottom: 0.7em;
@@ -1573,69 +1586,112 @@ body {
   height: 0;
 }
 
-/* ── Content outline panel ──────────────────────────────────────────────── */
-.outline-panel {
-  position: absolute;
-  top: 40px;
-  right: 0;
-  width: 200px;
-  max-height: calc(100% - 48px);
-  overflow-y: auto;
-  background: oklch(0.985 0 0 / 92%);
-  border-left: 1px solid var(--border-faint);
-  border-bottom: 1px solid var(--border-faint);
-  border-radius: 0 0 0 var(--radius);
-  backdrop-filter: blur(12px);
-  z-index: 10;
+/* ── Note outline (left, in the flow) ────────────────────────────────────────
+   Replaces a hover-revealed overlay pinned to the RIGHT edge, which on a touch
+   device could not be opened at all — there is no hover to trigger it. Mirrors
+   .parsed-body / .parsed-outline so the two outlines in this app behave the
+   same way. */
+.tiptap-body {
+  flex: 1;
+  min-height: 0;
   display: flex;
-  flex-direction: column;
-  padding: 8px 0;
+  align-items: stretch;
 }
 
-.outline-item {
+.note-outline {
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  overflow: hidden;
+  border-right: 1px solid var(--border-faint);
+  background: var(--bg-base);
+}
+
+.note-outline-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 10px 10px 6px 14px;
+  flex-shrink: 0;
+}
+
+.note-outline-title {
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--fg-ghost);
+}
+
+.note-outline-close {
+  border: none;
+  background: none;
+  color: var(--fg-invisible);
+  font-size: 16px;
+  line-height: 1;
+  padding: 2px 6px;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: all var(--duration) var(--ease);
+}
+
+.note-outline-close:hover { background: var(--bg-muted); color: var(--fg-muted); }
+
+.note-outline-list {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 0 6px 12px;
+}
+
+.note-outline-empty {
+  padding: 4px 14px 14px;
+  font-size: 12px;
+  color: var(--fg-invisible);
+}
+
+.note-outline-item {
+  display: block;
+  width: 100%;
   background: none;
   border: none;
+  box-shadow: none;
   color: var(--fg-ghost);
   text-align: left;
-  padding: 4px 12px;
-  font-size: 12px;
+  padding: 5px 8px;
+  font-size: 12.5px;
+  line-height: 1.45;
   cursor: pointer;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-  box-shadow: none;
-  line-height: 1.5;
-  border-radius: 0;
-  transition: color var(--duration) var(--ease);
+  border-radius: calc(var(--radius) * 0.5);
+  transition: color var(--duration) var(--ease), background var(--duration) var(--ease);
 }
 
-.outline-item:hover {
-  color: var(--fg-primary);
-  background: oklch(0 0 0 / 4%);
+.note-outline-item:hover { background: var(--bg-subtle); color: var(--fg-primary); }
+
+.note-outline-item.active {
+  background: var(--bg-muted);
+  color: var(--fg-main);
+  font-weight: 500;
 }
 
-.outline-h1 {
-  color: var(--fg-muted);
-  font-weight: 600;
-  font-size: 12px;
+/* Indent comes from the heading's position in the level SEQUENCE, not from its
+   level number — a note that starts at H2 shouldn't render permanently
+   indented. Hence nol-0..3 rather than a class per heading level. */
+.nol-0 { padding-left: 8px; font-weight: 500; }
+.nol-1 { padding-left: 20px; }
+.nol-2 { padding-left: 32px; }
+.nol-3 { padding-left: 44px; }
+
+@media (pointer: coarse) {
+  .note-outline-item { padding: 9px 8px; font-size: 14px; }
+  .note-outline-close { padding: 6px 10px; font-size: 18px; }
 }
 
-.outline-h2 {
-  padding-left: 20px;
-  font-size: 11px;
-}
-
-.outline-h3 {
-  padding-left: 30px;
-  font-size: 11px;
-  color: var(--fg-dim);
-}
-
-.outline-h1:hover,
-.outline-h2:hover,
-.outline-h3:hover {
-  color: var(--fg-primary);
-}
 
 /* ── Note schema guard (unknown block types) ────────────────────────────────
    Shown INSTEAD of the editor when a note references block types this build

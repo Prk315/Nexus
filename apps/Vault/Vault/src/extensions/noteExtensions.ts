@@ -46,6 +46,10 @@ export function buildNoteExtensions(opts: NoteExtensionOpts = {}): Extensions {
       // surprise and at worst leaves the app. The link popover offers an
       // explicit Open instead.
       link: { openOnClick: false },
+      // Four levels, matching what the outline renders. This IS a schema
+      // option, so it must stay identical to whatever noteSchema() derives —
+      // see the note on cachedSchema below.
+      heading: { levels: [1, 2, 3, 4] },
     }),
     Placeholder.configure({ placeholder }),
     // Checkboxes. Note this is a SCHEMA addition — taskList/taskItem — so it

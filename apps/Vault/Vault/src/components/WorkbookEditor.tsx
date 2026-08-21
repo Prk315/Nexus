@@ -453,7 +453,13 @@ function NotesSection({ linkedIds, graph, onOpenNode, onChange }: NotesSectionPr
             <div className="wb-node-page-body wb-node-page-note">
               {nodeContent === undefined
                 ? <div className="wb-inline-loading">Loading…</div>
-                : <NoteEditor content={nodeContent} onChange={c => handleContentChange(id, c)} />
+                : <NoteEditor
+                    content={nodeContent}
+                    onChange={c => handleContentChange(id, c)}
+                    // One NoteEditor per linked note here; N stacked outlines
+                    // down a column of cards is noise, not navigation.
+                    variant="embedded"
+                  />
               }
             </div>
           </div>
