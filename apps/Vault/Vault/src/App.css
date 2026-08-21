@@ -1520,6 +1520,160 @@ body {
   color: var(--fg-primary);
 }
 
+/* ── Note schema guard (unknown block types) ────────────────────────────────
+   Shown INSTEAD of the editor when a note references block types this build
+   doesn't know — see lib/noteSchemaGuard.ts. Styled as a calm explanation
+   rather than a crash screen, because the note is fine; this build isn't. */
+.note-schema-error {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 32px 40px;
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+  align-items: flex-start;
+}
+
+.nse-card {
+  max-width: 640px;
+  padding: 24px 28px;
+  /* Plain fallback first, tinted version second — a browser without color-mix
+     keeps the readable one rather than dropping the whole declaration.
+     Mixed in oklab, NOT oklch: --bg-base is oklch(1 0 0), i.e. hue 0, and
+     oklch interpolates the hue ANGLE — so 28% amber (hue 85) against white
+     lands on hue 23.8 and the card comes out pink. It then reads as an error,
+     which is the opposite of this screen's message. oklab has no hue channel
+     to drag, so an achromatic mix partner stays neutral. */
+  background: var(--bg-subtle);
+  background: color-mix(in oklab, var(--sticky-border) 28%, var(--bg-base));
+  border: 1px solid var(--sticky-border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-sm);
+}
+
+.nse-icon {
+  font-size: 22px;
+  line-height: 1;
+  color: var(--warning);
+  margin-bottom: 10px;
+}
+
+.nse-title {
+  margin: 0 0 12px;
+  font-size: 17px;
+  font-weight: 600;
+  line-height: 1.35;
+  color: var(--fg-bright);
+}
+
+.nse-body {
+  margin: 0 0 10px;
+  font-size: 14px;
+  line-height: 1.65;
+  color: var(--fg-main);
+}
+
+.nse-reassure { color: var(--fg-base); }
+
+.nse-types,
+.nse-steps code {
+  font-family: Menlo, monospace;
+  font-size: 12.5px;
+  background: var(--bg-raised);
+  border-radius: 6px;
+  padding: 1px 6px;
+}
+
+.nse-steps {
+  margin: 0 0 4px;
+  padding-left: 1.3em;
+  font-size: 13.5px;
+  line-height: 1.85;
+  color: var(--fg-muted);
+}
+
+.nse-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 18px;
+}
+
+/* Generous hit targets — this screen is reachable on iPad with a finger. */
+.nse-btn {
+  min-height: 42px;
+  padding: 0 18px;
+  font-size: 13.5px;
+  font-weight: 500;
+  border-radius: calc(var(--radius) * 0.7);
+  border: 1px solid var(--border-base);
+  background: var(--bg-base);
+  color: var(--fg-main);
+  cursor: pointer;
+  transition: all var(--duration) var(--ease);
+}
+
+.nse-btn:hover { background: var(--bg-subtle); }
+
+.nse-btn-primary {
+  background: var(--fg-main);
+  border-color: var(--fg-main);
+  color: var(--bg-base);
+}
+
+.nse-btn-primary:hover { background: var(--fg-bright); }
+
+.nse-btn-danger {
+  color: var(--destructive);
+  border-color: var(--destructive-border);
+  background: var(--destructive-bg);
+}
+
+.nse-btn-danger:hover { background: color-mix(in oklab, var(--destructive-bg) 80%, var(--destructive)); }
+.nse-btn:disabled { opacity: 0.55; cursor: default; }
+
+.nse-preview {
+  max-width: 720px;
+  width: 100%;
+  border: 1px dashed var(--border-base);
+  border-radius: var(--radius);
+  overflow: hidden;
+}
+
+.nse-preview-label {
+  padding: 8px 16px;
+  font-size: 11.5px;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  color: var(--fg-ghost);
+  background: var(--bg-subtle);
+  border-bottom: 1px solid var(--border-faint);
+}
+
+.nse-preview-body {
+  padding: 20px 24px;
+  font-size: 14.5px;
+  line-height: 1.7;
+  color: var(--fg-muted);
+}
+
+.nse-preview-body > :first-child { margin-top: 0; }
+.nse-preview-body > :last-child { margin-bottom: 0; }
+
+/* Shown ABOVE a live editor when Tiptap rejected the content after mount.
+   onUpdate is gated on the same flag, so this is a statement of fact: nothing
+   typed below it is reaching the server. */
+.note-blocked-banner {
+  flex-shrink: 0;
+  padding: 10px 16px;
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--destructive);
+  background: var(--destructive-bg);
+  border-bottom: 1px solid var(--destructive-border);
+}
+
 /* ── Slash command menu ─────────────────────────────────────────────────── */
 .tippy-box[data-theme~="vault"] {
   background: transparent;

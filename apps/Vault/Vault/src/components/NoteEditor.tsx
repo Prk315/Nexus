@@ -1,12 +1,10 @@
 import { useEditor, EditorContent } from "@tiptap/react";
-import StarterKit from "@tiptap/starter-kit";
-import Placeholder from "@tiptap/extension-placeholder";
-import Mathematics from "@tiptap/extension-mathematics";
-import { Table, TableRow, TableHeader, TableCell } from "@tiptap/extension-table";
 import { useEffect, useMemo, useRef, useState } from "react";
 import katex from "katex";
 import { createSlashCommandsExtension, type SlashMenuState } from "../extensions/SlashCommands";
-import { CategoryHighlight } from "../extensions/CategoryHighlight";
+import { buildNoteExtensions, noteSchema } from "../extensions/noteExtensions";
+import { auditNoteContent, parseNoteContent } from "../lib/noteSchemaGuard";
+import { NoteSchemaError } from "./NoteSchemaError";
 import { SlashCommandsList } from "./SlashCommandsList";
 import { HighlighterCatEditor } from "./HighlighterCatEditor";
 import { DatabaseInsertPicker } from "./DatabaseInsertPicker";
@@ -151,8 +149,39 @@ function parseContent(raw: string) {
   }
 }
 
-export function NoteEditor({ content, onChange, nodeId, graph }: Props) {
+/**
+ * Auditing wrapper. Its only job is to decide whether mounting an editor on
+ * this content is safe, and to render something inert when it isn't.
+ *
+ * The split exists so hooks stay unconditional: NoteEditorInner owns every
+ * hook and simply isn't rendered when the audit fails. Mounting a "read-only"
+ * editor instead would be a much weaker guarantee — an editor that exists can
+ * emit, and one emit is all it takes (see lib/noteSchemaGuard.ts).
+ */
+export function NoteEditor(props: Props) {
+  const audit = useMemo(
+    () => auditNoteContent(parseNoteContent(props.content), noteSchema()),
+    [props.content]
+  );
+
+  if (!audit.ok) {
+    return (
+      <NoteSchemaError audit={audit} content={props.content} onRecover={props.onChange} />
+    );
+  }
+  // Remount on a transition between blocked and editable so the editor never
+  // inherits state built from content it was never allowed to see.
+  return <NoteEditorInner {...props} />;
+}
+
+function NoteEditorInner({ content, onChange, nodeId, graph }: Props) {
   const [, forceUpdate] = useState(0);
+  // Set when Tiptap itself rejects the content (structurally invalid but with
+  // known types — the case the pre-flight audit deliberately doesn't cover).
+  // While set, nothing may leave this component.
+  const [hardBlocked, setHardBlocked] = useState(false);
+  const hardBlockedRef = useRef(false);
+  hardBlockedRef.current = hardBlocked;
   const [slashMenu, setSlashMenu] = useState<SlashMenuState | null>(null);
   const [mathEdit, setMathEdit] = useState<MathEditState | null>(null);
   const [nearRightEdge, setNearRightEdge] = useState(false);
@@ -186,27 +215,30 @@ export function NoteEditor({ content, onChange, nodeId, graph }: Props) {
   const lastEmittedRef = useRef<string>("");
 
   const editor = useEditor({
-    extensions: [
-      StarterKit,
-      Placeholder.configure({ placeholder: "Write here… (type / for commands)" }),
-      Mathematics.configure({
-        katexOptions: KATEX_OPTS,
-        inlineOptions: {
-          onClick: (node, pos) => setMathEdit({ kind: "inline", pos, latex: node.attrs.latex }),
-        },
-        blockOptions: {
-          onClick: (node, pos) => setMathEdit({ kind: "block", pos, latex: node.attrs.latex }),
-        },
-      }),
-      CategoryHighlight,
-      Table.configure({ resizable: true }),
-      TableRow,
-      TableHeader,
-      TableCell,
-      slashExtRef.current,
-    ],
+    // One shared list, also used to derive the schema the wrapper audits
+    // against — see extensions/noteExtensions.ts. Do not inline extensions
+    // here; a second copy of the list makes the guard validate against a
+    // schema this editor doesn't actually have.
+    extensions: buildNoteExtensions({
+      onMathClick: (kind, node, pos) => setMathEdit({ kind, pos, latex: node.attrs.latex }),
+      extra: [slashExtRef.current],
+    }),
     content: parseContent(content),
+    // Catches content whose types all exist but whose *nesting* is invalid —
+    // the residue the pre-flight audit deliberately doesn't check. Tiptap
+    // recovers by substituting an empty doc, so the only safe response is to
+    // stop emitting; onUpdate below is the thing that would overwrite.
+    enableContentCheck: true,
+    onContentError: ({ error }) => {
+      console.error("[vault] note content failed validation; edits are disabled", error);
+      setHardBlocked(true);
+    },
     onUpdate: ({ editor }) => {
+      // The single most important line in this file. When the document Tiptap
+      // holds is not the document that was stored, letting one keystroke
+      // through means EditorPane's 400ms autosave writes the substitute over
+      // the original, and vault_content keeps no history.
+      if (hardBlockedRef.current) return;
       const json = JSON.stringify(editor.getJSON());
       lastEmittedRef.current = json;
       onChange(json);
@@ -219,7 +251,16 @@ export function NoteEditor({ content, onChange, nodeId, graph }: Props) {
     // Content came from this editor's own keystroke — no need to setContent.
     if (content === lastEmittedRef.current) return;
     lastEmittedRef.current = content;
-    editor.commands.setContent(parseContent(content), { emitUpdate: false });
+    try {
+      // setContent forwards enableContentCheck to createDocument and does NOT
+      // catch, so with the flag on this can throw synchronously inside an
+      // effect. The wrapper's audit makes that near-unreachable for unknown
+      // types; this covers the invalid-nesting case it doesn't check.
+      editor.commands.setContent(parseContent(content), { emitUpdate: false });
+    } catch (e) {
+      console.error("[vault] refusing to load note content into the editor", e);
+      setHardBlocked(true);
+    }
   }, [content]);
 
   // Load this note's highlighter categories; seed defaults on first use.
@@ -402,6 +443,15 @@ export function NoteEditor({ content, onChange, nodeId, graph }: Props) {
       onMouseMove={handleWrapperMouseMove}
       onMouseLeave={() => setNearRightEdge(false)}
     >
+      {hardBlocked && (
+        // Not merely cosmetic: onUpdate is gated on the same flag, so while
+        // this is showing nothing typed here reaches the server. Say so
+        // plainly rather than let the user believe their edits are saving.
+        <div className="note-blocked-banner" role="alert">
+          <strong>Edits are not being saved.</strong> Vault couldn't load this note's stored content
+          safely, so it has been left untouched on the server. Reload after updating Vault.
+        </div>
+      )}
       <div className="tiptap-toolbar">
         {btn(editor.isActive("bold"), () => editor.chain().focus().toggleBold().run(), "B")}
         {btn(editor.isActive("italic"), () => editor.chain().focus().toggleItalic().run(), "I")}
