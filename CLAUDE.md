@@ -642,16 +642,38 @@ any removal, grep `origin/main` — not your branch — for the thing being remo
 | *(none)*   | `time_entries`, `active_sessions`, `blocked_sites`, `blocked_apps`, `focus_blocks`, `unlock_rules` (TimeTracker) |
 | *(none)*   | `blocking_state`, `pomodoro_config`, `schedule_block_apps`, `schedule_block_sites` (Nexus Local productivity stack) |
 | *(none)*   | `nexus_local_nodes`, `nexus_local_commands` (grid queue), `nexus_ble_captures` |
-| `pf_`      | 50 tables — goals, plans, tasks (an ISA hierarchy: `pf_tasks` + `pf_task_{planning,reminders,chores,shopping}`), `pf_task_sessions`, systems, calendar, pipelines, habits, games, … (PathFinder) |
+| `pf_`      | 51 tables — goals, plans, tasks (an ISA hierarchy: `pf_tasks` + `pf_task_{planning,reminders,chores,shopping}`), `pf_task_sessions`, systems, calendar, pipelines, habits, games, … + views `pf_goals_with_counts` / `pf_plans_with_counts` (PathFinder) |
 | `vault_`   | `vault_nodes`, `vault_edges`, `vault_tag_colors`, `vault_content`, `vault_journals` + Storage bucket `vault-assets` (Vault) |
 | `protocol_`| 28 tables — health/fitness. Body/sleep (`protocol_body_metrics`, `protocol_sleep`), workouts (`protocol_workout_sessions`/`_routines`/`_plans`, `protocol_exercises`, `protocol_exercise_sets`/`_library`/`_aliases`, `protocol_running_sessions`/`_plans`), nutrition (`protocol_foods` + static `protocol_foods_dk`, `protocol_meals`/`_meal_items`/`_meal_plan_entries`/`_nutrition_goals`, `protocol_supplements`/`_logs`), habits, config (`protocol_data_source_settings`, `protocol_progress_config`), Oura auth (`protocol_oura_tokens`, `protocol_oauth_states`). **`protocol_foods`, `protocol_meals`, `protocol_meal_items` are shared read-all / write-own** — any user sees & logs another's foods/meals, edit/delete owner-only; most other tables are owner-only `auth.uid()`; `protocol_foods_dk` is public-read reference data (Protocol) |
 
 **PathFinder data layer** (`apps/PathFinder/src/lib/`):
 - `supabase.ts` — creates the shared client from `VITE_SUPABASE_URL` /
   `VITE_SUPABASE_ANON_KEY` env vars.
-- `api.ts` — every data function that previously called `invoke()` into Rust
-  now calls Supabase directly. Function signatures are **unchanged** so all
-  page components work without modification.
+- `api/` — **a directory, not a file.** Every data function calls Supabase
+  directly. Split into twelve domain modules (`tasks`, `calendar`, `daily`,
+  `courses`, `training`, `week`, `goals`, `plans`, `systems`, `notes`, `games`,
+  `misc`) plus `_shared.ts`, which holds the client, `err`/`num`, **every row
+  mapper**, and the `TASK_SELECT` constants. `api/index.ts` re-exports the lot,
+  so every `from "../lib/api"` still resolves and no call site changed.
+
+  It was one 3,142-line file until 2026-08-21. Keeping the mappers and
+  `TASK_SELECT` together is the point: a `pf_tasks` read that omits the
+  `pf_task_planning` embed does not fail, it silently yields default urgency and
+  stage — and that mistake was sitting in four separate places because the file
+  was too big for anyone to see the others.
+
+**Pure logic lives outside components, and is tested.** `taskTree.ts` (breakdown
+roll-ups, coverage, the gate), `systems.ts` (the one due-rule), `nextUp.ts` (the
+"work on now" ranking) and `coverage.ts` are React-free on purpose. `npm test`
+in `apps/PathFinder` runs vitest over `src/**/*.test.ts` — 78 cases, each drawn
+from a bug that actually happened rather than for coverage. Add to these before
+touching the rules they encode.
+
+**Page components live in `components/dashboard/` and `components/week/`.**
+`Dashboard.tsx` (382 lines) and `Week.tsx` (880) are now state + layout only.
+Watch for the trap that splitting them exposed: constants declared *between*
+components get swept into whichever neighbour precedes them, so anything shared
+belongs in that folder's `_shared.ts`.
 
 Required `.env` file at `apps/PathFinder/.env` (gitignored):
 ```
@@ -663,9 +685,10 @@ VITE_SUPABASE_ANON_KEY=<anon key from Supabase dashboard>
 policy (`USING (true)`). Tighten policies and add `auth.uid()` checks when
 Supabase Auth is introduced.
 
-**Computed fields** (`task_count`, `done_count`, `feature_count`, streaks,
-`recent_dates`): resolved client-side via parallel Supabase queries inside
-`api.ts` — no DB functions or views required.
+**Computed fields**: `pf_goals_with_counts` and `pf_plans_with_counts` are
+Postgres views (both `security_invoker = on` — without it a view bypasses the
+base table's RLS and would publish every user's task titles). Streaks and
+`recent_dates` are still resolved client-side.
 
 **Recurring calendar blocks**: `pf_recurring_cal_blocks` stores the rules;
 `getCalBlocks()` expands them into virtual `CalBlock` entries client-side
@@ -708,6 +731,45 @@ right relation so callers never have to know; `taskTree.ts` `applyTaskPatch` is
 its client-side mirror for optimistic updates — spreading a patch containing
 `urgency` straight onto a task sets a dead property, and the matrix pad appears
 frozen until the refetch lands.
+
+### Goals are reached from the task, not only through plans
+
+`pf_tasks.goal_id` points at a goal directly. The original model was goal → plan
+→ task only, and that chain went **unused**: of 162 root project tasks 48 carried
+a plan, and of 15 plans **zero** carried a `goal_id`. No task could reach a goal,
+so `pf_goals_with_counts` — which joins through plans — counted nothing and every
+goal sat permanently at 0%. The bars could never move. If a goal reads 0%, check
+the linkage before suspecting the renderer.
+
+A **direct** goal beats the one inherited via plan. It is the more specific
+statement, and preferring it is what stops a task that reaches a goal both ways
+being counted twice. The view and `mapTaskWithContext` implement the same
+precedence deliberately — if they diverge, the header and the board disagree.
+
+Only **root, non-quick** tasks count toward a goal. Counting steps would mean
+breaking a task into five pieces inflates its goal's denominator from 1 to 6 —
+the same class of bug that made the dashboard's open-task pill grow the more
+carefully you planned. `ON DELETE SET NULL`, never CASCADE: deleting a goal must
+not delete the work aimed at it.
+
+⚠️ `pf_tasks` now reaches `pf_goals` **two ways**, so PostgREST refuses an
+ambiguous embed — `TASK_SELECT_CTX` disambiguates with
+`pf_goals!pf_tasks_goal_id_fkey`.
+
+### One recurrence engine: Systems, with two kinds of cadence
+
+`pf_systems.frequency` accepts `daily` / `weekly` / `monthly` — **calendar**
+recurrence, due-ness follows the date — and `interval` (+ `interval_days`) —
+**since-completion** recurrence, due-ness follows `last_done` and the schedule
+floats with behaviour. Wash the clothes on Friday instead of Tuesday and the next
+one moves with you; `weekly` cannot express that, which is why chores promote
+into an interval system rather than growing a second engine on `pf_tasks`.
+
+The due rule lives **only** in `lib/systems.ts`. It was previously written out
+three times (QuickPanels, Week, `getTodayFocus`) and the copies already disagreed
+about monthly and about unknown frequencies. A CHECK constraint enforces the
+pairing so an `interval` system cannot exist without a positive `interval_days`
+(which would read as due forever) and a calendar frequency cannot carry one.
 
 **Three more traps in the task model:**
 
