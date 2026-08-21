@@ -11,10 +11,10 @@ import type { Editor } from "@tiptap/core";
 import { actionsFor, GROUP_LABELS, type BlockAction, type BlockGroup } from "../extensions/blockRegistry";
 
 // Groups shown as bare buttons, in this order.
-const INLINE_GROUPS: BlockGroup[] = ["format", "text", "lists"];
+const INLINE_GROUPS: BlockGroup[] = ["format", "text", "lists", "align"];
 // Groups folded behind a single "Insert ▾" menu — they're occasional, and
 // .tiptap-toolbar doesn't wrap, so ~25 bare buttons would simply clip.
-const MENU_GROUPS: BlockGroup[] = ["structure", "callout", "container", "math", "table"];
+const MENU_GROUPS: BlockGroup[] = ["structure", "callout", "container", "media", "math", "table", "code"];
 // Trailing groups, shown inline after the menu.
 const TAIL_GROUPS: BlockGroup[] = ["vault", "history"];
 

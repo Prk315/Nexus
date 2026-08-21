@@ -418,6 +418,33 @@ function NoteEditorInner({ content, onChange, nodeId, graph, variant = "full" }:
     setLinkDialog(null);
   }
 
+  // ── Images ────────────────────────────────────────────────────────────────
+
+  // A hidden <input type=file>, because there is no way to open a file picker
+  // without one. Paste and drag-drop are handled inside the extension; all
+  // three routes go through the same Storage upload.
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
+  function pickImage() {
+    fileInputRef.current?.click();
+  }
+
+  async function onImageChosen(e: React.ChangeEvent<HTMLInputElement>) {
+    const files = Array.from(e.target.files ?? []).filter((f) => f.type.startsWith("image/"));
+    // Reset first: choosing the SAME file twice fires no change event otherwise.
+    e.target.value = "";
+    if (!editor || files.length === 0) return;
+    for (const file of files) {
+      try {
+        const url = await api.uploadCanvasImage(file);
+        editor.chain().focus().setImage({ src: url }).run();
+      } catch (err) {
+        console.error("[vault] image upload failed; nothing was inserted", err);
+        setPickerMsg("Could not upload that image.");
+      }
+    }
+  }
+
   // ── Registry ──────────────────────────────────────────────────────────────
 
   const registry = useMemo(
@@ -437,9 +464,11 @@ function NoteEditorInner({ content, onChange, nodeId, graph, variant = "full" }:
         highlighters: nodeId ? highlighters : [],
         onApplyHighlighter: applyCategory,
         onEditHighlighters: nodeId ? () => setEditingCats((v) => !v) : undefined,
+        onPickImage: pickImage,
       }),
     // editor identity is what makes the closures above valid; the rest are the
     // genuine inputs to the list's shape.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
     [editor, nodeId, highlighters, graph]
   );
   registryRef.current = registry;
@@ -577,6 +606,14 @@ function NoteEditorInner({ content, onChange, nodeId, graph, variant = "full" }:
           safely, so it has been left untouched on the server. Reload after updating Vault.
         </div>
       )}
+      <input
+        ref={fileInputRef}
+        type="file"
+        accept="image/*"
+        multiple
+        style={{ display: "none" }}
+        onChange={onImageChosen}
+      />
       <NoteToolbar
         editor={editor}
         registry={registry}

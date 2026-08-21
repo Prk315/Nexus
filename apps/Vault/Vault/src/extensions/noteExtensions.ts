@@ -24,6 +24,10 @@ import { Container } from "./structural/Container";
 import { ToggleBlock, ToggleSummary, ToggleContent } from "./structural/Toggle";
 import { ColumnBlock, Column } from "./structural/Columns";
 import { BlockHandle } from "./structural/BlockHandle";
+import { NoteImage } from "./noteImage";
+import { NoteCodeBlock } from "./noteCodeBlock";
+import TextAlign from "@tiptap/extension-text-align";
+import { TextStyle, Color } from "@tiptap/extension-text-style";
 import { KATEX_OPTS } from "../lib/katexShared";
 
 export interface NoteExtensionOpts {
@@ -50,7 +54,19 @@ export function buildNoteExtensions(opts: NoteExtensionOpts = {}): Extensions {
       // option, so it must stay identical to whatever noteSchema() derives —
       // see the note on cachedSchema below.
       heading: { levels: [1, 2, 3, 4] },
+      // Replaced below by the lowlight version. Leaving StarterKit's plain
+      // codeBlock registered too would be a duplicate node name.
+      codeBlock: false,
     }),
+    NoteCodeBlock,
+    // Storage URLs only — see noteImage.ts for the incident this prevents.
+    NoteImage,
+    TextAlign.configure({ types: ["heading", "paragraph"] }),
+    // TextStyle carries the mark; Color writes into it. BackgroundColor is
+    // deliberately NOT registered — it would compete with the highlighter
+    // categories, which mean something (they file vault_records rows).
+    TextStyle,
+    Color,
     Placeholder.configure({ placeholder }),
     // Checkboxes. Note this is a SCHEMA addition — taskList/taskItem — so it
     // depends on the Phase 1 guard being deployed everywhere first; a client

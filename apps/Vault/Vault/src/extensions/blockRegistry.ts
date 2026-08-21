@@ -19,6 +19,7 @@ import { CONTAINER_STYLES, CONTAINER_LABELS } from "./structural/Container";
 import { unwrapNearestContainer } from "./structural/containerCommands";
 import { insertToggle } from "./structural/toggleCommands";
 import { insertColumns, addColumn, deleteColumn } from "./structural/columnCommands";
+import { CODE_LANGUAGES } from "./noteCodeBlock";
 
 /** Every node in the structural family that "remove surrounding box" applies to. */
 export const STRUCTURAL_CONTAINERS = ["calloutBlock", "containerBlock"] as const;
@@ -34,8 +35,29 @@ export type BlockGroup =
   | "container"  // generic grouping panels
   | "math"
   | "table"
+  | "media"      // images
+  | "align"
+  | "color"
+  | "code"       // code-block language, only inside one
   | "vault"      // highlighters, database records
   | "history";
+
+/**
+ * Text colours offered in the bubble menu.
+ *
+ * A short, deliberate list rather than a colour wheel: an arbitrary hex picker
+ * in a note editor produces documents that look like ransom notes and can't be
+ * restyled later. These are the app's own semantic hues, so coloured text
+ * matches the callouts and the rest of Vault.
+ */
+export const TEXT_COLORS: Array<{ id: string; label: string; value: string | null }> = [
+  { id: "default", label: "Default", value: null },
+  { id: "muted", label: "Muted", value: "oklch(0.55 0 0)" },
+  { id: "red", label: "Red", value: "oklch(0.577 0.245 27.325)" },
+  { id: "amber", label: "Amber", value: "oklch(0.55 0.12 82)" },
+  { id: "green", label: "Green", value: "oklch(0.50 0.15 140)" },
+  { id: "blue", label: "Blue", value: "oklch(0.40 0.10 265)" },
+];
 
 export interface BlockActionContext {
   /** The `/query` range to delete first. Present only from the slash menu. */
@@ -94,6 +116,8 @@ export interface BlockRegistryOptions {
   highlighters?: HighlighterCategory[];
   onApplyHighlighter?: (cat: HighlighterCategory) => void;
   onEditHighlighters?: () => void;
+  /** Opens a file picker; the extension handles the upload. */
+  onPickImage?: (editor: Editor) => void;
 }
 
 const inTable = (e: Editor) => e.isActive("table");
@@ -312,6 +336,48 @@ export function buildBlockRegistry(opts: BlockRegistryOptions = {}): BlockAction
       },
     },
 
+    // ── Media ───────────────────────────────────────────────────────────────
+    // Paste and drag-drop are handled in the extension itself; this is the
+    // explicit route. Every path uploads to Storage first — see noteImage.ts.
+    {
+      id: "image",
+      title: "Image",
+      icon: "🖼",
+      group: "media",
+      surfaces: ["slash", "toolbar"],
+      keywords: ["image", "picture", "photo", "screenshot", "upload"],
+      run: (editor, ctx) => {
+        if (ctx?.range) editor.chain().focus().deleteRange(ctx.range).run();
+        opts.onPickImage?.(editor);
+      },
+    },
+
+    // ── Alignment ───────────────────────────────────────────────────────────
+    ...(["left", "center", "right"] as const).map((align): BlockAction => ({
+      id: `align:${align}`,
+      title: `Align ${align}`,
+      icon: align === "left" ? "⇤" : align === "center" ? "↔" : "⇥",
+      group: "align",
+      surfaces: ["toolbar"],
+      keywords: ["align", align],
+      run: (e) => e.chain().focus().setTextAlign(align).run(),
+      isActive: (e) => e.isActive({ textAlign: align }),
+    })),
+
+    // ── Text colour ─────────────────────────────────────────────────────────
+    ...TEXT_COLORS.map((c): BlockAction => ({
+      id: `color:${c.id}`,
+      title: c.label,
+      icon: "A",
+      group: "color",
+      surfaces: ["bubble"],
+      run: (e) =>
+        c.value
+          ? e.chain().focus().setColor(c.value).run()
+          : e.chain().focus().unsetColor().run(),
+      isActive: (e) => (c.value ? e.isActive("textStyle", { color: c.value }) : false),
+    })),
+
     // Offered only from inside one, because "unwrap" has no meaning outside.
     // Backspace-at-start does the same thing; this is the discoverable route.
     {
@@ -421,6 +487,25 @@ export function buildBlockRegistry(opts: BlockRegistryOptions = {}): BlockAction
     });
   }
 
+  // ── Code block language ───────────────────────────────────────────────────
+  // One action per language, available only inside a code block. Expressing it
+  // this way means the existing "Insert ▾" menu renders the whole picker for
+  // free — empty groups are already filtered out, so these are invisible
+  // everywhere else and cost no new UI code.
+  for (const lang of CODE_LANGUAGES) {
+    const value = lang.value === "plaintext" ? null : lang.value;
+    actions.push({
+      id: `codeLang:${lang.value}`,
+      title: lang.label,
+      icon: "⌗",
+      group: "code",
+      surfaces: ["toolbar"],
+      isAvailable: (e) => e.isActive("codeBlock"),
+      isActive: (e) => e.isActive("codeBlock", { language: value }),
+      run: (e) => e.chain().focus().updateAttributes("codeBlock", { language: value }).run(),
+    });
+  }
+
   // ── History ───────────────────────────────────────────────────────────────
   actions.push(
     { id: "undo", title: "Undo", icon: "↩", group: "history", surfaces: ["toolbar"], shortcut: "⌘Z", run: (e) => e.chain().focus().undo().run() },
@@ -453,6 +538,10 @@ export const GROUP_LABELS: Record<BlockGroup, string> = {
   callout: "Callout",
   container: "Group",
   math: "Math",
+  media: "Media",
+  align: "Align",
+  color: "Colour",
+  code: "Language",
   table: "Table",
   vault: "Vault",
   history: "History",

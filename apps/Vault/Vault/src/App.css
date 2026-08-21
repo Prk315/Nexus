@@ -3488,6 +3488,80 @@ body.vault-col-resizing * {
 }
 
 
+/* ── Images ──────────────────────────────────────────────────────────────────
+   Always a Storage URL, never inline base64 — see extensions/noteImage.ts for
+   the incident that rule exists because of. */
+.tiptap-editor .ProseMirror img.note-image {
+  display: block;
+  max-width: 100%;
+  height: auto;
+  margin: 1em 0;
+  border-radius: calc(var(--radius) * 0.7);
+  border: 1px solid var(--border-faint);
+}
+
+.tiptap-editor .ProseMirror img.note-image.ProseMirror-selectednode {
+  outline: 2px solid var(--edge-in);
+  outline-offset: 2px;
+}
+
+/* ── Code block syntax highlighting ──────────────────────────────────────────
+   lowlight emits highlight.js class names. The palette is derived from the
+   app's own tokens rather than importing one of highlight.js's themes, which
+   would arrive with its own background colour and fight everything around it. */
+.tiptap-editor .ProseMirror pre code .hljs-comment,
+.tiptap-editor .ProseMirror pre code .hljs-quote {
+  color: var(--fg-invisible);
+  font-style: italic;
+}
+
+.tiptap-editor .ProseMirror pre code .hljs-keyword,
+.tiptap-editor .ProseMirror pre code .hljs-selector-tag,
+.tiptap-editor .ProseMirror pre code .hljs-literal,
+.tiptap-editor .ProseMirror pre code .hljs-section,
+.tiptap-editor .ProseMirror pre code .hljs-doctag,
+.tiptap-editor .ProseMirror pre code .hljs-type {
+  color: oklch(0.45 0.16 300);
+}
+
+.tiptap-editor .ProseMirror pre code .hljs-string,
+.tiptap-editor .ProseMirror pre code .hljs-regexp,
+.tiptap-editor .ProseMirror pre code .hljs-addition,
+.tiptap-editor .ProseMirror pre code .hljs-attribute,
+.tiptap-editor .ProseMirror pre code .hljs-meta .hljs-string {
+  color: var(--edge-out);
+}
+
+.tiptap-editor .ProseMirror pre code .hljs-number,
+.tiptap-editor .ProseMirror pre code .hljs-symbol,
+.tiptap-editor .ProseMirror pre code .hljs-bullet,
+.tiptap-editor .ProseMirror pre code .hljs-link,
+.tiptap-editor .ProseMirror pre code .hljs-variable,
+.tiptap-editor .ProseMirror pre code .hljs-template-variable {
+  color: var(--warning);
+}
+
+.tiptap-editor .ProseMirror pre code .hljs-title,
+.tiptap-editor .ProseMirror pre code .hljs-name,
+.tiptap-editor .ProseMirror pre code .hljs-selector-id,
+.tiptap-editor .ProseMirror pre code .hljs-selector-class,
+.tiptap-editor .ProseMirror pre code .hljs-function .hljs-title {
+  color: var(--edge-in);
+}
+
+.tiptap-editor .ProseMirror pre code .hljs-built_in,
+.tiptap-editor .ProseMirror pre code .hljs-class .hljs-title {
+  color: oklch(0.5 0.13 200);
+}
+
+.tiptap-editor .ProseMirror pre code .hljs-deletion { color: var(--destructive); }
+.tiptap-editor .ProseMirror pre code .hljs-emphasis { font-style: italic; }
+.tiptap-editor .ProseMirror pre code .hljs-strong { font-weight: 600; }
+
+/* ── Text alignment ──────────────────────────────────────────────────────── */
+.tiptap-editor .ProseMirror [style*="text-align: center"] { text-align: center; }
+.tiptap-editor .ProseMirror [style*="text-align: right"] { text-align: right; }
+
 /* ── Block drag handle ───────────────────────────────────────────────────────
    Hand-rolled rather than @tiptap/extension-drag-handle, which imports
    extension-collaboration and y-tiptap at the top level and would drag the

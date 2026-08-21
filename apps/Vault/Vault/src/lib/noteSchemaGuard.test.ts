@@ -193,7 +193,34 @@ describe("note schema", () => {
 // quietly disappearing on copy-paste.
 describe("HTML round-trip", () => {
   const exts = buildNoteExtensions();
-  const roundTrip = (json: any) => generateJSON(generateHTML(json, exts), exts);
+
+  /**
+   * Drop attributes that are null.
+   *
+   * Registering an extension like TextAlign adds an attribute to EVERY
+   * paragraph and heading, so a round trip legitimately returns
+   * `attrs: { textAlign: null }` for a fixture that didn't mention it. Pinning
+   * fixtures against the full attribute set would mean editing a dozen of them
+   * every time an extension is added, and would fail for a reason that has
+   * nothing to do with content surviving. Attributes that MATTER are asserted
+   * explicitly below (callout variant, toggle open, highlight category).
+   */
+  const strip = (v: any): any => {
+    if (Array.isArray(v)) return v.map(strip);
+    if (!v || typeof v !== "object") return v;
+    const out: any = {};
+    for (const [k, val] of Object.entries(v)) {
+      if (k === "attrs") {
+        const attrs = Object.fromEntries(Object.entries(val as any).filter(([, a]) => a !== null));
+        if (Object.keys(attrs).length) out.attrs = attrs;
+      } else {
+        out[k] = strip(val);
+      }
+    }
+    return out;
+  };
+
+  const roundTrip = (json: any) => strip(generateJSON(generateHTML(json, exts), exts));
 
   const cases: Array<[string, any]> = [
     ["paragraph", doc(para("hello world"))],
@@ -236,7 +263,7 @@ describe("HTML round-trip", () => {
 
   for (const [name, json] of cases) {
     it(`survives ${name}`, () => {
-      expect(roundTrip(json)).toEqual(json);
+      expect(roundTrip(json)).toEqual(strip(json));
     });
   }
 
@@ -267,14 +294,14 @@ describe("HTML round-trip", () => {
   for (const variant of ["note", "info", "warn", "success", "danger"]) {
     it(`survives a ${variant} callout`, () => {
       const json = doc({ type: "calloutBlock", attrs: { variant }, content: [para("body")] });
-      expect(roundTrip(json)).toEqual(json);
+      expect(roundTrip(json)).toEqual(strip(json));
     });
   }
 
   for (const style of ["plain", "card", "outline", "muted"]) {
     it(`survives a ${style} container`, () => {
       const json = doc({ type: "containerBlock", attrs: { style }, content: [para("body")] });
-      expect(roundTrip(json)).toEqual(json);
+      expect(roundTrip(json)).toEqual(strip(json));
     });
   }
 
@@ -290,7 +317,7 @@ describe("HTML round-trip", () => {
       });
       // Collapsed state has to survive the round trip or a toggle silently
       // springs open every time a note is copied or re-parsed.
-      expect(roundTrip(json)).toEqual(json);
+      expect(roundTrip(json)).toEqual(strip(json));
     });
   }
 
@@ -307,7 +334,7 @@ describe("HTML round-trip", () => {
         { type: "toggleContent", content: [para("body")] },
       ],
     });
-    expect(roundTrip(json)).toEqual(json);
+    expect(roundTrip(json)).toEqual(strip(json));
   });
 
   it("survives a container nested inside a callout", () => {
@@ -319,7 +346,7 @@ describe("HTML round-trip", () => {
         { type: "containerBlock", attrs: { style: "muted" }, content: [para("nested")] },
       ],
     });
-    expect(roundTrip(json)).toEqual(json);
+    expect(roundTrip(json)).toEqual(strip(json));
   });
 
   // An unrecognised variant must land on a real one, or the CSS attribute
