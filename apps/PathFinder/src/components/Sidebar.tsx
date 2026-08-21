@@ -1,6 +1,7 @@
 import { LayoutDashboard, ChevronLeft, ChevronRight, CalendarDays, BookOpen, Download, FolderKanban, Gamepad2, CalendarRange, Kanban } from "lucide-react";
 import { cn } from "../lib/utils";
 import { exportData } from "../lib/api";
+import { useQuickPanels } from "./QuickPanels";
 
 export type Page = "dashboard" | "workspace" | "week" | "projects" | "courses" | "schedules" | "games";
 
@@ -72,6 +73,13 @@ export function Sidebar({ current, onChange, collapsed, onToggle }: SidebarProps
         ))}
       </nav>
 
+      {/* Tools — the six side-panels, below a divider.
+          They sit apart from the nav on purpose: navigation changes *where you
+          are*, these open something over wherever you already were. Icon-only
+          even when the sidebar is expanded, because six labelled rows would
+          out-weigh the seven pages above them. */}
+      <QuickPanelRail collapsed={collapsed} />
+
       {/* Export */}
       <div className="shrink-0 border-t border-border p-2">
         <button
@@ -102,5 +110,47 @@ export function Sidebar({ current, onChange, collapsed, onToggle }: SidebarProps
         </button>
       </div>
     </aside>
+  );
+}
+
+function QuickPanelRail({ collapsed }: { collapsed: boolean }) {
+  const { panels, open, toggle } = useQuickPanels();
+
+  return (
+    <div className="shrink-0 border-t border-border px-2 py-2">
+      {/* A fixed grid, not flex-wrap: six icons in a 208px sidebar wrap to 5+1,
+          which reads as a mistake. Two rows of three reads as a set. */}
+      {/* Extra row gap: the badge sits above the button box (-top-1), so a
+            uniform gap-1 let a badge nearly touch the icon on the row above. */}
+        <div className={cn("grid gap-x-1 gap-y-2.5 justify-items-center", collapsed ? "grid-cols-1" : "grid-cols-3")}>
+        {panels.map(({ id, label, icon: Icon, count }) => (
+          <button
+            key={id}
+            // Marks this as a trigger so the flyout's click-outside handler
+            // ignores it — otherwise closing then re-toggling would fight.
+            data-quick-panel-trigger
+            onClick={() => toggle(id)}
+            title={label}
+            aria-label={label}
+            aria-pressed={open === id}
+            className={cn(
+              "relative flex h-8 w-8 items-center justify-center rounded-md transition-colors",
+              open === id
+                ? "bg-sidebar-accent text-sidebar-accent-foreground"
+                : "text-sidebar-foreground/60 hover:bg-sidebar-accent/60 hover:text-sidebar-accent-foreground",
+            )}
+          >
+            <Icon className="h-4 w-4" />
+            {/* Superscript count of unchecked items. Capped at "9+" so a long
+                shopping list can't widen the badge past the icon it sits on. */}
+            {count != null && (
+              <span className="absolute -top-1 -right-1 flex h-4 min-w-4 items-center justify-center rounded-full bg-blue-500 px-1 text-[9px] font-semibold leading-none text-white ring-2 ring-sidebar">
+                {count > 9 ? "9+" : count}
+              </span>
+            )}
+          </button>
+        ))}
+      </div>
+    </div>
   );
 }

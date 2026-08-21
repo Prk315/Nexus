@@ -1,10 +1,73 @@
 export type GoalStatus = "active" | "completed" | "archived";
+// `Priority` is the *importance* axis. It is deliberately not renamed — every
+// consumer in this repo (Dashboard, Week, the command palette, the task-quick
+// edge function, the iOS widgets) writes `priority`. `Urgency` is its new
+// complement; together they place a task on the 3x3 matrix.
 export type Priority = "high" | "medium" | "low";
+export type Urgency = "high" | "medium" | "low";
 // Quick-task kinds. `null` on a task means a regular project task — the three
 // named categories are lightweight standing lists (surfaced by Nexus Local and
 // the home-screen quick-task widget) that don't belong to any plan.
 export type TaskCategory = "reminder" | "chore" | "shopping";
 export type Frequency = "daily" | "weekly" | "monthly";
+
+// ── The task ISA hierarchy ───────────────────────────────────────────────────
+//
+// `pf_tasks` is the supertype: everything that every kind of task has. Each kind
+// then has its own subtype table, and they are deliberately unequal in size — a
+// full task carries a whole planning relation, a shopping item carries two
+// columns. Modelling them as one wide table is what this replaced.
+//
+//   task     -> pf_task_planning   (urgency, stage, completion_mode, target, notes)
+//   reminder -> pf_task_reminders  (remind_at, lead_minutes)
+//   chore    -> pf_task_chores     (area, rotation_days)
+//   shopping -> pf_task_shopping   (quantity, store)
+//
+// `task_type` is the discriminator. In the database it is a generated column
+// (`coalesce(category, 'task')`), so it can never drift from the `category` that
+// existing writers — the task-quick edge function, the iOS widgets — already set.
+export type TaskType = "task" | TaskCategory;
+
+// The task lifecycle. A task is specified, then committed to the calendar, and
+// only then worked on — `active` is gated on having scheduled minutes (enforced
+// in api.ts `setTaskStage`, which is the only write path the UI uses).
+//
+// Only the 'task' subtype has one. A reminder has no lifecycle to gate.
+export type TaskStage = "refine" | "schedule" | "active" | "done";
+
+// What "complete" means for a full task.
+//   binary   — the checkbox (every task that existed before the breakdown work).
+//   sessions — N logged work sessions against `target_count`. This is what makes
+//              a *recurring* subtask completable: it is never done in one sitting.
+//   time     — logged minutes against `time_estimate`.
+export type CompletionMode = "binary" | "sessions" | "time";
+
+/** The `task` subtype: the heavy planning relation. Absent on sparse kinds. */
+export interface TaskPlanning {
+  urgency: Urgency;
+  stage: TaskStage;
+  completion_mode: CompletionMode;
+  target_count: number | null;
+  notes: string | null;
+}
+
+/** The `reminder` subtype. */
+export interface TaskReminder {
+  remind_at: string | null;
+  lead_minutes: number | null;
+}
+
+/** The `chore` subtype. */
+export interface TaskChore {
+  area: string | null;
+  rotation_days: number | null;
+}
+
+/** The `shopping` subtype. */
+export interface TaskShopping {
+  quantity: string | null;
+  store: string | null;
+}
 
 export interface GoalGroup {
   id: number;
@@ -49,18 +112,43 @@ export interface Plan {
   solution: string | null;
 }
 
-export interface Task {
+/**
+ * Supertype fields — what every kind of task has, regardless of subtype.
+ *
+ * `priority`, `due_date` and `time_estimate` live here rather than in the
+ * planning subtype because they are genuinely meaningful for a chore ("medium,
+ * 15 min, by Friday") as much as for a project task.
+ */
+export interface TaskBase {
   id: number;
   plan_id: number | null;
+  /** Parent task, for recursive breakdown. `null` = a top-level task. */
+  parent_id: number | null;
+  task_type: TaskType;
   title: string;
   done: boolean;
   sort_order: number;
   priority: Priority;
   due_date: string | null;
   created_at: string;
+  /** What this task claims for *itself*. See `aggregate_estimate`. */
   time_estimate: number | null;
+  /**
+   * Rolled-up minutes for the whole subtree, maintained by a database trigger:
+   * the sum of children's aggregates, or own `time_estimate` for a leaf.
+   *
+   * This is the number to show on a primary task — once it is broken down, its
+   * own `time_estimate` is a stale standalone guess, not the total. Read-only:
+   * writing it is overwritten on the next recompute.
+   */
+  aggregate_estimate: number;
   kanban_status: string;
   category: TaskCategory | null;
+}
+
+export interface Task extends TaskBase {
+  /** The `task` subtype's row. `null` for every sparse kind. */
+  planning: TaskPlanning | null;
 }
 
 export interface ProjectGoal {
@@ -71,21 +159,38 @@ export interface ProjectGoal {
   sort_order: number;
 }
 
-export interface TaskWithContext {
-  id: number;
-  plan_id: number | null;
+export interface TaskWithContext extends TaskBase {
   plan_title: string | null;
   goal_id: number | null;
   goal_title: string | null;
-  title: string;
-  done: boolean;
-  sort_order: number;
-  priority: Priority;
-  due_date: string | null;
+  /** The `task` subtype's row. `null` for every sparse kind. */
+  planning: TaskPlanning | null;
+}
+
+/** One chunk of work actually done on a task — the ledger behind sessions/time modes. */
+export interface TaskSession {
+  id: number;
+  task_id: number;
+  date: string;
+  minutes: number;
+  /**
+   * The calendar occurrence this session ticks off, if any. May be the *negative*
+   * virtual id of a recurring-block occurrence (see `expandRecurring`), so this
+   * is deliberately not a foreign key.
+   */
+  cal_block_id: number | null;
+  note: string | null;
   created_at: string;
-  time_estimate: number | null;
-  kanban_status?: string;
-  category: TaskCategory | null;
+}
+
+/** How much calendar time a task has committed, and how much it still needs. */
+export interface TaskCoverage {
+  /** Minutes of calendar blocks pointing at this task (one-off + recurring occurrences). */
+  scheduledMin: number;
+  /** Number of distinct calendar commitments (occurrences, not series). */
+  blockCount: number;
+  /** Earliest committed date, or null when nothing is scheduled. */
+  firstDate: string | null;
 }
 
 export interface SystemSubtask {
@@ -142,7 +247,6 @@ export interface WeekItems {
   goals: Goal[];
   plans: Plan[];
   deadlines: Deadline[];
-  reminders: Reminder[];
   course_assignments: CourseAssignment[];
   schedule_entries: ScheduleEntry[];
   training_sessions: TrainingSession[];
@@ -221,14 +325,6 @@ export interface DailyPrimaryGoal {
 export interface DailyGoals {
   primary: DailyPrimaryGoal | null;
   secondary: DailySecGoal[];
-}
-
-export interface Reminder {
-  id: number;
-  title: string;
-  done: boolean;
-  due_date: string | null;
-  created_at: string;
 }
 
 export interface QuickNote {
@@ -392,6 +488,8 @@ export interface RecurringCalBlock {
   description: string | null;
   location: string | null;
   created_at: string;
+  /** Set when this series is a recurring commitment to a task/subtask. */
+  task_id: number | null;
 }
 
 export interface Game {

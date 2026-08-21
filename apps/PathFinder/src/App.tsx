@@ -12,6 +12,7 @@ import { Games } from "./pages/Games";
 import { Schedules } from "./pages/Schedules";
 import { Workspace } from "./pages/Workspace";
 import { CommandPalette } from "./components/CommandPalette";
+import { QuickPanelsProvider } from "./components/QuickPanels";
 
 const IS_IOS = /iPhone|iPad|iPod/.test(navigator.userAgent);
 
@@ -22,6 +23,7 @@ function App() {
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
 
   return (
+    <QuickPanelsProvider>
     <div className="flex h-screen w-screen overflow-hidden bg-background text-foreground">
       <CommandPalette onNavigate={setPage} />
       {!IS_IOS && (
@@ -62,6 +64,7 @@ function App() {
 
       {IS_IOS && <BottomNav currentPage={page} onNavigate={setPage} />}
     </div>
+    </QuickPanelsProvider>
   );
 }
 

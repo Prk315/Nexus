@@ -1,35 +1,27 @@
 import { useEffect, useState, useCallback, useMemo, useRef } from "react";
 import {
-  CheckCircle, Flame, RefreshCw, Target, CheckSquare, Check, ChevronDown, ChevronRight,
-  Bell, Plus, X, FileText, Zap, Calendar, Clock, Handshake, Star, Pencil, BookOpen,
+  PanelRight, PanelRightClose,
+  CheckCircle, CheckSquare, Check, ChevronDown, ChevronRight,
+  Plus, X, Clock, Star, Pencil, BookOpen,
   Eye, EyeOff,
 } from "lucide-react";
 import {
   getGoals, getPlans, getAllTasks, getSystems,
-  markSystemDone, unmarkSystemDone, toggleTask, createTask, updateTask, deleteTask,
+  toggleTask, createTask, updateTask, deleteTask,
+  toTaskWithContext, getTaskSessionsInRange, logTaskSession, unlogTaskOccurrence,
   getCalBlocks, createCalBlock, updateCalBlock, deleteCalBlock,
-  getSystemSubtasks, toggleSystemSubtask,
-  getGoalGroups,
   getDailyGoals, setDailyPrimaryGoal, clearDailyPrimaryGoal, addDailySecondaryGoal, updateDailySecondaryGoal, deleteDailySecondaryGoal,
-  getReminders, addReminder, toggleReminder, deleteReminder,
-  getQuickNotes, addQuickNote, deleteQuickNote,
-  getBrainDump, addBrainEntry, deleteBrainEntry,
-  getEvents, addEvent, deleteEvent,
-  getDeadlines, addDeadline, toggleDeadline, deleteDeadline,
-  getAgreements, addAgreement, deleteAgreement,
   getCourseAssignments, updateCourseAssignment,
   getScheduleEntriesForDate,
   getHabitsForDate, toggleHabitCompletion, getHabitStacks,
   getHabitSubtasks, toggleHabitSubtask,
   getTrainingSessionsForDate,
 } from "../lib/api";
-import { Progress } from "../components/ui/progress";
-import { Button } from "../components/ui/button";
-import { Badge } from "../components/ui/badge";
-import { PriorityDot } from "../components/PriorityDot";
-import { daysUntil, deadlineLabel, deadlineVariant, cn, layoutCalItems } from "../lib/utils";
+import { daysUntil, cn, layoutCalItems, formatDateShort } from "../lib/utils";
+import { blockMinutes, planningOf, isFullTask } from "../lib/taskTree";
+import { UrgencyMeter } from "../components/UrgencyMeter";
 import { isDue } from "../components/workspace/systemForms";
-import type { Goal, GoalGroup, Plan, TaskWithContext, SystemEntry, SystemSubtask, CalBlock, DailyGoals, DailyPrimaryGoal, DailySecGoal, Reminder, QuickNote, BrainEntry, CalEvent, Deadline, Agreement, CourseAssignment, ScheduleEntry, HabitWithCompletion, HabitStack, HabitSubtask, TrainingSession } from "../types";
+import type { Goal, Plan, TaskWithContext, SystemEntry, CalBlock, DailyGoals, DailyPrimaryGoal, DailySecGoal, CourseAssignment, ScheduleEntry, HabitWithCompletion, HabitStack, HabitSubtask, TrainingSession, TaskSession } from "../types";
 
 const todayDate = () => new Date().toISOString().slice(0, 10);
 
@@ -460,7 +452,7 @@ function HabitsStrip({ habits, stacks, onToggle, today }: {
 
 function DayCalendar({
   date: _date, calBlocks, systems, courseAssignments, scheduleEntries, tasks,
-  onCreateBlock, onUpdateBlock, onDeleteBlock,
+  sessionsByBlock, onCreateBlock, onUpdateBlock, onDeleteBlock, onToggleWorked,
 }: {
   date: string;
   calBlocks: CalBlock[];
@@ -468,9 +460,12 @@ function DayCalendar({
   courseAssignments: CourseAssignment[];
   scheduleEntries: ScheduleEntry[];
   tasks: TaskWithContext[];
+  /** Sessions already logged, keyed by the occurrence's cal_block_id. */
+  sessionsByBlock: Map<number, TaskSession>;
   onCreateBlock: (d: DCBlockDraft) => Promise<void>;
   onUpdateBlock: (id: number, d: DCBlockDraft) => Promise<void>;
   onDeleteBlock: (b: CalBlock) => Promise<void>;
+  onToggleWorked: (b: CalBlock) => void;
 }) {
   const colRef    = useRef<HTMLDivElement>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -718,6 +713,9 @@ function DayCalendar({
                 const clr = DC_COLORS[b.color] ?? DC_COLORS.blue;
                 const cbId = `cb-${b.recurring_id ?? b.id}-${b.date}`;
                 const cbHidden = hiddenIds.has(cbId);
+                // A block committed to a task can be worked off in place; ticking
+                // it logs a session, which is what advances sessions/time modes.
+                const worked = b.task_id != null && sessionsByBlock.has(b.id);
                 return (
                   <div
                     key={`blk-${b.id}`}
@@ -726,7 +724,8 @@ function DayCalendar({
                       "absolute rounded border px-1 py-0.5 overflow-hidden z-20 transition-all group",
                       clr.bg, clr.border,
                       b.is_recurring ? "cursor-default opacity-80" : "cursor-pointer hover:brightness-110",
-                      cbHidden && "opacity-15"
+                      cbHidden && "opacity-15",
+                      worked && "ring-1 ring-emerald-400/60"
                     )}
                     style={{ top, height: ht, left, right }}
                     onClick={b.is_recurring ? undefined : (e) => { e.stopPropagation(); setModal({ block: b }); }}
@@ -738,7 +737,23 @@ function DayCalendar({
                     >
                       {cbHidden ? <EyeOff className={cn("h-3.5 w-3.5", clr.text)} /> : <Eye className={cn("h-3.5 w-3.5", clr.text)} />}
                     </button>
-                    <p className={cn("text-[10px] font-semibold leading-tight truncate", clr.text)}>{b.title}</p>
+                    <div className="flex items-center gap-1">
+                      {b.task_id != null && (
+                        <button
+                          title={worked ? "Worked — click to undo" : "Mark this block as worked"}
+                          onClick={(e) => { e.stopPropagation(); onToggleWorked(b); }}
+                          className={cn(
+                            "flex h-2.5 w-2.5 shrink-0 items-center justify-center rounded-[2px] border transition-colors",
+                            worked
+                              ? "bg-emerald-500 border-emerald-500 text-white"
+                              : cn("border-current opacity-50 hover:opacity-100", clr.text),
+                          )}
+                        >
+                          {worked && <Check className="h-1.5 w-1.5" />}
+                        </button>
+                      )}
+                      <p className={cn("text-[10px] font-semibold leading-tight truncate", clr.text, worked && "line-through opacity-70")}>{b.title}</p>
+                    </div>
                     {ht > 26 && (
                       <p className={cn("text-[9px] leading-tight opacity-70 tabular-nums", clr.text)}>
                         {b.start_time}–{b.end_time}
@@ -967,6 +982,51 @@ function TodayPie({ doneMin, pendingMin, freeMin, capTotal, items }: {
 
 // ── Welcome Box ───────────────────────────────────────────────────────────────
 
+/**
+ * Active goals, compacted into the header.
+ *
+ * They used to be a full-width block above the task list, which spent a whole
+ * row and ~1000px of width on two short titles and two progress bars. Goals are
+ * *context* for the day rather than something you act on hourly, so they belong
+ * beside the other at-a-glance header readouts — next to the pie, not above the
+ * work.
+ *
+ * Same ordering as the old block (priority, then nearest deadline) so the goal
+ * that mattered most still reads first. Scrolls past three rather than growing
+ * the header.
+ */
+function HeaderGoals({ goals }: { goals: Goal[] }) {
+  const active = [...goals]
+    .filter((g) => g.status === "active")
+    .sort((a, b) => {
+      const p = { high: 0, medium: 1, low: 2 } as Record<string, number>;
+      const pd = (p[a.priority] ?? 1) - (p[b.priority] ?? 1);
+      if (pd !== 0) return pd;
+      if (a.deadline && b.deadline) return a.deadline.localeCompare(b.deadline);
+      return a.deadline ? -1 : b.deadline ? 1 : 0;
+    });
+
+  if (active.length === 0) return null;
+
+  return (
+    <div className="hidden lg:flex shrink-0 w-56 max-h-16 flex-col justify-center gap-2 overflow-y-auto">
+      {active.map((g) => {
+        const pct = g.task_count === 0 ? 0 : Math.round((g.done_count / g.task_count) * 100);
+        return (
+          <div key={g.id} className="flex flex-col gap-1">
+            <span className="truncate text-[11px] font-medium text-foreground" title={g.title}>
+              {g.title}
+            </span>
+            <div className="h-1 w-full overflow-hidden rounded-full bg-secondary">
+              <div className="h-full rounded-full bg-primary transition-all" style={{ width: `${pct}%` }} />
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
 function WelcomeBox({
   goals, plans, tasks, systems, dailyGoals, courseAssignments, date,
   goalPrimaryDone, goalSecDone, todaySessions,
@@ -1017,14 +1077,20 @@ function WelcomeBox({
     setEditingEstId(null);
   }
 
-  // Stat pills
+  // Stat pills.
+  //
+  // Every count here is over *top-level* tasks only. A subtask is a step inside
+  // a task, not a task of its own — counting both would report a task broken
+  // into five steps as six things to do, and the number would grow the more
+  // carefully you planned.
+  const rootTasks   = tasks.filter((t) => t.parent_id == null);
   const activeGoals = goals.filter((g) => g.status === "active").length;
-  const openTasks   = tasks.filter((t) => !t.done).length;
+  const openTasks   = rootTasks.filter((t) => !t.done).length;
   const activePlans = plans.filter((p) => p.status === "active").length;
   const systemsDue  = systems.filter(isDue).length;
 
   // Today's task progress (tasks due today + assignments + training sessions)
-  const todayTasks = tasks.filter((t) => t.due_date === date);
+  const todayTasks = rootTasks.filter((t) => t.due_date === date);
   const totalToday = todayTasks.length + courseAssignments.length + todaySessions.length;
   const doneToday  = todayTasks.filter((t) => t.done).length
                    + courseAssignments.filter((ca) => ca.status === "done").length
@@ -1038,7 +1104,11 @@ function WelcomeBox({
   let doneMin = 0, pendingMin = 0;
 
   for (const t of todayTasks) {
-    const min = t.time_estimate ?? TASK_MIN;
+    // `aggregate_estimate` is the trigger-maintained roll-up of the whole
+    // breakdown, so a task split into steps contributes its real total exactly
+    // once. Falling back to its own estimate covers leaves and any row read
+    // before the aggregate was computed.
+    const min = t.aggregate_estimate || t.time_estimate || TASK_MIN;
     (t.done ? (doneMin += min) : (pendingMin += min));
   }
   for (const ca of courseAssignments) {
@@ -1088,7 +1158,9 @@ function WelcomeBox({
   const pieItems: PieItem[] = [
     ...todayTasks.map((t) => ({
       id: t.id, label: t.title, subtitle: t.plan_title ?? undefined,
-      minutes: t.time_estimate ?? TASK_MIN, done: t.done, kind: "task" as const,
+      // Same roll-up the totals above use, so the slices sum to the ring.
+      minutes: t.aggregate_estimate || t.time_estimate || TASK_MIN,
+      done: t.done, kind: "task" as const,
     })),
     ...courseAssignments.map((ca) => {
       let min: number;
@@ -1253,6 +1325,11 @@ function WelcomeBox({
         )}
       </div>
 
+      <div className="hidden lg:block h-10 w-px bg-border shrink-0" />
+
+      {/* Active goals — context for the day, beside the other header readouts */}
+      <HeaderGoals goals={goals} />
+
       <div className="hidden md:block h-10 w-px bg-border shrink-0" />
 
       {/* Pie chart */}
@@ -1330,606 +1407,179 @@ function TimeEstimateInput({ value, onChange, onBlur, className }: {
 
 // ── Quick Cards ───────────────────────────────────────────────────────────────
 
-function RemindersPanel({ reminders, onAdd, onToggle, onDelete }: {
-  reminders: Reminder[];
-  onAdd: (title: string) => void;
-  onToggle: (id: number) => void;
-  onDelete: (id: number) => void;
-}) {
-  const [draft, setDraft] = useState("");
-
-  function handleKeyDown(e: React.KeyboardEvent<HTMLInputElement>) {
-    if (e.key === "Enter" && draft.trim()) {
-      onAdd(draft.trim());
-      setDraft("");
-    }
-  }
-
-  const open = reminders.filter((r) => !r.done);
-  const done = reminders.filter((r) => r.done);
-
-  return (
-    <div className="flex flex-col gap-2 pt-1">
-      {/* Add input */}
-      <div className="flex items-center gap-1.5">
-        <input
-          className="flex-1 h-7 rounded border border-input bg-transparent px-2 text-xs placeholder:text-muted-foreground/50 focus:outline-none focus:ring-1 focus:ring-ring"
-          placeholder="Add reminder… (Enter)"
-          value={draft}
-          onChange={(e) => setDraft(e.target.value)}
-          onKeyDown={handleKeyDown}
-        />
-        <button
-          onClick={() => { if (draft.trim()) { onAdd(draft.trim()); setDraft(""); } }}
-          className="flex h-7 w-7 shrink-0 items-center justify-center rounded border border-input text-muted-foreground hover:text-foreground hover:bg-secondary transition-colors"
-        >
-          <Plus className="h-3.5 w-3.5" />
-        </button>
-      </div>
-
-      {/* Open reminders */}
-      {open.length === 0 && done.length === 0 ? (
-        <p className="text-xs text-muted-foreground italic">No reminders yet.</p>
-      ) : (
-        <div className="flex flex-col gap-0.5">
-          {open.map((r) => (
-            <div key={r.id} className="flex items-center gap-2 group py-0.5">
-              <button
-                onClick={() => onToggle(r.id)}
-                className="h-3.5 w-3.5 shrink-0 rounded border border-border hover:border-primary transition-colors"
-              />
-              <span className="text-xs flex-1 truncate">{r.title}</span>
-              <button onClick={() => onDelete(r.id)} className="opacity-0 group-hover:opacity-100 transition-opacity text-muted-foreground hover:text-destructive">
-                <X className="h-3 w-3" />
-              </button>
-            </div>
-          ))}
-
-          {done.length > 0 && (
-            <>
-              {open.length > 0 && <div className="h-px bg-border my-1" />}
-              {done.map((r) => (
-                <div key={r.id} className="flex items-center gap-2 group py-0.5 opacity-50">
-                  <button
-                    onClick={() => onToggle(r.id)}
-                    className="flex h-3.5 w-3.5 shrink-0 items-center justify-center rounded border border-primary bg-primary transition-colors"
-                  >
-                    <Check className="h-2.5 w-2.5 text-primary-foreground" />
-                  </button>
-                  <span className="text-xs flex-1 truncate line-through">{r.title}</span>
-                  <button onClick={() => onDelete(r.id)} className="opacity-0 group-hover:opacity-100 transition-opacity text-muted-foreground hover:text-destructive">
-                    <X className="h-3 w-3" />
-                  </button>
-                </div>
-              ))}
-            </>
-          )}
-        </div>
-      )}
-    </div>
-  );
-}
-
-// ── Quick Notes Panel ─────────────────────────────────────────────────────────
-
-function QuickNotesPanel({ notes, onAdd, onDelete }: {
-  notes: QuickNote[];
-  onAdd: (title: string, body: string | null) => void;
-  onDelete: (id: number) => void;
-}) {
-  const [title, setTitle] = useState("");
-  const [body, setBody] = useState("");
-  const [adding, setAdding] = useState(false);
-  const [expanded, setExpanded] = useState<Set<number>>(new Set());
-
-  function handleAdd() {
-    if (!title.trim()) return;
-    onAdd(title.trim(), body.trim() || null);
-    setTitle(""); setBody(""); setAdding(false);
-  }
-
-  return (
-    <div className="flex flex-col gap-2 pt-1">
-      {!adding ? (
-        <button onClick={() => setAdding(true)}
-          className="flex items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground transition-colors w-fit">
-          <Plus className="h-3.5 w-3.5" /> New note
-        </button>
-      ) : (
-        <div className="flex flex-col gap-1.5">
-          <input autoFocus className="h-7 rounded border border-input bg-transparent px-2 text-xs focus:outline-none focus:ring-1 focus:ring-ring"
-            placeholder="Title" value={title} onChange={(e) => setTitle(e.target.value)}
-            onKeyDown={(e) => e.key === "Escape" && setAdding(false)} />
-          <textarea className="rounded border border-input bg-transparent px-2 py-1 text-xs resize-none focus:outline-none focus:ring-1 focus:ring-ring"
-            placeholder="Body (optional)" rows={2} value={body} onChange={(e) => setBody(e.target.value)} />
-          <div className="flex gap-1.5">
-            <button onClick={handleAdd} className="px-2 h-6 text-xs rounded bg-primary text-primary-foreground hover:bg-primary/90">Add</button>
-            <button onClick={() => { setAdding(false); setTitle(""); setBody(""); }}
-              className="px-2 h-6 text-xs rounded border border-border text-muted-foreground hover:text-foreground">Cancel</button>
-          </div>
-        </div>
-      )}
-      {notes.length === 0 && !adding && <p className="text-xs text-muted-foreground italic">No notes yet.</p>}
-      <div className="flex flex-col gap-1">
-        {notes.map((n) => {
-          const open = expanded.has(n.id);
-          return (
-            <div key={n.id} className="group rounded border border-border px-2.5 py-1.5">
-              <div className="flex items-center gap-2">
-                {n.body && (
-                  <button onClick={() => setExpanded((prev) => { const s = new Set(prev); open ? s.delete(n.id) : s.add(n.id); return s; })}
-                    className="shrink-0 text-muted-foreground hover:text-foreground">
-                    {open ? <ChevronDown className="h-3 w-3" /> : <ChevronRight className="h-3 w-3" />}
-                  </button>
-                )}
-                <span className="text-xs flex-1 font-medium truncate">{n.title}</span>
-                <button onClick={() => onDelete(n.id)} className="opacity-0 group-hover:opacity-100 transition-opacity text-muted-foreground hover:text-destructive">
-                  <X className="h-3 w-3" />
-                </button>
-              </div>
-              {open && n.body && <p className="text-xs text-muted-foreground mt-1 pl-5 whitespace-pre-wrap">{n.body}</p>}
-            </div>
-          );
-        })}
-      </div>
-    </div>
-  );
-}
-
-// ── Brain Dump Panel ──────────────────────────────────────────────────────────
-
-function BrainDumpPanel({ entries, onAdd, onDelete }: {
-  entries: BrainEntry[];
-  onAdd: (content: string) => void;
-  onDelete: (id: number) => void;
-}) {
-  const [draft, setDraft] = useState("");
-
-  return (
-    <div className="flex flex-col gap-2 pt-1">
-      <textarea
-        autoFocus
-        className="rounded border border-input bg-transparent px-2 py-1.5 text-xs resize-none focus:outline-none focus:ring-1 focus:ring-ring"
-        placeholder="Dump your thoughts… (Ctrl+Enter to save)"
-        rows={3}
-        value={draft}
-        onChange={(e) => setDraft(e.target.value)}
-        onKeyDown={(e) => {
-          if (e.key === "Enter" && (e.ctrlKey || e.metaKey) && draft.trim()) {
-            onAdd(draft.trim()); setDraft("");
-          }
-        }}
-      />
-      <button
-        onClick={() => { if (draft.trim()) { onAdd(draft.trim()); setDraft(""); } }}
-        className="self-start px-2 h-6 text-xs rounded bg-primary text-primary-foreground hover:bg-primary/90"
-      >Capture</button>
-      {entries.length === 0
-        ? <p className="text-xs text-muted-foreground italic">Nothing captured yet.</p>
-        : <div className="flex flex-col gap-0.5 max-h-40 overflow-y-auto">
-            {entries.map((e) => (
-              <div key={e.id} className="flex items-start gap-2 group py-0.5">
-                <span className="text-xs flex-1 text-muted-foreground whitespace-pre-wrap">{e.content}</span>
-                <button onClick={() => onDelete(e.id)} className="shrink-0 opacity-0 group-hover:opacity-100 transition-opacity text-muted-foreground hover:text-destructive mt-0.5">
-                  <X className="h-3 w-3" />
-                </button>
-              </div>
-            ))}
-          </div>
-      }
-    </div>
-  );
-}
-
-// ── Events Panel ──────────────────────────────────────────────────────────────
-
-function EventsPanel({ events, onAdd, onDelete }: {
-  events: CalEvent[];
-  onAdd: (title: string, date: string) => void;
-  onDelete: (id: number) => void;
-}) {
-  const [title, setTitle] = useState("");
-  const [date, setDate] = useState("");
-  const today = new Date().toISOString().slice(0, 10);
-
-  function handleAdd() {
-    if (!title.trim() || !date) return;
-    onAdd(title.trim(), date);
-    setTitle(""); setDate("");
-  }
-
-  function relativeDate(d: string) {
-    const days = Math.round((new Date(d).getTime() - new Date(today).getTime()) / 86_400_000);
-    if (days === 0) return "Today";
-    if (days === 1) return "Tomorrow";
-    if (days < 0) return `${Math.abs(days)}d ago`;
-    if (days < 7) return `In ${days}d`;
-    return new Date(d).toLocaleDateString("en-US", { month: "short", day: "numeric" });
-  }
-
-  return (
-    <div className="flex flex-col gap-2 pt-1">
-      <div className="flex items-center gap-1.5">
-        <input className="flex-1 h-7 rounded border border-input bg-transparent px-2 text-xs focus:outline-none focus:ring-1 focus:ring-ring"
-          placeholder="Event title" value={title} onChange={(e) => setTitle(e.target.value)}
-          onKeyDown={(e) => e.key === "Enter" && handleAdd()} />
-        <input type="date" className="h-7 rounded border border-input bg-transparent px-2 text-xs focus:outline-none focus:ring-1 focus:ring-ring"
-          value={date} onChange={(e) => setDate(e.target.value)} />
-        <button onClick={handleAdd}
-          className="flex h-7 w-7 shrink-0 items-center justify-center rounded border border-input text-muted-foreground hover:text-foreground hover:bg-secondary transition-colors">
-          <Plus className="h-3.5 w-3.5" />
-        </button>
-      </div>
-      {events.length === 0
-        ? <p className="text-xs text-muted-foreground italic">No events.</p>
-        : <div className="flex flex-col gap-0.5">
-            {events.map((ev) => {
-              const past = ev.date < today;
-              return (
-                <div key={ev.id} className={cn("flex items-center gap-2 group py-0.5", past && "opacity-50")}>
-                  <span className={cn("text-xs w-16 shrink-0 tabular-nums", ev.date === today ? "text-primary font-medium" : past ? "text-muted-foreground" : "text-foreground")}>
-                    {relativeDate(ev.date)}
-                  </span>
-                  <span className="text-xs flex-1 truncate">{ev.title}</span>
-                  <button onClick={() => onDelete(ev.id)} className="opacity-0 group-hover:opacity-100 transition-opacity text-muted-foreground hover:text-destructive">
-                    <X className="h-3 w-3" />
-                  </button>
-                </div>
-              );
-            })}
-          </div>
-      }
-    </div>
-  );
-}
-
-// ── Deadlines Panel ───────────────────────────────────────────────────────────
-
-function DeadlinesPanel({ deadlines, onAdd, onToggle, onDelete }: {
-  deadlines: Deadline[];
-  onAdd: (title: string, due_date: string) => void;
-  onToggle: (id: number) => void;
-  onDelete: (id: number) => void;
-}) {
-  const [title, setTitle] = useState("");
-  const [date, setDate] = useState("");
-  const today = new Date().toISOString().slice(0, 10);
-
-  function handleAdd() {
-    if (!title.trim() || !date) return;
-    onAdd(title.trim(), date);
-    setTitle(""); setDate("");
-  }
-
-  const open = deadlines.filter((d) => !d.done);
-  const done = deadlines.filter((d) => d.done);
-
-  return (
-    <div className="flex flex-col gap-2 pt-1">
-      <div className="flex items-center gap-1.5">
-        <input className="flex-1 h-7 rounded border border-input bg-transparent px-2 text-xs focus:outline-none focus:ring-1 focus:ring-ring"
-          placeholder="Deadline title" value={title} onChange={(e) => setTitle(e.target.value)}
-          onKeyDown={(e) => e.key === "Enter" && handleAdd()} />
-        <input type="date" className="h-7 rounded border border-input bg-transparent px-2 text-xs focus:outline-none focus:ring-1 focus:ring-ring"
-          value={date} onChange={(e) => setDate(e.target.value)} />
-        <button onClick={handleAdd}
-          className="flex h-7 w-7 shrink-0 items-center justify-center rounded border border-input text-muted-foreground hover:text-foreground hover:bg-secondary transition-colors">
-          <Plus className="h-3.5 w-3.5" />
-        </button>
-      </div>
-      {deadlines.length === 0
-        ? <p className="text-xs text-muted-foreground italic">No deadlines.</p>
-        : <div className="flex flex-col gap-0.5">
-            {open.map((d) => {
-              const overdue = d.due_date < today;
-              const days = Math.round((new Date(d.due_date).getTime() - new Date(today).getTime()) / 86_400_000);
-              return (
-                <div key={d.id} className="flex items-center gap-2 group py-0.5">
-                  <button onClick={() => onToggle(d.id)}
-                    className="h-3.5 w-3.5 shrink-0 rounded border border-border hover:border-primary transition-colors" />
-                  <span className={cn("text-xs flex-1 truncate", overdue && "text-destructive")}>{d.title}</span>
-                  <span className={cn("text-xs shrink-0 tabular-nums", overdue ? "text-destructive" : "text-muted-foreground")}>
-                    {overdue ? `${Math.abs(days)}d overdue` : days === 0 ? "Today" : `${days}d`}
-                  </span>
-                  <button onClick={() => onDelete(d.id)} className="opacity-0 group-hover:opacity-100 transition-opacity text-muted-foreground hover:text-destructive">
-                    <X className="h-3 w-3" />
-                  </button>
-                </div>
-              );
-            })}
-            {done.length > 0 && open.length > 0 && <div className="h-px bg-border my-1" />}
-            {done.map((d) => (
-              <div key={d.id} className="flex items-center gap-2 group py-0.5 opacity-50">
-                <button onClick={() => onToggle(d.id)}
-                  className="flex h-3.5 w-3.5 shrink-0 items-center justify-center rounded border border-primary bg-primary transition-colors">
-                  <Check className="h-2.5 w-2.5 text-primary-foreground" />
-                </button>
-                <span className="text-xs flex-1 truncate line-through">{d.title}</span>
-                <button onClick={() => onDelete(d.id)} className="opacity-0 group-hover:opacity-100 transition-opacity text-muted-foreground hover:text-destructive">
-                  <X className="h-3 w-3" />
-                </button>
-              </div>
-            ))}
-          </div>
-      }
-    </div>
-  );
-}
-
-// ── Agreements Panel ──────────────────────────────────────────────────────────
-
-function AgreementsPanel({ agreements, onAdd, onDelete }: {
-  agreements: Agreement[];
-  onAdd: (title: string, notes: string | null) => void;
-  onDelete: (id: number) => void;
-}) {
-  const [title, setTitle] = useState("");
-  const [notes, setNotes] = useState("");
-  const [adding, setAdding] = useState(false);
-  const [expanded, setExpanded] = useState<Set<number>>(new Set());
-
-  function handleAdd() {
-    if (!title.trim()) return;
-    onAdd(title.trim(), notes.trim() || null);
-    setTitle(""); setNotes(""); setAdding(false);
-  }
-
-  return (
-    <div className="flex flex-col gap-2 pt-1">
-      {!adding ? (
-        <button onClick={() => setAdding(true)}
-          className="flex items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground transition-colors w-fit">
-          <Plus className="h-3.5 w-3.5" /> New agreement
-        </button>
-      ) : (
-        <div className="flex flex-col gap-1.5">
-          <input autoFocus className="h-7 rounded border border-input bg-transparent px-2 text-xs focus:outline-none focus:ring-1 focus:ring-ring"
-            placeholder="What was agreed" value={title} onChange={(e) => setTitle(e.target.value)}
-            onKeyDown={(e) => e.key === "Escape" && setAdding(false)} />
-          <textarea className="rounded border border-input bg-transparent px-2 py-1 text-xs resize-none focus:outline-none focus:ring-1 focus:ring-ring"
-            placeholder="Notes / context (optional)" rows={2} value={notes} onChange={(e) => setNotes(e.target.value)} />
-          <div className="flex gap-1.5">
-            <button onClick={handleAdd} className="px-2 h-6 text-xs rounded bg-primary text-primary-foreground hover:bg-primary/90">Add</button>
-            <button onClick={() => { setAdding(false); setTitle(""); setNotes(""); }}
-              className="px-2 h-6 text-xs rounded border border-border text-muted-foreground hover:text-foreground">Cancel</button>
-          </div>
-        </div>
-      )}
-      {agreements.length === 0 && !adding && <p className="text-xs text-muted-foreground italic">No agreements recorded.</p>}
-      <div className="flex flex-col gap-1">
-        {agreements.map((a) => {
-          const open = expanded.has(a.id);
-          return (
-            <div key={a.id} className="group rounded border border-border px-2.5 py-1.5">
-              <div className="flex items-center gap-2">
-                {a.notes && (
-                  <button onClick={() => setExpanded((prev) => { const s = new Set(prev); open ? s.delete(a.id) : s.add(a.id); return s; })}
-                    className="shrink-0 text-muted-foreground hover:text-foreground">
-                    {open ? <ChevronDown className="h-3 w-3" /> : <ChevronRight className="h-3 w-3" />}
-                  </button>
-                )}
-                <span className="text-xs flex-1 font-medium truncate">{a.title}</span>
-                <button onClick={() => onDelete(a.id)} className="opacity-0 group-hover:opacity-100 transition-opacity text-muted-foreground hover:text-destructive">
-                  <X className="h-3 w-3" />
-                </button>
-              </div>
-              {open && a.notes && <p className="text-xs text-muted-foreground mt-1 pl-5 whitespace-pre-wrap">{a.notes}</p>}
-            </div>
-          );
-        })}
-      </div>
-    </div>
-  );
-}
-
-type CardId = "reminders" | "notes" | "brain" | "events" | "deadlines" | "agreements";
-
-interface CardDef {
-  id: CardId;
-  label: string;
-  icon: import("react").ReactNode;
-  count?: number;
-}
-
-function QuickCards({
-  reminders, onAddReminder, onToggleReminder, onDeleteReminder,
-  notes, onAddNote, onDeleteNote,
-  brainEntries, onAddBrain, onDeleteBrain,
-  events, onAddEvent, onDeleteEvent,
-  deadlines, onAddDeadline, onToggleDeadline, onDeleteDeadline,
-  agreements, onAddAgreement, onDeleteAgreement,
-}: {
-  reminders: Reminder[];       onAddReminder: (t: string) => void;    onToggleReminder: (id: number) => void; onDeleteReminder: (id: number) => void;
-  notes: QuickNote[];          onAddNote: (t: string, b: string | null) => void; onDeleteNote: (id: number) => void;
-  brainEntries: BrainEntry[];  onAddBrain: (c: string) => void;       onDeleteBrain: (id: number) => void;
-  events: CalEvent[];          onAddEvent: (t: string, d: string) => void; onDeleteEvent: (id: number) => void;
-  deadlines: Deadline[];       onAddDeadline: (t: string, d: string) => void; onToggleDeadline: (id: number) => void; onDeleteDeadline: (id: number) => void;
-  agreements: Agreement[];     onAddAgreement: (t: string, n: string | null) => void; onDeleteAgreement: (id: number) => void;
-}) {
-  const [open, setOpen] = useState<CardId | null>(null);
-  const toggle = (id: CardId) => setOpen((prev) => prev === id ? null : id);
-
-  const today = new Date().toISOString().slice(0, 10);
-  const cards: CardDef[] = [
-    { id: "reminders",  label: "Reminders",   icon: <Bell className="h-3.5 w-3.5" />,     count: reminders.filter((r) => !r.done).length || undefined },
-    { id: "notes",      label: "Quick Notes",  icon: <FileText className="h-3.5 w-3.5" />, count: notes.length || undefined },
-    { id: "brain",      label: "Brain Dump",   icon: <Zap className="h-3.5 w-3.5" />,      count: brainEntries.length || undefined },
-    { id: "events",     label: "Events",       icon: <Calendar className="h-3.5 w-3.5" />, count: events.filter((e) => e.date >= today).length || undefined },
-    { id: "deadlines",  label: "Deadlines",    icon: <Clock className="h-3.5 w-3.5" />,    count: deadlines.filter((d) => !d.done).length || undefined },
-    { id: "agreements", label: "Agreements",   icon: <Handshake className="h-3.5 w-3.5" />,count: agreements.length || undefined },
-  ];
-
-  return (
-    <div className="flex flex-col gap-2">
-      {/* Card strip */}
-      <div className="flex items-center gap-2 flex-wrap">
-        {cards.map((card) => (
-          <button
-            key={card.id}
-            onClick={() => toggle(card.id)}
-            className={cn(
-              "flex items-center gap-1.5 px-3 py-1.5 rounded-lg border text-xs font-medium transition-colors",
-              open === card.id
-                ? "bg-secondary border-border text-foreground"
-                : "border-border text-muted-foreground hover:text-foreground hover:bg-secondary/50"
-            )}
-          >
-            {card.icon}
-            {card.label}
-            {card.count != null && (
-              <span className="ml-0.5 flex h-4 min-w-4 items-center justify-center rounded-full bg-primary text-primary-foreground text-[10px] px-1">
-                {card.count}
-              </span>
-            )}
-          </button>
-        ))}
-      </div>
-
-      {/* Dropdown panel */}
-      {open && (
-        <div className="rounded-lg border border-border bg-card px-3 py-2.5">
-          {open === "reminders"  && <RemindersPanel  reminders={reminders}   onAdd={onAddReminder}  onToggle={onToggleReminder} onDelete={onDeleteReminder} />}
-          {open === "notes"      && <QuickNotesPanel notes={notes}           onAdd={onAddNote}      onDelete={onDeleteNote} />}
-          {open === "brain"      && <BrainDumpPanel  entries={brainEntries}  onAdd={onAddBrain}     onDelete={onDeleteBrain} />}
-          {open === "events"     && <EventsPanel     events={events}         onAdd={onAddEvent}     onDelete={onDeleteEvent} />}
-          {open === "deadlines"  && <DeadlinesPanel  deadlines={deadlines}   onAdd={onAddDeadline}  onToggle={onToggleDeadline} onDelete={onDeleteDeadline} />}
-          {open === "agreements" && <AgreementsPanel agreements={agreements} onAdd={onAddAgreement} onDelete={onDeleteAgreement} />}
-        </div>
-      )}
-    </div>
-  );
-}
-
 // ── Top Goals ─────────────────────────────────────────────────────────────────
 
-const GROUP_COLOR_MAP: Record<string, { bg: string; text: string }> = {
-  slate:  { bg: "bg-slate-500/15",  text: "text-slate-600 dark:text-slate-400" },
-  red:    { bg: "bg-red-500/15",    text: "text-red-600 dark:text-red-400" },
-  orange: { bg: "bg-orange-500/15", text: "text-orange-600 dark:text-orange-400" },
-  yellow: { bg: "bg-yellow-400/15", text: "text-yellow-600 dark:text-yellow-400" },
-  green:  { bg: "bg-green-500/15",  text: "text-green-600 dark:text-green-400" },
-  teal:   { bg: "bg-teal-500/15",   text: "text-teal-600 dark:text-teal-400" },
-  blue:   { bg: "bg-blue-500/15",   text: "text-blue-600 dark:text-blue-400" },
-  purple: { bg: "bg-purple-500/15", text: "text-purple-600 dark:text-purple-400" },
-  pink:   { bg: "bg-pink-500/15",   text: "text-pink-600 dark:text-pink-400" },
+// ── Dashboard task row ───────────────────────────────────────────────────────
+
+/** Left accent bar per importance — scannable down a column in a way a dot isn't. */
+const PRIORITY_BAR: Record<string, string> = {
+  high: "bg-rose-500",
+  medium: "bg-amber-400",
+  low: "bg-slate-400/50",
 };
 
-function TopGoals({ goals, groups }: { goals: Goal[]; groups: GoalGroup[] }) {
-  const [groupFilter, setGroupFilter] = useState<number | null>(null);
+/**
+ * A due-date chip that says how urgent the date actually is.
+ *
+ * Overdue and today are the only two states worth colour: everything else is a
+ * quiet grey date. Colouring every future date turns the list into confetti and
+ * makes the two states that need attention stop standing out.
+ */
+function DueChip({ due, today }: { due: string; today: string }) {
+  const overdue = due < today;
+  const isToday = due === today;
+  if (!overdue && !isToday) {
+    return (
+      <span className="shrink-0 text-[10px] tabular-nums text-muted-foreground/50">
+        {formatDateShort(due)}
+      </span>
+    );
+  }
+  return (
+    <span
+      className={cn(
+        "shrink-0 rounded px-1 py-px text-[10px] font-medium tabular-nums",
+        overdue
+          ? "bg-rose-500/15 text-rose-600 dark:text-rose-400"
+          : "bg-amber-500/15 text-amber-600 dark:text-amber-400",
+      )}
+    >
+      {overdue ? `${daysUntil(due) * -1}d late` : "Today"}
+    </span>
+  );
+}
 
-  const visibleGoals = [...goals]
-    .filter((g) => groupFilter === null || g.group_id === groupFilter)
-    .sort((a, b) => {
-      const p = { high: 0, medium: 1, low: 2 } as Record<string, number>;
-      const pd = (p[a.priority] ?? 1) - (p[b.priority] ?? 1);
-      if (pd !== 0) return pd;
-      if (a.deadline && b.deadline) return a.deadline.localeCompare(b.deadline);
-      return a.deadline ? -1 : b.deadline ? 1 : 0;
-    });
+/**
+ * One task on the dashboard.
+ *
+ * Rewritten from a bare dot-and-title line for three reasons the old row got
+ * wrong: its checkbox rendered no tick at all (so completing a task gave no
+ * feedback), nothing showed a due date or an estimate on a *today*-focused
+ * screen, and the hover affordances were driven by React state, re-rendering the
+ * whole list on every mouse move. Hover is now pure CSS via `group/task`.
+ *
+ * Steps expand inline — a breakdown you can't see from the dashboard may as well
+ * not exist, and the whole point of the recursive model is that today's work is
+ * usually a step, not a whole task.
+ */
+function DashTaskRow({
+  task, steps, today, expanded, onToggleExpand, onToggle, onEdit, onDelete,
+}: {
+  task: TaskWithContext;
+  /** Direct subtasks. Named `steps`, not `children` — that prop name is React's. */
+  steps: TaskWithContext[];
+  today: string;
+  expanded: boolean;
+  onToggleExpand: () => void;
+  onToggle: (id: number) => void;
+  onEdit: () => void;
+  onDelete: (id: number) => void;
+}) {
+  const doneKids = steps.filter((c) => c.done).length;
+  const hasKids = steps.length > 0;
+  const effort = task.aggregate_estimate || task.time_estimate || 0;
+  const plan = planningOf(task);
 
   return (
-    <div className="flex flex-col gap-2">
-      {/* Header + group toggles */}
-      <div className="flex items-center gap-2 flex-wrap">
-        <h2 className="text-xs font-semibold text-muted-foreground uppercase tracking-wide flex items-center gap-1.5 shrink-0">
-          <Target className="h-3.5 w-3.5" /> Goals
-        </h2>
-        {groups.length > 0 && (
-          <div className="flex gap-1 flex-wrap">
-            <button
-              onClick={() => setGroupFilter(null)}
-              className={cn(
-                "px-2 py-0.5 text-xs rounded-full border transition-colors font-medium",
-                groupFilter === null
-                  ? "bg-foreground text-background border-foreground"
-                  : "text-muted-foreground border-border hover:text-foreground"
-              )}
-            >
-              All
-            </button>
-            {groups.map((g) => {
-              const col = GROUP_COLOR_MAP[g.color] ?? GROUP_COLOR_MAP.slate;
-              const active = groupFilter === g.id;
-              return (
-                <button
-                  key={g.id}
-                  onClick={() => setGroupFilter(active ? null : g.id)}
-                  className={cn(
-                    "px-2 py-0.5 text-xs rounded-full border transition-colors font-medium",
-                    active
-                      ? cn("border-transparent", col.bg, col.text)
-                      : "text-muted-foreground border-border hover:text-foreground"
-                  )}
-                >
-                  {g.name}
-                </button>
-              );
-            })}
-          </div>
+    <div className="flex flex-col">
+      <div className="group/task flex items-center gap-2 rounded-md pr-1 py-1 hover:bg-secondary/50 transition-colors">
+        {/* Importance as a left accent bar. */}
+        <span className={cn("w-0.5 self-stretch rounded-full shrink-0", PRIORITY_BAR[task.priority] ?? PRIORITY_BAR.medium)} />
+
+        <button
+          onClick={() => onToggle(task.id)}
+          disabled={hasKids}
+          title={hasKids ? "Finish its steps to complete this" : "Mark done"}
+          className={cn(
+            "flex h-4 w-4 shrink-0 items-center justify-center rounded-[5px] border transition-colors",
+            "border-border hover:border-primary hover:bg-primary/10",
+            hasKids && "opacity-40 cursor-default hover:bg-transparent hover:border-border",
+          )}
+        >
+          <Check className="h-2.5 w-2.5 opacity-0 group-hover/task:opacity-40 transition-opacity" />
+        </button>
+
+        {isFullTask(task) && <UrgencyMeter urgency={plan.urgency} />}
+
+        <button
+          onClick={onEdit}
+          className="flex-1 min-w-0 text-left text-sm truncate hover:text-primary transition-colors"
+          title={task.title}
+        >
+          {task.title}
+        </button>
+
+        {/* Steps — click to reveal them inline. */}
+        {hasKids && (
+          <button
+            onClick={onToggleExpand}
+            title={`${doneKids} of ${steps.length} steps done`}
+            className="shrink-0 inline-flex items-center gap-1 rounded px-1 py-px text-[10px] tabular-nums text-muted-foreground hover:bg-secondary hover:text-foreground transition-colors"
+          >
+            {expanded ? <ChevronDown className="h-2.5 w-2.5" /> : <ChevronRight className="h-2.5 w-2.5" />}
+            {doneKids}/{steps.length}
+          </button>
         )}
+
+        {effort > 0 && <TimeEstimateBadge min={effort} />}
+        {task.due_date && <DueChip due={task.due_date} today={today} />}
+
+        <button
+          onClick={() => onDelete(task.id)}
+          title="Delete"
+          className="shrink-0 p-0.5 rounded text-muted-foreground opacity-0 group-hover/task:opacity-100 hover:text-destructive hover:bg-destructive/10 transition-all"
+        >
+          <X className="h-3 w-3" />
+        </button>
       </div>
 
-      {/* Goal list — scrollable, capped height */}
-      <div className="flex flex-col gap-2 overflow-y-auto max-h-48 pr-1">
-        {visibleGoals.length === 0 ? (
-          <p className="text-sm text-muted-foreground italic">No active goals.</p>
-        ) : visibleGoals.map((goal) => {
-          const pct  = goal.task_count === 0 ? 0 : Math.round((goal.done_count / goal.task_count) * 100);
-          const days = goal.deadline ? daysUntil(goal.deadline) : null;
-          const col  = goal.group_color ? GROUP_COLOR_MAP[goal.group_color] : null;
-          return (
-            <div key={goal.id} className="flex flex-col gap-1 shrink-0">
-              <div className="flex items-center gap-2 min-w-0">
-                <PriorityDot priority={goal.priority} />
-                <span className="text-sm font-medium text-foreground truncate flex-1">{goal.title}</span>
-                {col && goal.group_name && (
-                  <span className={cn("text-xs px-1.5 py-0 rounded-full shrink-0 font-medium", col.bg, col.text)}>
-                    {goal.group_name}
-                  </span>
+      {expanded && hasKids && (
+        <div className="flex flex-col gap-0.5 ml-4 pl-2 border-l border-border/60">
+          {steps.map((c) => (
+            <div key={c.id} className="group/step flex items-center gap-2 rounded-md pr-1 py-0.5 hover:bg-secondary/40 transition-colors">
+              <button
+                onClick={() => onToggle(c.id)}
+                className={cn(
+                  "flex h-3 w-3 shrink-0 items-center justify-center rounded-[4px] border transition-colors",
+                  c.done
+                    ? "bg-primary border-primary text-primary-foreground"
+                    : "border-border hover:border-primary",
                 )}
-                {days !== null && (
-                  <Badge variant={deadlineVariant(days)} className="text-xs shrink-0 px-1.5 py-0">
-                    {deadlineLabel(days)}
-                  </Badge>
-                )}
-              </div>
-              <div className="flex items-center gap-2">
-                <Progress value={goal.done_count} max={goal.task_count || 1} className="flex-1" />
-                <span className="text-xs text-muted-foreground tabular-nums w-8 text-right">{pct}%</span>
-              </div>
+              >
+                {c.done && <Check className="h-2 w-2" />}
+              </button>
+              <span className={cn("flex-1 min-w-0 truncate text-xs", c.done && "line-through text-muted-foreground")}>
+                {c.title}
+              </span>
+              {c.time_estimate ? (
+                <span className="shrink-0 text-[10px] tabular-nums text-muted-foreground/60">
+                  {formatMinutes(c.time_estimate)}
+                </span>
+              ) : null}
+              {c.due_date && <DueChip due={c.due_date} today={today} />}
             </div>
-          );
-        })}
-      </div>
+          ))}
+        </div>
+      )}
     </div>
   );
 }
 
-// ── To-Do List ────────────────────────────────────────────────────────────────
-
 function TodoList({
-  tasks, plans, systems, courseAssignments, onToggleTask, onCreateTask, onDeleteTask, onUpdateTask, onMarkSystem, onUnmarkSystem, onToggleSubtask, subtaskMap, onToggleAssignment,
+  tasks, plans, courseAssignments, onToggleTask, onCreateTask, onDeleteTask, onUpdateTask, onToggleAssignment,
 }: {
   tasks: TaskWithContext[];
   plans: Plan[];
-  systems: SystemEntry[];
   courseAssignments: CourseAssignment[];
   onToggleTask: (id: number) => void;
   onCreateTask: (payload: { plan_id?: number | null; title: string; priority?: string; due_date?: string | null; category?: string | null }) => void;
   onDeleteTask: (id: number) => void;
   onUpdateTask: (id: number, payload: { title: string; priority: string; due_date?: string | null; category?: string | null }) => void;
-  onMarkSystem: (id: number) => void;
-  onUnmarkSystem: (id: number) => void;
-  onToggleSubtask: (subtaskId: number, systemId: number) => void;
-  subtaskMap: Record<number, SystemSubtask[]>;
   onToggleAssignment: (ca: CourseAssignment) => void;
 }) {
   const [tasksCollapsed, setTasksCollapsed] = useState(false);
-  const [systemsCollapsed, setSystemsCollapsed] = useState(false);
   const [studyCollapsed, setStudyCollapsed] = useState(false);
   const [collapsedPlans, setCollapsedPlans] = useState<Set<number | null>>(new Set());
-  // Systems where the user has manually expanded subtasks even after completion
-  const [expandedSystems, setExpandedSystems] = useState<Set<number>>(new Set());
 
   // Create form state
   const [showAdd, setShowAdd] = useState(false);
@@ -1946,8 +1596,15 @@ function TodoList({
   const [editDueDate, setEditDueDate] = useState("");
   const [editCategory, setEditCategory] = useState<string>("");
 
-  // Hover state for delete button
-  const [hoveredId, setHoveredId] = useState<number | null>(null);
+  // Which tasks have their steps revealed. Hover affordances are pure CSS now
+  // (see DashTaskRow's group/task), so no mouse-move state lives here.
+  const [expandedTasks, setExpandedTasks] = useState<Set<number>>(new Set());
+  const toggleTaskExpand = (id: number) =>
+    setExpandedTasks((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id); else next.add(id);
+      return next;
+    });
 
   const activePlans = plans.filter((p) => p.status === "active");
 
@@ -1981,47 +1638,56 @@ function TodoList({
     setEditingId(null);
   };
 
-  const toggleSystemExpand = (id: number) =>
-    setExpandedSystems((prev) => {
-      const next = new Set(prev);
-      if (next.has(id)) next.delete(id); else next.add(id);
-      return next;
-    });
+  // Quick tasks (reminder / chore / shopping) are captured on the phone via
+  // Nexus Local and are not project work — they now live in the sidebar rail,
+  // one panel per category. Leaving them here meant a shopping list competed for
+  // attention with the day's actual tasks.
+  //
+  // Steps live inside their parent row, not beside it. Without this filter a
+  // task broken into five steps would occupy six lines on the dashboard, and
+  // planning a task more carefully would make the day look busier.
+  const childrenByParent = useMemo(() => {
+    const m = new Map<number, TaskWithContext[]>();
+    for (const t of tasks) {
+      if (t.parent_id == null) continue;
+      const b = m.get(t.parent_id);
+      if (b) b.push(t); else m.set(t.parent_id, [t]);
+    }
+    for (const list of m.values()) list.sort((a, b) => a.sort_order - b.sort_order || a.id - b.id);
+    return m;
+  }, [tasks]);
 
   const open = useMemo(() => {
     const p = { high: 0, medium: 1, low: 2 } as Record<string, number>;
     return [...tasks]
-      .filter((t) => !t.done)
-      .sort((a, b) => (p[a.priority] ?? 1) - (p[b.priority] ?? 1));
+      .filter((t) => !t.done && t.parent_id == null && t.category == null)
+      // Overdue first, then by importance — the dashboard's job is to surface
+      // what is slipping, and a high-priority task due next month should not
+      // outrank one that was due yesterday.
+      .sort((a, b) => {
+        const aLate = a.due_date != null && a.due_date < todayDate() ? 0 : 1;
+        const bLate = b.due_date != null && b.due_date < todayDate() ? 0 : 1;
+        if (aLate !== bLate) return aLate - bLate;
+        return (p[a.priority] ?? 1) - (p[b.priority] ?? 1);
+      });
   }, [tasks]);
 
   // Group open tasks by plan. Quick tasks (category set) group under their
   // category instead — a shopping list under "No plan" reads as clutter, not
   // as a list. Category groups use negative pseudo-ids so they can share the
   // collapse mechanism without colliding with real plan ids.
-  const CATEGORY_GROUPS: Record<string, { pseudoId: number; label: string }> = {
-    reminder: { pseudoId: -101, label: "🔔 Reminders" },
-    chore:    { pseudoId: -102, label: "🧹 Chores" },
-    shopping: { pseudoId: -103, label: "🛒 Shopping" },
-  };
   const byPlan = useMemo(() => {
     const map = new Map<number | null, { planTitle: string | null; goalTitle: string | null; tasks: TaskWithContext[] }>();
     for (const t of open) {
-      const cat = t.category ? CATEGORY_GROUPS[t.category] : undefined;
-      const key = cat ? cat.pseudoId : t.plan_id;
+      const key = t.plan_id;
       if (!map.has(key)) {
-        map.set(key, cat
-          ? { planTitle: cat.label, goalTitle: null, tasks: [] }
-          : { planTitle: t.plan_title, goalTitle: t.goal_title, tasks: [] });
+        map.set(key, { planTitle: t.plan_title, goalTitle: t.goal_title, tasks: [] });
       }
       map.get(key)!.tasks.push(t);
     }
-    // Category groups first — they're the glanceable lists; plan groups follow.
-    return Array.from(map.entries()).sort(([a], [b]) => {
-      const aCat = a != null && a < 0 ? 0 : 1;
-      const bCat = b != null && b < 0 ? 0 : 1;
-      return aCat - bCat;
-    });
+    // Unplanned work last; named plans keep their natural order otherwise.
+    return Array.from(map.entries()).sort(([a], [b]) =>
+      (a == null ? 1 : 0) - (b == null ? 1 : 0));
   }, [open]);
 
   const togglePlan = (planId: number | null) => {
@@ -2140,37 +1806,51 @@ function TodoList({
               </div>
             )
           ) : (
-            <div className="flex flex-col gap-2">
+            /*
+              A grid of group cards, not one long column.
+              Each group holds a handful of short titles ("retinol", "mælk"), so a
+              full-width row spent ~1000px of horizontal space on ~80px of text and
+              pushed everything else below the fold. Cards let the groups sit
+              side by side and make each one a scannable unit.
+              `items-start` keeps a 2-task card from stretching to match a 6-task
+              one — equal-height cards would just reintroduce the empty space.
+            */
+            <div className="grid gap-2.5 items-start auto-rows-min [grid-template-columns:repeat(auto-fill,minmax(280px,1fr))]">
               {byPlan.map(([planId, group]) => {
                 const isPlanCollapsed = collapsedPlans.has(planId);
                 return (
-                  <div key={planId} className="flex flex-col gap-0.5">
+                  <div key={planId} className="flex flex-col gap-0.5 rounded-lg border border-border/60 bg-card/40 p-2">
                     {/* Plan group header */}
                     <button
                       onClick={() => togglePlan(planId)}
-                      className="flex items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground transition-colors w-fit"
+                      className="flex items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground transition-colors w-full min-w-0"
                     >
-                      {isPlanCollapsed ? <ChevronRight className="h-3 w-3" /> : <ChevronDown className="h-3 w-3" />}
-                      <span className="font-medium">{group.planTitle ?? "No plan"}</span>
-                      {group.goalTitle && <span className="opacity-60">· {group.goalTitle}</span>}
-                      <span className="opacity-50">({group.tasks.length})</span>
+                      {isPlanCollapsed ? <ChevronRight className="h-3 w-3 shrink-0" /> : <ChevronDown className="h-3 w-3 shrink-0" />}
+                      <span className="font-medium truncate" title={[group.planTitle ?? "No plan", group.goalTitle].filter(Boolean).join(" · ")}>{group.planTitle ?? "No plan"}</span>
+                      <span className="opacity-50 shrink-0">({group.tasks.length})</span>
                     </button>
 
                     {!isPlanCollapsed && (
-                      <div className="flex flex-col gap-0.5 pl-4 border-l border-border ml-1">
+                      <div className="flex flex-col gap-0.5">
                         {group.tasks.map((task) => {
                           const isEditing = editingId === task.id;
-                          return (
-                            <div
-                              key={task.id}
-                              className="flex items-start gap-2 py-0.5 group/task"
-                              onMouseEnter={() => setHoveredId(task.id)}
-                              onMouseLeave={() => setHoveredId(null)}
-                            >
-                              <button
-                                onClick={() => onToggleTask(task.id)}
-                                className="mt-0.5 flex h-4 w-4 shrink-0 items-center justify-center rounded border border-border hover:border-primary transition-colors"
+                          if (!isEditing) {
+                            return (
+                              <DashTaskRow
+                                key={task.id}
+                                task={task}
+                                steps={childrenByParent.get(task.id) ?? []}
+                                today={todayDate()}
+                                expanded={expandedTasks.has(task.id)}
+                                onToggleExpand={() => toggleTaskExpand(task.id)}
+                                onToggle={onToggleTask}
+                                onEdit={() => startEdit(task)}
+                                onDelete={onDeleteTask}
                               />
+                            );
+                          }
+                          return (
+                            <div key={task.id} className="flex items-start gap-2 py-0.5">
                               <div className="flex-1 min-w-0">
                                 {isEditing ? (
                                   <div className="flex flex-col gap-1">
@@ -2210,26 +1890,8 @@ function TodoList({
                                       />
                                     </div>
                                   </div>
-                                ) : (
-                                  <div
-                                    className="flex items-center gap-1.5 min-w-0 cursor-pointer"
-                                    onClick={() => startEdit(task)}
-                                  >
-                                    <PriorityDot priority={task.priority} />
-                                    <span className="text-sm truncate">
-                                      {task.title}
-                                    </span>
-                                  </div>
-                                )}
+                                ) : null}
                               </div>
-                              {!isEditing && hoveredId === task.id && (
-                                <button
-                                  onClick={() => onDeleteTask(task.id)}
-                                  className="mt-0.5 p-0.5 rounded text-muted-foreground hover:text-destructive hover:bg-destructive/10 transition-colors shrink-0"
-                                >
-                                  <X className="h-3 w-3" />
-                                </button>
-                              )}
                             </div>
                           );
                         })}
@@ -2284,100 +1946,6 @@ function TodoList({
         </div>
       )}
 
-      {/* ── Systems section ── */}
-      {systems.length > 0 && (
-        <div className="flex flex-col gap-2">
-          <SectionHeader
-            icon={<RefreshCw className="h-3.5 w-3.5" />}
-            label="Systems"
-            collapsed={systemsCollapsed}
-            onToggle={() => setSystemsCollapsed((v) => !v)}
-          />
-
-          {!systemsCollapsed && (
-            <div className="flex flex-col gap-1">
-              {systems.map((sys) => {
-                const due = isDue(sys);
-                const subtasks = subtaskMap[sys.id] ?? [];
-                const hasSubtasks = subtasks.length > 0;
-                const allSubtasksDone = hasSubtasks && subtasks.every((s) => s.done);
-                // Auto-collapse when all done; user can manually re-expand
-                const subtasksVisible = hasSubtasks && (!allSubtasksDone || expandedSystems.has(sys.id));
-
-                return (
-                  <div key={sys.id} className={cn("flex flex-col gap-0.5", !due && "opacity-60")}>
-                    <div className="flex items-center gap-2 py-0.5">
-                      {/* Chevron toggle for systems with subtasks */}
-                      {hasSubtasks && (
-                        <button
-                          onClick={() => toggleSystemExpand(sys.id)}
-                          className="shrink-0 text-muted-foreground hover:text-foreground transition-colors"
-                        >
-                          {subtasksVisible ? <ChevronDown className="h-3 w-3" /> : <ChevronRight className="h-3 w-3" />}
-                        </button>
-                      )}
-                      <span className={cn("text-sm truncate flex-1", due ? "text-foreground" : "text-muted-foreground")}>
-                        {sys.title}
-                      </span>
-                      {sys.streak_count > 1 && (
-                        <span className="flex items-center gap-0.5 text-xs text-orange-500 shrink-0">
-                          <Flame className="h-3 w-3" />{sys.streak_count}
-                        </span>
-                      )}
-                      {!hasSubtasks && (
-                        due ? (
-                          <Button size="sm" variant="outline" className="h-6 px-2 text-xs shrink-0"
-                            onClick={() => onMarkSystem(sys.id)}>
-                            Done
-                          </Button>
-                        ) : (
-                          <button onClick={() => onUnmarkSystem(sys.id)} title="Mark as not done"
-                            className="shrink-0 hover:opacity-70 transition-opacity">
-                            <CheckCircle className="h-4 w-4 text-green-500" />
-                          </button>
-                        )
-                      )}
-                      {hasSubtasks && (
-                        allSubtasksDone ? (
-                          <CheckCircle className="h-4 w-4 text-green-500 shrink-0" />
-                        ) : (
-                          <span className="text-xs text-muted-foreground tabular-nums shrink-0">
-                            {subtasks.filter((s) => s.done).length}/{subtasks.length}
-                          </span>
-                        )
-                      )}
-                    </div>
-
-                    {subtasksVisible && (
-                      <div className="flex flex-col gap-0.5 pl-3 border-l border-border ml-1">
-                        {subtasks.map((sub) => (
-                          <div key={sub.id} className="flex items-center gap-2 py-0.5">
-                            <button
-                              onClick={() => onToggleSubtask(sub.id, sys.id)}
-                              className={cn(
-                                "flex h-3.5 w-3.5 shrink-0 items-center justify-center rounded border transition-colors",
-                                sub.done ? "bg-primary border-primary" : "border-border hover:border-primary"
-                              )}
-                            >
-                              {sub.done && <Check className="h-2.5 w-2.5 text-primary-foreground" />}
-                            </button>
-                            <span className={cn(
-                              "text-xs flex-1 truncate",
-                              sub.done ? "line-through text-muted-foreground" : "text-foreground"
-                            )}>
-                              {sub.title}
-                            </span>
-                          </div>
-                        ))}
-                      </div>
-                    )}
-                  </div>
-                );
-              })}
-            </div>
-          )}
-        </div>
-      )}
     </div>
   );
 }
@@ -2386,19 +1954,13 @@ function TodoList({
 
 export function Dashboard() {
   const [goals,      setGoals]      = useState<Goal[]>([]);
-  const [groups,     setGroups]     = useState<GoalGroup[]>([]);
   const [plans,      setPlans]      = useState<Plan[]>([]);
   const [tasks,      setTasks]      = useState<TaskWithContext[]>([]);
   const [systems,    setSystems]    = useState<SystemEntry[]>([]);
-  const [subtaskMap, setSubtaskMap] = useState<Record<number, SystemSubtask[]>>({});
   const [calBlocks,  setCalBlocks]  = useState<CalBlock[]>([]);
+  // Sessions logged against today's calendar occurrences, keyed by cal_block_id.
+  const [sessionsByBlock, setSessionsByBlock] = useState<Map<number, TaskSession>>(new Map());
   const [dailyGoals, setDailyGoals] = useState<DailyGoals>({ primary: null, secondary: [] });
-  const [reminders,  setReminders]  = useState<Reminder[]>([]);
-  const [notes,      setNotes]      = useState<QuickNote[]>([]);
-  const [brainEntries, setBrainEntries] = useState<BrainEntry[]>([]);
-  const [events,     setEvents]     = useState<CalEvent[]>([]);
-  const [deadlines,  setDeadlines]  = useState<Deadline[]>([]);
-  const [agreements, setAgreements] = useState<Agreement[]>([]);
   const [courseAssignments, setCourseAssignments] = useState<CourseAssignment[]>([]);
   const [scheduleEntries,  setScheduleEntries]  = useState<ScheduleEntry[]>([]);
   const [habits,           setHabits]           = useState<HabitWithCompletion[]>([]);
@@ -2433,33 +1995,79 @@ export function Dashboard() {
     persistGoalDone(goalPrimaryDone, next);
   }
 
-  const loadSubtasks = useCallback(async (sysList: SystemEntry[]) => {
-    const entries = await Promise.all(
-      sysList.map(async (s) => [s.id, await getSystemSubtasks(s.id, date)] as [number, SystemSubtask[]])
-    );
-    setSubtaskMap(Object.fromEntries(entries));
-  }, [date]);
-
   const load = useCallback(async () => {
-    const [g, gr, p, t, s, cb, dg, rem, qn, bd, ev, dl, ag, cas, ses, hb, hs, ts] = await Promise.all([
-      getGoals(), getGoalGroups(), getPlans(), getAllTasks(), getSystems(), getCalBlocks(date, date),
-      getDailyGoals(date), getReminders(), getQuickNotes(), getBrainDump(), getEvents(), getDeadlines(), getAgreements(),
+    // The six side-tools (reminders, notes, brain dump, events, deadlines,
+    // agreements) are no longer loaded here — they live in the sidebar and fetch
+    // their own data on first open. See components/QuickPanels.tsx.
+    const [g, p, t, s, cb, dg, cas, ses, hb, hs, ts, wk] = await Promise.all([
+      getGoals(), getPlans(), getAllTasks(), getSystems(), getCalBlocks(date, date),
+      getDailyGoals(date),
       getCourseAssignments(), getScheduleEntriesForDate(date), getHabitsForDate(date), getHabitStacks(),
-      getTrainingSessionsForDate(date),
+      getTrainingSessionsForDate(date), getTaskSessionsInRange(date, date),
     ]);
-    setGoals(g); setGroups(gr); setPlans(p); setTasks(t); setSystems(s); setCalBlocks(cb);
-    setDailyGoals(dg); setReminders(rem); setNotes(qn); setBrainEntries(bd); setEvents(ev); setDeadlines(dl); setAgreements(ag);
+    setGoals(g); setPlans(p); setTasks(t); setSystems(s); setCalBlocks(cb);
+    setDailyGoals(dg);
     setCourseAssignments(cas.filter((ca) => ca.due_date === date));
     setScheduleEntries(ses);
     setHabits(hb);
     setHabitStacks(hs);
     setTodaySessions(ts);
-    loadSubtasks(s);
-  }, [date, loadSubtasks]);
+    setSessionsByBlock(new Map(
+      wk.filter((x) => x.cal_block_id != null).map((x) => [x.cal_block_id!, x]),
+    ));
+  }, [date]);
 
   useEffect(() => { load(); }, [load]);
 
-  const activeGoals  = useMemo(() => goals.filter((g) => g.status === "active"), [goals]);
+  // ── Day-calendar rail: collapsible + drag-resizable ───────────────────────
+  const RAIL_MIN = 220, RAIL_MAX = 620, RAIL_DEFAULT = 288;
+  const [railOpen, setRailOpen] = useState(
+    () => localStorage.getItem("pf-dash-rail-open") !== "0",
+  );
+  const [railWidth, setRailWidth] = useState(() => {
+    const v = Number(localStorage.getItem("pf-dash-rail-w"));
+    return Number.isFinite(v) && v >= RAIL_MIN && v <= RAIL_MAX ? v : RAIL_DEFAULT;
+  });
+
+  useEffect(() => { localStorage.setItem("pf-dash-rail-open", railOpen ? "1" : "0"); }, [railOpen]);
+  useEffect(() => { localStorage.setItem("pf-dash-rail-w", String(railWidth)); }, [railWidth]);
+
+  /**
+   * Drag the divider to resize.
+   *
+   * Width is read from the pointer's distance to the window's right edge rather
+   * than accumulated deltas — accumulating drifts whenever a move event is
+   * coalesced or the clamp bites, so the handle slowly desyncs from the cursor.
+   * Pointer capture keeps the drag alive when the cursor outruns the 4px handle.
+   */
+  const startResize = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
+    e.preventDefault();
+
+    // Listeners go on `window`, not on the handle with setPointerCapture.
+    // Capture retargets events to the element in theory, but in practice moves
+    // went missing and the rail barely tracked the cursor. Window listeners are
+    // the conventional shape here and also keep the drag alive when the pointer
+    // outruns the handle or leaves the viewport entirely.
+    const onMove = (ev: PointerEvent) => {
+      setRailWidth(Math.min(RAIL_MAX, Math.max(RAIL_MIN, window.innerWidth - ev.clientX)));
+    };
+    const onUp = () => {
+      window.removeEventListener("pointermove", onMove);
+      window.removeEventListener("pointerup", onUp);
+      window.removeEventListener("pointercancel", onUp);
+      document.body.style.userSelect = "";
+      document.body.style.cursor = "";
+    };
+
+    // Without these, dragging selects the text it sweeps over and the cursor
+    // flickers back to a caret whenever it crosses the content.
+    document.body.style.userSelect = "none";
+    document.body.style.cursor = "col-resize";
+    window.addEventListener("pointermove", onMove);
+    window.addEventListener("pointerup", onUp);
+    window.addEventListener("pointercancel", onUp);
+  }, []);
+
   // Quick tasks (reminders / chores / shopping) are standing lists — they show
   // regardless of due date, unlike project tasks which only surface on their day.
   const todayTasks   = useMemo(
@@ -2489,26 +2097,6 @@ export function Dashboard() {
     setTasks(t);
   };
 
-  const handleMarkSystem = async (id: number) => {
-    await markSystemDone(id);
-    const s = await getSystems();
-    setSystems(s);
-    loadSubtasks(s);
-  };
-
-  const handleUnmarkSystem = async (id: number) => {
-    await unmarkSystemDone(id);
-    const s = await getSystems();
-    setSystems(s);
-    loadSubtasks(s);
-  };
-
-  const handleToggleSubtask = async (subtaskId: number, systemId: number) => {
-    const result = await toggleSystemSubtask(subtaskId, date);
-    setSubtaskMap((prev) => ({ ...prev, [systemId]: result.subtasks }));
-    setSystems((prev) => prev.map((s) => s.id === result.system.id ? result.system : s));
-  };
-
   const handleSetPrimary = async (payload: DailyPrimaryGoal) => {
     await setDailyPrimaryGoal(date, payload);
     setDailyGoals((prev) => ({ ...prev, primary: payload }));
@@ -2533,54 +2121,6 @@ export function Dashboard() {
     setDailyGoals((prev) => ({ ...prev, secondary: prev.secondary.filter((s) => s.id !== id) }));
   };
 
-  const handleAddReminder = async (title: string) => {
-    const r = await addReminder(title);
-    setReminders((prev) => [...prev, r]);
-  };
-
-  const handleToggleReminder = async (id: number) => {
-    const r = await toggleReminder(id);
-    setReminders((prev) => prev.map((x) => x.id === id ? r : x));
-  };
-
-  const handleDeleteReminder = async (id: number) => {
-    await deleteReminder(id);
-    setReminders((prev) => prev.filter((x) => x.id !== id));
-  };
-
-  const handleAddNote = async (title: string, body: string | null) => {
-    const n = await addQuickNote(title, body);
-    setNotes((prev) => [n, ...prev]);
-  };
-  const handleDeleteNote = async (id: number) => { await deleteQuickNote(id); setNotes((prev) => prev.filter((x) => x.id !== id)); };
-
-  const handleAddBrain = async (content: string) => {
-    const e = await addBrainEntry(content);
-    setBrainEntries((prev) => [e, ...prev]);
-  };
-  const handleDeleteBrain = async (id: number) => { await deleteBrainEntry(id); setBrainEntries((prev) => prev.filter((x) => x.id !== id)); };
-
-  const handleAddEvent = async (title: string, date: string) => {
-    const e = await addEvent(title, date);
-    setEvents((prev) => [...prev, e].sort((a, b) => a.date.localeCompare(b.date)));
-  };
-  const handleDeleteEvent = async (id: number) => { await deleteEvent(id); setEvents((prev) => prev.filter((x) => x.id !== id)); };
-
-  const handleAddDeadline = async (title: string, due_date: string) => {
-    const d = await addDeadline(title, due_date);
-    setDeadlines((prev) => [...prev, d].sort((a, b) => a.due_date.localeCompare(b.due_date)));
-  };
-  const handleToggleDeadline = async (id: number) => {
-    const d = await toggleDeadline(id);
-    setDeadlines((prev) => prev.map((x) => x.id === id ? d : x));
-  };
-  const handleDeleteDeadline = async (id: number) => { await deleteDeadline(id); setDeadlines((prev) => prev.filter((x) => x.id !== id)); };
-
-  const handleAddAgreement = async (title: string, notes: string | null) => {
-    const a = await addAgreement(title, notes);
-    setAgreements((prev) => [a, ...prev]);
-  };
-  const handleDeleteAgreement = async (id: number) => { await deleteAgreement(id); setAgreements((prev) => prev.filter((x) => x.id !== id)); };
 
   const handleToggleAssignment = async (ca: CourseAssignment) => {
     const newStatus = ca.status === "done" ? "pending" : "done";
@@ -2599,6 +2139,45 @@ export function Dashboard() {
     setHabits((prev) => prev.map((h) => h.id === id ? { ...h, done: nowDone } : h));
   };
 
+  /**
+   * Ticks a scheduled block off as worked, or un-ticks it.
+   *
+   * Mirrors Week's handler: the session is keyed to `block.id`, which for a
+   * recurring occurrence is its virtual negative id, so one day's tick doesn't
+   * mark the whole series. This is what advances sessions- and time-mode
+   * completion — without it a recurring step never finishes.
+   */
+  const handleToggleWorked = async (block: CalBlock) => {
+    if (block.task_id == null) return;
+    const existing = sessionsByBlock.get(block.id);
+
+    setSessionsByBlock((prev) => {
+      const next = new Map(prev);
+      if (existing) next.delete(block.id);
+      else next.set(block.id, {
+        id: -1, task_id: block.task_id!, date: block.date,
+        minutes: blockMinutes(block.start_time, block.end_time),
+        cal_block_id: block.id, note: null, created_at: new Date().toISOString(),
+      });
+      return next;
+    });
+
+    try {
+      if (existing) {
+        await unlogTaskOccurrence(block.task_id, block.id);
+      } else {
+        await logTaskSession({
+          task_id: block.task_id,
+          date: block.date,
+          minutes: blockMinutes(block.start_time, block.end_time),
+          cal_block_id: block.id,
+        });
+      }
+    } finally {
+      load();
+    }
+  };
+
   const handleCreateCalBlock = async (d: DCBlockDraft) => {
     let taskId = d.task_id;
     if (taskId === null) {
@@ -2609,14 +2188,7 @@ export function Dashboard() {
         due_date: date,
       });
       taskId = newTask.id;
-      setTasks((prev) => [{
-        id: newTask.id, plan_id: null, plan_title: null,
-        goal_id: null, goal_title: null, title: newTask.title,
-        done: newTask.done, sort_order: newTask.sort_order,
-        priority: newTask.priority, due_date: newTask.due_date,
-        created_at: newTask.created_at, time_estimate: newTask.time_estimate,
-        category: newTask.category,
-      }, ...prev]);
+      setTasks((prev) => [toTaskWithContext(newTask), ...prev]);
     }
     const b = await createCalBlock(date, d.title, d.start_time, d.end_time, d.color, d.description || null, d.location || null, taskId);
     setCalBlocks((prev) => [...prev, b].sort((a, x) => a.start_time.localeCompare(x.start_time)));
@@ -2641,49 +2213,68 @@ export function Dashboard() {
         onAddSecondary={handleAddSecondary} onUpdateSecondaryEstimate={handleUpdateSecondaryEstimate}
         onDeleteSecondary={handleDeleteSecondary} />
 
-      <div className="flex-1 min-h-0 flex flex-col md:flex-row overflow-hidden">
+      <div className="flex-1 min-h-0 flex flex-col md:flex-row overflow-hidden relative">
 
         {/* ── Left column ─────────────────────────────────────────────────── */}
         <div className="flex-1 min-w-0 overflow-y-auto border-r border-border px-3 py-2 md:px-4 md:py-3 flex flex-col gap-3 md:gap-4">
-
-          {/* Quick Cards */}
-          <QuickCards
-            reminders={reminders}    onAddReminder={handleAddReminder}    onToggleReminder={handleToggleReminder} onDeleteReminder={handleDeleteReminder}
-            notes={notes}            onAddNote={handleAddNote}            onDeleteNote={handleDeleteNote}
-            brainEntries={brainEntries} onAddBrain={handleAddBrain}      onDeleteBrain={handleDeleteBrain}
-            events={events}          onAddEvent={handleAddEvent}          onDeleteEvent={handleDeleteEvent}
-            deadlines={deadlines}    onAddDeadline={handleAddDeadline}    onToggleDeadline={handleToggleDeadline} onDeleteDeadline={handleDeleteDeadline}
-            agreements={agreements}  onAddAgreement={handleAddAgreement}  onDeleteAgreement={handleDeleteAgreement}
-          />
-
-          <div className="h-px bg-border" />
-
-          {/* Top Goals */}
-          <TopGoals goals={activeGoals} groups={groups} />
-
-          <div className="h-px bg-border" />
 
           {/* To-Do List */}
           <TodoList
             tasks={todayTasks}
             plans={plans}
-            systems={systems}
             courseAssignments={courseAssignments}
             onToggleTask={handleToggleTask}
             onCreateTask={handleCreateTask}
             onDeleteTask={handleDeleteTask}
             onUpdateTask={handleUpdateTask}
-            onMarkSystem={handleMarkSystem}
-            onUnmarkSystem={handleUnmarkSystem}
-            onToggleSubtask={handleToggleSubtask}
-            subtaskMap={subtaskMap}
             onToggleAssignment={handleToggleAssignment}
           />
 
         </div>
 
         {/* ── Right column: Habits + Day Calendar ─────────────────────────── */}
-        <div className="hidden md:flex w-72 shrink-0 flex-col overflow-hidden px-3 py-3 gap-3">
+        {/*
+          Collapsible and resizable. The day calendar is the densest thing on the
+          page and how much room it deserves depends entirely on what the day
+          looks like — a wall of blocks wants width, an empty Sunday wants none.
+          Both the width and the open/closed state persist, because a layout you
+          have to re-adjust on every visit is worse than a fixed one.
+        */}
+        {!railOpen && (
+          <button
+            onClick={() => setRailOpen(true)}
+            title="Show day calendar"
+            className="hidden md:flex absolute bottom-3 right-3 z-10 h-8 w-8 items-center justify-center rounded-md border border-border bg-card shadow-sm text-muted-foreground hover:text-foreground transition-colors"
+          >
+            <PanelRight className="h-4 w-4" />
+          </button>
+        )}
+
+        {/* 12px hit area around a 1px line. A hairline divider is the right
+            *look* but a terrible target; separating the two means the handle is
+            easy to grab without drawing a thick bar down the page.
+            touch-none stops the browser claiming the gesture for scrolling. */}
+        {railOpen && (
+        <div
+          onPointerDown={startResize}
+          title="Drag to resize"
+          className="hidden md:flex w-3 shrink-0 cursor-col-resize items-stretch justify-center touch-none group/resize"
+        >
+          <div className="w-px bg-border transition-colors group-hover/resize:bg-primary group-active/resize:bg-primary" />
+        </div>
+        )}
+
+        {railOpen && (
+        <div
+          style={{ width: railWidth }}
+          className="hidden md:flex shrink-0 flex-col overflow-hidden px-3 py-3 gap-3 relative">
+          <button
+            onClick={() => setRailOpen(false)}
+            title="Hide day calendar"
+            className="absolute top-1 right-1 z-10 p-1 rounded text-muted-foreground/50 hover:text-foreground hover:bg-secondary transition-colors"
+          >
+            <PanelRightClose className="h-3.5 w-3.5" />
+          </button>
           <HabitsStrip habits={habits} stacks={habitStacks} onToggle={handleToggleHabit} today={date} />
           <DayCalendar
             date={date}
@@ -2692,11 +2283,14 @@ export function Dashboard() {
             courseAssignments={courseAssignments}
             scheduleEntries={scheduleEntries}
             tasks={tasks}
+            sessionsByBlock={sessionsByBlock}
+            onToggleWorked={handleToggleWorked}
             onCreateBlock={handleCreateCalBlock}
             onUpdateBlock={handleUpdateCalBlock}
             onDeleteBlock={handleDeleteCalBlock}
           />
         </div>
+        )}
 
       </div>
 

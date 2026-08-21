@@ -33,4 +33,10 @@ export const qk = {
   plans: ["plans"] as const,
   goals: ["goals"] as const,
   systems: ["systems"] as const,
+  /** Committed calendar minutes per task, board-wide. */
+  taskScheduling: ["task-scheduling"] as const,
+  /** The calendar commitments of one task's subtree. */
+  taskBlocks: (rootId: number) => ["task-blocks", rootId] as const,
+  /** The work-session ledger for one task's subtree. */
+  taskSessions: (rootId: number) => ["task-sessions", rootId] as const,
 };
