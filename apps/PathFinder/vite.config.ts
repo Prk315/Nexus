@@ -1,3 +1,4 @@
+/// <reference types="vitest" />
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react-swc";
 import tailwindcss from "@tailwindcss/vite";
@@ -29,6 +30,14 @@ export default defineConfig(async () => ({
       "@xyflow/react",
       "recharts",
     ],
+  },
+
+  // Unit tests for the pure logic modules (taskTree, systems, coverage).
+  // Node environment: these are deliberately React-free, so jsdom would only
+  // add startup cost. Component tests would need their own environment.
+  test: {
+    environment: "node",
+    include: ["src/**/*.test.ts"],
   },
 
   // Vite options tailored for Tauri development and only applied in `tauri dev` or `tauri build`
