@@ -170,10 +170,27 @@ A TimelineProvider showing today's coverage % and the biggest open gap.
 - Verify on-device via the KeychainDebug panel patterns; expect the usual
   free-tier re-sign friction.
 
-## Phase E — categories, the unifying layer
+## Phase E — categories, the unifying layer ✅ shipped 2026-08-21
 
-The end state: "how much deep work / training / social today", online and
-offline summed, with budgets.
+Shipped in two commits. Part 1 (Nexus Local + schema): `coverage_categories`
+(seeded from the constant, now in nexus-core behind `@nexus/core/categories`)
++ `app_category_map` applied live; `category` column on both cal-block tables,
+stamped by gap chips / suggestion accepts / meal sessions; pure
+`categoryTotals()` attribution in nexus-core (screen-beats-plan, per-category
+union, sleep excluded; 9 vitest cases — the repo's first vitest suite);
+`CategoryBreakdown` panel with daily totals, Monday-week (Europe/Copenhagen)
+budgets on `weekly_target_min`, and the app→category mapping UI (decision:
+map syncs via Supabase). Bonus: meal cards show Protocol's planned meal —
+read-only, since the only anon write path for `logged` is the widget-key edge
+function. Part 2 (PathFinder): category picker on block create/edit (category
+color defaults the block color unless explicitly overridden; emoji prefix on
+labels; update calls patch `category` only when passed so older Dashboard
+call sites can't wipe it), plus two user-requested Week-view changes outside
+the original roadmap: the grid is now a scrollable full 00:00–24:00 day
+(fixing pre-existing last-hour clipping bugs), and sleep renders as an
+always-on band split at midnight so bed/rise times read directly off the
+grid. The blocker tie-in (unlock rules per category) remains deliberately
+unbuilt.
 
 - Schema: `coverage_categories(id, name, color, sort)` seeded with the same
   list Phase A's chips use (**this is why A1 must draw chips from a shared
