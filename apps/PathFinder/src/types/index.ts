@@ -431,6 +431,8 @@ export interface CalBlock {
   series_start_date: string | null;
   series_end_date: string | null;
   task_id: number | null;
+  /** Name of a `coverage_categories` row, matched by name (no FK). Null = uncategorized. */
+  category: string | null;
 }
 
 export interface PipelineStep {
@@ -502,6 +504,8 @@ export interface RecurringCalBlock {
   created_at: string;
   /** Set when this series is a recurring commitment to a task/subtask. */
   task_id: number | null;
+  /** Name of a `coverage_categories` row, matched by name (no FK). Null = uncategorized. */
+  category: string | null;
 }
 
 export interface Game {
