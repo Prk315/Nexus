@@ -15,6 +15,9 @@ import { DayCalendar } from "../components/dashboard/DayCalendar";
 import { HabitsStrip } from "../components/dashboard/HabitsStrip";
 import { WelcomeBox } from "../components/dashboard/WelcomeBox";
 import { TodoList } from "../components/dashboard/TodoList";
+import { NowPanel } from "../components/dashboard/NowPanel";
+import { TaskPlanner } from "../components/workspace/TaskPlanner";
+import { nextUp, needsScheduling } from "../lib/nextUp";
 
 export function Dashboard() {
   const [goals,      setGoals]      = useState<Goal[]>([]);
@@ -147,6 +150,36 @@ export function Dashboard() {
   }, [calBlocks]);
 
   const workedBlockIds = useMemo(() => new Set(sessionsByBlock.keys()), [sessionsByBlock]);
+
+  // "What should I work on right now" — ranking lives in lib/nextUp.ts.
+  // nowMinutes is state rather than a Date read at render, so the panel
+  // re-ranks as the day moves instead of freezing at first paint.
+  const [nowMinutes, setNowMinutes] = useState(() => {
+    const d = new Date();
+    return d.getHours() * 60 + d.getMinutes();
+  });
+  useEffect(() => {
+    const id = setInterval(() => {
+      const d = new Date();
+      setNowMinutes(d.getHours() * 60 + d.getMinutes());
+    }, 60_000);
+    return () => clearInterval(id);
+  }, []);
+
+  const nowItems = useMemo(
+    () => nextUp({ tasks, blocksByTask, workedBlockIds, today: date, nowMinutes }),
+    [tasks, blocksByTask, workedBlockIds, date, nowMinutes],
+  );
+  const blocked = useMemo(
+    () => needsScheduling({ tasks, blocksByTask, workedBlockIds, today: date }),
+    [tasks, blocksByTask, workedBlockIds, date],
+  );
+
+  // The planner is mounted here, not just on the Workspace board. Breaking a
+  // task down, setting its axes, committing time and choosing what "done" means
+  // all lived one page away from where the day is actually spent, which is why
+  // none of it was getting used.
+  const [plannerId, setPlannerId] = useState<number | null>(null);
 
   // Quick tasks (reminders / chores / shopping) are standing lists — they show
   // regardless of due date, unlike project tasks which only surface on their day.
@@ -299,6 +332,16 @@ export function Dashboard() {
         <div className="flex-1 min-w-0 overflow-y-auto border-r border-border px-3 py-2 md:px-4 md:py-3 flex flex-col gap-3 md:gap-4">
 
           {/* To-Do List */}
+          <NowPanel
+            items={nowItems}
+            blockedCount={blocked.length}
+            onOpen={(t) => setPlannerId(t.id)}
+            onLogSession={(item) => { if (item.block) handleToggleWorked(item.block); }}
+            // Turns the count into an action: open the planner on the first
+            // thing the gate is holding back, where it can be scheduled.
+            onScheduleHint={() => { if (blocked[0]) setPlannerId(blocked[0].id); }}
+          />
+
           <TodoList
             tasks={todayTasks}
             allTasks={tasks}
@@ -377,6 +420,10 @@ export function Dashboard() {
 
       </div>
 
-    </div>
+    
+      {plannerId != null && (
+        <TaskPlanner rootId={plannerId} onClose={() => { setPlannerId(null); load(); }} />
+      )}
+</div>
   );
 }
