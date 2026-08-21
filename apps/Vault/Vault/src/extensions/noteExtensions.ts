@@ -21,6 +21,7 @@ import { TaskItem } from "@tiptap/extension-list/task-item";
 import { CategoryHighlight } from "./CategoryHighlight";
 import { Callout } from "./structural/Callout";
 import { Container } from "./structural/Container";
+import { ToggleBlock, ToggleSummary, ToggleContent } from "./structural/Toggle";
 import { KATEX_OPTS } from "../lib/katexShared";
 
 export interface NoteExtensionOpts {
@@ -64,6 +65,9 @@ export function buildNoteExtensions(opts: NoteExtensionOpts = {}): Extensions {
     // why every one of these depends on the guard being deployed first.
     Callout,
     Container,
+    ToggleBlock,
+    ToggleSummary,
+    ToggleContent,
     Table.configure({ resizable: true }),
     TableRow,
     TableHeader,

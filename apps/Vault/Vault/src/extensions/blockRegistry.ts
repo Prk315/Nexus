@@ -17,6 +17,7 @@ import type { HighlighterCategory } from "../types";
 import { CALLOUT_VARIANTS, CALLOUT_LABELS, CALLOUT_ICONS } from "./structural/Callout";
 import { CONTAINER_STYLES, CONTAINER_LABELS } from "./structural/Container";
 import { unwrapNearestContainer } from "./structural/containerCommands";
+import { insertToggle } from "./structural/toggleCommands";
 
 /** Every node in the structural family that "remove surrounding box" applies to. */
 export const STRUCTURAL_CONTAINERS = ["calloutBlock", "containerBlock"] as const;
@@ -200,6 +201,24 @@ export function buildBlockRegistry(opts: BlockRegistryOptions = {}): BlockAction
       id: "divider", title: "Divider", icon: "—", group: "structure",
       surfaces: ["slash", "toolbar"], keywords: ["hr", "rule", "separator", "line"],
       run: atCursor((c) => c.setHorizontalRule()),
+    },
+
+    {
+      id: "toggle",
+      title: "Toggle list",
+      icon: "▶",
+      group: "structure",
+      surfaces: ["slash", "toolbar"],
+      keywords: ["toggle", "collapse", "collapsible", "fold", "details", "accordion", "expand"],
+      run: (editor, ctx) => {
+        if (ctx?.range) editor.chain().focus().deleteRange(ctx.range).run();
+        editor.commands.focus();
+        insertToggle()({
+          state: editor.state,
+          dispatch: (tr: any) => editor.view.dispatch(tr),
+        });
+      },
+      isActive: (e) => e.isActive("toggleBlock"),
     },
 
     // ── Callouts ────────────────────────────────────────────────────────────

@@ -3256,6 +3256,103 @@ body {
   color: var(--fg-muted);
 }
 
+/* ── Toggle (collapsible) block ──────────────────────────────────────────────
+   The only member of the structural family with a React node view, because
+   the disclosure triangle is a control rather than content.
+
+   The body is ALWAYS in the DOM — a node view must keep its contentDOM alive
+   for its whole life or ProseMirror desyncs and starts swallowing edits — so
+   collapsing is `display: none` here, never a conditional render. */
+.tiptap-editor .ProseMirror .toggle-block {
+  position: relative;
+  margin: 0.5em 0;
+  padding-left: 26px;
+}
+
+.tiptap-editor .ProseMirror .toggle-caret {
+  position: absolute;
+  left: 0;
+  /* Aligned to the summary's first line, not the block: a long summary that
+     wraps must not drag the triangle down with it. */
+  top: 0.28em;
+  width: 20px;
+  height: 20px;
+  display: grid;
+  place-content: center;
+  padding: 0;
+  border: none;
+  background: none;
+  border-radius: 5px;
+  color: var(--fg-ghost);
+  cursor: pointer;
+  transition: background var(--duration) var(--ease), color var(--duration) var(--ease);
+}
+
+.tiptap-editor .ProseMirror .toggle-caret:hover {
+  background: var(--bg-muted);
+  color: var(--fg-main);
+}
+
+.tiptap-editor .ProseMirror .toggle-caret-glyph {
+  font-size: 9px;
+  line-height: 1;
+  transition: transform var(--duration) var(--ease);
+}
+
+.tiptap-editor .ProseMirror .toggle-block.is-open .toggle-caret-glyph {
+  transform: rotate(90deg);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .tiptap-editor .ProseMirror .toggle-caret-glyph { transition: none; }
+}
+
+.tiptap-editor .ProseMirror .toggle-summary {
+  font-weight: 500;
+  color: var(--fg-bright);
+  min-height: 1.75em;
+}
+
+.tiptap-editor .ProseMirror .toggle-content {
+  /* A hairline showing what the toggle owns; without it a nested toggle's
+     body is impossible to tell from the parent's. */
+  margin-top: 0.15em;
+  padding-left: 4px;
+  border-left: 1px solid var(--border-faint);
+}
+
+.tiptap-editor .ProseMirror .toggle-content > :first-child { margin-top: 0.2em; }
+.tiptap-editor .ProseMirror .toggle-content > :last-child { margin-bottom: 0; }
+
+.tiptap-editor .ProseMirror .toggle-block.is-collapsed .toggle-content {
+  display: none;
+}
+
+/* A collapsed toggle with a body should not look identical to an empty one. */
+.tiptap-editor .ProseMirror .toggle-block.is-collapsed .toggle-summary::after {
+  content: "…";
+  margin-left: 6px;
+  color: var(--fg-invisible);
+}
+
+.tiptap-editor .ProseMirror .toggle-summary:empty::before {
+  content: "Toggle";
+  color: var(--fg-ghost);
+  pointer-events: none;
+  float: left;
+  height: 0;
+}
+
+@media (pointer: coarse) {
+  .tiptap-editor .ProseMirror .toggle-block { padding-left: 34px; }
+  .tiptap-editor .ProseMirror .toggle-caret {
+    width: 28px;
+    height: 28px;
+    top: 0.1em;
+  }
+  .tiptap-editor .ProseMirror .toggle-caret-glyph { font-size: 11px; }
+}
+
 /* ── Gap cursor & node selection ─────────────────────────────────────────────
    prosemirror-gapcursor ships CSS that this app never imported, so the gap
    cursor has always been invisible — already a latent problem next to tables

@@ -238,7 +238,16 @@ function NoteEditorInner({ content, onChange, nodeId, graph }: Props) {
 
   // Tracks the last JSON string emitted via onChange so we can skip a
   // setContent call when the content prop is just echoing back our own edit.
-  const lastEmittedRef = useRef<string>("");
+  //
+  // Seeded with the INITIAL content, not "". Seeded empty, the effect below
+  // fires once on mount and replaces the document with the identical content
+  // `useEditor` had already loaded — a full ReplaceStep, recorded in the undo
+  // history. The damage isn't the wasted work: undoing a whole-document
+  // replacement restores the entire previous doc, so the first Cmd-Z after
+  // opening a note wipes out any attribute-only change made since, including
+  // the `addToHistory: false` toggle collapses that are specifically meant to
+  // be invisible to undo.
+  const lastEmittedRef = useRef<string>(content);
 
   const editor = useEditor({
     // One shared list, also used to derive the schema the wrapper audits

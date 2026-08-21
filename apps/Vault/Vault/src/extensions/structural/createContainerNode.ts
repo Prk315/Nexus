@@ -26,6 +26,14 @@ export interface ContainerNodeSpec {
   className?: (attrs: Record<string, any>) => string | undefined;
   /** Extra HTML attributes derived from node attributes. */
   extraHTML?: (attrs: Record<string, any>) => Record<string, any>;
+  /**
+   * Node-specific keys, merged BEFORE the shared ones so they get first
+   * refusal. Each must return false when it doesn't apply, or the generic
+   * unwrap/escape behaviour below becomes unreachable.
+   */
+  keyboard?: (ctx: { editor: any; name: string }) => Record<string, () => boolean>;
+  /** A React node view, for the rare container that needs one. */
+  nodeView?: () => any;
 }
 
 export function createContainerNode(spec: ContainerNodeSpec) {
@@ -91,13 +99,27 @@ export function createContainerNode(spec: ContainerNodeSpec) {
             dispatch: (tr: any) => editor.view.dispatch(tr),
           });
 
-      return {
+      const shared: Record<string, () => boolean> = {
         // Each returns false when the caret isn't in this container, so the
         // rest of the keymap (lists, tables, StarterKit) still gets its turn.
         Backspace: run(backspaceAtContainerStart(names)),
         Enter: run(enterAtContainerEnd(names)),
         "Mod-Enter": run(escapeContainer(names)),
       };
+
+      const own = spec.keyboard?.({ editor, name: this.name }) ?? {};
+
+      // Node-specific handler first, shared one as the fallback — so a toggle
+      // can claim Enter-inside-the-summary while still inheriting
+      // Enter-on-an-empty-trailing-paragraph.
+      const merged: Record<string, () => boolean> = { ...shared };
+      for (const [key, handler] of Object.entries(own)) {
+        const fallback = shared[key];
+        merged[key] = fallback ? () => handler() || fallback() : handler;
+      }
+      return merged;
     },
+
+    ...(spec.nodeView ? { addNodeView: () => spec.nodeView!() } : {}),
   });
 }

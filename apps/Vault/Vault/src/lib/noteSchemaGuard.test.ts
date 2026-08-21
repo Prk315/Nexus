@@ -63,9 +63,9 @@ describe("auditNoteContent", () => {
   // The whole point of Phase 1. An unknown type must be NAMED, not just
   // detected — the banner shows these strings to the user verbatim.
   it("names an unknown top-level node type", () => {
-    const audit = auditNoteRaw(JSON.stringify(doc({ type: "toggleBlock", content: [] })), schema);
+    const audit = auditNoteRaw(JSON.stringify(doc({ type: "zzNotARealBlock", content: [] })), schema);
     expect(audit.ok).toBe(false);
-    expect(audit.unknownNodes).toEqual(["toggleBlock"]);
+    expect(audit.unknownNodes).toEqual(["zzNotARealBlock"]);
   });
 
   it("finds unknown types nested inside known ones", () => {
@@ -82,9 +82,26 @@ describe("auditNoteContent", () => {
   it("recognises the structural blocks this build actually ships", () => {
     const known = doc(
       { type: "calloutBlock", attrs: { variant: "warn" }, content: [para("careful")] },
-      { type: "containerBlock", attrs: { style: "card" }, content: [para("grouped")] }
+      { type: "containerBlock", attrs: { style: "card" }, content: [para("grouped")] },
+      {
+        type: "toggleBlock",
+        attrs: { open: true },
+        content: [
+          { type: "toggleSummary", content: [{ type: "text", text: "summary" }] },
+          { type: "toggleContent", content: [para("body")] },
+        ],
+      }
     );
     expect(auditNoteRaw(JSON.stringify(known), schema).ok).toBe(true);
+  });
+
+  it("keeps toggle parts out of `group: block` so they can't escape a toggle", () => {
+    // The containment rule is schema-enforced, not policed after the fact:
+    // neither part is a `block`, so neither is placeable at the top level.
+    for (const name of ["toggleSummary", "toggleContent"]) {
+      expect(schema.nodes[name].isInGroup("block"), `${name} must not be a block`).toBe(false);
+    }
+    expect(schema.nodes.toggleBlock.isInGroup("block")).toBe(true);
   });
 
   // nodeFromJSON throws on the FIRST unknown type; this walk must not, or the
@@ -260,6 +277,38 @@ describe("HTML round-trip", () => {
       expect(roundTrip(json)).toEqual(json);
     });
   }
+
+  for (const open of [true, false]) {
+    it(`survives a ${open ? "open" : "collapsed"} toggle`, () => {
+      const json = doc({
+        type: "toggleBlock",
+        attrs: { open },
+        content: [
+          { type: "toggleSummary", content: [{ type: "text", text: "Summary text" }] },
+          { type: "toggleContent", content: [para("hidden body"), para("second block")] },
+        ],
+      });
+      // Collapsed state has to survive the round trip or a toggle silently
+      // springs open every time a note is copied or re-parsed.
+      expect(roundTrip(json)).toEqual(json);
+    });
+  }
+
+  it("keeps marks inside a toggle summary", () => {
+    // The reason the summary is a real node and not a string attribute.
+    const json = doc({
+      type: "toggleBlock",
+      attrs: { open: true },
+      content: [
+        {
+          type: "toggleSummary",
+          content: [{ type: "text", text: "bold title", marks: [{ type: "bold" }] }],
+        },
+        { type: "toggleContent", content: [para("body")] },
+      ],
+    });
+    expect(roundTrip(json)).toEqual(json);
+  });
 
   it("survives a container nested inside a callout", () => {
     const json = doc({
