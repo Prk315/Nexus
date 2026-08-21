@@ -17,7 +17,6 @@ import {
   getHabitSubtasks, toggleHabitSubtask,
   getTrainingSessionsForDate,
 } from "../lib/api";
-import { PriorityDot } from "../components/PriorityDot";
 import { daysUntil, cn, layoutCalItems, formatDateShort } from "../lib/utils";
 import { blockMinutes, planningOf, isFullTask } from "../lib/taskTree";
 import { UrgencyMeter } from "../components/UrgencyMeter";
@@ -1010,27 +1009,14 @@ function HeaderGoals({ goals }: { goals: Goal[] }) {
   if (active.length === 0) return null;
 
   return (
-    <div className="hidden lg:flex shrink-0 w-56 max-h-16 flex-col gap-1 overflow-y-auto rounded-lg border border-border bg-background px-2 py-1.5">
+    <div className="hidden lg:flex shrink-0 w-56 max-h-16 flex-col justify-center gap-2 overflow-y-auto">
       {active.map((g) => {
-        const pct  = g.task_count === 0 ? 0 : Math.round((g.done_count / g.task_count) * 100);
-        const days = g.deadline ? daysUntil(g.deadline) : null;
+        const pct = g.task_count === 0 ? 0 : Math.round((g.done_count / g.task_count) * 100);
         return (
-          <div key={g.id} className="flex flex-col gap-0.5">
-            <div className="flex items-center gap-1.5 min-w-0">
-              <PriorityDot priority={g.priority} />
-              <span className="flex-1 min-w-0 truncate text-[11px] font-medium text-foreground" title={g.title}>
-                {g.title}
-              </span>
-              {days !== null && (
-                <span className={cn(
-                  "shrink-0 text-[10px] tabular-nums",
-                  days < 0 ? "text-rose-500" : days <= 7 ? "text-amber-500" : "text-muted-foreground/60",
-                )}>
-                  {days < 0 ? `${-days}d late` : `${days}d`}
-                </span>
-              )}
-              <span className="shrink-0 text-[10px] tabular-nums text-muted-foreground/60 w-7 text-right">{pct}%</span>
-            </div>
+          <div key={g.id} className="flex flex-col gap-1">
+            <span className="truncate text-[11px] font-medium text-foreground" title={g.title}>
+              {g.title}
+            </span>
             <div className="h-1 w-full overflow-hidden rounded-full bg-secondary">
               <div className="h-full rounded-full bg-primary transition-all" style={{ width: `${pct}%` }} />
             </div>
