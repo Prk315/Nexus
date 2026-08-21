@@ -15,6 +15,7 @@ import type {
   CompletionMode, TaskType,
 } from "../types";
 import { coverageByTask } from "./taskTree";
+import { isSystemDue } from "./systems";
 
 
 // ─── helpers ────────────────────────────────────────────────────────────────
@@ -243,6 +244,7 @@ function mapSystem(r: any): SystemEntry {
     frequency: r.frequency,
     days_of_week: r.days_of_week,
     last_done: r.last_done,
+    interval_days: r.interval_days ?? null,
     streak_count: r.streak_count,
     streak_updated: r.streak_updated,
     created_at: r.created_at,
@@ -767,6 +769,51 @@ export const saveTaskSubtype = async (
   if (error) err(error);
 };
 
+/** All subtype rows of one sparse kind, for panels that need them in bulk. */
+export const getTaskSubtypeRows = async (
+  type: Exclude<TaskType, "task">,
+): Promise<Record<string, any>[]> => {
+  const { data, error } = await supabase
+    .from(SUBTYPE_TABLE[type]).select("*").eq("user_id", getUserId());
+  if (error) err(error);
+  return data ?? [];
+};
+
+/**
+ * Turns a chore into a recurring system, then deletes the chore.
+ *
+ * Recurrence lives in exactly one place — pf_systems — so a chore that should
+ * come back becomes a system with `frequency: 'interval'` rather than growing a
+ * second engine on pf_tasks. `interval` recurs N days after the last completion,
+ * which is what a chore means; 'weekly' would pin it to a fixed weekday.
+ *
+ * Destructive on the task, deliberately: leaving both behind would show the
+ * chore twice, once in Chores and once in Systems, with only one of them
+ * recurring. The title and area survive on the system.
+ */
+export const promoteChoreToSystem = async (
+  taskId: number, intervalDays: number,
+): Promise<SystemEntry> => {
+  const { data: task, error: e1 } = await supabase
+    .from("pf_tasks").select("title, task_type").eq("id", taskId).single();
+  if (e1) err(e1);
+  if (task!.task_type !== "chore") throw "Only chores can be made recurring.";
+
+  const sub = await getTaskSubtype(taskId, "chore");
+  const area = sub?.area ? String(sub.area) : null;
+
+  const system = await createSystem({
+    title: task!.title,
+    description: area ? `Area: ${area}` : null,
+    frequency: "interval",
+    interval_days: Math.max(1, Math.round(intervalDays)),
+  });
+
+  // Only after the system exists — a failure above must not lose the chore.
+  await deleteTask(taskId);
+  return system;
+};
+
 // ─── Breakdown ──────────────────────────────────────────────────────────────
 
 /** Every task in `rootId`'s subtree, including the root itself. */
@@ -1161,6 +1208,7 @@ export const createSystem = async (payload: {
   title: string; description?: string | null; frequency: string;
   days_of_week?: string | null; start_time?: string | null; end_time?: string | null;
   is_lifestyle?: boolean; lifestyle_area_id?: number | null;
+  interval_days?: number | null;
 }): Promise<SystemEntry> => {
   const { data, error } = await supabase
     .from("pf_systems").insert({ user_id: getUserId(), ...payload }).select().single();
@@ -1172,6 +1220,7 @@ export const updateSystem = async (id: number, payload: {
   title: string; description?: string | null; frequency: string;
   days_of_week?: string | null; start_time?: string | null; end_time?: string | null;
   is_lifestyle?: boolean; lifestyle_area_id?: number | null;
+  interval_days?: number | null;
 }): Promise<SystemEntry> => {
   const { data, error } = await supabase
     .from("pf_systems").update(payload).eq("id", id).select().single();
@@ -1287,16 +1336,9 @@ export const getTodayFocus = async (): Promise<TodayFocus> => {
   const plansMap = new Map((plans ?? []).map((p) => [num(p.id), p]));
   const allTasks = (tasks ?? []).map((t) => mapTaskWithContext(t, plansMap));
 
-  const systemsDue = (systems ?? []).filter((s) => {
-    if (s.last_done === today) return false;
-    if (s.frequency === "daily") return true;
-    if (s.frequency === "weekly") {
-      if (!s.days_of_week) return false;
-      const todayDow = new Date().getDay();
-      return s.days_of_week.split(",").map(Number).includes(todayDow);
-    }
-    return false;
-  }).map(mapSystem);
+  // Shared rule — see lib/systems.ts. This used to be an inline copy that
+  // disagreed with the other two about monthly and about unknown frequencies.
+  const systemsDue = (systems ?? []).map(mapSystem).filter((s) => isSystemDue(s, today));
 
   return {
     tasks_due_today: allTasks.filter((t) => t.due_date === today),
