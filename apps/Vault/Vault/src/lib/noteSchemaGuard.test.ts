@@ -70,10 +70,21 @@ describe("auditNoteContent", () => {
 
   it("finds unknown types nested inside known ones", () => {
     const audit = auditNoteRaw(
-      JSON.stringify(doc({ type: "blockquote", content: [{ type: "calloutBlock", content: [para("x")] }] })),
+      JSON.stringify(doc({ type: "blockquote", content: [{ type: "zzFutureBlock", content: [para("x")] }] })),
       schema
     );
-    expect(audit.unknownNodes).toEqual(["calloutBlock"]);
+    expect(audit.unknownNodes).toEqual(["zzFutureBlock"]);
+  });
+
+  // These names are deliberately fictional. Using a real upcoming node type
+  // here would make the test flip to failing the day that type ships, which
+  // is churn, not signal.
+  it("recognises the structural blocks this build actually ships", () => {
+    const known = doc(
+      { type: "calloutBlock", attrs: { variant: "warn" }, content: [para("careful")] },
+      { type: "containerBlock", attrs: { style: "card" }, content: [para("grouped")] }
+    );
+    expect(auditNoteRaw(JSON.stringify(known), schema).ok).toBe(true);
   });
 
   // nodeFromJSON throws on the FIRST unknown type; this walk must not, or the
@@ -83,14 +94,14 @@ describe("auditNoteContent", () => {
     const audit = auditNoteRaw(
       JSON.stringify(
         doc(
-          { type: "columnBlock", content: [{ type: "column", content: [para("a")] }] },
-          { type: "column", content: [para("b")] },
-          { type: "calloutBlock", content: [] }
+          { type: "zzOuter", content: [{ type: "zzInner", content: [para("a")] }] },
+          { type: "zzInner", content: [para("b")] },
+          { type: "zzAnother", content: [] }
         )
       ),
       schema
     );
-    expect(audit.unknownNodes).toEqual(["calloutBlock", "column", "columnBlock"]);
+    expect(audit.unknownNodes).toEqual(["zzAnother", "zzInner", "zzOuter"]);
   });
 
   it("keeps recursing past an unknown node into its children", () => {
@@ -231,6 +242,52 @@ describe("HTML round-trip", () => {
     expect(mark?.type).toBe("highlight");
     expect(mark?.attrs?.category).toBe("Definition");
     expect(mark?.attrs?.color).toBe("#ffd400");
+  });
+
+  // Structural blocks are where a renderHTML/parseHTML mismatch actually costs
+  // something: the wrapper silently vanishes on paste and the content inside
+  // it merges into the surrounding document.
+  for (const variant of ["note", "info", "warn", "success", "danger"]) {
+    it(`survives a ${variant} callout`, () => {
+      const json = doc({ type: "calloutBlock", attrs: { variant }, content: [para("body")] });
+      expect(roundTrip(json)).toEqual(json);
+    });
+  }
+
+  for (const style of ["plain", "card", "outline", "muted"]) {
+    it(`survives a ${style} container`, () => {
+      const json = doc({ type: "containerBlock", attrs: { style }, content: [para("body")] });
+      expect(roundTrip(json)).toEqual(json);
+    });
+  }
+
+  it("survives a container nested inside a callout", () => {
+    const json = doc({
+      type: "calloutBlock",
+      attrs: { variant: "info" },
+      content: [
+        para("intro"),
+        { type: "containerBlock", attrs: { style: "muted" }, content: [para("nested")] },
+      ],
+    });
+    expect(roundTrip(json)).toEqual(json);
+  });
+
+  // An unrecognised variant must land on a real one, or the CSS attribute
+  // selector matches nothing and the callout renders as an unstyled div —
+  // indistinguishable from having lost the block entirely.
+  it("falls back to a valid variant when the attribute is nonsense", () => {
+    const back = generateJSON(
+      '<aside data-type="callout" data-variant="chartreuse"><p>x</p></aside>',
+      exts
+    );
+    expect(back.content?.[0]?.attrs?.variant).toBe("note");
+  });
+
+  it("keeps the content when the wrapper attribute is missing entirely", () => {
+    const back = generateJSON('<aside data-type="callout"><p>kept</p></aside>', exts);
+    expect(back.content?.[0]?.type).toBe("calloutBlock");
+    expect(back.content?.[0]?.content?.[0]?.content?.[0]?.text).toBe("kept");
   });
 
   it("round-trips a document through the guard unchanged", () => {

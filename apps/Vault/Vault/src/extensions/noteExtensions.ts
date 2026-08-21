@@ -19,6 +19,8 @@ import { Table, TableRow, TableHeader, TableCell } from "@tiptap/extension-table
 import { TaskList } from "@tiptap/extension-list/task-list";
 import { TaskItem } from "@tiptap/extension-list/task-item";
 import { CategoryHighlight } from "./CategoryHighlight";
+import { Callout } from "./structural/Callout";
+import { Container } from "./structural/Container";
 import { KATEX_OPTS } from "../lib/katexShared";
 
 export interface NoteExtensionOpts {
@@ -58,6 +60,10 @@ export function buildNoteExtensions(opts: NoteExtensionOpts = {}): Extensions {
       },
     }),
     CategoryHighlight,
+    // Structural family. All schema additions — see lib/noteSchemaGuard.ts for
+    // why every one of these depends on the guard being deployed first.
+    Callout,
+    Container,
     Table.configure({ resizable: true }),
     TableRow,
     TableHeader,

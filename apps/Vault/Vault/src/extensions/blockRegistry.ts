@@ -14,6 +14,12 @@
 import type { Editor, Range } from "@tiptap/core";
 import type { ChainedCommands } from "@tiptap/core";
 import type { HighlighterCategory } from "../types";
+import { CALLOUT_VARIANTS, CALLOUT_LABELS, CALLOUT_ICONS } from "./structural/Callout";
+import { CONTAINER_STYLES, CONTAINER_LABELS } from "./structural/Container";
+import { unwrapNearestContainer } from "./structural/containerCommands";
+
+/** Every node in the structural family that "remove surrounding box" applies to. */
+export const STRUCTURAL_CONTAINERS = ["calloutBlock", "containerBlock"] as const;
 
 export type BlockSurface = "slash" | "toolbar" | "bubble";
 
@@ -21,7 +27,9 @@ export type BlockGroup =
   | "format"     // inline marks
   | "text"       // paragraph / headings
   | "lists"
-  | "structure"  // quote, code, divider — and Phase 3's containers
+  | "structure"  // quote, code, divider
+  | "callout"    // admonition boxes
+  | "container"  // generic grouping panels
   | "math"
   | "table"
   | "vault"      // highlighters, database records
@@ -194,6 +202,66 @@ export function buildBlockRegistry(opts: BlockRegistryOptions = {}): BlockAction
       run: atCursor((c) => c.setHorizontalRule()),
     },
 
+    // ── Callouts ────────────────────────────────────────────────────────────
+    // One action per variant, and it does double duty: outside a callout it
+    // wraps, inside one it re-styles. That's what removes the need for a React
+    // node view with a variant picker — the existing menus already are one.
+    ...CALLOUT_VARIANTS.map((variant): BlockAction => ({
+      id: `callout:${variant}`,
+      title: CALLOUT_LABELS[variant],
+      icon: CALLOUT_ICONS[variant],
+      group: "callout",
+      surfaces: ["slash", "toolbar"],
+      keywords: ["callout", "admonition", "aside", "box", "panel", CALLOUT_LABELS[variant].toLowerCase()],
+      run: (editor, ctx) => {
+        if (ctx?.range) editor.chain().focus().deleteRange(ctx.range).run();
+        if (editor.isActive("calloutBlock")) {
+          editor.chain().focus().updateAttributes("calloutBlock", { variant }).run();
+        } else {
+          editor.chain().focus().toggleWrap("calloutBlock", { variant }).run();
+        }
+      },
+      isActive: (editor) => editor.isActive("calloutBlock", { variant }),
+    })),
+
+    // ── Containers ──────────────────────────────────────────────────────────
+    ...CONTAINER_STYLES.map((style): BlockAction => ({
+      id: `container:${style}`,
+      title: CONTAINER_LABELS[style],
+      icon: "▭",
+      group: "container",
+      surfaces: ["slash", "toolbar"],
+      keywords: ["container", "group", "div", "box", "panel", "card", "section"],
+      run: (editor, ctx) => {
+        if (ctx?.range) editor.chain().focus().deleteRange(ctx.range).run();
+        if (editor.isActive("containerBlock")) {
+          editor.chain().focus().updateAttributes("containerBlock", { style }).run();
+        } else {
+          editor.chain().focus().toggleWrap("containerBlock", { style }).run();
+        }
+      },
+      isActive: (editor) => editor.isActive("containerBlock", { style }),
+    })),
+
+    // Offered only from inside one, because "unwrap" has no meaning outside.
+    // Backspace-at-start does the same thing; this is the discoverable route.
+    {
+      id: "unwrapContainer",
+      title: "Remove surrounding box",
+      icon: "⤴",
+      group: "container",
+      surfaces: ["toolbar"],
+      keywords: ["unwrap", "lift", "remove", "ungroup"],
+      isAvailable: (e) => e.isActive("calloutBlock") || e.isActive("containerBlock"),
+      run: (e) => {
+        e.commands.focus();
+        // Same unwrap as Backspace-at-start, NOT Tiptap's lift(): lift splits
+        // a multi-child container around the caret, and two routes to "remove
+        // this box" that disagree about the contents is worse than one.
+        unwrapNearestContainer(e as any, STRUCTURAL_CONTAINERS);
+      },
+    },
+
     // ── Math ────────────────────────────────────────────────────────────────
     {
       id: "inlineMath", title: "Inline Math", icon: "√x", group: "math",
@@ -313,6 +381,8 @@ export const GROUP_LABELS: Record<BlockGroup, string> = {
   text: "Text",
   lists: "Lists",
   structure: "Blocks",
+  callout: "Callout",
+  container: "Group",
   math: "Math",
   table: "Table",
   vault: "Vault",

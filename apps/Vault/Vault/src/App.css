@@ -3152,6 +3152,149 @@ body {
   cursor: col-resize;
 }
 
+/* ── Structural blocks: callouts & containers ────────────────────────────────
+   Both are plain renderHTML + CSS, no React node view — there is nothing
+   interactive inside them, so a React tree per instance would only cost a
+   reconcile on every keystroke that touched the block.
+
+   Every colour here maps onto a token that already existed. Callouts are
+   exactly the place where someone reaches for a new palette; the semantic
+   tokens (--destructive-*, --success-*, --sticky-*, --edge-in-*) already mean
+   danger/success/warning/info elsewhere in the app, so reusing them keeps a
+   warning callout the same yellow as every other warning in Vault. */
+
+.tiptap-editor .ProseMirror .callout {
+  --callout-accent: var(--border-strong);
+  --callout-bg: var(--bg-subtle);
+  --callout-fg: var(--fg-muted);
+
+  position: relative;
+  margin: 1em 0;
+  padding: 12px 16px 12px 42px;
+  background: var(--callout-bg);
+  border: 1px solid var(--callout-accent);
+  border-left-width: 3px;
+  border-radius: calc(var(--radius) * 0.8);
+}
+
+/* The glyph is a pseudo-element and therefore not selectable — a caret can
+   never land "on" it and Backspace can never half-delete it. */
+.tiptap-editor .ProseMirror .callout::before {
+  content: var(--callout-icon, "✎");
+  position: absolute;
+  left: 14px;
+  top: 12px;
+  font-size: 14px;
+  line-height: 1.6;
+  color: var(--callout-accent);
+}
+
+.tiptap-editor .ProseMirror .callout > :first-child { margin-top: 0; }
+.tiptap-editor .ProseMirror .callout > :last-child { margin-bottom: 0; }
+
+.tiptap-editor .ProseMirror .callout-note {
+  --callout-icon: "✎";
+  --callout-accent: var(--border-strong);
+  --callout-bg: var(--bg-subtle);
+}
+
+.tiptap-editor .ProseMirror .callout-info {
+  --callout-icon: "ⓘ";
+  --callout-accent: var(--edge-in);
+  --callout-bg: var(--edge-in-bg);
+}
+
+.tiptap-editor .ProseMirror .callout-warn {
+  --callout-icon: "⚠";
+  --callout-accent: var(--warning);
+  /* oklab, not oklch — --bg-base is hue 0, and oklch would drag the amber
+     toward red. Same trap documented on .nse-card. */
+  --callout-bg: color-mix(in oklab, var(--sticky-border) 30%, var(--bg-base));
+}
+
+.tiptap-editor .ProseMirror .callout-success {
+  --callout-icon: "✓";
+  --callout-accent: var(--success);
+  --callout-bg: var(--success-bg);
+}
+
+.tiptap-editor .ProseMirror .callout-danger {
+  --callout-icon: "✕";
+  --callout-accent: var(--destructive);
+  --callout-bg: var(--destructive-bg);
+}
+
+/* Containers group; they don't mean anything. Deliberately quieter than
+   callouts so the two never compete for the same job. */
+.tiptap-editor .ProseMirror .container-block {
+  margin: 1em 0;
+  padding: 14px 16px;
+  border-radius: calc(var(--radius) * 0.8);
+}
+
+.tiptap-editor .ProseMirror .container-block > :first-child { margin-top: 0; }
+.tiptap-editor .ProseMirror .container-block > :last-child { margin-bottom: 0; }
+
+.tiptap-editor .ProseMirror .container-plain {
+  padding: 0 0 0 14px;
+  border-left: 2px solid var(--border-faint);
+  border-radius: 0;
+}
+
+.tiptap-editor .ProseMirror .container-card {
+  background: var(--bg-raised);
+  border: 1px solid var(--border-faint);
+  box-shadow: var(--shadow-xs);
+}
+
+.tiptap-editor .ProseMirror .container-outline {
+  border: 1px solid var(--border-base);
+}
+
+.tiptap-editor .ProseMirror .container-muted {
+  background: var(--bg-subtle);
+  color: var(--fg-muted);
+}
+
+/* ── Gap cursor & node selection ─────────────────────────────────────────────
+   prosemirror-gapcursor ships CSS that this app never imported, so the gap
+   cursor has always been invisible — already a latent problem next to tables
+   and block math. With isolating containers it becomes the *primary* way to
+   put a caret before or after a block, so an invisible one means "I can't
+   type above this callout" with no clue why. Same for selectednode: a
+   NodeSelection with no visible feedback looks like nothing happened. */
+.tiptap-editor .ProseMirror-gapcursor {
+  display: none;
+  pointer-events: none;
+  position: absolute;
+}
+
+.tiptap-editor .ProseMirror-gapcursor::after {
+  content: "";
+  display: block;
+  position: absolute;
+  top: -2px;
+  width: 22px;
+  border-top: 2px solid var(--fg-main);
+  animation: vault-gapcursor-blink 1.1s steps(2, start) infinite;
+}
+
+@keyframes vault-gapcursor-blink {
+  to { visibility: hidden; }
+}
+
+.tiptap-editor .ProseMirror-focused .ProseMirror-gapcursor { display: block; }
+
+@media (prefers-reduced-motion: reduce) {
+  .tiptap-editor .ProseMirror-gapcursor::after { animation: none; }
+}
+
+.tiptap-editor .ProseMirror-selectednode {
+  outline: 2px solid var(--edge-in);
+  outline-offset: 2px;
+  border-radius: calc(var(--radius) * 0.6);
+}
+
 /* ── KaTeX / Math (@tiptap/extension-mathematics v3 node views) ───────────
    The extension renders inline math as <span data-type="inline-math"> and
    block math as <div data-type="block-math">, both wrapped in a

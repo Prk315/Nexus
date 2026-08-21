@@ -14,7 +14,7 @@ import { actionsFor, GROUP_LABELS, type BlockAction, type BlockGroup } from "../
 const INLINE_GROUPS: BlockGroup[] = ["format", "text", "lists"];
 // Groups folded behind a single "Insert ▾" menu — they're occasional, and
 // .tiptap-toolbar doesn't wrap, so ~25 bare buttons would simply clip.
-const MENU_GROUPS: BlockGroup[] = ["structure", "math", "table"];
+const MENU_GROUPS: BlockGroup[] = ["structure", "callout", "container", "math", "table"];
 // Trailing groups, shown inline after the menu.
 const TAIL_GROUPS: BlockGroup[] = ["vault", "history"];
 
