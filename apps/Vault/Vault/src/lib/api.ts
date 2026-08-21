@@ -162,8 +162,31 @@ async function rawSaveContent(id: string, content: string): Promise<void> {
   if (error) err(error);
 }
 
+// A save this big is not a document, it is a bug — almost certainly binary
+// inlined as base64 rather than uploaded to the vault-assets bucket. 1.9 MB is
+// what wedged Supabase for 2h on 2026-08-15, so refuse above 2 MB rather than
+// repeat it. Rejecting surfaces as "error" in the pane's save status and
+// leaves the stored content intact; truncating would silently destroy it.
+const MAX_CONTENT_BYTES = 2_000_000;
+
+const queuedSaveContent = makeSaver(rawSaveContent);
+
+// The cap is checked HERE, outside the queue, deliberately. Throwing inside
+// rawSave would look like a failing database: the queue would retry 6 times
+// (pointlessly — the length never changes) and each failure bumps the queue's
+// *global* failStreak/gateUntil, stalling saves for every OTHER node by up to
+// 60s a round. One oversized note must not take the rest of the vault down
+// with it — that is the exact failure this queue exists to prevent.
 export const saveContent: (id: string, content: string) => Promise<void> =
-  makeSaver(rawSaveContent);
+  (id, content) => {
+    if (content.length > MAX_CONTENT_BYTES) {
+      return Promise.reject(new Error(
+        `[vault] refusing to save ${(content.length / 1024 / 1024).toFixed(1)} MB to node ${id} ` +
+        `(cap ${MAX_CONTENT_BYTES / 1_000_000} MB). Images belong in Storage via uploadCanvasImage(), not inline.`
+      ));
+    }
+    return queuedSaveContent(id, content);
+  };
 
 // ── Journals (handwriting stroke data) ───────────────────────────────────────
 

@@ -3,7 +3,7 @@ import StarterKit from "@tiptap/starter-kit";
 import Placeholder from "@tiptap/extension-placeholder";
 import Mathematics from "@tiptap/extension-mathematics";
 import { Table, TableRow, TableHeader, TableCell } from "@tiptap/extension-table";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import katex from "katex";
 import { createSlashCommandsExtension, type SlashMenuState } from "../extensions/SlashCommands";
 import { CategoryHighlight } from "../extensions/CategoryHighlight";
@@ -359,15 +359,26 @@ export function NoteEditor({ content, onChange, nodeId, graph }: Props) {
     </button>
   );
 
-  if (!editor) return null;
+  // Keyed on the doc, not on every transaction. `onTransaction` above fires a
+  // re-render for pure cursor moves too, and this used to call getJSON() —
+  // serializing the ENTIRE document on every keypress and arrow key. A PM doc
+  // node is immutable, so its reference is stable across selection-only
+  // transactions and this recomputes only when the text actually changes.
+  // (`textContent` also picks up text the old JSON walk missed, e.g. a heading
+  // whose text sits inside a nested inline node rather than a bare text node.)
+  const headings = useMemo(() => {
+    const out: Array<{ level: number; text: string }> = [];
+    const doc = editor?.state.doc;
+    if (!doc) return out;
+    doc.forEach((node) => {
+      if (node.type.name !== "heading") return;
+      const text = node.textContent.trim();
+      if (text) out.push({ level: node.attrs?.level ?? 1, text });
+    });
+    return out;
+  }, [editor?.state.doc]);
 
-  const headings: Array<{ level: number; text: string }> = [];
-  (editor.getJSON().content ?? []).forEach((node: any) => {
-    if (node.type === "heading") {
-      const text = (node.content ?? []).map((n: any) => n.text ?? "").join("").trim();
-      if (text) headings.push({ level: node.attrs?.level ?? 1, text });
-    }
-  });
+  if (!editor) return null;
 
   function scrollToHeading(text: string, level: number) {
     const pm = wrapperRef.current?.querySelector(".ProseMirror");

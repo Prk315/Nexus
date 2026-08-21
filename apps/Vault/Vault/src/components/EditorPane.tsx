@@ -37,6 +37,14 @@ const GraphView = lazyWithReload(() => import("./GraphView").then(m => ({ defaul
 // same note is opened in a second pane or re-opened after tab close.
 const globalContentCache = new Map<string, string>();
 
+// What we believe is currently persisted server-side, per node. Distinct from
+// globalContentCache, which also holds *unsaved* in-memory edits. Opening a
+// node used to fire a full upsert of the bytes we had just read, because the
+// autosave effect below runs on mount with no way to tell "loaded" from
+// "edited". A missing entry means "unknown", which must fall through to
+// saving — never assume clean.
+const persistedContent = new Map<string, string>();
+
 class EditorErrorBoundary extends Component<
   { label: string; children: React.ReactNode },
   { error: string | null }
@@ -226,12 +234,18 @@ export const EditorPane = forwardRef<EditorPaneHandle, EditorPaneProps>(
     useEffect(() => {
       if (!selectedId || isFolderSelected || isPdfSelected || isVideoSelected || isDatabaseSelected)
         return;
+      // Byte-identical to what's already on the server — this is the mount pass
+      // right after selectNode loaded it, not an edit. Writing it back burns a
+      // round-trip per node open and, worse, makes a genuinely blocked/blank
+      // editor look like a legitimate save.
+      if (persistedContent.get(selectedId) === content) return;
       setSaveStatus("saving");
       const timer = setTimeout(async () => {
         try {
           // Queued in api.ts: single-flight per node, coalescing, backoff.
           // Resolves once this content (or something newer) is persisted.
           await api.saveContent(selectedId, content);
+          persistedContent.set(selectedId, content);
           setSaveStatus("saved");
           setTimeout(() => setSaveStatus(""), 1500);
         } catch {
@@ -333,6 +347,7 @@ export const EditorPane = forwardRef<EditorPaneHandle, EditorPaneProps>(
         // For all other types it is the text/JSON content string.
         text = await api.readContent(id);
         globalContentCache.set(id, text);
+        persistedContent.set(id, text);
         setIsLoading(false);
       }
 
@@ -359,6 +374,7 @@ export const EditorPane = forwardRef<EditorPaneHandle, EditorPaneProps>(
             if (!isFolder && cached === undefined) {
               api.readContent(nextId).then((t) => {
                 globalContentCache.set(nextId, t);
+                persistedContent.set(nextId, t);
                 setContent(t);
               });
             }
@@ -612,12 +628,18 @@ export const EditorPane = forwardRef<EditorPaneHandle, EditorPaneProps>(
                 />
               </EditorErrorBoundary>
             ) : (
-              <NoteEditor
-                content={content}
-                onChange={setContent}
-                nodeId={selectedId ?? undefined}
-                graph={graph}
-              />
+              // key + boundary match every other editor in this switch. The key
+              // matters for more than symmetry: without it the editor instance
+              // outlives the node, so undo history bleeds across notes and a
+              // Cmd-Z after a tab switch rewrites the *previous* note.
+              <EditorErrorBoundary key={selectedId} label="NoteEditor">
+                <NoteEditor
+                  content={content}
+                  onChange={setContent}
+                  nodeId={selectedId ?? undefined}
+                  graph={graph}
+                />
+              </EditorErrorBoundary>
             )}
             </Suspense>
           </>
