@@ -19,10 +19,11 @@ import {
   useLogSession, useDeleteSession,
 } from "../../hooks/useTaskPlanning";
 import { useTasks, useToggleTask, useDeleteTask } from "../../hooks/useTasks";
+import { useGoals, useSetTaskGoal } from "../../hooks/useTaskPlanning";
 import { PriorityPad } from "./PriorityPad";
 import { BreakdownTree } from "./BreakdownTree";
 import { SchedulePanel } from "./SchedulePanel";
-import type { CompletionMode, TaskSession, TaskStage } from "../../types";
+import type { CompletionMode, Goal, TaskSession, TaskStage } from "../../types";
 
 /**
  * The three-step task planner.
@@ -48,6 +49,7 @@ const STEPS: { id: Step; label: string; icon: typeof Target }[] = [
 
 export function TaskPlanner({ rootId, onClose }: { rootId: number; onClose: () => void }) {
   const { data: tasks = [] } = useTasks();
+  const { data: goals = [] } = useGoals();
   const { data: coverage = new Map() } = useTaskScheduling();
 
   const root = useMemo(() => subtreeNode(tasks, rootId), [tasks, rootId]);
@@ -75,6 +77,7 @@ export function TaskPlanner({ rootId, onClose }: { rootId: number; onClose: () =
   const reparent = useSetTaskParent(rootId);
   const setStage = useSetTaskStage(rootId);
   const setMatrix = useSetTaskMatrix(rootId);
+  const setGoal = useSetTaskGoal(rootId);
   const schedule = useScheduleTask(rootId);
   const scheduleSeries = useScheduleTaskSeries(rootId);
   const unschedule = useUnscheduleTask(rootId);
@@ -194,6 +197,8 @@ export function TaskPlanner({ rootId, onClose }: { rootId: number; onClose: () =
           {step === "refine" && (
             <RefineStep
               root={root}
+              goals={goals}
+              onSetGoal={(goalId) => setGoal.mutate({ id: t.id, goalId })}
               coverage={coverage}
               sessionsByTask={sessionsByTask}
               onMatrix={(importance, urgency) => setMatrix.mutate({ id: t.id, importance, urgency })}
@@ -253,8 +258,10 @@ export function TaskPlanner({ rootId, onClose }: { rootId: number; onClose: () =
 
 // ── Step 1: refine ───────────────────────────────────────────────────────────
 
-function RefineStep({ root, coverage, sessionsByTask, onMatrix, onPatchRoot, handlers }: {
+function RefineStep({ root, goals, coverage, sessionsByTask, onMatrix, onSetGoal, onPatchRoot, handlers }: {
   root: TaskNode;
+  goals: Goal[];
+  onSetGoal: (goalId: number | null) => void;
   coverage: Parameters<typeof rollupCoverage>[1];
   sessionsByTask: Map<number, TaskSession[]>;
   onMatrix: (importance: any, urgency: any) => void;
@@ -288,6 +295,27 @@ function RefineStep({ root, coverage, sessionsByTask, onMatrix, onPatchRoot, han
             className="flex-1 min-h-[132px] w-full rounded-md border border-input bg-transparent px-3 py-2 text-sm resize-none focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring placeholder:text-muted-foreground/50"
           />
         </div>
+      </div>
+
+      <div className="flex flex-col gap-1.5">
+        <span className="text-xs font-medium text-foreground">Goal</span>
+        {/*
+          A task points at its goal directly. The plan -> goal chain still works,
+          but it went entirely unused — no plan carried a goal — so every goal sat
+          at 0% forever. This is the link that makes goal progress move.
+        */}
+        <select
+          value={t.goal_id ?? ""}
+          onChange={(e) => onSetGoal(e.target.value ? Number(e.target.value) : null)}
+          className="h-8 w-full rounded-md border border-input bg-transparent px-2 text-xs focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+        >
+          <option value="">
+            {t.plan_title && t.goal_title ? `From plan — ${t.goal_title}` : "No goal"}
+          </option>
+          {goals.filter((g) => g.status === "active").map((g) => (
+            <option key={g.id} value={g.id}>{g.title}</option>
+          ))}
+        </select>
       </div>
 
       <div className="flex flex-col gap-1.5">

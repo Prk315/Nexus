@@ -85,7 +85,10 @@ export function mapPlan(r: any, taskCount = 0, doneCount = 0): Plan {
  * client should see that rather than a set of invented defaults.
  */
 export const TASK_SELECT = "*, pf_task_planning(*)";
-export const TASK_SELECT_CTX = "*, pf_task_planning(*), pf_plans(id, title, goal_id, pf_goals(id, title))";
+export // `pf_goals!pf_tasks_goal_id_fkey` disambiguates: pf_tasks now reaches pf_goals
+// both directly and through pf_plans, and PostgREST refuses an ambiguous embed.
+const TASK_SELECT_CTX =
+  "*, pf_task_planning(*), pf_goals!pf_tasks_goal_id_fkey(id, title), pf_plans(id, title, goal_id, pf_goals(id, title))";
 
 export function mapPlanning(r: any): TaskPlanning | null {
   // Two very different situations both end in `null`, and only one is legitimate:
@@ -123,6 +126,7 @@ export function mapTaskBase(r: any) {
     id: num(r.id),
     plan_id: r.plan_id ? num(r.plan_id) : null,
     parent_id: r.parent_id ? num(r.parent_id) : null,
+    goal_id: r.goal_id ? num(r.goal_id) : null,
     task_type: (r.task_type ?? r.category ?? "task") as TaskType,
     title: r.title,
     done: r.done,
@@ -145,11 +149,21 @@ export function mapTask(r: any): Task {
 
 export function mapTaskWithContext(r: any, plansMap?: Map<number, any>): TaskWithContext {
   const plan = plansMap?.get(num(r.plan_id)) ?? r.pf_plans;
+  const base = mapTaskBase(r);
+
+  // A task reaches a goal two ways, and the direct link wins — it is the more
+  // specific statement, and preferring it keeps the client's answer identical to
+  // the one pf_goals_with_counts computes.
+  const direct = Array.isArray(r.pf_goals) ? r.pf_goals[0] : r.pf_goals;
+  const viaPlan = plan?.pf_goals;
+  const goalId = base.goal_id ?? (plan?.goal_id ? num(plan.goal_id) : null);
+  const goalTitle = (base.goal_id ? direct?.title : viaPlan?.title) ?? null;
+
   return {
-    ...mapTaskBase(r),
+    ...base,
+    goal_id: goalId,
     plan_title: plan?.title ?? null,
-    goal_id: plan?.goal_id ? num(plan.goal_id) : null,
-    goal_title: plan?.pf_goals?.title ?? null,
+    goal_title: goalTitle,
     planning: mapPlanning(r),
   };
 }

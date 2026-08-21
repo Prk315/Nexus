@@ -10,6 +10,7 @@ import {
   getTaskScheduling, getTaskBlocks, getTaskSessions,
   logTaskSession, unlogTaskOccurrence, deleteTaskSession,
   createCalBlock, deleteCalBlock, createRecurringCalBlock, deleteRecurringCalBlock,
+  getGoals, setTaskGoal,
 } from "../lib/api";
 import { qk } from "../lib/queryClient";
 import { applyTaskPatch } from "../lib/taskTree";
@@ -72,6 +73,27 @@ function useInvalidatePlanning(rootId: number | null) {
       qc.invalidateQueries({ queryKey: qk.taskSessions(rootId) });
     }
   };
+}
+
+/** Active + archived goals, for the planner's goal picker. */
+export function useGoals() {
+  return useQuery({ queryKey: qk.goals, queryFn: getGoals, staleTime: 60_000 });
+}
+
+/**
+ * Points a task at a goal.
+ *
+ * Invalidates goals as well as tasks: the goal's task_count/done_count come from
+ * pf_goals_with_counts, so re-pointing a task changes a number rendered
+ * elsewhere on screen. Without this the header goals would silently stay stale.
+ */
+export function useSetTaskGoal(rootId: number | null = null) {
+  const qc = useQueryClient();
+  const done = useInvalidatePlanning(rootId);
+  return useMutation({
+    mutationFn: (v: { id: number; goalId: number | null }) => setTaskGoal(v.id, v.goalId),
+    onSuccess: () => { done(); qc.invalidateQueries({ queryKey: qk.goals }); },
+  });
 }
 
 // ── Breakdown ────────────────────────────────────────────────────────────────

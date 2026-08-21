@@ -130,6 +130,15 @@ export interface TaskBase {
   plan_id: number | null;
   /** Parent task, for recursive breakdown. `null` = a top-level task. */
   parent_id: number | null;
+  /**
+   * Direct link to a goal, bypassing the plan level.
+   *
+   * PathFinder originally modelled goal -> plan -> task only, and that chain went
+   * unused — no plan carried a goal, so no goal could ever show progress. A task
+   * may now name its goal itself. Takes precedence over the goal reached through
+   * `plan_id`; `null` means "inherit from the plan, if any".
+   */
+  goal_id: number | null;
   task_type: TaskType;
   title: string;
   done: boolean;
@@ -167,7 +176,7 @@ export interface ProjectGoal {
 
 export interface TaskWithContext extends TaskBase {
   plan_title: string | null;
-  goal_id: number | null;
+  /** Resolved goal title, whether reached directly or through the plan. */
   goal_title: string | null;
   /** The `task` subtype's row. `null` for every sparse kind. */
   planning: TaskPlanning | null;
