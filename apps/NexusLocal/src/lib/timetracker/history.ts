@@ -31,6 +31,14 @@ export type DayCoverage = {
   date: string; // YYYY-MM-DD local
   pct: number; // 0..100, accounted / elapsed
   gaps: Span[]; // uncovered spans >= 30 min, within the judged window
+  // Phase E: the same per-day spans the pct/gaps above were computed from,
+  // carried through so CategoryBreakdown can run categoryTotals over a week
+  // of days without a second batch of queries. screen spans keep their app
+  // name as `label` (one entry per app per interval, not merged); planned
+  // spans carry `category` from pf_cal_blocks/pf_recurring_cal_blocks.
+  screen: Span[];
+  training: Span[];
+  planned: (Span & { category: string | null })[];
 };
 
 export type GapSuggestion = {
@@ -178,6 +186,7 @@ type CalRow = {
   start_time: string;
   end_time: string;
   color: string | null;
+  category: string | null;
 };
 
 type RecurringRow = {
@@ -185,6 +194,7 @@ type RecurringRow = {
   start_time: string;
   end_time: string;
   color: string | null;
+  category: string | null;
   recurrence: string;
   days_of_week: string | null;
   start_date: string;
@@ -296,13 +306,15 @@ export async function loadHistory(days = 30): Promise<DayCoverage[]> {
   const [{ data: blocks }, { data: recurring }] = await Promise.all([
     supabasePublic
       .from("pf_cal_blocks")
-      .select("date, title, start_time, end_time, color")
+      .select("date, title, start_time, end_time, color, category")
       .eq("user_id", user)
       .gte("date", rangeStart)
       .lte("date", rangeEnd),
     supabasePublic
       .from("pf_recurring_cal_blocks")
-      .select("title, start_time, end_time, color, recurrence, days_of_week, start_date, end_date")
+      .select(
+        "title, start_time, end_time, color, category, recurrence, days_of_week, start_date, end_date",
+      )
       .eq("user_id", user)
       .lte("start_date", rangeEnd)
       .or(`end_date.is.null,end_date.gte.${rangeStart}`),
@@ -350,14 +362,14 @@ export async function loadHistory(days = 30): Promise<DayCoverage[]> {
           (r.recurrence === "weekly" &&
             String(r.days_of_week ?? "").split(",").map(Number).includes(dow))),
     );
-    const plannedSpans: Span[] = [];
+    const plannedSpans: (Span & { category: string | null })[] = [];
     for (const b of [...(blocksByDate.get(date) ?? []), ...todaysRecurring] as CalRow[]) {
       const s = hmOn(date, b.start_time);
       let e = hmOn(date, b.end_time);
       if (s === null || e === null) continue;
       if (e <= s) e = winEnd; // crosses midnight — count the part on this day
       const clipped = clip({ start: s, end: e, label: b.title }, winStart, winEnd);
-      if (clipped) plannedSpans.push(clipped);
+      if (clipped) plannedSpans.push({ ...clipped, category: b.category ?? null });
     }
 
     const covered = union([...sleepSpans, ...screenSpans, ...trainingSpans, ...plannedSpans]);
@@ -367,7 +379,7 @@ export async function loadHistory(days = 30): Promise<DayCoverage[]> {
     const gaps = uncovered.filter((g) => g.end - g.start >= GAP_MIN_MS);
     const pct = elapsed > 0 ? Math.round((accounted / elapsed) * 100) : 0;
 
-    out.push({ date, pct, gaps });
+    out.push({ date, pct, gaps, screen: screenSpans, training: trainingSpans, planned: plannedSpans });
   }
 
   return out;

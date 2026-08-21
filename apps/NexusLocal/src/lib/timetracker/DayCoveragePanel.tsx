@@ -37,20 +37,16 @@
  */
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { invoke } from "@tauri-apps/api/core";
 import { supabasePublic } from "../supabase";
 import { nodeUserId } from "../nodeUser";
 import { formatDuration } from "./UsageCharts";
 import { CATEGORIES } from "./categories";
 import {
   type Span,
-  clip,
   dayStartMs,
   gapsIn,
   hm,
-  hmOn,
   intersect,
-  parseSleepTs,
   roundForLog,
   shiftYmd,
   totalSeconds,
@@ -65,25 +61,14 @@ import {
   dismissSuggestion,
   loadHistory,
 } from "./history";
-
-type UsageInterval = { name: string; start: string; end: string; seconds: number };
-
-type CalRow = {
-  title: string;
-  start_time: string;
-  end_time: string;
-  color: string | null;
-};
+import { useSelectedDate } from "./selectedDate";
+import { useDayCoverage } from "./useDayCoverage";
 
 const GAP_MIN_SECONDS = 30 * 60;
 /** Screen-during-sleep overlaps shorter than this are clock skew, not news. */
 const HONESTY_MIN_MS = 5 * 60_000;
 /** Titles that imply screen work even without a category match. */
 const ONSCREEN_TITLE = /work|deep|study|code|research|writ|admin|meeting/i;
-
-function sessionSpanEnd(startMs: number, durationSec: number): number {
-  return startMs + Math.max(0, durationSec) * 1000;
-}
 
 const WEEKDAY_SHORT = ["Su", "Mo", "Tu", "We", "Th", "Fr", "Sa"];
 
@@ -136,12 +121,10 @@ function Track({
 }
 
 export function DayCoveragePanel() {
-  const [date, setDate] = useState(() => ymd(new Date()));
-  const [screen, setScreen] = useState<Span[]>([]);
-  const [sleep, setSleep] = useState<Span[]>([]);
-  const [training, setTraining] = useState<Span[]>([]);
-  const [planned, setPlanned] = useState<Span[]>([]);
-  const [loaded, setLoaded] = useState(false);
+  // Shared with CategoryBreakdown, so its "daily" section tracks whichever
+  // day this panel is showing rather than always defaulting to today.
+  const [date, setDate] = useSelectedDate();
+  const { screen, sleep, training, planned, loaded, reload } = useDayCoverage(date);
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
   // Ticks once a minute so "so far today" and the gap list stay current.
@@ -157,149 +140,16 @@ export function DayCoveragePanel() {
     };
   }, []);
 
+  // useDayCoverage already re-fetches every 60s; this just keeps "so far
+  // today" and the gap list's judgement of "now" in step with that tick.
+  useEffect(() => {
+    const t = setInterval(() => setNowMs(Date.now()), 60_000);
+    return () => clearInterval(t);
+  }, []);
+
   const winStart = dayStartMs(date);
   const winEnd = dayStartMs(shiftYmd(date, 1));
   const isToday = date === ymd(new Date());
-
-  const load = useCallback(async (day: string) => {
-    const start = dayStartMs(day);
-    const end = dayStartMs(shiftYmd(day, 1));
-    const startIso = new Date(start).toISOString();
-    const endIso = new Date(end).toISOString();
-
-    // Screen — local only. Fails to empty on iOS (no daemon) and on any error.
-    const screenSpans: Span[] = [];
-    try {
-      const intervals = await invoke<UsageInterval[]>("tt_usage_intervals", { date: day });
-      for (const iv of intervals ?? []) {
-        const s = Date.parse(iv.start);
-        const e = Date.parse(iv.end);
-        if (!Number.isFinite(s) || !Number.isFinite(e)) continue;
-        const clipped = clip({ start: s, end: e, label: iv.name }, start, end);
-        if (clipped) screenSpans.push(clipped);
-      }
-    } catch {
-      // No bridge (browser dev) or no command — screen band stays empty.
-    }
-
-    // Sleep — the night ending this morning is filed under `date = day`, and
-    // tonight's bedtime under the next day; both can put minutes inside this
-    // window. No user filter: widget_anon_read already scopes anon to the owner.
-    const sleepSpans: Span[] = [];
-    const { data: sleepRows } = await supabasePublic
-      .from("protocol_sleep")
-      .select("date, bedtime_start, bedtime_end")
-      .in("date", [day, shiftYmd(day, 1)]);
-    for (const row of sleepRows ?? []) {
-      const s = parseSleepTs(row.bedtime_start);
-      const e = parseSleepTs(row.bedtime_end);
-      if (s === null || e === null || e <= s) continue;
-      const clipped = clip({ start: s, end: e, label: "Sleep" }, start, end);
-      if (clipped) sleepSpans.push(clipped);
-    }
-
-    // Training — Garmin activities with a start instant. Same anon-read
-    // policies as sleep (added 2026-08-16). Pre-migration rows have NULL
-    // started_at and are correctly absent.
-    const trainingSpans: Span[] = [];
-    const [{ data: workouts }, { data: runs }] = await Promise.all([
-      supabasePublic
-        .from("protocol_workout_sessions")
-        .select("name, started_at, duration_min")
-        .not("started_at", "is", null)
-        .gte("started_at", startIso)
-        .lt("started_at", endIso),
-      supabasePublic
-        .from("protocol_running_sessions")
-        .select("notes, started_at, avg_pace_s_per_km, actual_km")
-        .not("started_at", "is", null)
-        .gte("started_at", startIso)
-        .lt("started_at", endIso),
-    ]);
-    for (const w of workouts ?? []) {
-      const s = Date.parse(w.started_at);
-      if (!Number.isFinite(s) || typeof w.duration_min !== "number") continue;
-      const span = clip(
-        { start: s, end: sessionSpanEnd(s, w.duration_min * 60), label: w.name ?? "Workout" },
-        start,
-        end,
-      );
-      if (span) trainingSpans.push(span);
-    }
-    for (const r of runs ?? []) {
-      const s = Date.parse(r.started_at);
-      // Runs store no duration; pace × distance reconstructs it. Missing
-      // either means the span length would be a guess — skip instead.
-      if (
-        !Number.isFinite(s) ||
-        typeof r.avg_pace_s_per_km !== "number" ||
-        typeof r.actual_km !== "number"
-      ) {
-        continue;
-      }
-      const span = clip(
-        {
-          start: s,
-          end: sessionSpanEnd(s, r.avg_pace_s_per_km * r.actual_km),
-          label: r.notes ?? "Run",
-        },
-        start,
-        end,
-      );
-      if (span) trainingSpans.push(span);
-    }
-
-    // Planned — PathFinder's day, one-off blocks plus recurring expanded for
-    // exactly this date (mirrors expandRecurring in PathFinder's api.ts).
-    const plannedSpans: Span[] = [];
-    const user = await nodeUserId();
-    const [{ data: blocks }, { data: recurring }] = await Promise.all([
-      supabasePublic
-        .from("pf_cal_blocks")
-        .select("title, start_time, end_time, color")
-        .eq("user_id", user)
-        .eq("date", day),
-      supabasePublic
-        .from("pf_recurring_cal_blocks")
-        .select("title, start_time, end_time, color, recurrence, days_of_week, start_date, end_date")
-        .eq("user_id", user)
-        .lte("start_date", day)
-        .or(`end_date.is.null,end_date.gte.${day}`),
-    ]);
-
-    const dow = new Date(`${day}T00:00:00Z`).getUTCDay(); // 0=Sun, PathFinder's numbering
-    const todaysRecurring = (recurring ?? []).filter(
-      (r) =>
-        r.recurrence === "daily" ||
-        (r.recurrence === "weekly" &&
-          String(r.days_of_week ?? "").split(",").map(Number).includes(dow)),
-    );
-
-    for (const b of [...(blocks ?? []), ...todaysRecurring] as CalRow[]) {
-      const s = hmOn(day, b.start_time);
-      let e = hmOn(day, b.end_time);
-      if (s === null || e === null) continue;
-      if (e <= s) e = end; // crosses midnight — count the part on this day
-      const clipped = clip({ start: s, end: e, label: b.title }, start, end);
-      if (clipped) plannedSpans.push(clipped);
-    }
-
-    if (!alive.current) return;
-    setScreen(screenSpans);
-    setSleep(sleepSpans);
-    setTraining(trainingSpans);
-    setPlanned(plannedSpans);
-    setLoaded(true);
-  }, []);
-
-  useEffect(() => {
-    load(date).catch(() => {});
-    const t = setInterval(() => {
-      setNowMs(Date.now());
-      load(date).catch(() => {});
-    }, 60_000);
-    return () => clearInterval(t);
-  }, [load, date]);
 
   const refreshHistory = useCallback(async () => {
     const next = await loadHistory(30);
@@ -327,6 +177,9 @@ export function DayCoveragePanel() {
         start_time: hm(rounded.start),
         end_time: rounded.end >= winEnd ? "23:59" : hm(rounded.end),
         color: category.color,
+        // Phase E: the chip's own category, so CategoryBreakdown doesn't have
+        // to fall back to title-prefix matching for anything logged from here.
+        category: category.name,
         description: "Logged from Nexus Local day coverage",
         location: null,
         task_id: null,
@@ -337,7 +190,7 @@ export function DayCoveragePanel() {
         setError("");
         await refreshHistory();
       }
-      await load(date);
+      await reload();
     } finally {
       if (alive.current) setBusy(false);
     }
@@ -354,6 +207,8 @@ export function DayCoveragePanel() {
         start_time: suggestion.startHm,
         end_time: suggestion.endHm,
         color: category.color,
+        // Phase E: the category picked to accept the suggestion.
+        category: category.name,
         recurrence: "weekly",
         days_of_week: suggestion.weekdays.join(","),
         start_date: ymd(new Date()),
@@ -371,7 +226,7 @@ export function DayCoveragePanel() {
         dismissSuggestion(suggestion.key);
         setDismissed(dismissedSuggestions());
         await refreshHistory();
-        await load(date);
+        await reload();
       }
     } finally {
       if (alive.current) setBusy(false);
