@@ -20,6 +20,11 @@ export const imageUploadKey = new PluginKey("vaultNoteImageUpload");
 async function uploadAndInsert(editor: any, file: File | Blob, at?: number) {
   try {
     const url = await api.uploadCanvasImage(file);
+    // The upload is a network round trip, so the note can easily be closed
+    // before it lands. A destroyed editor is still a truthy object whose
+    // internals have been nulled, so touching it here throws — the same
+    // failure that white-screened the app from the content effect.
+    if (!editor || editor.isDestroyed) return;
     const pos = at ?? editor.state.selection.from;
     editor
       .chain()

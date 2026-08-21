@@ -373,3 +373,33 @@ describe("HTML round-trip", () => {
     expect(parseNoteContent(raw)).toEqual({ kind: "json", json });
   });
 });
+
+// Regression: the crash that white-screened the live app.
+//
+// A DESTROYED Tiptap editor is still a truthy object — teardown only nulls its
+// internals — so `if (!editor) return` waves it through and `editor.commands`
+// throws "Cannot read properties of null (reading 'commands')". NoteEditor's
+// content effect depends on [content] alone, so it can fire holding an editor
+// torn down between the async content load and the commit. On main there was
+// no error boundary above it, so the whole app went white.
+describe("destroyed editor guard", () => {
+  it("a destroyed editor is truthy, so !editor is not a sufficient guard", async () => {
+    const { Editor } = await import("@tiptap/core");
+    const el = document.createElement("div");
+    document.body.appendChild(el);
+    const editor = new Editor({ element: el, extensions: buildNoteExtensions(), content: "<p>hi</p>" });
+
+    expect(editor.isDestroyed).toBe(false);
+    editor.destroy();
+
+    // The two facts the bug depended on:
+    expect(Boolean(editor)).toBe(true);        // still truthy
+    expect(editor.isDestroyed).toBe(true);     // but unusable
+    expect(() => editor.commands).toThrow();   // and touching it throws
+
+    // Which is why every call site guards on isDestroyed, not just truthiness.
+    const safe = (e: any) => (!e || e.isDestroyed ? "skipped" : "used");
+    expect(safe(editor)).toBe("skipped");
+    el.remove();
+  });
+});

@@ -304,7 +304,16 @@ function NoteEditorInner({ content, onChange, nodeId, graph, variant = "full" }:
   });
 
   useEffect(() => {
-    if (!editor) return;
+    // `!editor` is NOT a sufficient guard, and this is the bug that white-screened
+    // the live app on `main`. A DESTROYED editor is still a perfectly truthy
+    // object — Tiptap's teardown only nulls its internals — so `editor.commands`
+    // hits `get commands() { return this.commandManager.commands }` with a null
+    // commandManager and throws "Cannot read properties of null (reading
+    // 'commands')". This effect depends on [content] alone, so it can fire while
+    // holding an editor that was torn down between the async content load and
+    // the commit; on main, with no error boundary above, that took the whole app
+    // down. Intermittent, because it's a race with the readContent await.
+    if (!editor || editor.isDestroyed) return;
     // Content came from this editor's own keystroke — no need to setContent.
     if (content === lastEmittedRef.current) return;
     lastEmittedRef.current = content;
@@ -437,6 +446,9 @@ function NoteEditorInner({ content, onChange, nodeId, graph, variant = "full" }:
     for (const file of files) {
       try {
         const url = await api.uploadCanvasImage(file);
+        // Same reason as the content effect: the note may have been closed
+        // while the upload was in flight, and a destroyed editor is truthy.
+        if (editor.isDestroyed) return;
         editor.chain().focus().setImage({ src: url }).run();
       } catch (err) {
         console.error("[vault] image upload failed; nothing was inserted", err);

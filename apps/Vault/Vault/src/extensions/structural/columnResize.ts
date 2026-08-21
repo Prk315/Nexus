@@ -106,6 +106,10 @@ function onPointerUp(e: PointerEvent) {
   const d = endDrag();
   if (!d) return;
 
+  // The drag listens on `window`, so a note closed mid-drag leaves this
+  // handler holding a torn-down view. Dispatching into one throws.
+  if (d.view.isDestroyed) return;
+
   const leftGrow = parseFloat(d.leftDom.style.flexGrow);
   const rightGrow = parseFloat(d.rightDom.style.flexGrow);
   if (!Number.isFinite(leftGrow) || !Number.isFinite(rightGrow)) return;
