@@ -67,7 +67,6 @@ const NODES: SchemaNode[] = [
   { id: "pf_schedule_entries",     label: "ScheduleEntry", domain: "pathfinder", val: 5 },
   { id: "pf_events",               label: "Event",         domain: "pathfinder", val: 4 },
   { id: "pf_deadlines",            label: "Deadline",      domain: "pathfinder", val: 4 },
-  { id: "pf_reminders",            label: "Reminder",      domain: "pathfinder", val: 4 },
   { id: "pf_journal_entries",      label: "Journal",       domain: "pathfinder", val: 4 },
   // PathFinder — pipelines
   { id: "pf_pipeline_templates",     label: "Pipeline",      domain: "pathfinder", val: 6 },

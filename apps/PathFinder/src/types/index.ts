@@ -247,7 +247,6 @@ export interface WeekItems {
   goals: Goal[];
   plans: Plan[];
   deadlines: Deadline[];
-  reminders: Reminder[];
   course_assignments: CourseAssignment[];
   schedule_entries: ScheduleEntry[];
   training_sessions: TrainingSession[];
@@ -326,14 +325,6 @@ export interface DailyPrimaryGoal {
 export interface DailyGoals {
   primary: DailyPrimaryGoal | null;
   secondary: DailySecGoal[];
-}
-
-export interface Reminder {
-  id: number;
-  title: string;
-  done: boolean;
-  due_date: string | null;
-  created_at: string;
 }
 
 export interface QuickNote {

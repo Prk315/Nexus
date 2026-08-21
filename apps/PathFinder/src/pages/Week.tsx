@@ -1,7 +1,7 @@
 import { useEffect, useState, useCallback, useRef, useMemo } from "react";
 import {
   ChevronLeft, ChevronRight, ChevronDown, Plus, X, Check, Target, ListChecks,
-  CheckSquare, RefreshCw, Flame, Trash2, Repeat2, MapPin, Flag, Bell, GraduationCap,
+  CheckSquare, RefreshCw, Flame, Trash2, Repeat2, MapPin, Flag, GraduationCap,
   CalendarOff,
   PanelLeft, PanelRight, PanelBottom, PanelTop, CalendarRange, Eye, EyeOff,
 } from "lucide-react";
@@ -16,7 +16,7 @@ import {
   getTaskSessionsInRange, logTaskSession, unlogTaskOccurrence,
   getTaskScheduling,
   createRecurringCalBlock, updateRecurringCalBlock, deleteRecurringCalBlock,
-  getDeadlines, getReminders, toggleDeadline, toggleReminder, updateCourseAssignment,
+  getDeadlines, toggleDeadline, updateCourseAssignment,
   getCaSubtasks, toggleCaSubtask,
 } from "../lib/api";
 import { loadActualWeek, type ActualDay } from "../lib/actual";
@@ -27,7 +27,7 @@ import { blockMinutes, planningOf, isFullTask } from "../lib/taskTree";
 import { UrgencyMeter } from "../components/UrgencyMeter";
 import { URGENCY_LABEL, STAGE_LABEL, STAGE_CLASSES } from "../lib/utils";
 import { isDue } from "../components/workspace/systemForms";
-import type { Goal, Plan, TaskWithContext, SystemEntry, WeekItems, CalBlock, Deadline, Reminder, CourseAssignment, CaSubtask, ScheduleEntry, TaskSession, TaskCoverage } from "../types";
+import type { Goal, Plan, TaskWithContext, SystemEntry, WeekItems, CalBlock, Deadline, CourseAssignment, CaSubtask, ScheduleEntry, TaskSession, TaskCoverage } from "../types";
 
 // ── Date helpers ──────────────────────────────────────────────────────────────
 
@@ -1369,18 +1369,12 @@ function AssignmentSection({ assignments, onToggle, daysTag }: {
 
 // ── Right panel ───────────────────────────────────────────────────────────────
 
-function RightPanel({ tasks, deadlines, reminders, courseAssignments, today, onToggleTask, onToggleDeadline, onToggleReminder, onToggleAssignment }: {
-  tasks: TaskWithContext[]; deadlines: Deadline[]; reminders: Reminder[]; courseAssignments: CourseAssignment[];
-  today: string; onToggleTask: (id: number) => void; onToggleDeadline: (id: number) => void; onToggleReminder: (id: number) => void; onToggleAssignment: (a: CourseAssignment) => void;
+function RightPanel({ tasks, deadlines, courseAssignments, today, onToggleTask, onToggleDeadline, onToggleAssignment }: {
+  tasks: TaskWithContext[]; deadlines: Deadline[]; courseAssignments: CourseAssignment[];
+  today: string; onToggleTask: (id: number) => void; onToggleDeadline: (id: number) => void; onToggleAssignment: (a: CourseAssignment) => void;
 }) {
   const upcomingDL = deadlines.filter((d) => !d.done).sort((a, b) => a.due_date.localeCompare(b.due_date));
   const doneDL     = deadlines.filter((d) => d.done);
-  const pendingRM  = reminders.filter((r) => !r.done).sort((a, b) => {
-    if (!a.due_date && !b.due_date) return 0;
-    if (!a.due_date) return 1;
-    if (!b.due_date) return -1;
-    return a.due_date.localeCompare(b.due_date);
-  });
 
   function daysTag(iso: string | null) {
     if (!iso) return null;
@@ -1465,21 +1459,6 @@ function RightPanel({ tasks, deadlines, reminders, courseAssignments, today, onT
           ))}
         </section>
 
-        <section className="flex flex-col gap-1.5">
-          <p className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider flex items-center gap-1">
-            <Bell className="h-3 w-3" /> Reminders
-          </p>
-          {pendingRM.length === 0 && <p className="text-xs text-muted-foreground italic">No reminders.</p>}
-          {pendingRM.map((r) => (
-            <div key={r.id} className="flex items-center gap-2 min-w-0">
-              <button onClick={() => onToggleReminder(r.id)}
-                className="h-3.5 w-3.5 shrink-0 rounded-sm border border-amber-400 flex items-center justify-center hover:bg-amber-400/20 transition-colors" />
-              <span className="flex-1 text-xs text-foreground leading-tight truncate">{r.title}</span>
-              {daysTag(r.due_date ?? null)}
-            </div>
-          ))}
-        </section>
-
         {courseAssignments.length > 0 && (
           <AssignmentSection
             assignments={courseAssignments}
@@ -1507,7 +1486,6 @@ function MonthView({ monthStart, calBlocks, items, today, onClickDay, onClickBlo
   onEditGoal: (g: Goal) => void;
 }) {
   const deadlinesFor         = (iso: string) => items.deadlines.filter((d) => d.due_date === iso);
-  const remindersFor         = (iso: string) => items.reminders.filter((r) => r.due_date === iso);
   const courseAssignmentsFor = (iso: string) => items.course_assignments.filter((a) => a.due_date === iso);
   const scheduleEntriesFor   = (iso: string) => items.schedule_entries.filter((e) => e.date === iso);
   const trainingSessionsFor  = (iso: string) => items.training_sessions.filter((s) => s.scheduled_date === iso);
@@ -1551,11 +1529,10 @@ function MonthView({ monthStart, calBlocks, items, today, onClickDay, onClickBlo
             const tasks     = tasksFor(iso);
             const goals     = goalsFor(iso);
             const dlItems   = deadlinesFor(iso);
-            const rmItems   = remindersFor(iso);
             const caItems   = courseAssignmentsFor(iso);
             const seItems   = scheduleEntriesFor(iso);
             const tsItems   = trainingSessionsFor(iso);
-            const total     = blocks.length + goals.length + tasks.length + dlItems.length + rmItems.length + caItems.length + seItems.length + tsItems.length;
+            const total     = blocks.length + goals.length + tasks.length + dlItems.length + caItems.length + seItems.length + tsItems.length;
             let shown       = 0;
 
             return (
@@ -1649,22 +1626,6 @@ function MonthView({ monthStart, calBlocks, items, today, onClickDay, onClickBlo
                     >
                       <Flag className={cn("h-2 w-2 shrink-0", d.done ? "text-muted-foreground" : "text-red-500")} />
                       <span className={cn("truncate", d.done ? "line-through text-muted-foreground" : "text-foreground")}>{d.title}</span>
-                    </div>
-                  );
-                })}
-
-                {/* Reminders */}
-                {rmItems.map((r) => {
-                  if (shown >= MAX_CELL_ITEMS) return null;
-                  shown++;
-                  return (
-                    <div key={`rm-${r.id}`}
-                      className={cn("flex items-center gap-0.5 rounded px-1 py-px text-[10px] leading-tight border truncate shrink-0",
-                        r.done ? "bg-secondary/40 border-border/40" : "bg-amber-500/10 border-amber-400/30")}
-                      onClick={(e) => e.stopPropagation()}
-                    >
-                      <Bell className={cn("h-2 w-2 shrink-0", r.done ? "text-muted-foreground" : "text-amber-500")} />
-                      <span className={cn("truncate", r.done ? "line-through text-muted-foreground" : "text-foreground")}>{r.title}</span>
                     </div>
                   );
                 })}
@@ -1765,13 +1726,12 @@ export function Week() {
     return () => window.removeEventListener("resize", fn);
   }, []);
   const [selectedDay, setSelectedDay] = useState(() => todayISO());
-  const [items,        setItems]       = useState<WeekItems>({ tasks: [], goals: [], plans: [], deadlines: [], reminders: [], course_assignments: [], schedule_entries: [], training_sessions: [] });
+  const [items,        setItems]       = useState<WeekItems>({ tasks: [], goals: [], plans: [], deadlines: [], course_assignments: [], schedule_entries: [], training_sessions: [] });
   const [allPlans,     setAllPlans]    = useState<Plan[]>([]);
   const [allGoals,     setAllGoals]    = useState<Goal[]>([]);
   const [systems,      setSystems]     = useState<SystemEntry[]>([]);
   const [calBlocks,    setCalBlocks]   = useState<CalBlock[]>([]);
   const [allDeadlines, setAllDeadlines] = useState<Deadline[]>([]);
-  const [allReminders, setAllReminders] = useState<Reminder[]>([]);
   const [allTasks,     setAllTasks]    = useState<TaskWithContext[]>([]);
   // Sessions logged against calendar occurrences in the visible range. Keyed by
   // cal_block_id so a block can tell whether it has already been worked — for a
@@ -1825,13 +1785,13 @@ export function Week() {
   const queryEnd   = view === "week" ? end   : toISO(monthGridEnd);
 
   const load = useCallback(async () => {
-    const [wi, gp, pl, sy, cb, dl, rm, at, ts, tc] = await Promise.all([
+    const [wi, gp, pl, sy, cb, dl, at, ts, tc] = await Promise.all([
       getWeekItems(queryStart, queryEnd), getGoals(), getPlans(), getSystems(),
-      getCalBlocks(queryStart, queryEnd), getDeadlines(), getReminders(), getAllTasks(),
+      getCalBlocks(queryStart, queryEnd), getDeadlines(), getAllTasks(),
       getTaskSessionsInRange(queryStart, queryEnd), getTaskScheduling(),
     ]);
     setItems(wi); setAllGoals(gp); setAllPlans(pl); setSystems(sy); setCalBlocks(cb);
-    setAllDeadlines(dl); setAllReminders(rm); setAllTasks(at);
+    setAllDeadlines(dl); setAllTasks(at);
     setSessionsByBlock(new Map(
       ts.filter((x) => x.cal_block_id != null).map((x) => [x.cal_block_id!, x]),
     ));
@@ -1920,7 +1880,6 @@ export function Week() {
   });
   const goalsFor             = (iso: string) => items.goals.filter((g) => g.deadline  === iso);
   const deadlinesFor         = (iso: string) => items.deadlines.filter((d) => d.due_date === iso);
-  const remindersFor         = (iso: string) => items.reminders.filter((r) => r.due_date === iso);
   const courseAssignmentsFor = (iso: string) => items.course_assignments.filter((a) => a.due_date === iso);
   const scheduleEntriesFor   = (iso: string) => items.schedule_entries.filter((e) => e.date === iso);
   const trainingSessionsFor  = (iso: string) => items.training_sessions.filter((s) => s.scheduled_date === iso);
@@ -2001,11 +1960,6 @@ export function Week() {
     const updated = await toggleDeadline(id);
     setAllDeadlines((prev) => prev.map((d) => d.id === id ? updated : d));
   };
-  const handleToggleReminder = async (id: number) => {
-    const updated = await toggleReminder(id);
-    setAllReminders((prev) => prev.map((r) => r.id === id ? updated : r));
-  };
-
   const handleCreateBlock = async (d: BlockDraft) => {
     if (modal?.kind !== "create-block") return;
     const desc = d.description.trim() || null;
@@ -2192,11 +2146,10 @@ export function Week() {
     const selGoals  = goalsFor(selectedDay);
     const selTasks  = tasksFor(selectedDay);
     const selDL     = deadlinesFor(selectedDay);
-    const selRM     = remindersFor(selectedDay);
     const selCAAll  = courseAssignmentsFor(selectedDay);
     const selCAAllDay = selCAAll.filter((a) => !a.start_time);
     const selectedLabel = `${DAY_NAMES[selDate.getDay()]}, ${MONTHS[selDate.getMonth()]} ${selDate.getDate()}`;
-    const hasAllDay = selGoals.length + selTasks.length + selDL.length + selRM.length + selCAAll.length > 0;
+    const hasAllDay = selGoals.length + selTasks.length + selDL.length + selCAAll.length > 0;
 
     return (
       <div className="flex flex-col h-[calc(100vh-2.5rem)] overflow-hidden">
@@ -2263,14 +2216,6 @@ export function Week() {
                   d.done ? "bg-secondary/40 border-border/40" : "bg-red-500/10 border-red-400/40")}>
                 <Flag className={cn("h-3 w-3 shrink-0", d.done ? "text-muted-foreground" : "text-red-500")} />
                 <span className={cn("text-xs truncate", d.done ? "line-through text-muted-foreground" : "text-foreground")}>{d.title}</span>
-              </div>
-            ))}
-            {selRM.map((r) => (
-              <div key={`rm-${r.id}`}
-                className={cn("flex items-center gap-1.5 px-2 py-1 rounded border",
-                  r.done ? "bg-secondary/40 border-border/40" : "bg-amber-500/10 border-amber-400/40")}>
-                <Bell className={cn("h-3 w-3 shrink-0", r.done ? "text-muted-foreground" : "text-amber-500")} />
-                <span className={cn("text-xs truncate", r.done ? "line-through text-muted-foreground" : "text-foreground")}>{r.title}</span>
               </div>
             ))}
             {selCAAllDay.map((a) => (
@@ -2444,11 +2389,10 @@ export function Week() {
                 const dayGoals    = goalsFor(iso);
                 const dayTasks    = tasksFor(iso);
                 const dayDL       = deadlinesFor(iso);
-                const dayRM       = remindersFor(iso);
                 const dayCA       = courseAssignmentsFor(iso);
                 const daySE       = scheduleEntriesFor(iso).filter((e) => !e.start_time);
                 const dayTS       = trainingSessionsFor(iso);
-                const hasItems = dayGoals.length + dayTasks.length + dayDL.length + dayRM.length + dayCA.length + daySE.length + dayTS.length > 0;
+                const hasItems = dayGoals.length + dayTasks.length + dayDL.length + dayCA.length + daySE.length + dayTS.length > 0;
                 return (
                   <div key={iso}
                     className={cn("flex-1 min-w-0 border-r border-border p-0.5 flex flex-col gap-0.5",
@@ -2477,14 +2421,6 @@ export function Week() {
                           d.done ? "bg-secondary/40 border-border/40" : "bg-red-500/10 border-red-400/40")}>
                         <Flag className={cn("h-2.5 w-2.5 shrink-0", d.done ? "text-muted-foreground" : "text-red-500")} />
                         <span className={cn("text-[11px] truncate", d.done ? "line-through text-muted-foreground" : "text-foreground")}>{d.title}</span>
-                      </div>
-                    ))}
-                    {dayRM.map((r) => (
-                      <div key={`rm-${r.id}`}
-                        className={cn("flex items-center gap-1 px-1.5 py-0.5 rounded border",
-                          r.done ? "bg-secondary/40 border-border/40" : "bg-amber-500/10 border-amber-400/40")}>
-                        <Bell className={cn("h-2.5 w-2.5 shrink-0", r.done ? "text-muted-foreground" : "text-amber-500")} />
-                        <span className={cn("text-[11px] truncate", r.done ? "line-through text-muted-foreground" : "text-foreground")}>{r.title}</span>
                       </div>
                     ))}
                     {dayCA.map((a) => (
@@ -2572,12 +2508,10 @@ export function Week() {
           <RightPanel
             tasks={items.tasks}
             deadlines={allDeadlines}
-            reminders={allReminders}
             courseAssignments={items.course_assignments}
             today={today}
             onToggleTask={handleToggleTask}
             onToggleDeadline={handleToggleDeadline}
-            onToggleReminder={handleToggleReminder}
             onToggleAssignment={handleToggleAssignment}
           />
         )}

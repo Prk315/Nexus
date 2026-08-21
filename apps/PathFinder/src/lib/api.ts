@@ -2,7 +2,7 @@ import { supabase, getUserId } from "./supabase";
 import type {
   Goal, Plan, Task, TaskWithContext, SystemEntry, TodayFocus, SearchResult,
   DailyPlan, DailySection, DailyItemWithStatus, TimeBlock, Routines, RoutineItem,
-  WeekItems, Reminder, QuickNote, BrainEntry, CalEvent, Deadline, Agreement,
+  WeekItems, QuickNote, BrainEntry, CalEvent, Deadline, Agreement,
   ScheduleEntry,
   DailyGoals, DailySecGoal, DailyPrimaryGoal, CalBlock, RecurringCalBlock, CourseAssignment,
   CaSubtask, PipelineTemplate, PipelineStep, PipelineRun,
@@ -250,16 +250,6 @@ function mapSystem(r: any): SystemEntry {
     end_time: r.end_time,
     is_lifestyle: r.is_lifestyle,
     lifestyle_area_id: r.lifestyle_area_id ? num(r.lifestyle_area_id) : null,
-  };
-}
-
-function mapReminder(r: any): Reminder {
-  return {
-    id: num(r.id),
-    title: r.title,
-    done: r.done,
-    due_date: r.due_date,
-    created_at: r.created_at,
   };
 }
 
@@ -1347,7 +1337,6 @@ export const getWeekItems = async (startDate: string, endDate: string): Promise<
     { data: plans },
     { data: goals },
     { data: deadlines },
-    { data: reminders },
     { data: assignments },
     { data: seOneOff },
     { data: seRecurring },
@@ -1376,9 +1365,6 @@ export const getWeekItems = async (startDate: string, endDate: string): Promise<
       .select("*, pf_goal_groups(name, color)").eq("user_id", getUserId()).eq("status", "active"),
     supabase.from("pf_deadlines")
       .select("*").eq("user_id", getUserId()).gte("due_date", startDate).lte("due_date", endDate),
-    supabase.from("pf_reminders")
-      .select("*").eq("user_id", getUserId()).not("due_date", "is", null)
-      .gte("due_date", startDate).lte("due_date", endDate),
     supabase.from("pf_course_assignments")
       .select("*, pf_plans(title)").not("due_date", "is", null)
       .gte("due_date", startDate).lte("due_date", endDate),
@@ -1419,7 +1405,6 @@ export const getWeekItems = async (startDate: string, endDate: string): Promise<
     goals:              (goals       ?? []).map((g) => mapGoal(g)),
     plans:              (plans       ?? []).map((p) => mapPlan(p)),
     deadlines:          (deadlines   ?? []).map(mapDeadline),
-    reminders:          (reminders   ?? []).map(mapReminder),
     course_assignments: (assignments ?? []).map(mapCourseAssignment),
     schedule_entries:   [
       ...(seOneOff ?? []).map((e) => mapScheduleEntry(e)),
@@ -1631,33 +1616,6 @@ export const deleteDailySecondaryGoal = async (id: number): Promise<void> => {
 // ═══════════════════════════════════════════════════════════════════════════
 // REMINDERS
 // ═══════════════════════════════════════════════════════════════════════════
-
-export const getReminders = async (): Promise<Reminder[]> => {
-  const { data, error } = await supabase
-    .from("pf_reminders").select("*").eq("user_id", getUserId()).order("created_at", { ascending: false });
-  if (error) err(error);
-  return (data ?? []).map(mapReminder);
-};
-
-export const addReminder = async (title: string, dueDate?: string | null): Promise<Reminder> => {
-  const { data, error } = await supabase
-    .from("pf_reminders").insert({ user_id: getUserId(), title, due_date: dueDate ?? null }).select().single();
-  if (error) err(error);
-  return mapReminder(data!);
-};
-
-export const toggleReminder = async (id: number): Promise<Reminder> => {
-  const { data: cur } = await supabase.from("pf_reminders").select("done").eq("id", id).single();
-  const { data, error } = await supabase
-    .from("pf_reminders").update({ done: !cur!.done }).eq("id", id).select().single();
-  if (error) err(error);
-  return mapReminder(data!);
-};
-
-export const deleteReminder = async (id: number): Promise<void> => {
-  const { error } = await supabase.from("pf_reminders").delete().eq("id", id);
-  if (error) err(error);
-};
 
 // ═══════════════════════════════════════════════════════════════════════════
 // QUICK NOTES

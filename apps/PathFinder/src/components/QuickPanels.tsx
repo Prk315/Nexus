@@ -47,10 +47,11 @@ import type {
  * no breakdown and no lifecycle, which is exactly what the sparse ISA subtypes
  * say about them.
  *
- * Note this REPLACED a panel backed by the legacy `pf_reminders` table. That
- * table holds zero rows; every reminder the user actually has is a quick task,
- * so pointing the Reminders icon at the empty table while the real ones sat in
- * the dashboard's task list was the routing bug this fixes.
+ * Note this REPLACED a panel backed by a separate `pf_reminders` table, which
+ * held zero rows — every reminder the user actually has is a quick task. Pointing
+ * the Reminders icon at that empty table while the real ones sat in the
+ * dashboard's task list was the routing bug this fixed. The table has since been
+ * dropped.
  */
 function QuickTaskPanel({ tasks, category, onToggle, onDelete, onAdd }: {
   tasks: Task[];
