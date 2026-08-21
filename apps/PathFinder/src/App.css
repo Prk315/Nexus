@@ -126,7 +126,47 @@
   }
   body {
     @apply bg-background text-foreground;
+
+    /*
+      Typography: sleeker Inter, not a different typeface.
+
+      `cv11` swaps Inter's double-storey 'a' and 'g' for single-storey forms and
+      `ss01` its alternate punctuation — together they take Inter from its
+      default, slightly bureaucratic look toward something more geometric, which
+      is most of what "minimal" reads as here. `cv02`/`cv03`/`cv04` straighten
+      the l/i/u terminals for the same reason.
+
+      Negative tracking is the other half: Inter is drawn generously for small UI
+      text, and at the 11–14px this app lives at, tightening it noticeably
+      reduces the "spread out" feeling without touching a single size.
+
+      Optical sizing lets the variable font thin its strokes at large sizes on
+      its own, so headings stop looking heavy next to body text.
+    */
+    font-feature-settings: "cv02", "cv03", "cv04", "cv11", "ss01";
+    font-optical-sizing: auto;
+    letter-spacing: -0.011em;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    text-rendering: optimizeLegibility;
   }
+
+  /*
+    Headings tighten further and drop a weight step. A 600 heading beside 400
+    body at these sizes reads as shouting; 550 with tighter tracking keeps the
+    hierarchy while letting the page feel quieter. Inter Variable is a true
+    variable font, so 550 is a real weight, not a synthesised one.
+  */
+  h1, h2, h3, h4 {
+    letter-spacing: -0.021em;
+    font-variation-settings: "wght" 550;
+  }
+
+  /* Numbers line up in columns — estimates, counts, times, percentages. */
+  .tabular-nums {
+    font-variant-numeric: tabular-nums;
+  }
+
   html {
     @apply font-sans;
     padding-top: env(safe-area-inset-top);

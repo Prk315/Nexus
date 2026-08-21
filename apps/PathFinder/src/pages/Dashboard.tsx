@@ -1,7 +1,7 @@
 import { useEffect, useState, useCallback, useMemo, useRef } from "react";
 import {
   CheckCircle, Flame, RefreshCw, Target, CheckSquare, Check, ChevronDown, ChevronRight,
-  Bell, Plus, X, FileText, Zap, Calendar, Clock, Handshake, Star, Pencil, BookOpen,
+  Plus, X, Clock, Star, Pencil, BookOpen,
   Eye, EyeOff,
 } from "lucide-react";
 import {
@@ -12,12 +12,6 @@ import {
   getSystemSubtasks, toggleSystemSubtask,
   getGoalGroups,
   getDailyGoals, setDailyPrimaryGoal, clearDailyPrimaryGoal, addDailySecondaryGoal, updateDailySecondaryGoal, deleteDailySecondaryGoal,
-  getReminders, addReminder, toggleReminder, deleteReminder,
-  getQuickNotes, addQuickNote, deleteQuickNote,
-  getBrainDump, addBrainEntry, deleteBrainEntry,
-  getEvents, addEvent, deleteEvent,
-  getDeadlines, addDeadline, toggleDeadline, deleteDeadline,
-  getAgreements, addAgreement, deleteAgreement,
   getCourseAssignments, updateCourseAssignment,
   getScheduleEntriesForDate,
   getHabitsForDate, toggleHabitCompletion, getHabitStacks,
@@ -32,7 +26,7 @@ import { daysUntil, deadlineLabel, deadlineVariant, cn, layoutCalItems, formatDa
 import { blockMinutes, planningOf, isFullTask } from "../lib/taskTree";
 import { UrgencyMeter } from "../components/UrgencyMeter";
 import { isDue } from "../components/workspace/systemForms";
-import type { Goal, GoalGroup, Plan, TaskWithContext, SystemEntry, SystemSubtask, CalBlock, DailyGoals, DailyPrimaryGoal, DailySecGoal, Reminder, QuickNote, BrainEntry, CalEvent, Deadline, Agreement, CourseAssignment, ScheduleEntry, HabitWithCompletion, HabitStack, HabitSubtask, TrainingSession, TaskSession } from "../types";
+import type { Goal, GoalGroup, Plan, TaskWithContext, SystemEntry, SystemSubtask, CalBlock, DailyGoals, DailyPrimaryGoal, DailySecGoal, CourseAssignment, ScheduleEntry, HabitWithCompletion, HabitStack, HabitSubtask, TrainingSession, TaskSession } from "../types";
 
 const todayDate = () => new Date().toISOString().slice(0, 10);
 
@@ -1368,476 +1362,6 @@ function TimeEstimateInput({ value, onChange, onBlur, className }: {
 
 // ── Quick Cards ───────────────────────────────────────────────────────────────
 
-function RemindersPanel({ reminders, onAdd, onToggle, onDelete }: {
-  reminders: Reminder[];
-  onAdd: (title: string) => void;
-  onToggle: (id: number) => void;
-  onDelete: (id: number) => void;
-}) {
-  const [draft, setDraft] = useState("");
-
-  function handleKeyDown(e: React.KeyboardEvent<HTMLInputElement>) {
-    if (e.key === "Enter" && draft.trim()) {
-      onAdd(draft.trim());
-      setDraft("");
-    }
-  }
-
-  const open = reminders.filter((r) => !r.done);
-  const done = reminders.filter((r) => r.done);
-
-  return (
-    <div className="flex flex-col gap-2 pt-1">
-      {/* Add input */}
-      <div className="flex items-center gap-1.5">
-        <input
-          className="flex-1 h-7 rounded border border-input bg-transparent px-2 text-xs placeholder:text-muted-foreground/50 focus:outline-none focus:ring-1 focus:ring-ring"
-          placeholder="Add reminder… (Enter)"
-          value={draft}
-          onChange={(e) => setDraft(e.target.value)}
-          onKeyDown={handleKeyDown}
-        />
-        <button
-          onClick={() => { if (draft.trim()) { onAdd(draft.trim()); setDraft(""); } }}
-          className="flex h-7 w-7 shrink-0 items-center justify-center rounded border border-input text-muted-foreground hover:text-foreground hover:bg-secondary transition-colors"
-        >
-          <Plus className="h-3.5 w-3.5" />
-        </button>
-      </div>
-
-      {/* Open reminders */}
-      {open.length === 0 && done.length === 0 ? (
-        <p className="text-xs text-muted-foreground italic">No reminders yet.</p>
-      ) : (
-        <div className="flex flex-col gap-0.5">
-          {open.map((r) => (
-            <div key={r.id} className="flex items-center gap-2 group py-0.5">
-              <button
-                onClick={() => onToggle(r.id)}
-                className="h-3.5 w-3.5 shrink-0 rounded border border-border hover:border-primary transition-colors"
-              />
-              <span className="text-xs flex-1 truncate">{r.title}</span>
-              <button onClick={() => onDelete(r.id)} className="opacity-0 group-hover:opacity-100 transition-opacity text-muted-foreground hover:text-destructive">
-                <X className="h-3 w-3" />
-              </button>
-            </div>
-          ))}
-
-          {done.length > 0 && (
-            <>
-              {open.length > 0 && <div className="h-px bg-border my-1" />}
-              {done.map((r) => (
-                <div key={r.id} className="flex items-center gap-2 group py-0.5 opacity-50">
-                  <button
-                    onClick={() => onToggle(r.id)}
-                    className="flex h-3.5 w-3.5 shrink-0 items-center justify-center rounded border border-primary bg-primary transition-colors"
-                  >
-                    <Check className="h-2.5 w-2.5 text-primary-foreground" />
-                  </button>
-                  <span className="text-xs flex-1 truncate line-through">{r.title}</span>
-                  <button onClick={() => onDelete(r.id)} className="opacity-0 group-hover:opacity-100 transition-opacity text-muted-foreground hover:text-destructive">
-                    <X className="h-3 w-3" />
-                  </button>
-                </div>
-              ))}
-            </>
-          )}
-        </div>
-      )}
-    </div>
-  );
-}
-
-// ── Quick Notes Panel ─────────────────────────────────────────────────────────
-
-function QuickNotesPanel({ notes, onAdd, onDelete }: {
-  notes: QuickNote[];
-  onAdd: (title: string, body: string | null) => void;
-  onDelete: (id: number) => void;
-}) {
-  const [title, setTitle] = useState("");
-  const [body, setBody] = useState("");
-  const [adding, setAdding] = useState(false);
-  const [expanded, setExpanded] = useState<Set<number>>(new Set());
-
-  function handleAdd() {
-    if (!title.trim()) return;
-    onAdd(title.trim(), body.trim() || null);
-    setTitle(""); setBody(""); setAdding(false);
-  }
-
-  return (
-    <div className="flex flex-col gap-2 pt-1">
-      {!adding ? (
-        <button onClick={() => setAdding(true)}
-          className="flex items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground transition-colors w-fit">
-          <Plus className="h-3.5 w-3.5" /> New note
-        </button>
-      ) : (
-        <div className="flex flex-col gap-1.5">
-          <input autoFocus className="h-7 rounded border border-input bg-transparent px-2 text-xs focus:outline-none focus:ring-1 focus:ring-ring"
-            placeholder="Title" value={title} onChange={(e) => setTitle(e.target.value)}
-            onKeyDown={(e) => e.key === "Escape" && setAdding(false)} />
-          <textarea className="rounded border border-input bg-transparent px-2 py-1 text-xs resize-none focus:outline-none focus:ring-1 focus:ring-ring"
-            placeholder="Body (optional)" rows={2} value={body} onChange={(e) => setBody(e.target.value)} />
-          <div className="flex gap-1.5">
-            <button onClick={handleAdd} className="px-2 h-6 text-xs rounded bg-primary text-primary-foreground hover:bg-primary/90">Add</button>
-            <button onClick={() => { setAdding(false); setTitle(""); setBody(""); }}
-              className="px-2 h-6 text-xs rounded border border-border text-muted-foreground hover:text-foreground">Cancel</button>
-          </div>
-        </div>
-      )}
-      {notes.length === 0 && !adding && <p className="text-xs text-muted-foreground italic">No notes yet.</p>}
-      <div className="flex flex-col gap-1">
-        {notes.map((n) => {
-          const open = expanded.has(n.id);
-          return (
-            <div key={n.id} className="group rounded border border-border px-2.5 py-1.5">
-              <div className="flex items-center gap-2">
-                {n.body && (
-                  <button onClick={() => setExpanded((prev) => { const s = new Set(prev); open ? s.delete(n.id) : s.add(n.id); return s; })}
-                    className="shrink-0 text-muted-foreground hover:text-foreground">
-                    {open ? <ChevronDown className="h-3 w-3" /> : <ChevronRight className="h-3 w-3" />}
-                  </button>
-                )}
-                <span className="text-xs flex-1 font-medium truncate">{n.title}</span>
-                <button onClick={() => onDelete(n.id)} className="opacity-0 group-hover:opacity-100 transition-opacity text-muted-foreground hover:text-destructive">
-                  <X className="h-3 w-3" />
-                </button>
-              </div>
-              {open && n.body && <p className="text-xs text-muted-foreground mt-1 pl-5 whitespace-pre-wrap">{n.body}</p>}
-            </div>
-          );
-        })}
-      </div>
-    </div>
-  );
-}
-
-// ── Brain Dump Panel ──────────────────────────────────────────────────────────
-
-function BrainDumpPanel({ entries, onAdd, onDelete }: {
-  entries: BrainEntry[];
-  onAdd: (content: string) => void;
-  onDelete: (id: number) => void;
-}) {
-  const [draft, setDraft] = useState("");
-
-  return (
-    <div className="flex flex-col gap-2 pt-1">
-      <textarea
-        autoFocus
-        className="rounded border border-input bg-transparent px-2 py-1.5 text-xs resize-none focus:outline-none focus:ring-1 focus:ring-ring"
-        placeholder="Dump your thoughts… (Ctrl+Enter to save)"
-        rows={3}
-        value={draft}
-        onChange={(e) => setDraft(e.target.value)}
-        onKeyDown={(e) => {
-          if (e.key === "Enter" && (e.ctrlKey || e.metaKey) && draft.trim()) {
-            onAdd(draft.trim()); setDraft("");
-          }
-        }}
-      />
-      <button
-        onClick={() => { if (draft.trim()) { onAdd(draft.trim()); setDraft(""); } }}
-        className="self-start px-2 h-6 text-xs rounded bg-primary text-primary-foreground hover:bg-primary/90"
-      >Capture</button>
-      {entries.length === 0
-        ? <p className="text-xs text-muted-foreground italic">Nothing captured yet.</p>
-        : <div className="flex flex-col gap-0.5 max-h-40 overflow-y-auto">
-            {entries.map((e) => (
-              <div key={e.id} className="flex items-start gap-2 group py-0.5">
-                <span className="text-xs flex-1 text-muted-foreground whitespace-pre-wrap">{e.content}</span>
-                <button onClick={() => onDelete(e.id)} className="shrink-0 opacity-0 group-hover:opacity-100 transition-opacity text-muted-foreground hover:text-destructive mt-0.5">
-                  <X className="h-3 w-3" />
-                </button>
-              </div>
-            ))}
-          </div>
-      }
-    </div>
-  );
-}
-
-// ── Events Panel ──────────────────────────────────────────────────────────────
-
-function EventsPanel({ events, onAdd, onDelete }: {
-  events: CalEvent[];
-  onAdd: (title: string, date: string) => void;
-  onDelete: (id: number) => void;
-}) {
-  const [title, setTitle] = useState("");
-  const [date, setDate] = useState("");
-  const today = new Date().toISOString().slice(0, 10);
-
-  function handleAdd() {
-    if (!title.trim() || !date) return;
-    onAdd(title.trim(), date);
-    setTitle(""); setDate("");
-  }
-
-  function relativeDate(d: string) {
-    const days = Math.round((new Date(d).getTime() - new Date(today).getTime()) / 86_400_000);
-    if (days === 0) return "Today";
-    if (days === 1) return "Tomorrow";
-    if (days < 0) return `${Math.abs(days)}d ago`;
-    if (days < 7) return `In ${days}d`;
-    return new Date(d).toLocaleDateString("en-US", { month: "short", day: "numeric" });
-  }
-
-  return (
-    <div className="flex flex-col gap-2 pt-1">
-      <div className="flex items-center gap-1.5">
-        <input className="flex-1 h-7 rounded border border-input bg-transparent px-2 text-xs focus:outline-none focus:ring-1 focus:ring-ring"
-          placeholder="Event title" value={title} onChange={(e) => setTitle(e.target.value)}
-          onKeyDown={(e) => e.key === "Enter" && handleAdd()} />
-        <input type="date" className="h-7 rounded border border-input bg-transparent px-2 text-xs focus:outline-none focus:ring-1 focus:ring-ring"
-          value={date} onChange={(e) => setDate(e.target.value)} />
-        <button onClick={handleAdd}
-          className="flex h-7 w-7 shrink-0 items-center justify-center rounded border border-input text-muted-foreground hover:text-foreground hover:bg-secondary transition-colors">
-          <Plus className="h-3.5 w-3.5" />
-        </button>
-      </div>
-      {events.length === 0
-        ? <p className="text-xs text-muted-foreground italic">No events.</p>
-        : <div className="flex flex-col gap-0.5">
-            {events.map((ev) => {
-              const past = ev.date < today;
-              return (
-                <div key={ev.id} className={cn("flex items-center gap-2 group py-0.5", past && "opacity-50")}>
-                  <span className={cn("text-xs w-16 shrink-0 tabular-nums", ev.date === today ? "text-primary font-medium" : past ? "text-muted-foreground" : "text-foreground")}>
-                    {relativeDate(ev.date)}
-                  </span>
-                  <span className="text-xs flex-1 truncate">{ev.title}</span>
-                  <button onClick={() => onDelete(ev.id)} className="opacity-0 group-hover:opacity-100 transition-opacity text-muted-foreground hover:text-destructive">
-                    <X className="h-3 w-3" />
-                  </button>
-                </div>
-              );
-            })}
-          </div>
-      }
-    </div>
-  );
-}
-
-// ── Deadlines Panel ───────────────────────────────────────────────────────────
-
-function DeadlinesPanel({ deadlines, onAdd, onToggle, onDelete }: {
-  deadlines: Deadline[];
-  onAdd: (title: string, due_date: string) => void;
-  onToggle: (id: number) => void;
-  onDelete: (id: number) => void;
-}) {
-  const [title, setTitle] = useState("");
-  const [date, setDate] = useState("");
-  const today = new Date().toISOString().slice(0, 10);
-
-  function handleAdd() {
-    if (!title.trim() || !date) return;
-    onAdd(title.trim(), date);
-    setTitle(""); setDate("");
-  }
-
-  const open = deadlines.filter((d) => !d.done);
-  const done = deadlines.filter((d) => d.done);
-
-  return (
-    <div className="flex flex-col gap-2 pt-1">
-      <div className="flex items-center gap-1.5">
-        <input className="flex-1 h-7 rounded border border-input bg-transparent px-2 text-xs focus:outline-none focus:ring-1 focus:ring-ring"
-          placeholder="Deadline title" value={title} onChange={(e) => setTitle(e.target.value)}
-          onKeyDown={(e) => e.key === "Enter" && handleAdd()} />
-        <input type="date" className="h-7 rounded border border-input bg-transparent px-2 text-xs focus:outline-none focus:ring-1 focus:ring-ring"
-          value={date} onChange={(e) => setDate(e.target.value)} />
-        <button onClick={handleAdd}
-          className="flex h-7 w-7 shrink-0 items-center justify-center rounded border border-input text-muted-foreground hover:text-foreground hover:bg-secondary transition-colors">
-          <Plus className="h-3.5 w-3.5" />
-        </button>
-      </div>
-      {deadlines.length === 0
-        ? <p className="text-xs text-muted-foreground italic">No deadlines.</p>
-        : <div className="flex flex-col gap-0.5">
-            {open.map((d) => {
-              const overdue = d.due_date < today;
-              const days = Math.round((new Date(d.due_date).getTime() - new Date(today).getTime()) / 86_400_000);
-              return (
-                <div key={d.id} className="flex items-center gap-2 group py-0.5">
-                  <button onClick={() => onToggle(d.id)}
-                    className="h-3.5 w-3.5 shrink-0 rounded border border-border hover:border-primary transition-colors" />
-                  <span className={cn("text-xs flex-1 truncate", overdue && "text-destructive")}>{d.title}</span>
-                  <span className={cn("text-xs shrink-0 tabular-nums", overdue ? "text-destructive" : "text-muted-foreground")}>
-                    {overdue ? `${Math.abs(days)}d overdue` : days === 0 ? "Today" : `${days}d`}
-                  </span>
-                  <button onClick={() => onDelete(d.id)} className="opacity-0 group-hover:opacity-100 transition-opacity text-muted-foreground hover:text-destructive">
-                    <X className="h-3 w-3" />
-                  </button>
-                </div>
-              );
-            })}
-            {done.length > 0 && open.length > 0 && <div className="h-px bg-border my-1" />}
-            {done.map((d) => (
-              <div key={d.id} className="flex items-center gap-2 group py-0.5 opacity-50">
-                <button onClick={() => onToggle(d.id)}
-                  className="flex h-3.5 w-3.5 shrink-0 items-center justify-center rounded border border-primary bg-primary transition-colors">
-                  <Check className="h-2.5 w-2.5 text-primary-foreground" />
-                </button>
-                <span className="text-xs flex-1 truncate line-through">{d.title}</span>
-                <button onClick={() => onDelete(d.id)} className="opacity-0 group-hover:opacity-100 transition-opacity text-muted-foreground hover:text-destructive">
-                  <X className="h-3 w-3" />
-                </button>
-              </div>
-            ))}
-          </div>
-      }
-    </div>
-  );
-}
-
-// ── Agreements Panel ──────────────────────────────────────────────────────────
-
-function AgreementsPanel({ agreements, onAdd, onDelete }: {
-  agreements: Agreement[];
-  onAdd: (title: string, notes: string | null) => void;
-  onDelete: (id: number) => void;
-}) {
-  const [title, setTitle] = useState("");
-  const [notes, setNotes] = useState("");
-  const [adding, setAdding] = useState(false);
-  const [expanded, setExpanded] = useState<Set<number>>(new Set());
-
-  function handleAdd() {
-    if (!title.trim()) return;
-    onAdd(title.trim(), notes.trim() || null);
-    setTitle(""); setNotes(""); setAdding(false);
-  }
-
-  return (
-    <div className="flex flex-col gap-2 pt-1">
-      {!adding ? (
-        <button onClick={() => setAdding(true)}
-          className="flex items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground transition-colors w-fit">
-          <Plus className="h-3.5 w-3.5" /> New agreement
-        </button>
-      ) : (
-        <div className="flex flex-col gap-1.5">
-          <input autoFocus className="h-7 rounded border border-input bg-transparent px-2 text-xs focus:outline-none focus:ring-1 focus:ring-ring"
-            placeholder="What was agreed" value={title} onChange={(e) => setTitle(e.target.value)}
-            onKeyDown={(e) => e.key === "Escape" && setAdding(false)} />
-          <textarea className="rounded border border-input bg-transparent px-2 py-1 text-xs resize-none focus:outline-none focus:ring-1 focus:ring-ring"
-            placeholder="Notes / context (optional)" rows={2} value={notes} onChange={(e) => setNotes(e.target.value)} />
-          <div className="flex gap-1.5">
-            <button onClick={handleAdd} className="px-2 h-6 text-xs rounded bg-primary text-primary-foreground hover:bg-primary/90">Add</button>
-            <button onClick={() => { setAdding(false); setTitle(""); setNotes(""); }}
-              className="px-2 h-6 text-xs rounded border border-border text-muted-foreground hover:text-foreground">Cancel</button>
-          </div>
-        </div>
-      )}
-      {agreements.length === 0 && !adding && <p className="text-xs text-muted-foreground italic">No agreements recorded.</p>}
-      <div className="flex flex-col gap-1">
-        {agreements.map((a) => {
-          const open = expanded.has(a.id);
-          return (
-            <div key={a.id} className="group rounded border border-border px-2.5 py-1.5">
-              <div className="flex items-center gap-2">
-                {a.notes && (
-                  <button onClick={() => setExpanded((prev) => { const s = new Set(prev); open ? s.delete(a.id) : s.add(a.id); return s; })}
-                    className="shrink-0 text-muted-foreground hover:text-foreground">
-                    {open ? <ChevronDown className="h-3 w-3" /> : <ChevronRight className="h-3 w-3" />}
-                  </button>
-                )}
-                <span className="text-xs flex-1 font-medium truncate">{a.title}</span>
-                <button onClick={() => onDelete(a.id)} className="opacity-0 group-hover:opacity-100 transition-opacity text-muted-foreground hover:text-destructive">
-                  <X className="h-3 w-3" />
-                </button>
-              </div>
-              {open && a.notes && <p className="text-xs text-muted-foreground mt-1 pl-5 whitespace-pre-wrap">{a.notes}</p>}
-            </div>
-          );
-        })}
-      </div>
-    </div>
-  );
-}
-
-type CardId = "reminders" | "notes" | "brain" | "events" | "deadlines" | "agreements";
-
-interface CardDef {
-  id: CardId;
-  label: string;
-  icon: import("react").ReactNode;
-  count?: number;
-}
-
-function QuickCards({
-  reminders, onAddReminder, onToggleReminder, onDeleteReminder,
-  notes, onAddNote, onDeleteNote,
-  brainEntries, onAddBrain, onDeleteBrain,
-  events, onAddEvent, onDeleteEvent,
-  deadlines, onAddDeadline, onToggleDeadline, onDeleteDeadline,
-  agreements, onAddAgreement, onDeleteAgreement,
-}: {
-  reminders: Reminder[];       onAddReminder: (t: string) => void;    onToggleReminder: (id: number) => void; onDeleteReminder: (id: number) => void;
-  notes: QuickNote[];          onAddNote: (t: string, b: string | null) => void; onDeleteNote: (id: number) => void;
-  brainEntries: BrainEntry[];  onAddBrain: (c: string) => void;       onDeleteBrain: (id: number) => void;
-  events: CalEvent[];          onAddEvent: (t: string, d: string) => void; onDeleteEvent: (id: number) => void;
-  deadlines: Deadline[];       onAddDeadline: (t: string, d: string) => void; onToggleDeadline: (id: number) => void; onDeleteDeadline: (id: number) => void;
-  agreements: Agreement[];     onAddAgreement: (t: string, n: string | null) => void; onDeleteAgreement: (id: number) => void;
-}) {
-  const [open, setOpen] = useState<CardId | null>(null);
-  const toggle = (id: CardId) => setOpen((prev) => prev === id ? null : id);
-
-  const today = new Date().toISOString().slice(0, 10);
-  const cards: CardDef[] = [
-    { id: "reminders",  label: "Reminders",   icon: <Bell className="h-3.5 w-3.5" />,     count: reminders.filter((r) => !r.done).length || undefined },
-    { id: "notes",      label: "Quick Notes",  icon: <FileText className="h-3.5 w-3.5" />, count: notes.length || undefined },
-    { id: "brain",      label: "Brain Dump",   icon: <Zap className="h-3.5 w-3.5" />,      count: brainEntries.length || undefined },
-    { id: "events",     label: "Events",       icon: <Calendar className="h-3.5 w-3.5" />, count: events.filter((e) => e.date >= today).length || undefined },
-    { id: "deadlines",  label: "Deadlines",    icon: <Clock className="h-3.5 w-3.5" />,    count: deadlines.filter((d) => !d.done).length || undefined },
-    { id: "agreements", label: "Agreements",   icon: <Handshake className="h-3.5 w-3.5" />,count: agreements.length || undefined },
-  ];
-
-  return (
-    <div className="flex flex-col gap-2">
-      {/* Card strip */}
-      <div className="flex items-center gap-2 flex-wrap">
-        {cards.map((card) => (
-          <button
-            key={card.id}
-            onClick={() => toggle(card.id)}
-            className={cn(
-              "flex items-center gap-1.5 px-3 py-1.5 rounded-lg border text-xs font-medium transition-colors",
-              open === card.id
-                ? "bg-secondary border-border text-foreground"
-                : "border-border text-muted-foreground hover:text-foreground hover:bg-secondary/50"
-            )}
-          >
-            {card.icon}
-            {card.label}
-            {card.count != null && (
-              <span className="ml-0.5 flex h-4 min-w-4 items-center justify-center rounded-full bg-primary text-primary-foreground text-[10px] px-1">
-                {card.count}
-              </span>
-            )}
-          </button>
-        ))}
-      </div>
-
-      {/* Dropdown panel */}
-      {open && (
-        <div className="rounded-lg border border-border bg-card px-3 py-2.5">
-          {open === "reminders"  && <RemindersPanel  reminders={reminders}   onAdd={onAddReminder}  onToggle={onToggleReminder} onDelete={onDeleteReminder} />}
-          {open === "notes"      && <QuickNotesPanel notes={notes}           onAdd={onAddNote}      onDelete={onDeleteNote} />}
-          {open === "brain"      && <BrainDumpPanel  entries={brainEntries}  onAdd={onAddBrain}     onDelete={onDeleteBrain} />}
-          {open === "events"     && <EventsPanel     events={events}         onAdd={onAddEvent}     onDelete={onDeleteEvent} />}
-          {open === "deadlines"  && <DeadlinesPanel  deadlines={deadlines}   onAdd={onAddDeadline}  onToggle={onToggleDeadline} onDelete={onDeleteDeadline} />}
-          {open === "agreements" && <AgreementsPanel agreements={agreements} onAdd={onAddAgreement} onDelete={onDeleteAgreement} />}
-        </div>
-      )}
-    </div>
-  );
-}
-
 // ── Top Goals ─────────────────────────────────────────────────────────────────
 
 const GROUP_COLOR_MAP: Record<string, { bg: string; text: string }> = {
@@ -2614,12 +2138,6 @@ export function Dashboard() {
   // Sessions logged against today's calendar occurrences, keyed by cal_block_id.
   const [sessionsByBlock, setSessionsByBlock] = useState<Map<number, TaskSession>>(new Map());
   const [dailyGoals, setDailyGoals] = useState<DailyGoals>({ primary: null, secondary: [] });
-  const [reminders,  setReminders]  = useState<Reminder[]>([]);
-  const [notes,      setNotes]      = useState<QuickNote[]>([]);
-  const [brainEntries, setBrainEntries] = useState<BrainEntry[]>([]);
-  const [events,     setEvents]     = useState<CalEvent[]>([]);
-  const [deadlines,  setDeadlines]  = useState<Deadline[]>([]);
-  const [agreements, setAgreements] = useState<Agreement[]>([]);
   const [courseAssignments, setCourseAssignments] = useState<CourseAssignment[]>([]);
   const [scheduleEntries,  setScheduleEntries]  = useState<ScheduleEntry[]>([]);
   const [habits,           setHabits]           = useState<HabitWithCompletion[]>([]);
@@ -2662,14 +2180,17 @@ export function Dashboard() {
   }, [date]);
 
   const load = useCallback(async () => {
-    const [g, gr, p, t, s, cb, dg, rem, qn, bd, ev, dl, ag, cas, ses, hb, hs, ts, wk] = await Promise.all([
+    // The six side-tools (reminders, notes, brain dump, events, deadlines,
+    // agreements) are no longer loaded here — they live in the sidebar and fetch
+    // their own data on first open. See components/QuickPanels.tsx.
+    const [g, gr, p, t, s, cb, dg, cas, ses, hb, hs, ts, wk] = await Promise.all([
       getGoals(), getGoalGroups(), getPlans(), getAllTasks(), getSystems(), getCalBlocks(date, date),
-      getDailyGoals(date), getReminders(), getQuickNotes(), getBrainDump(), getEvents(), getDeadlines(), getAgreements(),
+      getDailyGoals(date),
       getCourseAssignments(), getScheduleEntriesForDate(date), getHabitsForDate(date), getHabitStacks(),
       getTrainingSessionsForDate(date), getTaskSessionsInRange(date, date),
     ]);
     setGoals(g); setGroups(gr); setPlans(p); setTasks(t); setSystems(s); setCalBlocks(cb);
-    setDailyGoals(dg); setReminders(rem); setNotes(qn); setBrainEntries(bd); setEvents(ev); setDeadlines(dl); setAgreements(ag);
+    setDailyGoals(dg);
     setCourseAssignments(cas.filter((ca) => ca.due_date === date));
     setScheduleEntries(ses);
     setHabits(hb);
@@ -2757,54 +2278,6 @@ export function Dashboard() {
     setDailyGoals((prev) => ({ ...prev, secondary: prev.secondary.filter((s) => s.id !== id) }));
   };
 
-  const handleAddReminder = async (title: string) => {
-    const r = await addReminder(title);
-    setReminders((prev) => [...prev, r]);
-  };
-
-  const handleToggleReminder = async (id: number) => {
-    const r = await toggleReminder(id);
-    setReminders((prev) => prev.map((x) => x.id === id ? r : x));
-  };
-
-  const handleDeleteReminder = async (id: number) => {
-    await deleteReminder(id);
-    setReminders((prev) => prev.filter((x) => x.id !== id));
-  };
-
-  const handleAddNote = async (title: string, body: string | null) => {
-    const n = await addQuickNote(title, body);
-    setNotes((prev) => [n, ...prev]);
-  };
-  const handleDeleteNote = async (id: number) => { await deleteQuickNote(id); setNotes((prev) => prev.filter((x) => x.id !== id)); };
-
-  const handleAddBrain = async (content: string) => {
-    const e = await addBrainEntry(content);
-    setBrainEntries((prev) => [e, ...prev]);
-  };
-  const handleDeleteBrain = async (id: number) => { await deleteBrainEntry(id); setBrainEntries((prev) => prev.filter((x) => x.id !== id)); };
-
-  const handleAddEvent = async (title: string, date: string) => {
-    const e = await addEvent(title, date);
-    setEvents((prev) => [...prev, e].sort((a, b) => a.date.localeCompare(b.date)));
-  };
-  const handleDeleteEvent = async (id: number) => { await deleteEvent(id); setEvents((prev) => prev.filter((x) => x.id !== id)); };
-
-  const handleAddDeadline = async (title: string, due_date: string) => {
-    const d = await addDeadline(title, due_date);
-    setDeadlines((prev) => [...prev, d].sort((a, b) => a.due_date.localeCompare(b.due_date)));
-  };
-  const handleToggleDeadline = async (id: number) => {
-    const d = await toggleDeadline(id);
-    setDeadlines((prev) => prev.map((x) => x.id === id ? d : x));
-  };
-  const handleDeleteDeadline = async (id: number) => { await deleteDeadline(id); setDeadlines((prev) => prev.filter((x) => x.id !== id)); };
-
-  const handleAddAgreement = async (title: string, notes: string | null) => {
-    const a = await addAgreement(title, notes);
-    setAgreements((prev) => [a, ...prev]);
-  };
-  const handleDeleteAgreement = async (id: number) => { await deleteAgreement(id); setAgreements((prev) => prev.filter((x) => x.id !== id)); };
 
   const handleToggleAssignment = async (ca: CourseAssignment) => {
     const newStatus = ca.status === "done" ? "pending" : "done";
@@ -2901,18 +2374,6 @@ export function Dashboard() {
 
         {/* ── Left column ─────────────────────────────────────────────────── */}
         <div className="flex-1 min-w-0 overflow-y-auto border-r border-border px-3 py-2 md:px-4 md:py-3 flex flex-col gap-3 md:gap-4">
-
-          {/* Quick Cards */}
-          <QuickCards
-            reminders={reminders}    onAddReminder={handleAddReminder}    onToggleReminder={handleToggleReminder} onDeleteReminder={handleDeleteReminder}
-            notes={notes}            onAddNote={handleAddNote}            onDeleteNote={handleDeleteNote}
-            brainEntries={brainEntries} onAddBrain={handleAddBrain}      onDeleteBrain={handleDeleteBrain}
-            events={events}          onAddEvent={handleAddEvent}          onDeleteEvent={handleDeleteEvent}
-            deadlines={deadlines}    onAddDeadline={handleAddDeadline}    onToggleDeadline={handleToggleDeadline} onDeleteDeadline={handleDeleteDeadline}
-            agreements={agreements}  onAddAgreement={handleAddAgreement}  onDeleteAgreement={handleDeleteAgreement}
-          />
-
-          <div className="h-px bg-border" />
 
           {/* Top Goals */}
           <TopGoals goals={activeGoals} groups={groups} />
