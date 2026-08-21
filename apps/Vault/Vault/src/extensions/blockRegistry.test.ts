@@ -85,11 +85,33 @@ describe("block registry", () => {
     expect(matchesQuery(taskList, "zzz")).toBe(false);
   });
 
+  // Regression: these were all in the `table` group, which the toolbar folds
+  // into "Insert ▾" — so editing a table meant opening an insert menu, and the
+  // table felt read-only. They must stay in a group the toolbar renders inline.
+  it("keeps row/column editing in the inline group, not the insert menu", () => {
+    const byId = Object.fromEntries(registry().map((a) => [a.id, a]));
+    for (const id of ["tableRowBefore", "tableRowAfter", "tableRowDelete",
+                      "tableColBefore", "tableColAfter", "tableColDelete"]) {
+      expect(byId[id], `${id} is missing entirely`).toBeTruthy();
+      expect(byId[id].group, `${id} must be inline, not folded into Insert`).toBe("tableOps");
+      expect(byId[id].surfaces).toContain("toolbar");
+    }
+    // Inserting a table is a different job and stays in the insert menu.
+    expect(byId["table"].group).toBe("table");
+  });
+
+  it("offers both directions for rows and columns", () => {
+    const ids = registry().map((a) => a.id);
+    // The pre-existing toolbar only had the "after" variants; a table editor
+    // with no "insert row above" is a table editor you fight.
+    for (const id of ["tableRowBefore", "tableColBefore"]) expect(ids).toContain(id);
+  });
+
   it("hides table row/column operations outside a table", () => {
     const notInTable = { isActive: () => false } as any;
     const inTable = { isActive: (n: string) => n === "table" } as any;
 
-    const ops = registry().filter((a) => a.id.startsWith("tableRow") || a.id.startsWith("tableCol") || a.id === "tableDelete");
+    const ops = registry().filter((a) => a.group === "tableOps" || a.group === "tableMore");
     expect(ops.length).toBeGreaterThan(0);
     for (const op of ops) {
       expect(op.isAvailable?.(notInTable), `${op.id} should be hidden outside a table`).toBe(false);
