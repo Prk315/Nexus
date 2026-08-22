@@ -3,7 +3,7 @@ import { Mail, ChevronDown, ChevronRight } from "lucide-react";
 import { DropdownMenu } from "radix-ui";
 import { cn } from "../utils";
 import type { MailMessage } from "../mail/types";
-import { MAIL_FETCH_LIMIT } from "../mail/loader";
+import { MAIL_FETCH_LIMIT, type MailLoader, type MailSnapshot } from "../mail/loader";
 import {
   BUCKET_HEX,
   BUCKET_LABEL,
@@ -32,8 +32,8 @@ import {
 const REFETCH_AFTER_MS = 5 * 60 * 1000;
 
 export type MailPanelProps = {
-  /** Fetches every visible `mail_messages` row. See `createMailLoader`. */
-  loadMail: () => Promise<MailMessage[]>;
+  /** Open mail plus the freshness signal. See `createMailLoader`. */
+  loadMail: MailLoader;
 };
 
 // ── Small local helpers ──────────────────────────────────────────────────
@@ -199,6 +199,7 @@ function TriageList({ triage }: { triage: MailTriage }) {
 // ── Root ─────────────────────────────────────────────────────────────────
 
 export function MailPanel({ loadMail }: MailPanelProps) {
+  const [snapshot, setSnapshot] = useState<MailSnapshot | null>(null);
   const [triage, setTriage] = useState<MailTriage | null>(null);
   const [failed, setFailed] = useState(false);
   const [loading, setLoading] = useState(false);
@@ -216,8 +217,9 @@ export function MailPanel({ loadMail }: MailPanelProps) {
     lastFetchRef.current = now;
     setLoading(true);
     loadMail()
-      .then((messages) => {
-        setTriage(triageInbox(messages));
+      .then((result) => {
+        setSnapshot(result);
+        setTriage(triageInbox(result.messages));
         setFailed(false);
       })
       // Degrade silently, like every other fetch in the header: no crash, no
@@ -282,30 +284,42 @@ export function MailPanel({ loadMail }: MailPanelProps) {
             </div>
           )}
 
-          {/* Zero rows: the pipeline has never written. Not an empty inbox. */}
-          {!loading && triage && triage.total === 0 && (
+          {/*
+            The freshness signal, NOT the row count, decides this one. Zero rows
+            means "n8n has never run" *or* "the inbox is clean"; only the newest
+            completed `mail_sync` request can tell them apart, and a missing one
+            is *unknown* rather than empty.
+          */}
+          {!loading && snapshot && snapshot.lastSyncedAt === null && (
             <div className="px-1 py-2">
-              <p className="text-xs italic text-muted-foreground">No mail synced yet.</p>
+              <p className="text-xs italic text-muted-foreground">Never synced.</p>
               <p className="mt-0.5 text-[10px] text-muted-foreground/60">
-                n8n hasn't written any triaged messages. This is not an empty inbox — it
-                means nothing has arrived here.
+                n8n has not completed a mail sync. This is not an empty inbox — nothing
+                is known about it yet.
               </p>
             </div>
           )}
 
-          {/* Rows exist, none pending: genuinely clear. */}
-          {!loading && triage && triage.total > 0 && pendingCount === 0 && (
+          {/* Synced, and nothing open: genuinely clear. */}
+          {!loading && snapshot?.lastSyncedAt && triage && pendingCount === 0 && (
             <div className="px-1 py-2">
               <p className="text-xs italic text-muted-foreground">Inbox clear.</p>
               <p className="mt-0.5 text-[10px] text-muted-foreground/60">
-                All {triage.total} synced {triage.total === 1 ? "message is" : "messages are"}{" "}
-                triaged.
+                Nothing left to triage as of the last sync.
               </p>
-              <WindowNotice triage={triage} />
             </div>
           )}
 
           {!loading && triage && pendingCount > 0 && <TriageList triage={triage} />}
+
+          {/* Footer: when the pipeline last actually ran. An unparseable
+              timestamp yields "", so render nothing rather than a dangling
+              "Synced". */}
+          {!loading && fmtWhen(snapshot?.lastSyncedAt ?? null) !== "" && (
+            <p className="border-t border-border px-1 pt-1.5 text-[10px] text-muted-foreground/50">
+              Synced {fmtWhen(snapshot?.lastSyncedAt ?? null)}
+            </p>
+          )}
         </DropdownMenu.Content>
       </DropdownMenu.Portal>
     </DropdownMenu.Root>

@@ -9,8 +9,21 @@ export * from "./components/MailPanel";
 // Narrow on purpose. `mail/priority` also exports plainText / plainLine /
 // sortMail, which read like general-purpose utilities from the barrel but carry
 // mail-specific defaults; they stay internal to the mail module.
-export { MAIL_TABLE, MAIL_COLUMNS, type MailMessage } from "./mail/types";
-export { createMailLoader, MAIL_FETCH_LIMIT, type MailLoaderOptions } from "./mail/loader";
+export {
+  MAIL_TABLE,
+  MAIL_COLUMNS,
+  OPEN_STATUSES,
+  HANDLED_STATUSES,
+  type MailMessage,
+  type MailStatus,
+} from "./mail/types";
+export {
+  createMailLoader,
+  MAIL_FETCH_LIMIT,
+  type MailLoader,
+  type MailLoaderOptions,
+  type MailSnapshot,
+} from "./mail/loader";
 export * from "./components/LifeBar";
 export * from "./components/AgentBar";
 export * from "./components/CalendarSidebar";

@@ -5,50 +5,67 @@
  * renderer of whatever these functions decide.
  */
 
-import type { MailMessage } from "./types";
+import { HANDLED_STATUSES, type MailMessage } from "./types";
 
 // ── Priority scale ────────────────────────────────────────────────────────
 
-export type PriorityBucket = "urgent" | "high" | "normal" | "low";
+/**
+ * `untriaged` is a first-class bucket, not a fallback, and it sorts **first**.
+ *
+ * A `null` priority means the model has not scored the row yet — a different
+ * fact from "scored low", and the one most likely to need a human. Collapsing
+ * it into a numeric bucket (or into 0) is the mail version of seeding
+ * `blocking_state` with zeros: it makes "no verdict yet" indistinguishable
+ * from "verdict: nothing here", and hides the rows that most need looking at.
+ */
+export type PriorityBucket = "untriaged" | "urgent" | "high" | "normal" | "low";
 
-/** Most-urgent-first. The panel renders groups in exactly this order. */
+/** Render order: un-triaged first, then most urgent down. */
 export const PRIORITY_BUCKETS: readonly PriorityBucket[] = [
+  "untriaged",
   "urgent",
   "high",
   "normal",
   "low",
 ] as const;
 
-export const PRIORITY_MIN = 1;
-export const PRIORITY_MAX = 5;
+/** Inclusive bounds of the scored range. Pinned in the migration's CHECK too. */
+export const PRIORITY_MIN = 0;
+export const PRIORITY_MAX = 100;
+
+/** Lower inclusive bound of each scored bucket, most urgent first. */
+export const BUCKET_FLOOR: Record<Exclude<PriorityBucket, "untriaged">, number> = {
+  urgent: 80,
+  high: 60,
+  normal: 30,
+  low: PRIORITY_MIN,
+};
 
 /**
- * Where an unranked message lands. Deliberately the **middle** of the scale,
- * not the bottom: a row n8n failed to score is not evidence that it is
- * unimportant, and sorting it silently to the end of a scrolling list is the
- * mail equivalent of failing toward "nothing is blocked".
+ * Clamp a score into 0–100, or return `null` for "not triaged".
+ *
+ * Mirrors `clampPriority` in the `n8n-ingest` edge function deliberately: a
+ * value that is present but out of range is a verdict the model spelled badly,
+ * so it clamps; a value that is absent is not a verdict at all, so it stays
+ * `null`. The two must not be conflated in either direction — which is why
+ * this returns `number | null` rather than defaulting.
  */
-export const DEFAULT_PRIORITY = 3;
-
-/**
- * Clamp whatever the row actually carries into 1–5. `priority` is an `integer`
- * column, but a null, a NaN, a float from a model that emitted `4.5`, or an
- * out-of-range 9 all have to produce a bucket rather than an exception.
- */
-export function normalizePriority(value: number | null | undefined): number {
-  if (typeof value !== "number" || !Number.isFinite(value)) return DEFAULT_PRIORITY;
+export function normalizePriority(value: number | null | undefined): number | null {
+  if (typeof value !== "number" || !Number.isFinite(value)) return null;
   return Math.min(PRIORITY_MAX, Math.max(PRIORITY_MIN, Math.round(value)));
 }
 
 export function priorityBucket(value: number | null | undefined): PriorityBucket {
   const p = normalizePriority(value);
-  if (p >= 5) return "urgent";
-  if (p === 4) return "high";
-  if (p === 3) return "normal";
+  if (p === null) return "untriaged";
+  if (p >= BUCKET_FLOOR.urgent) return "urgent";
+  if (p >= BUCKET_FLOOR.high) return "high";
+  if (p >= BUCKET_FLOOR.normal) return "normal";
   return "low";
 }
 
 export const BUCKET_LABEL: Record<PriorityBucket, string> = {
+  untriaged: "Not yet triaged",
   urgent: "Urgent",
   high: "High",
   normal: "Normal",
@@ -59,45 +76,40 @@ export const BUCKET_LABEL: Record<PriorityBucket, string> = {
  * Hex rather than Tailwind class names, for the same reason `ClockDropdown`
  * keeps a `COLOR_HEX` map: a dynamically-built `bg-${bucket}-500` is invisible
  * to Tailwind's scanner across the package boundary and renders as nothing.
+ *
+ * `untriaged` gets violet specifically so it cannot be mistaken for `low`'s
+ * grey — "we haven't looked at this" and "we looked, it's unimportant" are
+ * opposite meanings and must not share a colour family.
  */
 export const BUCKET_HEX: Record<PriorityBucket, string> = {
+  untriaged: "#8b5cf6", // violet-500
   urgent: "#ef4444", // red-500
   high: "#f97316", // orange-500
   normal: "#3b82f6", // blue-500
-  low: "#64748b", // slate-500
+  low: "#94a3b8", // slate-400
 };
 
 // ── Triage status ─────────────────────────────────────────────────────────
 
 /**
- * Statuses that mean "this no longer needs my attention". Compared
- * case-insensitively.
+ * Has the user finished with this message?
  *
- * An **unrecognised or missing** status counts as *pending*, not handled — the
- * list fails toward showing you a message rather than toward hiding one. If
- * n8n later invents a new terminal status, the worst outcome is a stale row
- * visible in the panel; the opposite default would silently swallow real mail.
+ * `status` is CHECK-constrained to four values, so this is exhaustive today.
+ * It still treats an **unrecognised or missing** status as *open* rather than
+ * handled: if a future migration widens the vocabulary, the worst outcome is a
+ * stale row visible in the panel, where the opposite default would silently
+ * swallow real mail.
  */
-export const HANDLED_STATUSES: readonly string[] = [
-  "archived",
-  "done",
-  "handled",
-  "replied",
-  "sent",
-  "dismissed",
-  "ignored",
-];
-
 export function isHandled(status: string | null | undefined): boolean {
   if (!status) return false;
-  return HANDLED_STATUSES.includes(status.trim().toLowerCase());
+  return (HANDLED_STATUSES as readonly string[]).includes(status.trim().toLowerCase());
 }
 
 // ── Ordering ──────────────────────────────────────────────────────────────
 
 /**
- * `received_at` as epoch ms. An unparseable or missing timestamp yields 0, so
- * it sorts last under the descending comparison rather than becoming "now".
+ * `received_at` as epoch ms. Unparseable or missing yields 0, so such a row
+ * sorts last under the descending comparison rather than becoming "now".
  */
 export function receivedAtMs(message: MailMessage): number {
   if (!message.received_at) return 0;
@@ -106,13 +118,23 @@ export function receivedAtMs(message: MailMessage): number {
 }
 
 /**
- * Priority desc, then recency desc, then `id` — the last key only exists to
- * make the order **total**, so two messages that tie on both real keys don't
- * swap places between renders and make the list visibly jitter.
+ * `priority desc nulls first, received_at desc` — the exact ordering the
+ * `mail_messages_user_priority` index is built for, restated client-side
+ * because the panel re-sorts after merging and clamping.
+ *
+ * `nulls first` is part of the contract, not a default: un-triaged mail belongs
+ * at the top of a triage list. The trailing `id` key exists only to make the
+ * order **total**, so two messages tying on both real keys don't swap places
+ * between renders and make the list visibly jitter.
  */
 export function compareMail(a: MailMessage, b: MailMessage): number {
-  const byPriority = normalizePriority(b.priority) - normalizePriority(a.priority);
-  if (byPriority !== 0) return byPriority;
+  const pa = normalizePriority(a.priority);
+  const pb = normalizePriority(b.priority);
+  // nulls first, and only against a scored row — two un-triaged messages fall
+  // through to recency together.
+  if (pa === null && pb !== null) return -1;
+  if (pb === null && pa !== null) return 1;
+  if (pa !== null && pb !== null && pa !== pb) return pb - pa;
   const byRecency = receivedAtMs(b) - receivedAtMs(a);
   if (byRecency !== 0) return byRecency;
   return String(a.id).localeCompare(String(b.id));
@@ -126,21 +148,25 @@ export function sortMail(messages: readonly MailMessage[]): MailMessage[] {
 // ── Partitioning ──────────────────────────────────────────────────────────
 
 export type MailTriage = {
-  /** Still needs attention, sorted by `compareMail`. */
+  /** Still open, sorted by `compareMail`. */
   pending: MailMessage[];
   /** Already dealt with, sorted the same way. */
   handled: MailMessage[];
-  /** Every row the loader returned — the number that distinguishes the two empty states. */
+  /** Every row handed in — the size of the fetched window, nothing more. */
   total: number;
 };
 
 /**
- * Split a raw fetch into pending / handled.
+ * Split a fetch into open / handled.
  *
- * `total` is what lets the UI tell "n8n has never written a row" (total === 0)
- * apart from "synced, and everything is triaged" (total > 0, pending empty).
- * Collapsing those two would present a broken pipeline as an empty inbox —
- * the same mistake as seeding `blocking_state` with zeros.
+ * The loader already filters to open statuses in SQL, so `handled` is normally
+ * empty; this is the client-side backstop for a status the database starts
+ * allowing before this code knows about it.
+ *
+ * Note what `total` is **not**: it is not a freshness signal. Zero rows means
+ * "n8n has never run" *or* "the inbox is clean", and those must not render the
+ * same way. `MailSnapshot.lastSyncedAt`, read from the `n8n_requests` queue, is
+ * the signal that tells them apart.
  */
 export function triageInbox(messages: readonly MailMessage[]): MailTriage {
   const pending: MailMessage[] = [];
@@ -162,8 +188,8 @@ export type MailBucketGroup = {
 };
 
 /**
- * Group into priority buckets, most urgent first. Empty buckets are dropped —
- * a heading with nothing under it reads as a loading failure.
+ * Group into priority buckets in `PRIORITY_BUCKETS` order. Empty buckets are
+ * dropped — a heading with nothing under it reads as a loading failure.
  */
 export function groupByBucket(messages: readonly MailMessage[]): MailBucketGroup[] {
   const byBucket = new Map<PriorityBucket, MailMessage[]>();
@@ -180,7 +206,7 @@ export function groupByBucket(messages: readonly MailMessage[]): MailBucketGroup
   }));
 }
 
-// ── Untrusted text ───────────────────────────────────────────────
+// ── Untrusted text ────────────────────────────────────────────────────────
 
 /**
  * `subject`, `snippet`, `category` and `suggested_reply` were written by an
@@ -225,7 +251,7 @@ export function plainLine(value: string | null | undefined, maxLength = 200): st
  *
  * Counts by code point, not UTF-16 unit: a plain `slice` through the middle of
  * an emoji leaves a lone surrogate, which renders as a replacement glyph — the
- * truncation would be visibly corrupting text it was meant to tidy. The
+ * truncation would be visibly corrupting the text it was meant to tidy. The
  * `Math.max` guards a `maxLength` of 0, where `maxLength - 1` would otherwise
  * become a *negative* slice index and return a string longer than the cap.
  */
