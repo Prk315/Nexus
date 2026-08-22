@@ -6,6 +6,8 @@ import {
   MAX_ITEMS,
   mergeStatus,
   parsePayload,
+  parseRun,
+  type RunMarker,
   secretIsUsable,
   secretMatches,
 } from "./logic.ts";
@@ -29,7 +31,10 @@ import {
  * 2. Fails closed: a missing or under-32-character `N8N_INGEST_KEY` is
  *    `500 server_misconfigured`. An unset secret must NEVER mean "allow
  *    everyone" — an empty env var deploys perfectly cleanly and would make
- *    `x-n8n-key: ""` a valid credential.
+ *    `X-N8N-Key: ""` a valid credential. The header is spelled **`X-N8N-Key`**
+ *    (the secret itself stays `N8N_INGEST_KEY`), matching `usage-ingest`'s
+ *    `X-Usage-Key`. `Headers.get()` is case-insensitive per spec, so the
+ *    lowercase lookup below accepts any casing n8n's credential is saved with.
  * 3. Constant-time comparison of the presented key.
  * 4. Service-role client, so the write does not depend on any RLS policy.
  * 5. Server-side owner re-check. The service role *bypasses* RLS, so ownership
@@ -64,6 +69,21 @@ import {
  * top where a human notices it, rather than sitting mid-list looking scored.
  * This is `blocking_state`'s invariant in a different table: a missing verdict
  * must never be indistinguishable from a computed one.
+ *
+ * # The sync marker, and why it is written last
+ *
+ * The POST carries a `run` object beside the messages, and recording it is not
+ * optional bookkeeping. n8n cannot write `n8n_requests` itself — no anon policy,
+ * no session — so this function is the only component positioned to. The newest
+ * `kind = 'mail_sync'`, `status = 'done'` row carries the authoritative "last
+ * synced" timestamp, because a `mail_messages` row count cannot tell "n8n has
+ * never run" from "the inbox is clean". Ignore `run` and mail arrives correctly
+ * while the header reports *never synced*, forever.
+ *
+ * It is written **after** the mail upsert succeeds, never before: a `done` row
+ * on top of a failed write tells the panel the sync worked, and the panel has
+ * no second source to check it against. An absent `run` is skipped rather than
+ * refused, so a workflow predating the marker still delivers mail.
  */
 
 /**
@@ -118,7 +138,10 @@ Deno.serve(async (req: Request) => {
   // one `triaged_at` fallback and `logic.ts` stays clock-free. Same discipline
   // as `session-toggle`, where two clock reads in one request would let
   // `end_time` and `duration_seconds` disagree.
-  const parsed = parsePayload(body, new Date().toISOString());
+  const ingestedAt = new Date().toISOString();
+  const run = parseRun((body as { run?: unknown } | null)?.run, ingestedAt);
+
+  const parsed = parsePayload(body, ingestedAt);
   if (!parsed.ok) {
     return json(
       parsed.error === "batch_too_large"
@@ -136,11 +159,113 @@ Deno.serve(async (req: Request) => {
   if (rejected > 0) {
     console.warn("n8n-ingest: rejected", rejected, "of", rejected + rows.length, rejectedReasons);
   }
-  if (rows.length === 0) {
-    return json({ upserted: 0, inserted: 0, rejected, rejectedReasons });
-  }
-
   const supabase = createClient(url, serviceKey);
+
+  /**
+   * Record that a sync pass completed, in `n8n_requests`.
+   *
+   * **Close an open row if there is one, insert if there is not.** The panel's
+   * "sync now" button enqueues a `queued` row and n8n claims it; leaving that row
+   * behind would strand it forever (the migration calls this out — there is no
+   * lease column, so a `claimed` row is indistinguishable from work the Mac slept
+   * through). But this workflow is Gmail-*triggered*, not queue-driven, so most
+   * passes correspond to no request at all and must still leave a marker: the
+   * freshness read is what tells the panel "n8n has run", and it is the only
+   * thing that can, since a `mail_messages` row count cannot separate "never ran"
+   * from "inbox is clean".
+   *
+   * The update is a compare-and-swap on the row id *and* an open status, same
+   * shape as `session-toggle`'s delete. Two passes finishing at once would
+   * otherwise both claim the same queued row; the loser matches zero rows and
+   * falls through to inserting its own, which is the honest outcome — two runs
+   * did happen.
+   */
+  const recordRun = async (
+      marker: RunMarker,
+    ): Promise<{ ok: true; closedExisting: boolean } | { ok: false; detail: string }> => {
+    const { data: open, error: findError } = await supabase
+      .from("n8n_requests")
+      .select("id")
+      .eq("user_id", OWNER_UID)
+      .eq("kind", marker.kind)
+      // Only rows still in flight. A row already `done` or `error` is a previous
+      // pass's history and must not be rewritten — that would silently erase a
+      // recorded failure.
+      .in("status", ["queued", "claimed"])
+      .order("created_at", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+
+    if (findError) return { ok: false, detail: findError.message };
+
+    if (open?.id) {
+      const { data: closed, error: updateError } = await supabase
+        .from("n8n_requests")
+        .update({
+          status: "done",
+          finished_at: marker.finished_at,
+          payload: marker.payload,
+          // Explicitly cleared: this row completed, so a stale `error` left by an
+          // earlier attempt must not travel with a `done` status.
+          error: null,
+        })
+        .eq("id", open.id)
+        .eq("user_id", OWNER_UID)
+        .in("status", ["queued", "claimed"])
+        .select("id");
+
+      if (updateError) return { ok: false, detail: updateError.message };
+      if (closed && closed.length > 0) return { ok: true, closedExisting: true };
+      // Lost the race; fall through and insert.
+    }
+
+    const { error: insertError } = await supabase
+      .from("n8n_requests")
+      .insert({
+        user_id: OWNER_UID,
+        // From the module constant, never the caller — see MAIL_SYNC_KIND.
+        kind: marker.kind,
+        status: "done",
+        payload: marker.payload,
+        finished_at: marker.finished_at,
+      });
+
+    if (insertError) return { ok: false, detail: insertError.message };
+    return { ok: true, closedExisting: false };
+  };
+
+  /**
+   * Write the sync marker, if the payload carried one.
+   *
+   * **Only ever called once the mail write has actually succeeded.** A `done`
+   * row on top of a failed write is worse than no row at all: it tells the
+   * panel the sync worked, and the panel has no other way to know. The marker
+   * is a claim about work that completed, so it is the last thing written.
+   */
+  const finishRun = async (): Promise<Record<string, unknown>> => {
+    if (!run.ok) return { syncMarker: `skipped:${run.reason}` };
+    const result = await recordRun(run.marker);
+    if (!result.ok) {
+      console.error("n8n-ingest: sync marker failed —", result.detail);
+      return { syncMarker: "failed", syncMarkerError: result.detail };
+    }
+    return { syncMarker: result.closedExisting ? "closed_request" : "recorded" };
+  };
+
+  if (rows.length === 0) {
+    // Nothing to upsert. A genuinely empty batch is still a real, successful,
+    // empty sync — "n8n ran and there was nothing new" is precisely the fact
+    // the freshness row exists to convey, and withholding the marker here is
+    // what would leave the panel saying "never synced" through a quiet week.
+    //
+    // A batch where every message was REJECTED is not that. Marking it done
+    // would claim a sync that delivered nothing, which is the same lie as a
+    // marker on top of a failed write — so it is skipped and named.
+    const marker = rejected === 0
+      ? await finishRun()
+      : { syncMarker: "skipped:all_rejected" };
+    return json({ upserted: 0, inserted: 0, rejected, rejectedReasons, ...marker });
+  }
 
   // MARK: - Owner re-check, and why it doubles as status preservation
   //
@@ -202,10 +327,27 @@ Deno.serve(async (req: Request) => {
 
   if (upsertError) {
     console.error("n8n-ingest: upsert failed —", upsertError.message);
+    // Deliberately returning BEFORE `finishRun()`. The mail did not land, so
+    // nothing may claim this sync completed.
     return json({ error: "upsert_failed", detail: upsertError.message }, 500);
   }
 
+  const marker = await finishRun();
+
+  // A failed marker is reported as a 500 even though the mail is safely
+  // written, and the trade is worth stating. n8n will retry the batch, which is
+  // harmless — the upsert is idempotent and the marker write is too — and a red
+  // execution is the only place a human would ever notice. The alternative, a
+  // green 200 with no marker, leaves the header saying "never synced" while
+  // mail quietly arrives, which is the exact divergence this whole endpoint's
+  // invariants exist to prevent. `upserted` is echoed so the two failures are
+  // never confused for each other.
+  if (marker.syncMarker === "failed") {
+    return json({ error: "sync_marker_failed", upserted: payload.length, inserted, ...marker }, 500);
+  }
+
   return json({
+    ...marker,
     upserted: payload.length,
     // How many of those were new. A sync that has silently stopped seeing fresh
     // mail reports `inserted: 0` here rather than looking like every other

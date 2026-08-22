@@ -440,7 +440,11 @@ export interface MailRow {
    * place in the conversation for no reason.
    */
   thread_id: string | null;
-  sender: string | null;
+  /**
+   * NOT NULL in the table, so it is a rejection reason rather than a
+   * degradation — see `normalizeItem`.
+   */
+  sender: string;
   subject: string | null;
   snippet: string | null;
   received_at: string;
@@ -496,6 +500,18 @@ export function normalizeItem(item: unknown, ingestedAt: string): NormalizeResul
   const receivedAt = firstTimestamp([o.received_at, o.receivedAt, o.internalDate]);
   if (!receivedAt) return { ok: false, error: "invalid_received_at" };
 
+  // `mail_messages.sender` is NOT NULL, so this cannot degrade to null the way
+  // `subject` does — a null would be a 23502 that fails the *whole* all-or-
+  // nothing batch, turning one nameless message into a permanently stalled
+  // pipeline. Rejecting the one message costs one message.
+  //
+  // The workflow already drops these upstream ("a message we cannot name is not
+  // something to invent values for"), so this should never fire in practice.
+  // That is exactly why it is here: the two sides agreeing by accident is not
+  // the same as the constraint being enforced.
+  const sender = firstText([o.sender, o.from], MAX_SENDER);
+  if (!sender) return { ok: false, error: "missing_sender" };
+
   // The three triage columns move as one. `priority === null` is the single
   // signal for "no verdict", and `triaged_at` / `triage_model` are derived from
   // it rather than read independently — otherwise a payload could produce a row
@@ -509,7 +525,7 @@ export function normalizeItem(item: unknown, ingestedAt: string): NormalizeResul
     row: {
       external_id: externalId,
       thread_id: optionalId([o.thread_id, o.threadId]),
-      sender: firstText([o.sender, o.from], MAX_SENDER),
+      sender,
       subject: sanitizeText(o.subject, MAX_SUBJECT),
       snippet: sanitizeText(o.snippet, MAX_SNIPPET, { multiline: true }),
       received_at: receivedAt,
@@ -654,6 +670,119 @@ export function mergeStatus(
       status: statusById.get(row.external_id) ?? DEFAULT_STATUS,
     })),
     inserted: rows.reduce((n, row) => n + (known.has(row.external_id) ? 0 : 1), 0),
+  };
+}
+
+// MARK: - The sync marker
+
+/**
+ * The one `n8n_requests.kind` this function will ever write.
+ *
+ * A constant, **never** the caller's `run.kind`. Same closed-allow-list posture
+ * as `n8n-requests`'s `ALLOWED_KINDS`: the caller names no table, no filter and
+ * no user, and it does not get to name the queue either. Otherwise a leaked key
+ * plus a guessed kind would be a way to forge completion markers for queues
+ * that have nothing to do with mail — including ones a future feature adds for
+ * something more consequential than reading email.
+ *
+ * WARNING — spelling divergence, flagged rather than resolved. Unit 1's
+ * migration comment, unit 4's panel and unit 5's workflow all use `mail_sync`;
+ * `n8n-requests`'s allow-list spells the same concept `mail.sync`.
+ * `n8n_requests.kind` is free text with no CHECK, so nothing in the database
+ * catches it. This unit follows the three that agree, because the *freshness
+ * read* is what breaks otherwise. The cost is that a queued `mail.sync` row
+ * will not be closed out by the lookup in `index.ts`.
+ */
+export const MAIL_SYNC_KIND = "mail_sync";
+
+/** `run.source` is a workflow name, e.g. `n8n:mail-triage`. */
+export const MAX_RUN_SOURCE = 128;
+
+/** The fixed shape written to `n8n_requests.payload`. */
+export interface RunPayload {
+  source: string | null;
+  fetched: number | null;
+  triaged: number | null;
+  untriaged: number | null;
+}
+
+export interface RunMarker {
+  kind: typeof MAIL_SYNC_KIND;
+  finished_at: string;
+  payload: RunPayload;
+}
+
+export type ParsedRun =
+  | { ok: true; marker: RunMarker }
+  | { ok: false; reason: "absent" | "not_an_object" | "unsupported_kind" };
+
+/** A non-negative integer count, or `null` — never `NaN`, never a guess. */
+function countOrNull(value: unknown): number | null {
+  const n = typeof value === "number"
+    ? value
+    : typeof value === "string" && value.trim().length > 0
+    ? Number(value)
+    : NaN;
+  if (!Number.isFinite(n) || n < 0) return null;
+  return Math.round(n);
+}
+
+/**
+ * Turn the POST's `run` object into the `n8n_requests` row that records this
+ * pass, or say why there is none.
+ *
+ * # Why this exists at all
+ *
+ * n8n cannot write `n8n_requests` itself — the table has no anon policy and n8n
+ * holds no session — so the workflow ships a summary alongside the messages and
+ * this function records it server-side. That row is load-bearing: the newest
+ * `kind = 'mail_sync'`, `status = 'done'` row carries the authoritative "last
+ * synced" timestamp, because a `mail_messages` row count cannot distinguish
+ * "n8n has never run" from "the inbox is clean", and a panel rendering both as
+ * "inbox zero" is wrong half the time. Ignoring `run` would deliver mail
+ * correctly while the header reported *never synced*, forever.
+ *
+ * # What it deliberately does not take from the caller
+ *
+ * `kind` is the constant above, and `status` is set by `index.ts` — a caller
+ * cannot mark a run `error`, or `done` on a queue it named itself. `payload` is
+ * a **fixed shape**: unrecognised keys are dropped rather than passed through
+ * into jsonb, so the marker cannot become an arbitrary caller-controlled blob.
+ * Widening it is a deliberate edit here.
+ *
+ * An absent `run` is `{ ok: false, reason: "absent" }`, not an error: an older
+ * workflow that predates the marker must still be able to deliver mail.
+ */
+export function parseRun(run: unknown, ingestedAt: string): ParsedRun {
+  if (run === undefined || run === null) return { ok: false, reason: "absent" };
+  if (typeof run !== "object" || Array.isArray(run)) {
+    return { ok: false, reason: "not_an_object" };
+  }
+  const o = run as Record<string, unknown>;
+
+  // A `kind` naming anything else is not a mail sync, so recording it as one
+  // would be a lie. Absent is fine — this endpoint only ever ingests mail.
+  const kind = sanitizeText(o.kind, MAX_CATEGORY);
+  if (kind !== null && kind !== MAIL_SYNC_KIND) {
+    return { ok: false, reason: "unsupported_kind" };
+  }
+
+  return {
+    ok: true,
+    marker: {
+      kind: MAIL_SYNC_KIND,
+      // The moment the workflow says it finished, falling back to this ingest.
+      // A marker with no timestamp would be worse than none: `finished_at desc`
+      // is how the freshness read picks the newest row, and NULL sorts first
+      // under `desc`, so it would shadow every real one.
+      finished_at: coerceTimestamp(o.finished_at) ?? ingestedAt,
+      payload: {
+        source: sanitizeText(o.source, MAX_RUN_SOURCE),
+        fetched: countOrNull(o.fetched),
+        triaged: countOrNull(o.triaged),
+        untriaged: countOrNull(o.untriaged),
+      },
+    },
   };
 }
 

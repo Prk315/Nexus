@@ -12,11 +12,13 @@ import {
   MAX_ITEMS,
   MAX_RAW_CHARS,
   MAX_SUBJECT,
+  MAIL_SYNC_KIND,
   MAX_SUGGESTED_REPLY,
   MAX_TRIAGE_MODEL,
   mergeStatus,
   normalizeItem,
   parsePayload,
+  parseRun,
   PRIORITY_MAX,
   PRIORITY_MIN,
   sanitizeText,
@@ -30,6 +32,8 @@ const KEY = "x".repeat(32);
 /** Minimum viable item — everything else in this file varies one field of it. */
 const item = (over: Record<string, unknown> = {}) => ({
   external_id: "18f0a1b2c3d4e5f6",
+  // NOT NULL in mail_messages, so every valid fixture carries one.
+  sender: "Ada <ada@example.com>",
   received_at: "2026-08-21T09:15:00Z",
   ...over,
 });
@@ -406,6 +410,23 @@ Deno.test("normalizeItem rejects only the two load-bearing fields", () => {
   });
 });
 
+Deno.test("normalizeItem rejects a message with no sender", () => {
+  // `mail_messages.sender` is NOT NULL. A null would be a 23502 that fails the
+  // whole all-or-nothing batch — one nameless message stalling the pipeline —
+  // so it is rejected like external_id rather than degraded like subject.
+  for (const bad of [undefined, null, "", "   ", 42, {}]) {
+    assertEquals(
+      normalizeItem({ ...item(), sender: bad, from: undefined }, INGESTED_AT),
+      { ok: false, error: "missing_sender" },
+      JSON.stringify(bad),
+    );
+  }
+  // `from` is the fallback spelling, and an empty `sender` falls through to it
+  // rather than stopping there.
+  const r = normalizeItem({ ...item(), sender: "", from: "Ada <ada@example.com>" }, INGESTED_AT);
+  assertEquals(r.ok && r.row.sender, "Ada <ada@example.com>");
+});
+
 Deno.test("normalizeItem rejects an external_id outside the safe charset", () => {
   // postgrest-js quotes an `in.()` value containing , ( or ) but does NOT
   // escape an embedded quote, so `a","b` produces a malformed filter, PostgREST
@@ -461,7 +482,8 @@ Deno.test("an empty primary field falls through to the fallback spelling", () =>
 
 Deno.test("normalizeItem degrades every optional field rather than dropping the message", () => {
   const row = rowOf();
-  assertEquals(row.sender, null);
+  // `sender` is absent from this list on purpose — it is NOT NULL in the table
+  // and therefore a rejection reason, covered separately below.
   assertEquals(row.subject, null);
   assertEquals(row.snippet, null);
   assertEquals(row.category, null);
@@ -591,8 +613,12 @@ Deno.test("normalizeItem accepts both the snake_case and camelCase spellings", (
   assertEquals(camel.row.sender, "Ada <ada@example.com>");
   assertEquals(camel.row.suggested_reply, "Sounds good.");
 
-  // Gmail's own field names work too.
-  const gmail = normalizeItem({ id: "18f0", internalDate: "1787303700000" }, INGESTED_AT);
+  // Gmail's own field names work too. `from` is the sender spelling mailparser
+  // produces, and it is required — see the NOT NULL note below.
+  const gmail = normalizeItem(
+    { id: "18f0", internalDate: "1787303700000", from: "Ada <ada@example.com>" },
+    INGESTED_AT,
+  );
   assertEquals(gmail.ok, true);
   if (!gmail.ok) return;
   assertEquals(gmail.row.external_id, "18f0");
@@ -855,3 +881,169 @@ Deno.test("chunk splits without dropping or duplicating", () => {
   assertEquals(chunk(big, 50).flat(), big);
   assertEquals(chunk(big, 50).length, 10);
 });
+
+// MARK: - The sync marker
+//
+// `recordRun` in index.ts does the I/O; what is testable here is the decision
+// of WHETHER there is a marker and WHAT it says. The ordering guarantee — that
+// it is only ever written after the mail upsert succeeds — is structural in
+// index.ts and asserted at the bottom of this section.
+
+Deno.test("parseRun reads the exact shape the workflow sends", () => {
+  // Copied from `Parse verdict` in integrations/n8n/workflows/mail-triage.json.
+  const parsed = parseRun({
+    kind: "mail_sync",
+    source: "n8n:mail-triage",
+    finished_at: "2026-08-22T09:15:00Z",
+    fetched: 12,
+    triaged: 10,
+    untriaged: 2,
+  }, INGESTED_AT);
+
+  assertEquals(parsed.ok, true);
+  if (!parsed.ok) return;
+  assertEquals(parsed.marker, {
+    kind: MAIL_SYNC_KIND,
+    finished_at: "2026-08-22T09:15:00.000Z",
+    payload: {
+      source: "n8n:mail-triage",
+      fetched: 12,
+      triaged: 10,
+      untriaged: 2,
+    },
+  });
+});
+
+Deno.test("parseRun never takes `kind` from the caller", () => {
+  // The closed-allow-list rule, same as n8n-requests' ALLOWED_KINDS: a leaked
+  // key plus a guessed kind must not be a way to forge completion markers for
+  // queues that have nothing to do with mail.
+  for (const kind of ["send_reply", "mail.sync", "archive", "retriage", "../admin"]) {
+    assertEquals(
+      parseRun({ kind, finished_at: "2026-08-22T09:15:00Z" }, INGESTED_AT),
+      { ok: false, reason: "unsupported_kind" },
+      kind,
+    );
+  }
+  // An absent kind is fine — this endpoint only ever ingests mail — and the
+  // written value is the constant either way.
+  const bare = parseRun({ finished_at: "2026-08-22T09:15:00Z" }, INGESTED_AT);
+  assertEquals(bare.ok && bare.marker.kind, MAIL_SYNC_KIND);
+  const named = parseRun({ kind: "mail_sync" }, INGESTED_AT);
+  assertEquals(named.ok && named.marker.kind, MAIL_SYNC_KIND);
+});
+
+Deno.test("parseRun writes a fixed payload shape, not the caller's object", () => {
+  // Unrecognised keys are dropped rather than passed through into jsonb, so a
+  // marker cannot become an arbitrary caller-controlled blob. Widening it is a
+  // deliberate edit to logic.ts.
+  const parsed = parseRun({
+    source: "n8n:mail-triage",
+    fetched: 1,
+    user_id: "00000000-0000-0000-0000-000000000000",
+    status: "error",
+    error: "forged",
+    table: "protocol_sleep",
+    payload: { nested: true },
+  }, INGESTED_AT);
+
+  assertEquals(parsed.ok, true);
+  if (!parsed.ok) return;
+  assertEquals(Object.keys(parsed.marker.payload).sort(), [
+    "fetched",
+    "source",
+    "triaged",
+    "untriaged",
+  ]);
+  // `status` is set by index.ts, never here — a caller cannot mark a run errored.
+  assertEquals(Object.keys(parsed.marker).sort(), ["finished_at", "kind", "payload"]);
+});
+
+Deno.test("parseRun falls back to ingest time rather than a null finished_at", () => {
+  // `finished_at desc` is how the freshness read picks the newest row, and NULL
+  // sorts FIRST under `desc` — a marker with no timestamp would shadow every
+  // real one and permanently pin the panel to a sync that reports no time.
+  for (const bad of [undefined, null, "", "   ", "soon", 0, {}, "1970-01-01T00:00:00Z"]) {
+    const parsed = parseRun({ finished_at: bad }, INGESTED_AT);
+    assertEquals(parsed.ok, true, JSON.stringify(bad));
+    if (!parsed.ok) return;
+    assertEquals(parsed.marker.finished_at, INGESTED_AT, JSON.stringify(bad));
+  }
+  // A real one is preferred over ingest time: the workflow knows when it
+  // actually finished, and a batch that sat in a retry queue must not claim to
+  // have run at the moment it was finally delivered.
+  const real = parseRun({ finished_at: "2026-08-22T08:00:00Z" }, INGESTED_AT);
+  assertEquals(real.ok && real.marker.finished_at, "2026-08-22T08:00:00.000Z");
+});
+
+Deno.test("parseRun counts are non-negative integers or null, never NaN", () => {
+  const parsed = parseRun({
+    fetched: "12",
+    triaged: 9.6,
+    untriaged: -1,
+  }, INGESTED_AT);
+  assertEquals(parsed.ok, true);
+  if (!parsed.ok) return;
+  // Quoted numbers are read (LLM and n8n JSON both do this); a float rounds;
+  // a negative count is not a count.
+  assertEquals(parsed.marker.payload.fetched, 12);
+  assertEquals(parsed.marker.payload.triaged, 10);
+  assertEquals(parsed.marker.payload.untriaged, null);
+
+  for (const bad of [undefined, null, NaN, Infinity, "lots", true, {}, []]) {
+    const p = parseRun({ fetched: bad }, INGESTED_AT);
+    assertEquals(p.ok && p.marker.payload.fetched, null, JSON.stringify(bad));
+  }
+});
+
+Deno.test("an absent run is skipped, not an error", () => {
+  // An older workflow that predates the marker must still deliver mail. The
+  // reasons are distinguishable so a silently-not-sending workflow is
+  // diagnosable from the response rather than looking like a success.
+  assertEquals(parseRun(undefined, INGESTED_AT), { ok: false, reason: "absent" });
+  assertEquals(parseRun(null, INGESTED_AT), { ok: false, reason: "absent" });
+  for (const bad of [1, "mail_sync", [], true]) {
+    assertEquals(
+      parseRun(bad, INGESTED_AT),
+      { ok: false, reason: "not_an_object" },
+      JSON.stringify(bad),
+    );
+  }
+});
+
+Deno.test("the marker is written only after a successful mail write", () => {
+  // The ordering is the whole invariant: a `done` row on top of a failed write
+  // tells the panel the sync worked, and the panel has no second source to
+  // check it against. It is structural in index.ts rather than expressible as a
+  // pure function, so this asserts the structure — every `return` that reports
+  // a failed write must come BEFORE the marker call, and the marker call must
+  // come after the upsert's error branch.
+  const src = Deno.readTextFileSync(new URL("./index.ts", import.meta.url));
+
+  const upsertError = src.indexOf('error: "upsert_failed"');
+  const lookupError = src.indexOf('error: "lookup_failed"');
+  const upsertCall = src.indexOf('.from("mail_messages")\n    .upsert(');
+  // `lastIndexOf`, not `indexOf`: there are two call sites and only this one is
+  // on the mail path. The other is the empty-batch branch, which legitimately
+  // runs earlier — it has no mail write that could have failed, and it is
+  // separately guarded on `rejected === 0` (asserted below).
+  const finishCall = src.lastIndexOf("await finishRun()");
+
+  assertNotEquals(upsertError, -1);
+  assertNotEquals(lookupError, -1);
+  assertNotEquals(finishCall, -1);
+  assertNotEquals(upsertCall, -1);
+
+  // Both write-failure exits precede any marker write on the mail path.
+  assertEquals(lookupError < finishCall, true, "lookup_failed must return before the marker");
+  assertEquals(upsertError < finishCall, true, "upsert_failed must return before the marker");
+  // ...and the marker is written after the upsert itself, not merely after its
+  // error check being declared somewhere earlier in the file.
+  assertEquals(upsertCall < finishCall, true, "marker must be written after the upsert");
+
+  // The empty-batch branch is the one place the marker is written without a
+  // mail write, and it must not fire when every message was rejected — that
+  // would claim a sync that delivered nothing.
+  assertNotEquals(src.indexOf("rejected === 0\n      ? await finishRun()"), -1);
+});
+
