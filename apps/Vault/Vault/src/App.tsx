@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef, useMemo, Suspense } from "react";
-import { useNexusRegistration, NexusHeader, useNexusAuth, CalendarSidebar } from "@nexus/core";
+import { useNexusRegistration, NexusHeader, useNexusAuth, CalendarSidebar, createMailLoader } from "@nexus/core";
 import * as api from "./lib/api";
+import { supabase } from "./lib/supabase";
 import { loadPathfinderDay, entryToEvent, toIsoDate, type PfCalEntry } from "./lib/pathfinderCalendar";
 import { CalendarBlockEditor, type CalEditorState } from "./components/CalendarBlockEditor";
 import { markdownToParsedHtml, blockifyDisplayMath } from "./lib/parsedImport";
@@ -25,6 +26,9 @@ const GraphView = lazyWithReload(() => import("./components/GraphView").then(m =
 // Learn & Retain — native observatory (src/learn/). Pulls react-force-graph-3d,
 // so it rides the same lazy path and only loads when the mode is first opened.
 const LearnMode = lazyWithReload(() => import("./learn/LearnMode").then(m => ({ default: m.LearnMode })));
+
+// Authenticated client, module scope — see packages/nexus-core/src/mail/loader.ts.
+const loadMail = createMailLoader(supabase);
 
 // Some WebViews / browsers (hardware accel off, sandboxed GPU) can't create a
 // WebGL context. ForceGraph3D throws synchronously in that case and white-screens
@@ -450,6 +454,9 @@ function App() {
         userEmail={user?.email}
         onSignOut={() => signOut()}
         onCalendar={() => { setCalendarOpen(true); void refreshCalendar(); }}
+        // Signed out the RLS read returns [], not an error — withhold the
+        // loader so the button falls back rather than claiming "no mail".
+        loadMail={user ? loadMail : undefined}
         center={
           <div className="app-mode-toggle">
             <button className={appMode === "vault" ? "active" : ""} onClick={() => setAppMode("vault")}>Vault</button>
