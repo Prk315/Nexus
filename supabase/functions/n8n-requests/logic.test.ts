@@ -64,19 +64,28 @@ Deno.test("isAllowedKind admits only the listed kinds", () => {
       "",
       "*",
       "mail",
-      "mail.",
-      "mail.*",
-      "mail.SYNC",
-      " mail.sync",
-      "mail.sync ",
-      "mail.send",
-      "mail.delete",
-      "grid.exec",
+      "mail_",
+      "mail_*",
+      "mail_SYNC",
+      " mail_sync",
+      "mail_sync ",
+      "mail_send",
+      "mail_delete",
+      "grid_exec",
+      // The dotted spelling this function shipped with before the other four
+      // units were reconciled. `n8n_requests.kind` is free text with no CHECK
+      // constraint, so a disagreement here is caught by nothing at write time:
+      // the panel enqueues one spelling, the ingest closes the other, and the
+      // row sits claimed forever.
+      "mail.sync",
+      "mail.triage",
+      "mail.archive",
+      "mail.draft_reply",
       null,
       undefined,
       1,
       {},
-      ["mail.sync"],
+      ["mail_sync"],
     ]
   ) {
     assertEquals(isAllowedKind(bad), false, `should reject ${JSON.stringify(bad)}`);
@@ -85,15 +94,15 @@ Deno.test("isAllowedKind admits only the listed kinds", () => {
 
 Deno.test("the allow-list is pinned, so widening it is a deliberate edit", () => {
   // A snapshot rather than a predicate on purpose. A "contains no kind with
-  // 'send' in the name" check passes happily for `mail.deliver` or
-  // `mail.reply_now`, which do the exact thing the list is meant to keep out:
+  // 'send' in the name" check passes happily for `mail_deliver` or
+  // `mail_reply_now`, which do the exact thing the list is meant to keep out:
   // a duplicate claim of a sending kind is a duplicate email. Pinning the whole
   // list forces any addition through this test.
   assertEquals([...ALLOWED_KINDS], [
-    "mail.sync",
-    "mail.triage",
-    "mail.archive",
-    "mail.draft_reply",
+    "mail_sync",
+    "mail_triage",
+    "mail_archive",
+    "mail_draft_reply",
   ]);
 });
 
@@ -144,22 +153,22 @@ Deno.test("parseRequest rejects unknown actions", () => {
 // MARK: - Request parsing: claim
 
 Deno.test("parseRequest accepts a claim with an allow-listed kind", () => {
-  assertEquals(parseRequest({ action: "claim", kind: "mail.triage" }), {
+  assertEquals(parseRequest({ action: "claim", kind: "mail_triage" }), {
     ok: true,
     action: "claim",
-    kind: "mail.triage",
+    kind: "mail_triage",
     limit: DEFAULT_LIMIT,
   });
-  assertEquals(parseRequest({ action: "claim", kind: "mail.sync", limit: 3 }), {
+  assertEquals(parseRequest({ action: "claim", kind: "mail_sync", limit: 3 }), {
     ok: true,
     action: "claim",
-    kind: "mail.sync",
+    kind: "mail_sync",
     limit: 3,
   });
 });
 
 Deno.test("parseRequest refuses a claim for a kind off the list", () => {
-  for (const kind of [undefined, "", "mail.send", "*", "pf_tasks"]) {
+  for (const kind of [undefined, "", "mail_send", "*", "pf_tasks"]) {
     assertEquals(parseRequest({ action: "claim", kind }), {
       ok: false,
       error: "invalid_kind",
@@ -172,11 +181,11 @@ Deno.test("parseRequest ignores a caller-supplied user_id on claim", () => {
   // user id, a leaked key would become a way to drain someone else's queue.
   const parsed = parseRequest({
     action: "claim",
-    kind: "mail.sync",
+    kind: "mail_sync",
     user_id: OTHER,
     table: "pf_tasks",
   });
-  assertEquals(parsed, { ok: true, action: "claim", kind: "mail.sync", limit: DEFAULT_LIMIT });
+  assertEquals(parsed, { ok: true, action: "claim", kind: "mail_sync", limit: DEFAULT_LIMIT });
   assertEquals("user_id" in parsed, false);
   assertEquals("table" in parsed, false);
 });
@@ -386,7 +395,7 @@ Deno.test("resultWithinLimit rejects values JSON cannot express", () => {
 const row = (over: Record<string, unknown> = {}) => ({
   status: "claimed",
   user_id: OWNER,
-  kind: "mail.triage",
+  kind: "mail_triage",
   ...over,
 });
 
@@ -445,7 +454,7 @@ Deno.test("a missing row and another user's row answer identically", () => {
   assertEquals(decideCompletion(undefined, OWNER, "done"), NOT_FOUND);
   assertEquals(decideCompletion(row({ user_id: OTHER }), OWNER, "done"), NOT_FOUND);
   // Missing or non-string owner must never pass the check.
-  assertEquals(decideCompletion({ status: "claimed", kind: "mail.sync" }, OWNER, "done"), NOT_FOUND);
+  assertEquals(decideCompletion({ status: "claimed", kind: "mail_sync" }, OWNER, "done"), NOT_FOUND);
   assertEquals(decideCompletion(row({ user_id: null }), OWNER, "done"), NOT_FOUND);
   assertEquals(decideCompletion(row({ user_id: 1 }), OWNER, "done"), NOT_FOUND);
 });
@@ -455,7 +464,7 @@ Deno.test("the allow-list gates complete, not just claim", () => {
   // row in n8n_requests done and write arbitrary JSON into its result — the
   // table is `n8n_requests`, not `mail_requests`, so assume it will one day hold
   // a queue for something more dangerous than reading mail.
-  for (const kind of [undefined, null, "", "grid.exec", "mail.send", "MAIL.SYNC", 7]) {
+  for (const kind of [undefined, null, "", "grid_exec", "mail_send", "MAIL_SYNC", 7]) {
     assertEquals(
       decideCompletion(row({ kind }), OWNER, "done"),
       NOT_FOUND,
@@ -464,7 +473,7 @@ Deno.test("the allow-list gates complete, not just claim", () => {
   }
   // …and it is indistinguishable from a row that does not exist, so it is not a
   // probe oracle for which ids are real.
-  assertEquals(decideCompletion(row({ kind: "grid.exec" }), OWNER, "done"), NOT_FOUND);
+  assertEquals(decideCompletion(row({ kind: "grid_exec" }), OWNER, "done"), NOT_FOUND);
 });
 
 Deno.test("a blank or malformed owner refuses everything", () => {
@@ -492,7 +501,7 @@ Deno.test("toClaimedRequest projects a fixed shape", () => {
     toClaimedRequest({
       id: ID,
       user_id: OWNER,
-      kind: "mail.triage",
+      kind: "mail_triage",
       payload: { threadIds: ["a"] },
       status: "claimed",
       created_at: "2026-08-22T10:00:00Z",
@@ -503,7 +512,7 @@ Deno.test("toClaimedRequest projects a fixed shape", () => {
     }),
     {
       id: ID,
-      kind: "mail.triage",
+      kind: "mail_triage",
       payload: { threadIds: ["a"] },
       createdAt: "2026-08-22T10:00:00Z",
       claimedAt: "2026-08-22T10:00:05Z",
@@ -514,7 +523,7 @@ Deno.test("toClaimedRequest projects a fixed shape", () => {
 Deno.test("toClaimedRequest leaks no column the projection doesn't name", () => {
   const projected = toClaimedRequest({
     id: ID,
-    kind: "mail.sync",
+    kind: "mail_sync",
     payload: null,
     user_id: OWNER,
     result: "previous run output",
@@ -531,9 +540,9 @@ Deno.test("toClaimedRequest leaks no column the projection doesn't name", () => 
 });
 
 Deno.test("toClaimedRequest handles an integer primary key", () => {
-  assertEquals(toClaimedRequest({ id: 12, kind: "mail.sync", payload: { a: 1 } }), {
+  assertEquals(toClaimedRequest({ id: 12, kind: "mail_sync", payload: { a: 1 } }), {
     id: 12,
-    kind: "mail.sync",
+    kind: "mail_sync",
     payload: { a: 1 },
     createdAt: null,
     claimedAt: null,
@@ -551,16 +560,16 @@ Deno.test("toClaimedRequests counts every row it drops", () => {
 
   assertEquals(
     toClaimedRequests([
-      { id: ID, kind: "mail.sync", payload: null },
-      { id: "nope", kind: "mail.sync" },
+      { id: ID, kind: "mail_sync", payload: null },
+      { id: "nope", kind: "mail_sync" },
       { id: ID, kind: 7 },
-      { id: ID, kind: "grid.exec" },
+      { id: ID, kind: "grid_exec" },
       null,
       "row",
       [],
     ]),
     {
-      requests: [{ id: ID, kind: "mail.sync", payload: null, createdAt: null, claimedAt: null }],
+      requests: [{ id: ID, kind: "mail_sync", payload: null, createdAt: null, claimedAt: null }],
       dropped: 6,
     },
   );

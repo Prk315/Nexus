@@ -57,18 +57,25 @@ export async function secretMatches(
  * happens to share the table — including one a future feature adds for
  * something more dangerous than reading mail.
  *
- * Adding a kind is a deliberate one-line change here, and must be matched by the
- * producer side and by whatever CHECK constraint `n8n_requests.kind` carries.
+ * ⚠️ **`n8n_requests.kind` is free text with no CHECK constraint**, so nothing in
+ * the database catches a spelling that disagrees with the producer — the row is
+ * simply never claimed, sits `claimed`/`queued` forever, and compounds with the
+ * missing stale-claim recovery documented in `claim_function.sql`. The
+ * underscore spelling here is the one the whole feature settled on: the ingest
+ * that closes the marker row, the panel that reads the newest
+ * `kind = 'mail_sync', status = 'done'` row as its "last synced" signal, and the
+ * n8n workflow that stamps `kind` into its run object. Adding or renaming a kind
+ * is a deliberate edit here *and* in all three of those.
  */
 export const ALLOWED_KINDS = [
   /** Pull recent threads/messages into Supabase for the header to render. */
-  "mail.sync",
+  "mail_sync",
   /** Classify + summarise a batch of threads. */
-  "mail.triage",
+  "mail_triage",
   /** Archive the named threads. */
-  "mail.archive",
+  "mail_archive",
   /** Compose a reply and leave it in Drafts — never sends. */
-  "mail.draft_reply",
+  "mail_draft_reply",
 ] as const;
 
 export type Kind = (typeof ALLOWED_KINDS)[number];
@@ -279,7 +286,7 @@ export type CompletionDecision =
  *   `404` for all three means a leaked key cannot be used to probe which ids
  *   exist in other accounts.
  * - **The allow-list gates `complete` as well as `claim`.** Checking it only on
- *   the way out would leave a key that may claim nothing but `mail.*` able to
+ *   the way out would leave a key that may claim nothing but `mail_*` able to
  *   mark *any* row in the table done and write arbitrary JSON into its result —
  *   including a future queue for something more dangerous than reading mail.
  *   The table is named `n8n_requests`, not `mail_requests`, so assume it will
@@ -287,7 +294,7 @@ export type CompletionDecision =
  * - **Only a `claimed` row may be completed.** Completing a `queued` row is n8n
  *   reporting on work it never took — and worse, it races a concurrent claim: the
  *   claimer would go on to run the job that has just been marked done, which for
- *   `mail.draft_reply` means a second draft and for anything sending means a
+ *   `mail_draft_reply` means a second draft and for anything sending means a
  *   double-send.
  * - **The same terminal state twice is a no-op success, not a conflict.** n8n
  *   retries a step whose HTTP response was lost, and a 409 there turns a

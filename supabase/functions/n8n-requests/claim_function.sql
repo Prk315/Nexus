@@ -16,7 +16,7 @@
 -- run is still in flight when the next one starts. A read-then-write ("select
 -- the oldest queued rows, then update them by id") is a race with a window of a
 -- whole HTTP round trip: both polls read the same rows, both update them, and
--- the same `mail.draft_reply` job runs twice. That is a duplicate draft, and for
+-- the same `mail_draft_reply` job runs twice. That is a duplicate draft, and for
 -- any kind that ever sends, a double-send.
 --
 -- `for update skip locked` closes it inside one statement: the second poll's
@@ -90,10 +90,16 @@ create index if not exists n8n_requests_claim_idx
 --
 -- `anon` must not reach this table at all. `authenticated` still must, because
 -- the producer half is the NexusHeader running in the browser as a signed-in
--- user — so revoke `anon` only, and make sure the sibling unit's policies are
--- `user_id = auth.uid()` and NOT `using (true)`.
+-- user — so revoke `anon` only.
 --
--- ⚠️ If the producer turns out to enqueue with the anon key, the fix is the
+-- The unit that owns the migration has since shipped owner-only
+-- (`user_id = auth.uid()`) policies with zero anon grants on both tables, so the
+-- two statements below are idempotent no-ops today. They stay as an executable
+-- assertion rather than a comment: this is the one property of a table another
+-- unit owns that, if it ever regresses, silently reduces this whole function to
+-- theatre while every test still passes.
+--
+-- ⚠️ If the producer is ever changed to enqueue with the anon key, the fix is the
 -- producer, not deleting this revoke.
 
 alter table public.n8n_requests enable row level security;
