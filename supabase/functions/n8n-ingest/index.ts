@@ -54,6 +54,16 @@ import {
  * learner answers). Nothing in this function branches on their content; `logic.ts`
  * bounds and de-controls them. In particular `suggested_reply` is a *draft for
  * the user to read and send*, never something any part of this system acts on.
+ *
+ * # An untriaged row says so
+ *
+ * `priority` is nullable and NULL means "triage produced no verdict", which is
+ * a different fact from "triage scored it medium". `triaged_at` and
+ * `triage_model` are NULL exactly when `priority` is. The panel reads
+ * `priority desc nulls first`, so a message the model failed on surfaces at the
+ * top where a human notices it, rather than sitting mid-list looking scored.
+ * This is `blocking_state`'s invariant in a different table: a missing verdict
+ * must never be indistinguishable from a computed one.
  */
 
 /**
@@ -104,7 +114,11 @@ Deno.serve(async (req: Request) => {
     return json({ error: "invalid_json" }, 400);
   }
 
-  const parsed = parsePayload(body);
+  // Sampled exactly once and threaded through, so every row in a batch shares
+  // one `triaged_at` fallback and `logic.ts` stays clock-free. Same discipline
+  // as `session-toggle`, where two clock reads in one request would let
+  // `end_time` and `duration_seconds` disagree.
+  const parsed = parsePayload(body, new Date().toISOString());
   if (!parsed.ok) {
     return json(
       parsed.error === "batch_too_large"

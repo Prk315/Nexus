@@ -13,10 +13,10 @@ import {
   MAX_RAW_CHARS,
   MAX_SUBJECT,
   MAX_SUGGESTED_REPLY,
+  MAX_TRIAGE_MODEL,
   mergeStatus,
   normalizeItem,
   parsePayload,
-  PRIORITY_DEFAULT,
   PRIORITY_MAX,
   PRIORITY_MIN,
   sanitizeText,
@@ -34,8 +34,14 @@ const item = (over: Record<string, unknown> = {}) => ({
   ...over,
 });
 
+/**
+ * A fixed "ingest happened at" instant. Passed in rather than read from a
+ * clock, which is what keeps every one of these tests deterministic.
+ */
+const INGESTED_AT = "2026-08-21T10:00:00.000Z";
+
 const rowOf = (over: Record<string, unknown> = {}): MailRow => {
-  const r = normalizeItem(item(over));
+  const r = normalizeItem(item(over), INGESTED_AT);
   if (!r.ok) throw new Error(`expected ok, got ${r.error}`);
   return r.row;
 };
@@ -78,16 +84,14 @@ Deno.test("secretMatches compares bytes, not code units", () => {
 
 // MARK: - Priority clamping
 
-Deno.test("clampPriority holds the sort key inside the range", () => {
+Deno.test("clampPriority holds a present score inside the range", () => {
   assertEquals(clampPriority(0), 0);
   assertEquals(clampPriority(100), 100);
   assertEquals(clampPriority(73), 73);
-  // Out of range clamps rather than rejecting — a mis-scored message still
-  // belongs in the list.
+  // Out of range clamps rather than nulling — the model did produce a verdict,
+  // it just spelled it badly. That is a different fact from "no verdict".
   assertEquals(clampPriority(-5), PRIORITY_MIN);
   assertEquals(clampPriority(1e9), PRIORITY_MAX);
-  assertEquals(clampPriority(-Infinity), PRIORITY_DEFAULT);
-  assertEquals(clampPriority(Infinity), PRIORITY_DEFAULT);
 });
 
 Deno.test("clampPriority rounds to an integer", () => {
@@ -97,7 +101,7 @@ Deno.test("clampPriority rounds to an integer", () => {
   assertEquals(clampPriority(72.5), 73);
   assertEquals(clampPriority(99.9), 100);
   assertEquals(clampPriority(0.4), 0);
-  assertEquals(Number.isInteger(clampPriority(50.5)), true);
+  assertEquals(Number.isInteger(clampPriority(50.5)!), true);
 });
 
 Deno.test("clampPriority accepts the quoted numbers LLM JSON emits", () => {
@@ -107,15 +111,20 @@ Deno.test("clampPriority accepts the quoted numbers LLM JSON emits", () => {
   assertEquals(clampPriority("-3"), PRIORITY_MIN);
 });
 
-Deno.test("clampPriority never yields NaN", () => {
-  // NaN would reach Postgres as NULL, and the message would vanish from an
-  // `order by priority desc` list entirely — present in the table, absent from
-  // the only surface that shows it.
+Deno.test("clampPriority returns NULL for an absent or unusable score", () => {
+  // THE contract, and the reason the column is nullable: NULL means "triage
+  // produced no verdict", which is a different fact from "triage scored it
+  // medium". A 50 default would collapse the two and park a message the model
+  // failed on mid-list looking scored, with nothing downstream able to tell.
+  // Same invariant as `blocking_state` — a missing verdict must never be
+  // indistinguishable from a computed one.
   for (
     const bad of [
       undefined,
       null,
       NaN,
+      Infinity,
+      -Infinity,
       "",
       "   ",
       "high",
@@ -127,12 +136,11 @@ Deno.test("clampPriority never yields NaN", () => {
       [5],
     ]
   ) {
-    const p = clampPriority(bad);
-    assertEquals(Number.isInteger(p), true, `${JSON.stringify(bad)} -> ${p}`);
-    assertEquals(p >= PRIORITY_MIN && p <= PRIORITY_MAX, true);
+    assertEquals(clampPriority(bad), null, JSON.stringify(bad));
   }
-  assertEquals(clampPriority(undefined), PRIORITY_DEFAULT);
-  assertEquals(clampPriority("urgent!"), PRIORITY_DEFAULT);
+  // ...and a real score is never null, so the two states stay separable.
+  assertEquals(clampPriority(0), 0);
+  assertNotEquals(clampPriority(0), null);
 });
 
 // MARK: - Timestamps
@@ -360,6 +368,8 @@ Deno.test("a hostile payload cannot name a table, a user or a filter", () => {
     "snippet",
     "subject",
     "suggested_reply",
+    "triage_model",
+    "triaged_at",
   ]);
   assertEquals("user_id" in row, false);
   assertEquals("status" in row, false);
@@ -369,27 +379,27 @@ Deno.test("a hostile payload cannot name a table, a user or a filter", () => {
 
 Deno.test("normalizeItem rejects non-objects", () => {
   for (const bad of [null, undefined, 1, "x", [], true]) {
-    assertEquals(normalizeItem(bad), { ok: false, error: "not_an_object" });
+    assertEquals(normalizeItem(bad, INGESTED_AT), { ok: false, error: "not_an_object" });
   }
 });
 
 Deno.test("normalizeItem rejects only the two load-bearing fields", () => {
   // No external_id: the upsert has no identity, so every sync would insert a
   // fresh duplicate of the same message.
-  assertEquals(normalizeItem({ received_at: "2026-08-21T09:15:00Z" }), {
+  assertEquals(normalizeItem({ received_at: "2026-08-21T09:15:00Z" }, INGESTED_AT), {
     ok: false,
     error: "missing_external_id",
   });
-  assertEquals(normalizeItem(item({ external_id: "   " })), {
+  assertEquals(normalizeItem(item({ external_id: "   " }), INGESTED_AT), {
     ok: false,
     error: "missing_external_id",
   });
   // No usable received_at: the message cannot be placed in a time-sorted list.
-  assertEquals(normalizeItem({ external_id: "abc" }), {
+  assertEquals(normalizeItem({ external_id: "abc" }, INGESTED_AT), {
     ok: false,
     error: "invalid_received_at",
   });
-  assertEquals(normalizeItem(item({ received_at: "soon" })), {
+  assertEquals(normalizeItem(item({ received_at: "soon" }), INGESTED_AT), {
     ok: false,
     error: "invalid_received_at",
   });
@@ -402,14 +412,14 @@ Deno.test("normalizeItem rejects an external_id outside the safe charset", () =>
   // permanently. Rejecting one message is the cheap failure.
   for (const bad of ['a","b', "a,b", "a(b)", "a\\b", "a b", "a\"b", "id#1", "id%2F"]) {
     assertEquals(
-      normalizeItem(item({ external_id: bad })),
+      normalizeItem(item({ external_id: bad }), INGESTED_AT),
       { ok: false, error: "invalid_external_id" },
       bad,
     );
   }
   // Real Gmail ids and other plausible provider ids pass.
   for (const good of ["18f0a1b2c3d4e5f6", "AAA-bbb_123", "msg.42", "a@b.example", "x+y=z", "a:b"]) {
-    const r = normalizeItem(item({ external_id: good }));
+    const r = normalizeItem(item({ external_id: good }), INGESTED_AT);
     assertEquals(r.ok, true, good);
   }
 });
@@ -418,11 +428,11 @@ Deno.test("normalizeItem rejects an over-long external_id instead of truncating 
   // Truncating would silently collapse two distinct ids sharing a prefix into
   // one row — a message lost with no error anywhere.
   const long = "a".repeat(MAX_EXTERNAL_ID + 1);
-  assertEquals(normalizeItem(item({ external_id: long })), {
+  assertEquals(normalizeItem(item({ external_id: long }), INGESTED_AT), {
     ok: false,
     error: "invalid_external_id",
   });
-  const atCap = normalizeItem(item({ external_id: "a".repeat(MAX_EXTERNAL_ID) }));
+  const atCap = normalizeItem(item({ external_id: "a".repeat(MAX_EXTERNAL_ID) }), INGESTED_AT);
   assertEquals(atCap.ok, true);
 });
 
@@ -439,7 +449,7 @@ Deno.test("an empty primary field falls through to the fallback spelling", () =>
     from: "Ada <ada@example.com>",
     suggested_reply: "   ",
     suggestedReply: "Sounds good.",
-  });
+  }, INGESTED_AT);
   assertEquals(r.ok, true);
   if (!r.ok) return;
   assertEquals(r.row.external_id, "18f0a1b2c3d4e5f6");
@@ -455,10 +465,69 @@ Deno.test("normalizeItem degrades every optional field rather than dropping the 
   assertEquals(row.snippet, null);
   assertEquals(row.category, null);
   assertEquals(row.suggested_reply, null);
-  // Absent priority is the midpoint, not NaN and not 0 — a mis-scored message
-  // sorts into the middle instead of being buried or floated to the top.
-  assertEquals(row.priority, PRIORITY_DEFAULT);
+  // ...but an absent priority is NULL, not a default, and the two companion
+  // triage columns go null with it. `received_at` is still required, because a
+  // message with no place in a time-sorted list is not showable at all.
+  assertEquals(row.priority, null);
+  assertEquals(row.triaged_at, null);
+  assertEquals(row.triage_model, null);
   assertEquals(row.received_at, "2026-08-21T09:15:00.000Z");
+});
+
+Deno.test("the three triage columns move as one", () => {
+  // priority is the single signal for "no verdict". A row that is unscored but
+  // carries a fresh triaged_at would look computed while being empty — the
+  // exact state the nullable column exists to prevent — so triaged_at and
+  // triage_model are derived from priority, never read independently.
+  const scored = rowOf({ priority: 80, triage_model: "qwen2.5:14b-instruct" });
+  assertEquals(scored.priority, 80);
+  assertEquals(scored.triaged_at, INGESTED_AT);
+  assertEquals(scored.triage_model, "qwen2.5:14b-instruct");
+
+  // A payload that supplies triage metadata but no usable score gets neither:
+  // the model did not score it, so nothing may claim it did.
+  for (const priority of [undefined, null, "urgent!", NaN, {}]) {
+    const row = rowOf({
+      priority,
+      triaged_at: "2026-08-21T09:59:00Z",
+      triage_model: "qwen2.5:14b-instruct",
+    });
+    assertEquals(row.priority, null, JSON.stringify(priority));
+    assertEquals(row.triaged_at, null, JSON.stringify(priority));
+    assertEquals(row.triage_model, null, JSON.stringify(priority));
+  }
+
+  // A score of 0 is a verdict, not an absence — the falsy trap.
+  const zero = rowOf({ priority: 0, triage_model: "m" });
+  assertEquals(zero.priority, 0);
+  assertEquals(zero.triaged_at, INGESTED_AT);
+  assertEquals(zero.triage_model, "m");
+});
+
+Deno.test("triaged_at prefers the moment the model ran over ingest time", () => {
+  // n8n knows when triage actually happened; ingest time is only the fallback,
+  // so a batch that sat in a retry queue does not claim to have been scored
+  // when it was finally delivered.
+  assertEquals(
+    rowOf({ priority: 10, triaged_at: "2026-08-21T08:30:00Z" }).triaged_at,
+    "2026-08-21T08:30:00.000Z",
+  );
+  assertEquals(
+    rowOf({ priority: 10, triagedAt: "2026-08-21T08:30:00Z" }).triaged_at,
+    "2026-08-21T08:30:00.000Z",
+  );
+  // An unusable triaged_at falls back rather than nulling: the score is real,
+  // so the row must not look untriaged.
+  assertEquals(rowOf({ priority: 10, triaged_at: "soon" }).triaged_at, INGESTED_AT);
+  assertEquals(rowOf({ priority: 10, triaged_at: "" }).triaged_at, INGESTED_AT);
+  // A scored row with no model named is still scored — the tag is metadata.
+  assertEquals(rowOf({ priority: 10 }).triage_model, null);
+  // `model` is accepted as a third spelling, and the tag is bounded.
+  assertEquals(rowOf({ priority: 10, model: "qwen3" }).triage_model, "qwen3");
+  assertEquals(
+    rowOf({ priority: 10, triage_model: "m".repeat(MAX_TRIAGE_MODEL + 50) }).triage_model?.length,
+    MAX_TRIAGE_MODEL,
+  );
 });
 
 Deno.test("normalizeItem accepts both the snake_case and camelCase spellings", () => {
@@ -470,7 +539,7 @@ Deno.test("normalizeItem accepts both the snake_case and camelCase spellings", (
     receivedAt: "2026-08-21T09:15:00Z",
     from: "Ada <ada@example.com>",
     suggestedReply: "Sounds good.",
-  });
+  }, INGESTED_AT);
   assertEquals(camel.ok, true);
   if (!camel.ok) return;
   assertEquals(camel.row.external_id, "abc123");
@@ -479,14 +548,14 @@ Deno.test("normalizeItem accepts both the snake_case and camelCase spellings", (
   assertEquals(camel.row.suggested_reply, "Sounds good.");
 
   // Gmail's own field names work too.
-  const gmail = normalizeItem({ id: "18f0", internalDate: "1787303700000" });
+  const gmail = normalizeItem({ id: "18f0", internalDate: "1787303700000" }, INGESTED_AT);
   assertEquals(gmail.ok, true);
   if (!gmail.ok) return;
   assertEquals(gmail.row.external_id, "18f0");
   assertEquals(gmail.row.received_at, "2026-08-21T09:15:00.000Z");
 
   // snake_case wins when both are present, so one spelling is authoritative.
-  const both = normalizeItem(item({ external_id: "snake", externalId: "camel" }));
+  const both = normalizeItem(item({ external_id: "snake", externalId: "camel" }), INGESTED_AT);
   assertEquals(both.ok && both.row.external_id, "snake");
 });
 
@@ -495,7 +564,7 @@ Deno.test("normalizeItem is deterministic — no clock, no randomness", () => {
   // of `now` for a missing received_at would make this fail and would also make
   // every re-sync reorder the list.
   const raw = item({ subject: "Hello", priority: 42, category: "work" });
-  assertEquals(normalizeItem(raw), normalizeItem(raw));
+  assertEquals(normalizeItem(raw, INGESTED_AT), normalizeItem(raw, INGESTED_AT));
 });
 
 // MARK: - `raw`
@@ -584,10 +653,10 @@ Deno.test("dedupeByExternalId collapses repeats, last wins", () => {
 
 Deno.test("parsePayload rejects malformed bodies", () => {
   for (const bad of [null, undefined, 1, "x", [], true]) {
-    assertEquals(parsePayload(bad), { ok: false, error: "invalid_body", status: 400 });
+    assertEquals(parsePayload(bad, INGESTED_AT), { ok: false, error: "invalid_body", status: 400 });
   }
   for (const messages of [undefined, null, "many", 3, {}]) {
-    assertEquals(parsePayload({ messages }), {
+    assertEquals(parsePayload({ messages }, INGESTED_AT), {
       ok: false,
       error: "missing_messages",
       status: 400,
@@ -597,20 +666,20 @@ Deno.test("parsePayload rejects malformed bodies", () => {
 
 Deno.test("parsePayload caps the batch on the raw length, before normalising", () => {
   const many = Array.from({ length: MAX_ITEMS + 1 }, (_, i) => item({ external_id: `m${i}` }));
-  assertEquals(parsePayload({ messages: many }), {
+  assertEquals(parsePayload({ messages: many }, INGESTED_AT), {
     ok: false,
     error: "batch_too_large",
     status: 413,
   });
   // Exactly at the cap is fine.
-  const atCap = parsePayload({ messages: many.slice(0, MAX_ITEMS) });
+  const atCap = parsePayload({ messages: many.slice(0, MAX_ITEMS) }, INGESTED_AT);
   assertEquals(atCap.ok, true);
   if (atCap.ok) assertEquals(atCap.rows.length, MAX_ITEMS);
 
   // The cap is on the *raw* array: a batch of 501 junk items is refused
   // outright rather than quietly reduced to a passing size.
   assertEquals(
-    parsePayload({ messages: Array.from({ length: MAX_ITEMS + 1 }, () => ({})) }),
+    parsePayload({ messages: Array.from({ length: MAX_ITEMS + 1 }, () => ({})) }, INGESTED_AT),
     { ok: false, error: "batch_too_large", status: 413 },
   );
 });
@@ -626,7 +695,7 @@ Deno.test("parsePayload skips bad items instead of failing the batch", () => {
       "nonsense",
       item({ external_id: "good2" }),
     ],
-  });
+  }, INGESTED_AT);
   assertEquals(parsed.ok, true);
   if (!parsed.ok) return;
   assertEquals(parsed.rows.map((r) => r.external_id), ["good1", "good2"]);
@@ -643,7 +712,7 @@ Deno.test("parsePayload skips bad items instead of failing the batch", () => {
 Deno.test("parsePayload accepts an empty batch as a no-op success", () => {
   // n8n polls on a schedule and most polls find nothing new. A 400 there would
   // paint the workflow red forever.
-  assertEquals(parsePayload({ messages: [] }), {
+  assertEquals(parsePayload({ messages: [] }, INGESTED_AT), {
     ok: true,
     rows: [],
     rejected: 0,
@@ -654,7 +723,7 @@ Deno.test("parsePayload accepts an empty batch as a no-op success", () => {
 Deno.test("parsePayload deduplicates before returning", () => {
   const parsed = parsePayload({
     messages: [item({ external_id: "a" }), item({ external_id: "a", priority: 91 })],
-  });
+  }, INGESTED_AT);
   assertEquals(parsed.ok, true);
   if (!parsed.ok) return;
   assertEquals(parsed.rows.length, 1);

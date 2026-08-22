@@ -46,17 +46,24 @@ export const MIN_KEY_LEN = 32;
 export const MAX_ITEMS = 500;
 
 /**
- * Priority is an integer 0–100, higher = more urgent, and the panel sorts
- * descending. The range is pinned *here* rather than left to the model: a
- * triage list whose sort key can be any number the LLM felt like emitting is
- * not a priority list, it is whatever the loudest hallucination was. Anything
- * outside the range clamps to the nearest end; anything unparseable falls to
- * the midpoint, which sorts a mis-scored message into the middle rather than
- * burying it or floating it to the top.
+ * Priority is an integer 0–100, higher = more urgent, and the panel reads
+ * `priority desc nulls first`. The range is pinned *here* rather than left to
+ * the model: a triage list whose sort key can be any number the LLM felt like
+ * emitting is not a priority list, it is whatever the loudest hallucination
+ * was. A value that is present but outside the range clamps to the nearest end.
+ *
+ * **An absent or unparseable score is NULL, never a number.** NULL means
+ * "triage has not produced a verdict for this row" — which is a different fact
+ * from "triage ran and scored it medium", and the schema exists to keep them
+ * apart. This is the same invariant as `blocking_state`: a missing verdict must
+ * never be indistinguishable from a computed one, because the fallback has to
+ * be visibly wrong rather than plausibly right. A 50 default would park a
+ * message the model failed on in the middle of the list looking scored, and
+ * nothing downstream could ever tell. `nulls first` instead surfaces it at the
+ * top, where a human notices.
  */
 export const PRIORITY_MIN = 0;
 export const PRIORITY_MAX = 100;
-export const PRIORITY_DEFAULT = 50;
 
 /**
  * Triage state, owned by the *user*, never by the ingester. It is only ever
@@ -90,6 +97,8 @@ export const MAX_SUBJECT = 1000;
 export const MAX_SNIPPET = 2000;
 export const MAX_CATEGORY = 64;
 export const MAX_SUGGESTED_REPLY = 8000;
+/** e.g. `qwen2.5:14b-instruct` — a model tag, not a description. */
+export const MAX_TRIAGE_MODEL = 128;
 
 /**
  * `raw` exists for debugging a bad triage, not as a mail archive.
@@ -237,24 +246,30 @@ function firstText(
 }
 
 /**
- * Coerce anything the model or the Gmail node might emit into an integer in
- * `[PRIORITY_MIN, PRIORITY_MAX]`.
+ * A score in `[PRIORITY_MIN, PRIORITY_MAX]`, or `null` if the payload does not
+ * contain one.
  *
- * Accepts a numeric string because LLM JSON routinely quotes numbers. `NaN`,
- * `Infinity`, booleans, objects and absent values all fall to the midpoint —
- * never to `NaN`, which would reach Postgres as NULL and drop the message out
- * of an `order by priority desc` list entirely.
+ * Accepts a numeric string because LLM JSON routinely quotes numbers. A number
+ * outside the range clamps — the model did produce a verdict, it just spelled
+ * it badly.
+ *
+ * Everything else is `null`, **not** a default: `NaN`, `Infinity`, `"urgent!"`,
+ * booleans, objects and an absent field all mean triage produced no usable
+ * score, and inventing a midpoint for them would erase exactly the distinction
+ * the nullable column exists to preserve. `null` is also what the caller keys
+ * `triaged_at` off, so a row that was never scored carries no triage timestamp
+ * either — the two can never disagree.
  */
-export function clampPriority(value: unknown): number {
+export function clampPriority(value: unknown): number | null {
   let n: number;
   if (typeof value === "number") {
     n = value;
   } else if (typeof value === "string" && value.trim().length > 0) {
     n = Number(value);
   } else {
-    return PRIORITY_DEFAULT;
+    return null;
   }
-  if (!Number.isFinite(n)) return PRIORITY_DEFAULT;
+  if (!Number.isFinite(n)) return null;
   return Math.min(PRIORITY_MAX, Math.max(PRIORITY_MIN, Math.round(n)));
 }
 
@@ -402,9 +417,14 @@ export interface MailRow {
   subject: string | null;
   snippet: string | null;
   received_at: string;
-  priority: number;
+  /** `null` = triage produced no verdict for this row. Never a default. */
+  priority: number | null;
   category: string | null;
   suggested_reply: string | null;
+  /** When triage scored it. `null` exactly when `priority` is null. */
+  triaged_at: string | null;
+  /** Which model scored it. `null` exactly when `priority` is null. */
+  triage_model: string | null;
   raw: unknown;
 }
 
@@ -425,8 +445,12 @@ export type NormalizeResult =
  * as are Gmail's own (`id`, `from`, `internalDate`). n8n expression output is
  * camelCase by habit and the DB is snake_case; a silent `null` there would be a
  * triage list with no suggested replies and no error anywhere to explain it.
+ *
+ * `ingestedAt` is passed in rather than read from a clock, so this stays pure
+ * and so every row in one batch shares one timestamp. It is only used as the
+ * fallback `triaged_at` for a row the payload scored but did not date.
  */
-export function normalizeItem(item: unknown): NormalizeResult {
+export function normalizeItem(item: unknown, ingestedAt: string): NormalizeResult {
   if (item === null || typeof item !== "object" || Array.isArray(item)) {
     return { ok: false, error: "not_an_object" };
   }
@@ -445,6 +469,14 @@ export function normalizeItem(item: unknown): NormalizeResult {
   const receivedAt = firstTimestamp([o.received_at, o.receivedAt, o.internalDate]);
   if (!receivedAt) return { ok: false, error: "invalid_received_at" };
 
+  // The three triage columns move as one. `priority === null` is the single
+  // signal for "no verdict", and `triaged_at` / `triage_model` are derived from
+  // it rather than read independently — otherwise a payload could produce a row
+  // that is unscored but carries a fresh `triaged_at`, which is precisely the
+  // "looks computed, isn't" state the nullable column exists to prevent.
+  const priority = clampPriority(o.priority);
+  const triaged = priority !== null;
+
   return {
     ok: true,
     row: {
@@ -453,13 +485,21 @@ export function normalizeItem(item: unknown): NormalizeResult {
       subject: sanitizeText(o.subject, MAX_SUBJECT),
       snippet: sanitizeText(o.snippet, MAX_SNIPPET, { multiline: true }),
       received_at: receivedAt,
-      priority: clampPriority(o.priority),
+      priority,
       category: sanitizeText(o.category, MAX_CATEGORY),
       suggested_reply: firstText(
         [o.suggested_reply, o.suggestedReply],
         MAX_SUGGESTED_REPLY,
         { multiline: true },
       ),
+      // Prefer the moment the model actually ran, which n8n knows; fall back to
+      // this ingest so a scored row is never left with a null triage timestamp.
+      triaged_at: triaged
+        ? (firstTimestamp([o.triaged_at, o.triagedAt]) ?? ingestedAt)
+        : null,
+      triage_model: triaged
+        ? firstText([o.triage_model, o.triageModel, o.model], MAX_TRIAGE_MODEL)
+        : null,
       raw: boundRaw(item),
     },
   };
@@ -500,8 +540,11 @@ export type ParsedPayload =
  * broken field mapping is diagnosable from the response alone. "500 messages
  * had no received_at" and "500 messages weren't objects" are different bugs and
  * a single number cannot tell them apart.
+ *
+ * `ingestedAt` is sampled once by the caller and threaded through, so the whole
+ * batch shares one timestamp and this function stays clock-free and testable.
  */
-export function parsePayload(body: unknown): ParsedPayload {
+export function parsePayload(body: unknown, ingestedAt: string): ParsedPayload {
   if (body === null || typeof body !== "object" || Array.isArray(body)) {
     return { ok: false, error: "invalid_body", status: 400 };
   }
@@ -517,7 +560,7 @@ export function parsePayload(body: unknown): ParsedPayload {
   const rejectedReasons: Record<string, number> = {};
   let rejected = 0;
   for (const item of messages) {
-    const parsed = normalizeItem(item);
+    const parsed = normalizeItem(item, ingestedAt);
     if (!parsed.ok) {
       rejected++;
       rejectedReasons[parsed.error] = (rejectedReasons[parsed.error] ?? 0) + 1;
