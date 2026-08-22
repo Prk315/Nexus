@@ -963,6 +963,116 @@ secrets used by CI.
 `apps/NexusLocal/src/lib/bodyScan.ts` with only a comment enforcing the match — keep
 the `CAL` blocks in sync after any re-calibration.
 
+## Mail triage: n8n on the Mac, Supabase as the bus
+
+`NexusHeader`'s mail panel shows a priority-sorted inbox with a suggested reply per
+message. **The header never talks to n8n**, and it is worth being precise about why,
+because "just point the panel at the workflow" is the first thing anyone tries.
+
+Vault, PathFinder and Protocol are HTTPS pages served by Vercel. An HTTPS page cannot
+fetch `http://localhost:5678` — the browser blocks it as mixed content, and no CORS
+header fixes that. The iPad PWA and the iPhone are not even on the same host, so for
+them `localhost` is the phone. There is no configuration of n8n that makes a Vercel
+page reach it.
+
+So the same shape as everything else here: the machine that *can* do the work does it
+on a schedule and writes the result to Postgres; every client just reads.
+
+```
+Gmail --> n8n (Mac, Docker) --> local Qwen (Ollama) --> n8n-ingest --> Supabase
+                                                                          |
+                        NexusHeader / MailPanel <------ reads ------------+
+```
+
+This is `focus-evaluate` → `blocking_state` and `learn-evaluate` → `lr_learn_state`
+with a different producer. If that framing is familiar, the rest of this section is
+mostly bookkeeping.
+
+The pieces:
+
+| Piece | Where | Does |
+|---|---|---|
+| Workflows | `~/docker/n8n/workflows/*.json` (separate repo, bind-mounted read-only at `/home/node/workflows`) | fetch Gmail, prompt Qwen, POST the result |
+| `n8n-ingest` | `supabase/functions/n8n-ingest/` | n8n → `mail_messages` (upsert on `user_id,external_id`) |
+| `n8n-requests` | `supabase/functions/n8n-requests/` | n8n claims/completes rows in `n8n_requests` |
+| `mail_messages`, `n8n_requests` | `supabase/migrations/20260822120000_n8n_mail_bus.sql` | the bus |
+
+`n8n_requests` is the other direction: the UI cannot reach n8n either, so an action
+("sync now", "send this reply", "archive") is a **row n8n polls for**, not a webhook.
+That is deliberate — a webhook to a laptop that is asleep is a lost request; a queued
+row survives until the Mac is back. Single worker, so a `claimed_at` with no
+`finished_at` and no lease column is enough; a row stuck in `claimed` past the longest
+plausible workflow is stranded work and needs re-queueing.
+
+### The rule: edge functions for what must happen, n8n for what is nice to happen
+
+n8n runs in Docker on this Mac and stops when the Mac sleeps — precisely the failure
+mode the whole NexusLocal design exists to route around (a schedule window opening or
+a reward unlocking while every device is asleep is why `focus-evaluate` lives on
+pg_cron and not in a `setInterval`). **Nothing load-bearing may hang off n8n.**
+Blocking policy, health imports, learn state: pg_cron + edge function. Mail triage,
+scraping, "ping me when a flat is listed": n8n, and the system degrades to "stale" not
+"broken" when it is down.
+
+If you find yourself moving something into n8n because the workflow editor is more
+pleasant, ask what happens to it overnight. That question is the rule.
+
+### Why a local Qwen, and what it costs
+
+Mail bodies never leave the Mac. Triage is Ollama on `localhost`, not a hosted model.
+This is the same posture as `usage_intervals`, which has no anon policy at all
+precisely because it holds URLs and page titles — mail is strictly more sensitive than
+browsing history, and shipping it to a third party to be scored 0–100 is not a trade
+worth making for a header panel.
+
+The accepted cost, stated plainly so nobody "fixes" it: **nothing is triaged
+overnight.** Mail that arrives while the Mac sleeps sits un-triaged until it wakes.
+`mail_messages.priority` / `triaged_at` are nullable for exactly this reason, and the
+panel sorts `priority desc nulls first` so un-triaged mail lands at the *top* of a
+triage list rather than being buried at the bottom where `default 0` would put it.
+
+### Traps
+
+- **Inside the container, `localhost` is the container.** An HTTP node pointing at
+  `http://localhost:11434` reaches n8n's own loopback, not the Mac's. Use
+  `http://host.docker.internal:11434`.
+- **…and then Ollama still refuses the connection.** This is the one that bites
+  *after* you have solved the first one, so it reads like the fix didn't work. Ollama
+  binds `127.0.0.1` by default, which excludes the Docker bridge. It needs
+  `OLLAMA_HOST=0.0.0.0` (`launchctl setenv OLLAMA_HOST 0.0.0.0`, then restart it) —
+  and note that then exposes it on the LAN, so it belongs behind the firewall, not on
+  café wifi.
+- **`mail_messages` / `n8n_requests` are `auth.uid()`-scoped with no anon policy** —
+  unlike the 13 permissive productivity tables (see `SECURITY_RLS_MIGRATION.md`; they
+  are a defect being migrated away from, not a convention to copy). Read them with the
+  **authenticated** client `supabase`, never `supabasePublic`. Getting this backwards
+  returns an **empty set, not an error** — an empty mail panel, indistinguishable from
+  a clean inbox. It is the same trap as the conventions list above, with the polarity
+  reversed: those tables need the anon client, these need the JWT.
+- **Row count is not a freshness signal.** Zero rows in `mail_messages` means "the
+  inbox is clean" *or* "n8n has never run", and a panel rendering both as "Inbox
+  zero ✓" is lying half the time — the `blocking_state`-seeding mistake wearing a
+  different hat. Last-synced comes from the newest `n8n_requests` row with
+  `kind = 'mail_sync'` and `status = 'done'`; no such row means *unknown*, and the UI
+  must say so.
+- **n8n 2.x rejects workflow JSON that 1.x accepted.** Import fails on a missing
+  top-level `id`, and on `tags` given as plain strings — 2.x wants tag *objects*. The
+  error is unhelpful; check those two before debugging the nodes.
+- **The migration is not applied by the code that writes it, and there is no staging
+  database.** Both edge functions 500 against a project where the tables do not
+  exist, and a deploy does not create them. See `supabase/migrations/APPLY.md`.
+
+### Two preconditions the user owns
+
+Neither is a code problem and neither can be fixed from this repo:
+
+1. **n8n has no working Google credential.** The Gmail OAuth connection needs
+   re-authing in the n8n UI (`http://localhost:5678` → Credentials). Until then the
+   Gmail node fails and no message is ever fetched.
+2. **Ollama is not installed.** No Ollama, no triage — the ingest half still writes
+   rows, they just stay `triaged_at is null` forever, which the panel will correctly
+   show as un-triaged rather than as low priority.
+
 ## Environment gotchas on this machine
 
 Cost real time; check here first.
