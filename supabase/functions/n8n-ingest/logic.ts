@@ -246,6 +246,26 @@ function firstText(
 }
 
 /**
+ * A provider id that is *metadata* rather than identity.
+ *
+ * Same charset and length rules as `external_id`, and for the same reason — it
+ * rides in the same all-or-nothing statement, so anything Postgres might refuse
+ * has to be caught before it can stall a whole batch.
+ *
+ * The difference is the failure mode: a value that fails the rules yields
+ * `null` instead of rejecting the message. `thread_id` is not what identifies a
+ * row, and dropping an entire triaged email because its thread id looked odd
+ * would be a far worse trade than losing the threading hint. Bounded generously
+ * before the length test for the same reason `normalizeItem` does it — checking
+ * a truncated value would let an over-long id pass as its own prefix.
+ */
+function optionalId(candidates: unknown[]): string | null {
+  const id = firstText(candidates, 4096);
+  if (id === null) return null;
+  return id.length <= MAX_EXTERNAL_ID && EXTERNAL_ID_RE.test(id) ? id : null;
+}
+
+/**
  * A score in `[PRIORITY_MIN, PRIORITY_MAX]`, or `null` if the payload does not
  * contain one.
  *
@@ -413,6 +433,13 @@ export function boundRaw(item: unknown): unknown {
  */
 export interface MailRow {
   external_id: string;
+  /**
+   * Gmail's conversation id. Plain optional metadata — deliberately **not**
+   * part of the triage triple below, so a message can have a thread and no
+   * score. Coupling it to `priority` would mean an untriaged reply lost its
+   * place in the conversation for no reason.
+   */
+  thread_id: string | null;
   sender: string | null;
   subject: string | null;
   snippet: string | null;
@@ -481,6 +508,7 @@ export function normalizeItem(item: unknown, ingestedAt: string): NormalizeResul
     ok: true,
     row: {
       external_id: externalId,
+      thread_id: optionalId([o.thread_id, o.threadId]),
       sender: firstText([o.sender, o.from], MAX_SENDER),
       subject: sanitizeText(o.subject, MAX_SUBJECT),
       snippet: sanitizeText(o.snippet, MAX_SNIPPET, { multiline: true }),

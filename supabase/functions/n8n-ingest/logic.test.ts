@@ -368,6 +368,7 @@ Deno.test("a hostile payload cannot name a table, a user or a filter", () => {
     "snippet",
     "subject",
     "suggested_reply",
+    "thread_id",
     "triage_model",
     "triaged_at",
   ]);
@@ -465,6 +466,7 @@ Deno.test("normalizeItem degrades every optional field rather than dropping the 
   assertEquals(row.snippet, null);
   assertEquals(row.category, null);
   assertEquals(row.suggested_reply, null);
+  assertEquals(row.thread_id, null);
   // ...but an absent priority is NULL, not a default, and the two companion
   // triage columns go null with it. `received_at` is still required, because a
   // message with no place in a time-sorted list is not showable at all.
@@ -528,6 +530,48 @@ Deno.test("triaged_at prefers the moment the model ran over ingest time", () => 
     rowOf({ priority: 10, triage_model: "m".repeat(MAX_TRIAGE_MODEL + 50) }).triage_model?.length,
     MAX_TRIAGE_MODEL,
   );
+});
+
+Deno.test("normalizeItem records the Gmail thread id under both spellings", () => {
+  assertEquals(rowOf({ threadId: "18f0aabbccddeeff" }).thread_id, "18f0aabbccddeeff");
+  assertEquals(rowOf({ thread_id: "18f0aabbccddeeff" }).thread_id, "18f0aabbccddeeff");
+  // snake_case wins when both are present, so one spelling is authoritative.
+  assertEquals(rowOf({ thread_id: "snake", threadId: "camel" }).thread_id, "snake");
+  // An empty string is n8n's unresolved-expression output, not a value: it must
+  // fall through to the other spelling rather than stopping there, which is
+  // what `a ?? b` would wrongly do.
+  assertEquals(rowOf({ thread_id: "", threadId: "18f0" }).thread_id, "18f0");
+  // Absent, blank or non-string is NULL, not a blank every consumer must
+  // special-case.
+  for (const bad of [undefined, null, "", "   ", 42, {}, []]) {
+    assertEquals(rowOf({ thread_id: bad }).thread_id, null, JSON.stringify(bad));
+  }
+});
+
+Deno.test("thread_id degrades to NULL rather than rejecting the message", () => {
+  // Same charset and length hygiene as external_id — it rides in the same
+  // all-or-nothing statement, so a value Postgres would refuse has to be caught
+  // before it stalls the whole batch. But unlike external_id it is metadata,
+  // not identity: a failure loses the threading hint, never the email.
+  for (const bad of ['a","b', "a,b", "a(b)", "a b", "id#1", "a".repeat(MAX_EXTERNAL_ID + 1)]) {
+    const r = normalizeItem(item({ thread_id: bad }), INGESTED_AT);
+    assertEquals(r.ok, true, bad);
+    if (!r.ok) return;
+    assertEquals(r.row.thread_id, null, bad);
+    // The message itself came through intact.
+    assertEquals(r.row.external_id, "18f0a1b2c3d4e5f6", bad);
+  }
+});
+
+Deno.test("an unscored message still records its thread", () => {
+  // thread_id is NOT part of the triage triple. Coupling it to `priority` the
+  // way triaged_at/triage_model are would mean an untriaged reply silently lost
+  // its place in the conversation.
+  const row = rowOf({ threadId: "18f0aabbccddeeff" });
+  assertEquals(row.priority, null);
+  assertEquals(row.triaged_at, null);
+  assertEquals(row.triage_model, null);
+  assertEquals(row.thread_id, "18f0aabbccddeeff");
 });
 
 Deno.test("normalizeItem accepts both the snake_case and camelCase spellings", () => {
