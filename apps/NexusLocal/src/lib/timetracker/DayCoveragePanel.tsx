@@ -38,7 +38,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { supabasePublic } from "../supabase";
-import { nodeUserId } from "../nodeUser";
+import { calendarOwnerUid } from "./calendarOwner";
 import { formatDuration } from "./UsageCharts";
 import { CATEGORIES } from "./categories";
 import {
@@ -168,7 +168,7 @@ export function DayCoveragePanel() {
   async function logGap(gap: Span, category: (typeof CATEGORIES)[number]) {
     setBusy(true);
     try {
-      const user = await nodeUserId();
+      const user = await calendarOwnerUid();
       const rounded = roundForLog(gap, winStart, winEnd);
       const { error: e } = await supabasePublic.from("pf_cal_blocks").insert({
         user_id: user,
@@ -200,7 +200,7 @@ export function DayCoveragePanel() {
   async function acceptSuggestion(suggestion: GapSuggestion, category: (typeof CATEGORIES)[number]) {
     setBusy(true);
     try {
-      const user = await nodeUserId();
+      const user = await calendarOwnerUid();
       const { error: e } = await supabasePublic.from("pf_recurring_cal_blocks").insert({
         user_id: user,
         title: `${category.emoji} ${category.name}`,

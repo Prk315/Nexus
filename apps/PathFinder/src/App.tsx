@@ -1,5 +1,7 @@
 import { useState } from "react";
 import { useNexusRegistration, NexusHeader, useNexusAuth } from "@nexus/core";
+import { ymd } from "@nexus/core/coverage";
+import { loadScreenSpansForDate } from "./lib/actual";
 import "./App.css";
 import { Sidebar, type Page } from "./components/Sidebar";
 import { SchedulesProvider } from "./contexts/SchedulesContext";
@@ -46,6 +48,7 @@ function App() {
             onHome={() => setPage("dashboard")}
             userEmail={user?.email}
             onSignOut={() => signOut()}
+            loadScreenSpans={() => loadScreenSpansForDate(ymd(new Date()))}
           />
         )}
 

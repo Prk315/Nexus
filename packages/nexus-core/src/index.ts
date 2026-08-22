@@ -4,6 +4,7 @@ export * from "./client";
 export * from "./auth/NexusAuth";
 export * from "./components/AppGridButton";
 export * from "./components/NexusHeader";
+export * from "./components/ClockDropdown";
 export * from "./components/LifeBar";
 export * from "./components/AgentBar";
 export * from "./components/CalendarSidebar";

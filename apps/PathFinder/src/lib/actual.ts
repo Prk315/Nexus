@@ -18,6 +18,26 @@ function sessionSpanEnd(startMs: number, durationSec: number): number {
 }
 
 /**
+ * A single day's per-app screen spans, epoch ms — the same `pf_usage_spans`
+ * bridge `loadActualWeek` uses below, just for one date and mapped straight
+ * to `{name, start, end}` instead of folded into `ActualDay`. Exported for
+ * NexusHeader's `loadScreenSpans` prop (see App.tsx): lazy, and safe in a
+ * bridgeless/browser run where `invoke` always fails the same way.
+ */
+export async function loadScreenSpansForDate(
+  date: string,
+): Promise<{ name: string; start: number; end: number }[]> {
+  try {
+    const rows = await invoke<UsageSpanRow[]>("pf_usage_spans", { date });
+    return rows
+      .map((row) => ({ name: row.name, start: Date.parse(row.start), end: Date.parse(row.end) }))
+      .filter((s) => Number.isFinite(s.start) && Number.isFinite(s.end));
+  } catch {
+    return [];
+  }
+}
+
+/**
  * Sleep only, clipped per day — split out of `loadActualWeek` so Week.tsx can
  * render the always-on sleep band (Phase E §7) without paying for the
  * screen/training queries that stay gated behind the "Actual" toggle.

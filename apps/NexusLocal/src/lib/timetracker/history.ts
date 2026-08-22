@@ -174,7 +174,7 @@ export function dismissSuggestion(key: string): void {
 
 import { invoke } from "@tauri-apps/api/core";
 import { supabasePublic } from "../supabase";
-import { nodeUserId } from "../nodeUser";
+import { calendarOwnerUid } from "./calendarOwner";
 import { parseSleepTs } from "./coverage";
 
 type UsageSpanRow = { name: string; start: string; end: string; seconds: number };
@@ -302,7 +302,7 @@ export async function loadHistory(days = 30): Promise<DayCoverage[]> {
 
   // Planned — one-off blocks over the range, plus recurring rules expanded
   // per day exactly as DayCoveragePanel does.
-  const user = await nodeUserId();
+  const user = await calendarOwnerUid();
   const [{ data: blocks }, { data: recurring }] = await Promise.all([
     supabasePublic
       .from("pf_cal_blocks")

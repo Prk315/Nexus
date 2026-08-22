@@ -16,7 +16,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { supabasePublic } from "../supabase";
-import { nodeUserId } from "../nodeUser";
+import { calendarOwnerUid } from "./calendarOwner";
 import { type Span, clip, dayStartMs, hmOn, parseSleepTs, shiftYmd } from "./coverage";
 
 type UsageInterval = { name: string; start: string; end: string; seconds: number };
@@ -147,7 +147,7 @@ export function useDayCoverage(date: string): DayCoverageData {
     // Planned — PathFinder's day, one-off blocks plus recurring expanded for
     // exactly this date, now carrying `category` alongside the span.
     const plannedSpans: PlannedSpan[] = [];
-    const user = await nodeUserId();
+    const user = await calendarOwnerUid();
     const [{ data: blocks }, { data: recurring }] = await Promise.all([
       supabasePublic
         .from("pf_cal_blocks")

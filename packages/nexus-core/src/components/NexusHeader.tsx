@@ -3,6 +3,7 @@ import { DropdownMenu } from "radix-ui";
 import { useConnectedApps } from "../hooks/useConnectedApps";
 import { cn } from "../utils";
 import type { ConnectedApp } from "../types";
+import { ClockDropdown, type ClockDropdownProps } from "./ClockDropdown";
 
 // Deployed ecosystem web apps, from per-deployment env vars. Entries with no URL
 // are hidden. Used by the header's app switcher to jump between the web apps.
@@ -27,8 +28,15 @@ interface NexusHeaderProps {
   onAgent?: () => void;
   onMail?: () => void;
   onMessages?: () => void;
+  /** Deprecated: when provided, the Clock button reverts to a plain no-op-able
+   *  button instead of the day-stats dropdown (kept for backwards compat —
+   *  no app passes this today). */
   onClock?: () => void;
   onCalendar?: () => void;
+  /** Optional: today's per-app screen spans, for the Clock dropdown's screen
+   *  category and mini timetrack strip. Only apps with a usage bridge pass
+   *  this (PathFinder). */
+  loadScreenSpans?: ClockDropdownProps["loadScreenSpans"];
 }
 
 // Small icon button — used for the right-side action row
@@ -71,6 +79,7 @@ export function NexusHeader({
   onMessages,
   onClock,
   onCalendar,
+  loadScreenSpans,
 }: NexusHeaderProps) {
   const { apps, isNexusRunning } = useConnectedApps();
 
@@ -155,7 +164,9 @@ export function NexusHeader({
         <IconBtn onClick={onAgent}    title="AI Agent"><Bot         className="h-4 w-4" /></IconBtn>
         <IconBtn onClick={onMail}     title="Mail">   <Mail         className="h-4 w-4" /></IconBtn>
         <IconBtn onClick={onMessages} title="Messages"><MessageSquare className="h-4 w-4" /></IconBtn>
-        <IconBtn onClick={onClock}    title="Clock">  <Clock        className="h-4 w-4" /></IconBtn>
+        {onClock
+          ? <IconBtn onClick={onClock} title="Clock"><Clock className="h-4 w-4" /></IconBtn>
+          : <ClockDropdown loadScreenSpans={loadScreenSpans} />}
         <IconBtn onClick={onCalendar} title="Calendar"><CalendarDays className="h-4 w-4" /></IconBtn>
 
         {/* App grid switcher */}

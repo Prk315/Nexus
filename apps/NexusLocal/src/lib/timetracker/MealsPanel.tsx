@@ -35,6 +35,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { supabasePublic } from "../supabase";
 import { nodeUserId } from "../nodeUser";
+import { calendarOwnerUid } from "./calendarOwner";
 
 type MealKey = "breakfast" | "lunch" | "dinner";
 
@@ -334,8 +335,10 @@ export function MealsPanel() {
             (apps.find((a) => a.process_name === t.process_name)?.display_name ??
               t.process_name),
         );
+      // PathFinder's calendar is keyed by the authed account, not the node id —
+      // see calendarOwner.ts. The RLS insert policy is pinned to that uid.
       const { error: calErr } = await supabasePublic.from("pf_cal_blocks").insert({
-        user_id: user,
+        user_id: await calendarOwnerUid(),
         date,
         title: `${meal.emoji} ${meal.label}`,
         start_time: hm,
