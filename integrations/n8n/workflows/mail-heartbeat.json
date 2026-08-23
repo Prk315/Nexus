@@ -1,0 +1,109 @@
+{
+  "id": "nexusMailHeartbeat1",
+  "name": "Nexus — Gmail triage heartbeat",
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "nodes": [
+    {
+      "id": "sticky-why",
+      "name": "Why this exists",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [-160, -220],
+      "parameters": {
+        "width": 760,
+        "height": 300,
+        "content": "## Why a second workflow\n\n`Nexus — Gmail triage` is driven by a **Gmail trigger**, and a polling trigger only\nfires when it has something to emit. So its `mail_sync` marker means *\"the last time\nmail arrived\"*, never *\"the last time we looked\"* — and a quiet weekend is\nindistinguishable from a stopped container, an expired credential, or a Mac that\nnever woke up.\n\n`MailPanel` reads the newest `kind='mail_sync', status='done'` row as its freshness\nsignal, so that gap is exactly the conflation the whole design exists to avoid.\n\nThis workflow closes it: on a schedule it **actually calls Gmail**, then records a run\nwith `fetched: 0`. Calling Gmail is the point — a heartbeat that only proved n8n was\nalive would keep reporting healthy while the Gmail credential silently expired. On the\nfree Google tier that is a real 7-day clock unless the consent screen is published.\n\nIt never ingests messages. Fetching is the trigger workflow's job, and two writers\nupserting the same rows is how you get a race for no benefit."
+      }
+    },
+    {
+      "id": "schedule",
+      "name": "Every 15 minutes",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [-160, 140],
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "minutes",
+              "minutesInterval": 15
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "gmail-probe",
+      "name": "Probe Gmail",
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.1,
+      "position": [80, 140],
+      "parameters": {
+        "resource": "message",
+        "operation": "getAll",
+        "returnAll": false,
+        "limit": 1,
+        "simple": true,
+        "filters": {},
+        "options": {}
+      },
+      "credentials": {
+        "gmailOAuth2": {
+          "id": null,
+          "name": "Nexus Gmail"
+        }
+      },
+      "alwaysOutputData": true,
+      "onError": "stopWorkflow"
+    },
+    {
+      "id": "build-run",
+      "name": "Build run marker",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [320, 140],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "// Build the `run` object `n8n-ingest` records as an `n8n_requests` row.\n//\n// The shape is fixed by the function's `RunPayload`; anything else it ignores.\n// `kind` is echoed for readability but the server writes its own constant — a\n// caller cannot forge a marker for another queue.\n//\n// `fetched: 0` is the honest number and the whole point of this workflow: we\n// looked, and we are not claiming to have ingested anything. Ingestion is the\n// trigger workflow's job, and it reports its own counts.\n//\n// Reaching this node at all means the Gmail call succeeded, because the probe\n// node is set to stop the workflow on error rather than continue. That is\n// deliberate: a heartbeat that still fires after Gmail starts refusing us would\n// keep `finished_at` moving and report a healthy sync over a dead credential —\n// the precise failure this exists to make visible. A failed run writes no\n// marker, `finished_at` goes stale, and the panel says so.\n\nconst probed = items.length;\n\nreturn [{\n  json: {\n    messages: [],\n    run: {\n      kind: 'mail_sync',\n      source: 'n8n:mail-heartbeat',\n      finished_at: new Date().toISOString(),\n      fetched: 0,\n      triaged: 0,\n      untriaged: 0,\n      probed_messages: probed,\n    },\n  },\n}];"
+      }
+    },
+    {
+      "id": "post-ingest",
+      "name": "POST n8n-ingest",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [560, 140],
+      "parameters": {
+        "method": "POST",
+        "url": "https://efxmzsdisaymtpebaxlp.supabase.co/functions/v1/n8n-ingest",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ messages: $json.messages, run: $json.run }) }}",
+        "options": {
+          "timeout": 60000
+        }
+      },
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": null,
+          "name": "Nexus n8n-ingest key"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Every 15 minutes": {
+      "main": [[{ "node": "Probe Gmail", "type": "main", "index": 0 }]]
+    },
+    "Probe Gmail": {
+      "main": [[{ "node": "Build run marker", "type": "main", "index": 0 }]]
+    },
+    "Build run marker": {
+      "main": [[{ "node": "POST n8n-ingest", "type": "main", "index": 0 }]]
+    }
+  }
+}

@@ -681,9 +681,21 @@ VITE_SUPABASE_URL=https://efxmzsdisaymtpebaxlp.supabase.co
 VITE_SUPABASE_ANON_KEY=<anon key from Supabase dashboard>
 ```
 
-**RLS posture**: all `pf_` tables have RLS enabled with a permissive `anon`
-policy (`USING (true)`). Tighten policies and add `auth.uid()` checks when
-Supabase Auth is introduced.
+⚠️ **RLS posture — this section was stale and is corrected here.** It used to say
+every `pf_` table carried a permissive `anon` policy (`USING (true)`) pending some
+future auth work. **PathFinder's auth is live.** `pf_tasks` and its neighbours are
+scoped to `auth.uid()` for the `authenticated` role, which is why `api.ts` reads them
+with the session client and why `apps/NexusLocal/src/lib/pathfinder/api.ts` says
+"`supabase`, not `supabasePublic`" at the top.
+
+This mattered in practice: correct code comments asserting owner-scoping were being
+"corrected" against this paragraph. The tables still carrying `USING (true)` are the
+thirteen productivity/grid ones — `time_entries`, `blocked_sites`, `focus_blocks` and
+company — enumerated in `SECURITY_RLS_MIGRATION.md`. Those are the defect. The `pf_`
+tables are not.
+
+The exception worth knowing is `pf_cal_blocks`, which additionally carries an anon
+read policy so the iOS widgets can render a day without a JWT.
 
 **Computed fields**: `pf_goals_with_counts` and `pf_plans_with_counts` are
 Postgres views (both `security_invoker = on` — without it a view bypasses the
@@ -944,7 +956,7 @@ manual click-through, and only shows up as content quietly vanishing on paste.
 
 ## Scheduled server-side work (pg_cron)
 
-Three jobs run in the database, and this is the pattern for anything that must happen
+Four jobs run in the database, and this is the pattern for anything that must happen
 while every device is asleep:
 
 | Job | Every | Function |
@@ -952,6 +964,12 @@ while every device is asleep:
 | `protocol-oura-daily-sync` | daily | `oura-sync` |
 | `protocol-bodyscan-sync` | 10 min | `bodyscan-sync` — decodes raw BLE scale captures |
 | `nexus-focus-evaluate` | 5 min | `focus-evaluate` — writes `blocking_state` |
+| `nexus-learn-evaluate` | ~15 min | `learn-evaluate` — writes `lr_learn_state` |
+
+⚠️ **Mail triage is deliberately NOT on this list.** It runs in n8n on the Mac, so it
+stops when the Mac sleeps — the exact failure this table exists to work around. The
+rule: *edge functions for what must happen, n8n for what is nice to happen.* Nothing
+load-bearing may hang off n8n.
 
 They `net.http_post` the function with the service-role key read from
 **Vault** (`vault.decrypted_secrets`), not inlined — rotating the key needs no job edit.

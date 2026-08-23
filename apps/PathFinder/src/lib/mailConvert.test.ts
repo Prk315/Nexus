@@ -60,30 +60,50 @@ describe("mailToTaskPayload — the axes", () => {
     // survives the split and ends as .update({ urgency: undefined }) — an empty
     // PATCH body.
     const payload = mailToTaskPayload(mail({ importance: null, urgency: null }));
-    expect(Object.keys(payload)).toEqual(["title", "due_date", "time_estimate", "notes"]);
+    expect(Object.keys(payload)).toEqual(["title", "time_estimate", "notes"]);
   });
 });
 
-describe("mailToTaskPayload — due date and estimate", () => {
-  it("carries an ISO date straight across", () => {
-    expect(mailToTaskPayload(mail()).due_date).toBe("2026-08-28");
+describe("mailToTaskPayload — the deadline is never written as a deadline", () => {
+  // The model gets roughly one extracted deadline in three right, measured with
+  // the arrival date supplied. `mail_messages.due_date` tolerates that because
+  // nothing acts on it. `pf_tasks.due_date` is what Dashboard sorts on and what
+  // daily.ts compares against today, so a guess there is indistinguishable from
+  // a deadline the owner set — and only discovered by missing it.
+
+  it("never puts due_date on the task, even for a perfectly valid date", () => {
+    expect("due_date" in keys(mail())).toBe(false);
+    expect("due_date" in keys(mail({ due_date: "2028-02-29" }))).toBe(false);
   });
 
-  it("refuses a non-ISO date — pf_tasks.due_date is TEXT and will accept anything", () => {
-    // The column predates the migrations directory and has no date type behind
-    // it. 'next Friday' would be stored verbatim and then sort and compare
-    // wrong forever, in the Week view and in every gte/lte range query.
-    expect("due_date" in keys(mail({ due_date: "next Friday" }))).toBe(false);
-    expect("due_date" in keys(mail({ due_date: "28/08/2026" }))).toBe(false);
-    expect("due_date" in keys(mail({ due_date: "2026-08-28T09:00:00Z" }))).toBe(false);
+  it("carries a valid date into notes, labelled unconfirmed", () => {
+    expect(mailToTaskPayload(mail()).notes).toContain(
+      "Suggested deadline (unconfirmed): 2026-08-28",
+    );
+    // A genuine leap day is still a real date and must survive.
+    expect(mailToTaskPayload(mail({ due_date: "2028-02-29" })).notes).toContain(
+      "Suggested deadline (unconfirmed): 2028-02-29",
+    );
   });
 
-  it("rejects a well-shaped date that does not exist", () => {
-    // '2026-02-30' passes the pattern and would compare as a real date forever.
-    expect("due_date" in keys(mail({ due_date: "2026-02-30" }))).toBe(false);
-    expect("due_date" in keys(mail({ due_date: "2026-13-01" }))).toBe(false);
-    // ...but a genuine leap day must survive.
-    expect(mailToTaskPayload(mail({ due_date: "2028-02-29" })).due_date).toBe("2028-02-29");
+  it("drops a non-ISO date rather than repeating it in prose", () => {
+    // Validation still applies on the way into the note: 'next Friday' in a
+    // note headed "Suggested deadline" is its own small lie, and the reader
+    // cannot tell it was never a date.
+    for (const bad of ["next Friday", "28/08/2026", "2026-08-28T09:00:00Z"]) {
+      expect(mailToTaskPayload(mail({ due_date: bad })).notes ?? "").not.toContain(
+        "Suggested deadline",
+      );
+    }
+  });
+
+  it("drops a well-shaped date that does not exist", () => {
+    // '2026-02-30' passes the pattern and V8 silently rolls it to March 3rd.
+    for (const bad of ["2026-02-30", "2026-13-01"]) {
+      expect(mailToTaskPayload(mail({ due_date: bad })).notes ?? "").not.toContain(
+        "Suggested deadline",
+      );
+    }
   });
 
   it("carries a whole number of minutes", () => {
@@ -150,14 +170,25 @@ describe("mailNotes", () => {
   });
 
   it("drops blank sections instead of emitting empty headings", () => {
-    const notes = mailNotes(mail({ snippet: null, suggested_reply: "  ", category: null }))!;
+    const notes = mailNotes(mail({
+      snippet: null, suggested_reply: "  ", category: null, due_date: null,
+    }))!;
     expect(notes).toBe("From: alice@example.com");
   });
 
   it("returns null when there is nothing to say", () => {
     expect(mailNotes(mail({
-      sender: "", snippet: null, suggested_reply: null, category: null,
+      sender: "", snippet: null, suggested_reply: null, category: null, due_date: null,
     }))).toBeNull();
+  });
+
+  it("omits the deadline line when the model gave no date", () => {
+    // The absent case has to stay silent: a heading reading "Suggested
+    // deadline: none" is a claim about the mail that nobody made.
+    const notes = mailNotes(mail({
+      snippet: null, suggested_reply: null, category: null, due_date: null,
+    }))!;
+    expect(notes).not.toContain("Suggested deadline");
   });
 });
 

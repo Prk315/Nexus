@@ -84,7 +84,9 @@ export type ConvertibleMail = {
 export type MailTaskPayload = {
   title: string;
   priority?: Priority;
-  due_date?: string;
+  // No `due_date`. Omitting it from the type rather than merely declining to
+  // set it is the point: a guessed deadline must not be one keystroke away
+  // from reaching `pf_tasks.due_date`. The reasoning is in `mailToTaskPayload`.
   time_estimate?: number;
   urgency?: Urgency;
   notes?: string;
@@ -181,6 +183,13 @@ export function mailNotes(mail: ConvertibleMail): string | null {
   const snippet = mail.snippet?.trim();
   if (snippet) parts.push(`Snippet:\n${snippet}`);
 
+  // The deadline the model *read out of the body*, carried as prose rather
+  // than written to `pf_tasks.due_date`. See `mailToTaskPayload` for why.
+  // Still routed through `isoDate`, so an impossible or malformed date is
+  // dropped here too — a note claiming "2026-02-31" is its own small lie.
+  const due = isoDate(mail.due_date);
+  if (due) parts.push(`Suggested deadline (unconfirmed): ${due}`);
+
   const reply = mail.suggested_reply?.trim();
   if (reply) parts.push(`Suggested reply:\n${reply}`);
 
@@ -203,6 +212,28 @@ export function mailNotes(mail: ConvertibleMail): string | null {
  *   without calendar minutes behind the task, and that gate exists nowhere else.
  * - `aggregate_estimate` — trigger-maintained. `time_estimate` is what a task
  *   claims for itself and is the only one of the pair anyone may write.
+ * - `due_date` — **deliberately not written**, and this is the one entry here
+ *   that is a judgement rather than a schema constraint.
+ *
+ *   The model reads deadlines out of prose, and on the workflow's own fixtures
+ *   it gets roughly one in three right — measured *with* the message's arrival
+ *   date supplied, so it is not a matter of the model not knowing what day it
+ *   is. `mail_messages.due_date` survives that because nothing acts on it:
+ *   the ingest validator bins anything impossible or implausibly far from the
+ *   arrival date, so a bad answer becomes NULL rather than a wrong date.
+ *
+ *   A task is different. `pf_tasks.due_date` is what Dashboard sorts on and
+ *   what `daily.ts` compares against today, so writing it here puts a guessed
+ *   deadline on a real calendar where it reads exactly like one the owner set.
+ *   That is the failure this codebase refuses everywhere else: a missing
+ *   verdict must never be dressed up as a computed one. A deadline that is
+ *   absent is visibly absent; a deadline that is wrong is invisible until it
+ *   is missed.
+ *
+ *   So the extracted date goes into `notes` as "Suggested deadline
+ *   (unconfirmed)" — the information is not lost, it just does not get to
+ *   impersonate a decision. Setting the real `due_date` stays a deliberate
+ *   act by the person reading the task.
  */
 export function mailToTaskPayload(mail: ConvertibleMail): MailTaskPayload {
   const payload: MailTaskPayload = {
@@ -215,8 +246,8 @@ export function mailToTaskPayload(mail: ConvertibleMail): MailTaskPayload {
   const urgency = axis<Urgency>(mail.urgency);
   if (urgency) payload.urgency = urgency;
 
-  const due = isoDate(mail.due_date);
-  if (due) payload.due_date = due;
+  // No `due_date` here on purpose — it is carried in `notes` instead. See the
+  // block comment above.
 
   const estimate = minutes(mail.time_estimate);
   if (estimate != null) payload.time_estimate = estimate;
