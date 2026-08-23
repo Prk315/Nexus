@@ -99,7 +99,17 @@ export type MailMessage = {
   /** Maps to `pf_task_planning.urgency` on conversion. Null = not determined. */
   urgency: MailAxis | null;
 
-  /** ISO date or timestamp. Maps to `pf_tasks.due_date`. */
+  /**
+   * A calendar date, `YYYY-MM-DD` — **never** a timestamp. The column is a real
+   * Postgres `date`, deliberately, so an instant would invent a time of day that
+   * can cross midnight in the viewer's timezone.
+   *
+   * It does **not** map to `pf_tasks.due_date`. The conversion carries it into
+   * the task's notes as an unconfirmed suggestion instead: the model gets
+   * roughly one extracted deadline in three right, and a guess written to the
+   * column Dashboard sorts on reads exactly like a deadline the owner set.
+   * See `mailToTaskPayload` in PathFinder.
+   */
   due_date: string | null;
   /** Minutes. Maps to `pf_tasks.time_estimate`. */
   time_estimate: number | null;

@@ -24,6 +24,7 @@ machine that can do the work does it, and the devices only read.
 | File | What it is |
 |---|---|
 | `workflows/mail-triage.json` | the workflow, importable into n8n 2.35.7 |
+| `workflows/mail-heartbeat.json` | the scheduled "we looked, and there was nothing" marker |
 
 ---
 
@@ -685,3 +686,31 @@ assuming the pipeline is broken, check the newest
 `finished_at`, not the row count in `mail_messages`, is the authoritative "last
 synced" signal. No such row means n8n has never completed a run, which is a
 different fact from an empty inbox.
+
+## The heartbeat, and why there are two workflows
+
+`mail-triage` is driven by a **Gmail trigger**, and a polling trigger only runs when
+it has something to emit. Its `mail_sync` marker therefore means *"the last time mail
+arrived"* — not *"the last time we looked"*. `MailPanel` reads the newest
+`kind='mail_sync', status='done'` row as its freshness signal, so on a quiet weekend
+the panel cannot tell a clean inbox from a stopped container, an expired credential,
+or a Mac that never woke up. That is the exact conflation the schema was built to
+prevent, reappearing one layer up.
+
+`mail-heartbeat` closes it. Every 15 minutes it **calls Gmail** and then records a run
+with `fetched: 0`.
+
+Calling Gmail is the load-bearing part. A heartbeat that merely proved n8n was alive
+would keep reporting healthy while the Gmail credential silently expired — and on the
+free Google tier that is a real 7-day clock unless the OAuth consent screen is
+published (Google Auth Platform → Audience → Publish app). The probe node is set to
+**stop the workflow on error**, so a failed Gmail call writes no marker at all,
+`finished_at` goes stale, and the panel says so instead of lying.
+
+It never ingests messages: fetching is the trigger workflow's job, and two writers
+upserting the same rows is a race for no benefit.
+
+Import it the same way as `mail-triage`, and wire the same two credentials — an
+import always arrives with `{"id": null}` and n8n resolves credentials by **id**, not
+by name, so a perfectly-named credential still reports "uses invalid credential" until
+you select it on the node.
