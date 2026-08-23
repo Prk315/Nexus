@@ -4,14 +4,14 @@ import {
   compareMail,
   groupByBucket,
   isHandled,
-  normalizePriority,
+  normalizeScore,
   plainLine,
   plainText,
-  priorityBucket,
+  scoreBucket,
   receivedAtMs,
   sortMail,
   triageInbox,
-} from "./priority";
+} from "./score";
 import type { MailMessage, MailStatus } from "./types";
 
 function msg(over: Partial<MailMessage> & { id: string }): MailMessage {
@@ -22,65 +22,71 @@ function msg(over: Partial<MailMessage> & { id: string }): MailMessage {
     subject: null,
     snippet: null,
     received_at: "2026-08-22T09:00:00Z",
-    priority: null,
+    score: null,
+    importance: null,
+    urgency: null,
+    due_date: null,
+    time_estimate: null,
     category: null,
+    rule_id: null,
     suggested_reply: null,
     triaged_at: null,
     triage_model: null,
+    task_id: null,
     status: "unread" as MailStatus,
     ...over,
   };
 }
 
-describe("normalizePriority", () => {
+describe("normalizeScore", () => {
   it("passes the 0-100 range through", () => {
-    expect(normalizePriority(0)).toBe(0);
-    expect(normalizePriority(42)).toBe(42);
-    expect(normalizePriority(100)).toBe(100);
+    expect(normalizeScore(0)).toBe(0);
+    expect(normalizeScore(42)).toBe(42);
+    expect(normalizeScore(100)).toBe(100);
   });
 
   it("clamps out-of-range scores rather than discarding the verdict", () => {
     // Mirrors clampPriority in the n8n-ingest function: a value that is present
     // but badly spelled is still a verdict.
-    expect(normalizePriority(-20)).toBe(0);
-    expect(normalizePriority(9001)).toBe(100);
+    expect(normalizeScore(-20)).toBe(0);
+    expect(normalizeScore(9001)).toBe(100);
   });
 
   it("rounds a float", () => {
-    expect(normalizePriority(72.4)).toBe(72);
-    expect(normalizePriority(72.6)).toBe(73);
+    expect(normalizeScore(72.4)).toBe(72);
+    expect(normalizeScore(72.6)).toBe(73);
   });
 
   it("keeps null as null — never coerced to a score", () => {
     // The whole contract: absent is not a verdict. Coercing to 0 would make
     // "not triaged yet" indistinguishable from "triaged, scored lowest".
-    expect(normalizePriority(null)).toBeNull();
-    expect(normalizePriority(undefined)).toBeNull();
-    expect(normalizePriority(Number.NaN)).toBeNull();
-    expect(normalizePriority(Number.POSITIVE_INFINITY)).toBeNull();
+    expect(normalizeScore(null)).toBeNull();
+    expect(normalizeScore(undefined)).toBeNull();
+    expect(normalizeScore(Number.NaN)).toBeNull();
+    expect(normalizeScore(Number.POSITIVE_INFINITY)).toBeNull();
   });
 });
 
-describe("priorityBucket", () => {
+describe("scoreBucket", () => {
   it("maps the scored range onto the four scored buckets", () => {
-    expect(priorityBucket(100)).toBe("urgent");
-    expect(priorityBucket(80)).toBe("urgent");
-    expect(priorityBucket(79)).toBe("high");
-    expect(priorityBucket(60)).toBe("high");
-    expect(priorityBucket(59)).toBe("normal");
-    expect(priorityBucket(30)).toBe("normal");
-    expect(priorityBucket(29)).toBe("low");
-    expect(priorityBucket(0)).toBe("low");
+    expect(scoreBucket(100)).toBe("urgent");
+    expect(scoreBucket(80)).toBe("urgent");
+    expect(scoreBucket(79)).toBe("high");
+    expect(scoreBucket(60)).toBe("high");
+    expect(scoreBucket(59)).toBe("normal");
+    expect(scoreBucket(30)).toBe("normal");
+    expect(scoreBucket(29)).toBe("low");
+    expect(scoreBucket(0)).toBe("low");
   });
 
   it("gives an unscored message its own bucket, distinct from low", () => {
-    expect(priorityBucket(null)).toBe("untriaged");
-    expect(priorityBucket(null)).not.toBe(priorityBucket(0));
+    expect(scoreBucket(null)).toBe("untriaged");
+    expect(scoreBucket(null)).not.toBe(scoreBucket(0));
   });
 
   it("has a label for every bucket it can return", () => {
     for (const p of [null, 0, 29, 30, 59, 60, 79, 80, 100, -5, 999]) {
-      expect(BUCKET_LABEL[priorityBucket(p)]).toBeTruthy();
+      expect(BUCKET_LABEL[scoreBucket(p)]).toBeTruthy();
     }
   });
 });
@@ -123,9 +129,9 @@ describe("sortMail", () => {
 
   it("puts higher priority first", () => {
     const sorted = sortMail([
-      msg({ id: "low", priority: 10 }),
-      msg({ id: "urgent", priority: 95 }),
-      msg({ id: "normal", priority: 45 }),
+      msg({ id: "low", score: 10 }),
+      msg({ id: "urgent", score: 95 }),
+      msg({ id: "normal", score: 45 }),
     ]);
     expect(sorted.map((m) => m.id)).toEqual(["urgent", "normal", "low"]);
   });
@@ -134,32 +140,32 @@ describe("sortMail", () => {
     // The contract, not a default: an unscored message is the one most likely
     // to need a human, so it must not sink below a scored-100 row.
     const sorted = sortMail([
-      msg({ id: "urgent", priority: 100 }),
-      msg({ id: "untriaged", priority: null }),
-      msg({ id: "low", priority: 5 }),
+      msg({ id: "urgent", score: 100 }),
+      msg({ id: "untriaged", score: null }),
+      msg({ id: "low", score: 5 }),
     ]);
     expect(sorted.map((m) => m.id)).toEqual(["untriaged", "urgent", "low"]);
   });
 
   it("orders two un-triaged messages by recency", () => {
     const sorted = sortMail([
-      msg({ id: "old", priority: null, received_at: older }),
-      msg({ id: "new", priority: null, received_at: newer }),
+      msg({ id: "old", score: null, received_at: older }),
+      msg({ id: "new", score: null, received_at: newer }),
     ]);
     expect(sorted.map((m) => m.id)).toEqual(["new", "old"]);
   });
 
   it("breaks a priority tie by recency, newest first", () => {
     const sorted = sortMail([
-      msg({ id: "old", priority: 70, received_at: older }),
-      msg({ id: "new", priority: 70, received_at: newer }),
+      msg({ id: "old", score: 70, received_at: older }),
+      msg({ id: "new", score: 70, received_at: newer }),
     ]);
     expect(sorted.map((m) => m.id)).toEqual(["new", "old"]);
   });
 
   it("is a total order, so equal rows never swap between renders", () => {
-    const a = msg({ id: "aaa", priority: 70, received_at: newer });
-    const b = msg({ id: "bbb", priority: 70, received_at: newer });
+    const a = msg({ id: "aaa", score: 70, received_at: newer });
+    const b = msg({ id: "bbb", score: 70, received_at: newer });
     expect(compareMail(a, b)).toBeLessThan(0);
     expect(compareMail(b, a)).toBeGreaterThan(0);
     expect(compareMail(a, a)).toBe(0);
@@ -167,14 +173,14 @@ describe("sortMail", () => {
   });
 
   it("is antisymmetric across the null boundary", () => {
-    const untriaged = msg({ id: "u", priority: null });
-    const scored = msg({ id: "s", priority: 100 });
+    const untriaged = msg({ id: "u", score: null });
+    const scored = msg({ id: "s", score: 100 });
     expect(compareMail(untriaged, scored)).toBeLessThan(0);
     expect(compareMail(scored, untriaged)).toBeGreaterThan(0);
   });
 
   it("does not mutate the input array", () => {
-    const input = [msg({ id: "a", priority: 10 }), msg({ id: "b", priority: 90 })];
+    const input = [msg({ id: "a", score: 10 }), msg({ id: "b", score: 90 })];
     const before = input.map((m) => m.id);
     sortMail(input);
     expect(input.map((m) => m.id)).toEqual(before);
@@ -184,10 +190,10 @@ describe("sortMail", () => {
 describe("triageInbox", () => {
   it("splits on status and sorts each side", () => {
     const t = triageInbox([
-      msg({ id: "p-low", priority: 10 }),
-      msg({ id: "h", priority: 99, status: "archived" }),
-      msg({ id: "p-urgent", priority: 95 }),
-      msg({ id: "r", priority: 50, status: "replied" }),
+      msg({ id: "p-low", score: 10 }),
+      msg({ id: "h", score: 99, status: "archived" }),
+      msg({ id: "p-urgent", score: 95 }),
+      msg({ id: "r", score: 50, status: "replied" }),
     ]);
     expect(t.pending.map((m) => m.id)).toEqual(["p-urgent", "p-low"]);
     expect(t.handled.map((m) => m.id)).toEqual(["h", "r"]);
@@ -209,19 +215,19 @@ describe("triageInbox", () => {
 describe("groupByBucket", () => {
   it("returns un-triaged first, then most urgent down, dropping empty buckets", () => {
     const groups = groupByBucket([
-      msg({ id: "a", priority: 10 }),
-      msg({ id: "b", priority: 95 }),
-      msg({ id: "c", priority: 85 }),
-      msg({ id: "d", priority: null }),
+      msg({ id: "a", score: 10 }),
+      msg({ id: "b", score: 95 }),
+      msg({ id: "c", score: 85 }),
+      msg({ id: "d", score: null }),
     ]);
     expect(groups.map((g) => g.bucket)).toEqual(["untriaged", "urgent", "low"]);
     expect(groups[0].messages.map((m) => m.id)).toEqual(["d"]);
-    expect(groups[0].label).toBe("Not yet triaged");
+    expect(groups[0].label).toBe("Not scored");
     expect(groups[1].messages.map((m) => m.id)).toEqual(["b", "c"]);
   });
 
   it("keeps every message exactly once", () => {
-    const input = [0, 30, 60, 80, 100, null].map((p, i) => msg({ id: `m${i}`, priority: p }));
+    const input = [0, 30, 60, 80, 100, null].map((p, i) => msg({ id: `m${i}`, score: p }));
     const ids = groupByBucket(input).flatMap((g) => g.messages.map((m) => m.id));
     expect(ids.sort()).toEqual(input.map((m) => m.id).sort());
   });

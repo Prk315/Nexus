@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { useNexusRegistration, NexusHeader, useNexusAuth, createMailLoader } from "@nexus/core";
+import { useNexusRegistration, NexusHeader, useNexusAuth, createMailLoader, createMailRulesApi } from "@nexus/core";
 import { ymd } from "@nexus/core/coverage";
 import { loadScreenSpansForDate } from "./lib/actual";
 import { supabase } from "./lib/supabase";
@@ -21,6 +21,7 @@ const IS_IOS = /iPhone|iPad|iPod/.test(navigator.userAgent);
 
 // Authenticated client, module scope — see packages/nexus-core/src/mail/loader.ts.
 const loadMail = createMailLoader(supabase);
+const mailRulesApi = createMailRulesApi(supabase);
 
 function App() {
   useNexusRegistration("PathFinder");
@@ -56,6 +57,7 @@ function App() {
             // Signed out the RLS read returns [], not an error — withhold the
             // loader so the button falls back rather than claiming "no mail".
             loadMail={user ? loadMail : undefined}
+            mailRulesApi={user ? mailRulesApi : undefined}
           />
         )}
 

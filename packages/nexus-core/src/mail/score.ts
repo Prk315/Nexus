@@ -1,13 +1,18 @@
 /**
  * Pure ordering / bucketing / sanitising for the mail triage list. No React,
  * no Supabase, no Tauri — same discipline as `coverage.ts`, so every rule here
- * is testable in isolation (`priority.test.ts`) and the panel stays a dumb
+ * is testable in isolation (`score.test.ts`) and the panel stays a dumb
  * renderer of whatever these functions decide.
+ *
+ * `score` is the model's **evidence** — one 0-100 number. The **verdict** is
+ * the importance x urgency pair in `axes.ts`. This file deliberately does not
+ * derive one from the other: a score is not an axis, and inventing axes from a
+ * number would launder a guess into something the UI presents as a decision.
  */
 
 import { HANDLED_STATUSES, type MailMessage } from "./types";
 
-// ── Priority scale ────────────────────────────────────────────────────────
+// ── Score scale ────────────────────────────────────────────────────────
 
 /**
  * `untriaged` is a first-class bucket, not a fallback, and it sorts **first**.
@@ -18,10 +23,10 @@ import { HANDLED_STATUSES, type MailMessage } from "./types";
  * `blocking_state` with zeros: it makes "no verdict yet" indistinguishable
  * from "verdict: nothing here", and hides the rows that most need looking at.
  */
-export type PriorityBucket = "untriaged" | "urgent" | "high" | "normal" | "low";
+export type ScoreBucket = "untriaged" | "urgent" | "high" | "normal" | "low";
 
 /** Render order: un-triaged first, then most urgent down. */
-export const PRIORITY_BUCKETS: readonly PriorityBucket[] = [
+export const SCORE_BUCKETS: readonly ScoreBucket[] = [
   "untriaged",
   "urgent",
   "high",
@@ -30,15 +35,15 @@ export const PRIORITY_BUCKETS: readonly PriorityBucket[] = [
 ] as const;
 
 /** Inclusive bounds of the scored range. Pinned in the migration's CHECK too. */
-export const PRIORITY_MIN = 0;
-export const PRIORITY_MAX = 100;
+export const SCORE_MIN = 0;
+export const SCORE_MAX = 100;
 
 /** Lower inclusive bound of each scored bucket, most urgent first. */
-export const BUCKET_FLOOR: Record<Exclude<PriorityBucket, "untriaged">, number> = {
+export const BUCKET_FLOOR: Record<Exclude<ScoreBucket, "untriaged">, number> = {
   urgent: 80,
   high: 60,
   normal: 30,
-  low: PRIORITY_MIN,
+  low: SCORE_MIN,
 };
 
 /**
@@ -50,13 +55,13 @@ export const BUCKET_FLOOR: Record<Exclude<PriorityBucket, "untriaged">, number> 
  * `null`. The two must not be conflated in either direction — which is why
  * this returns `number | null` rather than defaulting.
  */
-export function normalizePriority(value: number | null | undefined): number | null {
+export function normalizeScore(value: number | null | undefined): number | null {
   if (typeof value !== "number" || !Number.isFinite(value)) return null;
-  return Math.min(PRIORITY_MAX, Math.max(PRIORITY_MIN, Math.round(value)));
+  return Math.min(SCORE_MAX, Math.max(SCORE_MIN, Math.round(value)));
 }
 
-export function priorityBucket(value: number | null | undefined): PriorityBucket {
-  const p = normalizePriority(value);
+export function scoreBucket(value: number | null | undefined): ScoreBucket {
+  const p = normalizeScore(value);
   if (p === null) return "untriaged";
   if (p >= BUCKET_FLOOR.urgent) return "urgent";
   if (p >= BUCKET_FLOOR.high) return "high";
@@ -64,8 +69,8 @@ export function priorityBucket(value: number | null | undefined): PriorityBucket
   return "low";
 }
 
-export const BUCKET_LABEL: Record<PriorityBucket, string> = {
-  untriaged: "Not yet triaged",
+export const BUCKET_LABEL: Record<ScoreBucket, string> = {
+  untriaged: "Not scored",
   urgent: "Urgent",
   high: "High",
   normal: "Normal",
@@ -81,7 +86,7 @@ export const BUCKET_LABEL: Record<PriorityBucket, string> = {
  * grey — "we haven't looked at this" and "we looked, it's unimportant" are
  * opposite meanings and must not share a colour family.
  */
-export const BUCKET_HEX: Record<PriorityBucket, string> = {
+export const BUCKET_HEX: Record<ScoreBucket, string> = {
   untriaged: "#8b5cf6", // violet-500
   urgent: "#ef4444", // red-500
   high: "#f97316", // orange-500
@@ -128,8 +133,8 @@ export function receivedAtMs(message: MailMessage): number {
  * between renders and make the list visibly jitter.
  */
 export function compareMail(a: MailMessage, b: MailMessage): number {
-  const pa = normalizePriority(a.priority);
-  const pb = normalizePriority(b.priority);
+  const pa = normalizeScore(a.score);
+  const pb = normalizeScore(b.score);
   // nulls first, and only against a scored row — two un-triaged messages fall
   // through to recency together.
   if (pa === null && pb !== null) return -1;
@@ -182,24 +187,24 @@ export function triageInbox(messages: readonly MailMessage[]): MailTriage {
 }
 
 export type MailBucketGroup = {
-  bucket: PriorityBucket;
+  bucket: ScoreBucket;
   label: string;
   messages: MailMessage[];
 };
 
 /**
- * Group into priority buckets in `PRIORITY_BUCKETS` order. Empty buckets are
+ * Group into priority buckets in `SCORE_BUCKETS` order. Empty buckets are
  * dropped — a heading with nothing under it reads as a loading failure.
  */
 export function groupByBucket(messages: readonly MailMessage[]): MailBucketGroup[] {
-  const byBucket = new Map<PriorityBucket, MailMessage[]>();
+  const byBucket = new Map<ScoreBucket, MailMessage[]>();
   for (const m of sortMail(messages)) {
-    const bucket = priorityBucket(m.priority);
+    const bucket = scoreBucket(m.score);
     const list = byBucket.get(bucket);
     if (list) list.push(m);
     else byBucket.set(bucket, [m]);
   }
-  return PRIORITY_BUCKETS.filter((b) => byBucket.has(b)).map((bucket) => ({
+  return SCORE_BUCKETS.filter((b) => byBucket.has(b)).map((bucket) => ({
     bucket,
     label: BUCKET_LABEL[bucket],
     messages: byBucket.get(bucket)!,

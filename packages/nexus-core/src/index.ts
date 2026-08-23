@@ -14,9 +14,15 @@ export {
   MAIL_COLUMNS,
   OPEN_STATUSES,
   HANDLED_STATUSES,
+  type MailAxis,
+  type MailCategory,
   type MailMessage,
+  type MailRule,
+  type MailRuleField,
   type MailStatus,
 } from "./mail/types";
+export { createMailRulesApi, type MailRulesApi } from "./mail/rulesApi";
+export * from "./components/MailRulesDialog";
 export {
   createMailLoader,
   MAIL_FETCH_LIMIT,

@@ -50,6 +50,18 @@ interface NexusHeaderProps {
    * all and pass nothing. Build one with `createMailLoader(supabase)`.
    */
   loadMail?: MailPanelProps["loadMail"];
+  /**
+   * Writes for the triage-rules editor. Without it the Mail panel is read-only
+   * and its Rules button does not render — a form that cannot save is worse
+   * than no form.
+   */
+  mailRulesApi?: MailPanelProps["rulesApi"];
+  /**
+   * Turn a triaged message into a PathFinder task. Injected for the same
+   * reason `loadMail` is: nexus-core cannot import an app, and only the app
+   * owns the mail-field → task-field mapping.
+   */
+  onConvertMailToTask?: MailPanelProps["onConvertToTask"];
 }
 
 // Small icon button — used for the right-side action row
@@ -94,6 +106,8 @@ export function NexusHeader({
   onCalendar,
   loadScreenSpans,
   loadMail,
+  mailRulesApi,
+  onConvertMailToTask,
 }: NexusHeaderProps) {
   const { apps, isNexusRunning } = useConnectedApps();
 
@@ -178,7 +192,7 @@ export function NexusHeader({
         <IconBtn onClick={onAgent}    title="AI Agent"><Bot         className="h-4 w-4" /></IconBtn>
         {/* No loader (nexus / Stonks / TimeTracker — no session) → unchanged button. */}
         {loadMail
-          ? <MailPanel loadMail={loadMail} />
+          ? <MailPanel loadMail={loadMail} rulesApi={mailRulesApi} onConvertToTask={onConvertMailToTask} />
           : <IconBtn onClick={onMail} title="Mail"><Mail className="h-4 w-4" /></IconBtn>}
         <IconBtn onClick={onMessages} title="Messages"><MessageSquare className="h-4 w-4" /></IconBtn>
         {onClock

@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { NexusHeader, useNexusAuth, createMailLoader } from "@nexus/core";
+import { NexusHeader, useNexusAuth, createMailLoader, createMailRulesApi } from "@nexus/core";
 import { getSupabaseClient } from "../../lib/supabase";
 import NavTab from "./NavTab";
 import DashboardPage from "../../pages/DashboardPage";
@@ -11,6 +11,7 @@ import SettingsPage from "../../pages/SettingsPage";
 
 // Authenticated client, module scope — see packages/nexus-core/src/mail/loader.ts.
 const loadMail = createMailLoader(getSupabaseClient());
+const mailRulesApi = createMailRulesApi(getSupabaseClient());
 
 const TABS = ["Dashboard", "Biomarkers", "Workouts", "Habits", "Meal Planner", "Settings"] as const;
 type Tab = (typeof TABS)[number];
@@ -45,6 +46,7 @@ export default function AppShell() {
         // Signed out the RLS read returns [], not an error — withhold the
         // loader so the button falls back rather than claiming "no mail".
         loadMail={user ? loadMail : undefined}
+            mailRulesApi={user ? mailRulesApi : undefined}
       />
       <div
         style={{

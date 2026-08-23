@@ -1,8 +1,8 @@
-import { useRef, useState } from "react";
-import { Mail, ChevronDown, ChevronRight } from "lucide-react";
+import { useMemo, useRef, useState } from "react";
+import { Mail, ChevronDown, ChevronRight, SlidersHorizontal, CheckCircle2, Plus, Clock3 } from "lucide-react";
 import { DropdownMenu } from "radix-ui";
 import { cn } from "../utils";
-import type { MailMessage } from "../mail/types";
+import type { MailAxis, MailCategory, MailMessage } from "../mail/types";
 import { MAIL_FETCH_LIMIT, type MailLoader, type MailSnapshot } from "../mail/loader";
 import {
   BUCKET_HEX,
@@ -10,10 +10,20 @@ import {
   groupByBucket,
   plainLine,
   plainText,
-  priorityBucket,
+  scoreBucket,
   triageInbox,
   type MailTriage,
-} from "../mail/priority";
+} from "../mail/score";
+import {
+  IMPORTANCE_DOT,
+  URGENCY_FILL,
+  axisSummary,
+  normalizeAxis,
+} from "../mail/axes";
+import { indexCategories, resolveCategory, type ResolvedCategory } from "../mail/categories";
+import type { MailRule } from "../mail/types";
+import type { MailRulesApi } from "../mail/rulesApi";
+import { MailRulesDialog } from "./MailRulesDialog";
 
 /**
  * The Mail dropdown: n8n's Gmail triage, priority-first, with the drafted
@@ -32,8 +42,24 @@ import {
 const REFETCH_AFTER_MS = 5 * 60 * 1000;
 
 export type MailPanelProps = {
-  /** Open mail plus the freshness signal. See `createMailLoader`. */
+  /** Open mail, categories, rules and the freshness signal. See `createMailLoader`. */
   loadMail: MailLoader;
+  /**
+   * Writes for the rules editor. Optional: without it the panel is read-only
+   * and the rules button does not render.
+   */
+  rulesApi?: MailRulesApi;
+  /**
+   * Turn a message into a PathFinder task.
+   *
+   * Injected exactly like `loadMail`, and for the same reason — nexus-core
+   * cannot import an app. PathFinder owns the mapping (`importance` →
+   * `pf_tasks.priority`, `urgency` → `pf_task_planning.urgency`, and
+   * emphatically **not** mail's `category` → `pf_tasks.category`, which is the
+   * ISA subtype discriminator). Apps that cannot create tasks pass nothing and
+   * the action does not render.
+   */
+  onConvertToTask?: (message: MailMessage) => Promise<void>;
 };
 
 // ── Small local helpers ──────────────────────────────────────────────────
@@ -63,25 +89,173 @@ function displaySender(sender: string | null): string {
   return named ? named[1].trim() : flat;
 }
 
+// ── The two axes, in PathFinder's visual language ────────────────────────
+
+/**
+ * Importance is a coloured dot; urgency is a fill-count meter. Two different
+ * *forms*, deliberately — see `mail/axes.ts`. Same pair, same order, as
+ * `TaskRow` in PathFinder, so someone who uses both apps reads it without
+ * relearning.
+ *
+ * A null axis renders **nothing at all**, exactly as PathFinder omits the
+ * urgency meter for a task with no planning row rather than drawing it at 2/3.
+ * A greyed-out glyph would still occupy the slot and read as a value.
+ */
+function ImportanceDot({ importance }: { importance: MailAxis | null }) {
+  if (!importance) return null;
+  return (
+    <span
+      aria-hidden
+      className={cn("h-2 w-2 shrink-0 rounded-full", IMPORTANCE_DOT[importance])}
+    />
+  );
+}
+
+function UrgencyMeter({ urgency }: { urgency: MailAxis | null }) {
+  if (!urgency) return null;
+  const level = URGENCY_FILL[urgency];
+  return (
+    <span aria-hidden className="inline-flex h-2.5 shrink-0 items-end gap-[1px]">
+      {[1, 2, 3].map((i) => (
+        <span
+          key={i}
+          className={cn(
+            "w-[2px] rounded-[1px]",
+            i === 1 && "h-1",
+            i === 2 && "h-1.5",
+            i === 3 && "h-2.5",
+            i <= level ? "bg-amber-500" : "bg-muted-foreground/25",
+          )}
+        />
+      ))}
+    </span>
+  );
+}
+
+/**
+ * The pair, plus an explicit marker when the verdict is incomplete.
+ *
+ * "Half-decided" is its own state and gets its own word. Without it, a message
+ * with importance but no urgency is visually identical to one where the
+ * urgency glyph just happens to be off-screen.
+ */
+function AxisPair({ message }: { message: MailMessage }) {
+  const importance = normalizeAxis(message.importance);
+  const urgency = normalizeAxis(message.urgency);
+  const summary = axisSummary(importance, urgency);
+  if (!importance && !urgency) return null;
+  return (
+    <span className="inline-flex items-center gap-1" title={summary} aria-label={summary}>
+      <ImportanceDot importance={importance} />
+      <UrgencyMeter urgency={urgency} />
+      {(!importance || !urgency) && (
+        <span className="text-[9px] italic text-muted-foreground/50">part-set</span>
+      )}
+    </span>
+  );
+}
+
+function CategoryChip({ category }: { category: ResolvedCategory }) {
+  const title =
+    category.resolution === "unknown"
+      ? `${category.name} — no matching category (renamed or deleted)`
+      : category.resolution === "disabled"
+        ? `${category.name} — category is disabled`
+        : category.colorResolution === "unrecognized"
+          ? `${category.name} — colour not recognised`
+          : category.name;
+  return (
+    <span
+      title={title}
+      className={cn(
+        "inline-flex items-center gap-1 rounded-sm px-1.5 py-px text-[9px] text-muted-foreground",
+        // The signal is form, not hue: a broken colour cannot be announced with
+        // a colour, because every colour is one a user might have picked.
+        category.resolution === "matched" && category.colorResolution === "ok"
+          ? "bg-muted"
+          : "border border-dashed border-muted-foreground/40",
+      )}
+    >
+      <span
+        aria-hidden
+        className="h-1.5 w-1.5 rounded-full"
+        style={{ backgroundColor: category.hex }}
+      />
+      {category.emoji ? `${category.emoji} ` : ""}
+      {plainLine(category.name, 24)}
+      {category.resolution === "disabled" && (
+        <span className="text-muted-foreground/50">(off)</span>
+      )}
+    </span>
+  );
+}
+
+/** "45m" / "1h 30m" for a minute estimate. */
+function fmtEstimate(min: number | null): string {
+  if (typeof min !== "number" || !Number.isFinite(min) || min <= 0) return "";
+  const h = Math.floor(min / 60);
+  const rem = Math.round(min % 60);
+  if (h > 0 && rem > 0) return `${h}h ${rem}m`;
+  if (h > 0) return `${h}h`;
+  return `${rem}m`;
+}
+
+/** A due date as a short local date. Empty for anything unparseable. */
+function fmtDue(value: string | null): string {
+  if (!value) return "";
+  const t = Date.parse(value);
+  if (!Number.isFinite(t)) return "";
+  return new Date(t).toLocaleDateString(undefined, { day: "numeric", month: "short" });
+}
+
 // ── Row ──────────────────────────────────────────────────────────────────
 
-function MailRow({ message }: { message: MailMessage }) {
+function MailRow({
+  message,
+  category,
+  rule,
+  onConvertToTask,
+}: {
+  message: MailMessage;
+  category: ResolvedCategory | null;
+  rule: MailRule | null;
+  onConvertToTask?: (message: MailMessage) => Promise<void>;
+}) {
   const [expanded, setExpanded] = useState(false);
-  const bucket = priorityBucket(message.priority);
-  // All four of these are LLM-authored from arbitrary email content. They are
+  const [converting, setConverting] = useState(false);
+  const [convertError, setConvertError] = useState(false);
+  const bucket = scoreBucket(message.score);
+  // Every one of these is LLM-authored from arbitrary email content. They are
   // rendered as React children (escaped) and passed through plainText/plainLine
   // first; nothing here ever goes near dangerouslySetInnerHTML.
   const subject = plainLine(message.subject, 120) || "(no subject)";
   const snippet = plainLine(message.snippet, 160);
-  const category = plainLine(message.category, 24);
   const reply = plainText(message.suggested_reply, 1200);
+  const due = fmtDue(message.due_date);
+  const estimate = fmtEstimate(message.time_estimate);
+  const converted = message.task_id !== null;
+
+  async function handleConvert() {
+    if (!onConvertToTask || converting || converted) return;
+    setConverting(true);
+    setConvertError(false);
+    try {
+      await onConvertToTask(message);
+    } catch {
+      // The row keeps offering the action; the refetch on next open is what
+      // settles whether it actually landed.
+      setConvertError(true);
+    } finally {
+      setConverting(false);
+    }
+  }
 
   return (
     <li className="rounded-md px-1.5 py-1.5 hover:bg-accent/50 transition-colors">
       <div className="flex items-start gap-2">
         <span
           aria-hidden
-          title={`${BUCKET_LABEL[bucket]} priority`}
+          title={`${BUCKET_LABEL[bucket]}`}
           className="mt-1.5 h-2 w-2 shrink-0 rounded-full"
           style={{ backgroundColor: BUCKET_HEX[bucket] }}
         />
@@ -98,12 +272,44 @@ function MailRow({ message }: { message: MailMessage }) {
           {snippet && (
             <p className="truncate text-[10px] text-muted-foreground/60">{snippet}</p>
           )}
-          <div className="mt-1 flex items-center gap-1.5">
-            {category && (
-              <span className="rounded-sm bg-muted px-1.5 py-px text-[9px] text-muted-foreground">
-                {category}
+
+          <div className="mt-1 flex flex-wrap items-center gap-1.5">
+            <AxisPair message={message} />
+            {category && <CategoryChip category={category} />}
+            {due && (
+              <span className="text-[9px] text-muted-foreground/70" title="Due date">
+                due {due}
               </span>
             )}
+            {estimate && (
+              <span
+                className="inline-flex items-center gap-0.5 text-[9px] text-muted-foreground/70"
+                title="Time estimate"
+              >
+                <Clock3 className="h-2.5 w-2.5" />
+                {estimate}
+              </span>
+            )}
+          </div>
+
+          {/*
+            Attribution. "High urgency because <rule>" is the difference between
+            a system the user trusts and one that feels arbitrary — and it is
+            also the only way to notice a rule that is firing on more than it
+            should.
+          */}
+          {rule && (
+            <p className="mt-0.5 truncate text-[9px] text-muted-foreground/60">
+              Set by rule “{plainLine(rule.name, 40)}”
+            </p>
+          )}
+          {!rule && message.rule_id && (
+            <p className="mt-0.5 text-[9px] text-muted-foreground/60">
+              Set by a rule that no longer exists
+            </p>
+          )}
+
+          <div className="mt-1 flex flex-wrap items-center gap-1.5">
             {reply ? (
               // A bare <button> inside DropdownMenu.Content is mouse-only:
               // Radix preventDefaults Tab within the content and drives arrow
@@ -131,7 +337,34 @@ function MailRow({ message }: { message: MailMessage }) {
                 no draft
               </span>
             )}
+
+            {/* Converted mail must not offer to convert again. */}
+            {converted ? (
+              <span
+                className="inline-flex items-center gap-0.5 px-1 text-[9px] text-emerald-600 dark:text-emerald-400"
+                title={`Already a task (#${message.task_id})`}
+              >
+                <CheckCircle2 className="h-2.5 w-2.5" />
+                Task #{message.task_id}
+              </span>
+            ) : onConvertToTask ? (
+              <DropdownMenu.Item asChild onSelect={(e) => e.preventDefault()}>
+                <button
+                  type="button"
+                  onClick={handleConvert}
+                  disabled={converting}
+                  className="inline-flex items-center gap-0.5 rounded-sm px-1 py-px text-[9px] text-muted-foreground outline-none hover:bg-accent hover:text-foreground focus:bg-accent focus:text-foreground transition-colors disabled:opacity-50"
+                >
+                  <Plus className="h-2.5 w-2.5" />
+                  {converting ? "Creating…" : "Make task"}
+                </button>
+              </DropdownMenu.Item>
+            ) : null}
+            {convertError && (
+              <span className="text-[9px] italic text-destructive">couldn't create</span>
+            )}
           </div>
+
           {expanded && reply && (
             <p className="mt-1 max-h-40 overflow-y-auto whitespace-pre-wrap rounded-md border border-border bg-muted/40 p-1.5 text-[10px] leading-relaxed text-muted-foreground">
               {reply}
@@ -160,7 +393,24 @@ function WindowNotice({ triage }: { triage: MailTriage }) {
   );
 }
 
-function TriageList({ triage }: { triage: MailTriage }) {
+function TriageList({
+  triage,
+  categories,
+  rules,
+  onConvertToTask,
+}: {
+  triage: MailTriage;
+  categories: readonly MailCategory[];
+  rules: readonly MailRule[];
+  onConvertToTask?: (message: MailMessage) => Promise<void>;
+}) {
+  // Built once per render rather than per row: a linear scan per message would
+  // be O(messages x categories) across a 100-row window.
+  const byName = useMemo(() => indexCategories(categories), [categories]);
+  const rulesById = useMemo(
+    () => new Map(rules.map((r) => [r.id, r])),
+    [rules],
+  );
   const groups = groupByBucket(triage.pending);
   return (
     <div className="flex flex-col gap-2">
@@ -181,7 +431,13 @@ function TriageList({ triage }: { triage: MailTriage }) {
           </div>
           <ul className="flex flex-col">
             {group.messages.map((m) => (
-              <MailRow key={m.id} message={m} />
+              <MailRow
+                key={m.id}
+                message={m}
+                category={resolveCategory(m.category, byName)}
+                rule={m.rule_id ? (rulesById.get(m.rule_id) ?? null) : null}
+                onConvertToTask={onConvertToTask}
+              />
             ))}
           </ul>
         </div>
@@ -198,11 +454,12 @@ function TriageList({ triage }: { triage: MailTriage }) {
 
 // ── Root ─────────────────────────────────────────────────────────────────
 
-export function MailPanel({ loadMail }: MailPanelProps) {
+export function MailPanel({ loadMail, rulesApi, onConvertToTask }: MailPanelProps) {
   const [snapshot, setSnapshot] = useState<MailSnapshot | null>(null);
   const [triage, setTriage] = useState<MailTriage | null>(null);
   const [failed, setFailed] = useState(false);
   const [loading, setLoading] = useState(false);
+  const [rulesOpen, setRulesOpen] = useState(false);
   const lastFetchRef = useRef(0);
 
   function handleOpenChange(open: boolean) {
@@ -233,6 +490,16 @@ export function MailPanel({ loadMail }: MailPanelProps) {
       .finally(() => setLoading(false));
   }
 
+  /**
+   * Editing rules invalidates the cached snapshot — not because the mail
+   * changes (rules are not retroactive; see `RETROACTIVITY_COPY`) but because
+   * the *rules themselves* are part of it, and a stale copy would show the
+   * editor's own list reverting on reopen.
+   */
+  function invalidate() {
+    lastFetchRef.current = 0;
+  }
+
   const pendingCount = triage?.pending.length ?? 0;
 
   return (
@@ -259,13 +526,33 @@ export function MailPanel({ loadMail }: MailPanelProps) {
             "data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 data-[state=closed]:zoom-out-95 data-[state=open]:zoom-in-95",
           )}
         >
-          <div className="flex items-baseline justify-between px-1">
+          <div className="flex items-center justify-between gap-2 px-1">
             <p className="text-[11px] font-semibold text-foreground">Mail</p>
-            {triage && pendingCount > 0 && (
-              <span className="text-[10px] tabular-nums text-muted-foreground">
-                {pendingCount} to triage
-              </span>
-            )}
+            <div className="flex items-center gap-2">
+              {triage && pendingCount > 0 && (
+                <span className="text-[10px] tabular-nums text-muted-foreground">
+                  {pendingCount} to triage
+                </span>
+              )}
+              {/*
+                Without a write API the editor would be a form that cannot save,
+                so the button simply does not exist — same contract as
+                `onConvertToTask`.
+              */}
+              {rulesApi && (
+                <DropdownMenu.Item asChild onSelect={(e) => e.preventDefault()}>
+                  <button
+                    type="button"
+                    onClick={() => setRulesOpen(true)}
+                    title="Triage rules"
+                    className="inline-flex items-center gap-1 rounded-sm px-1 py-px text-[10px] text-muted-foreground outline-none hover:bg-accent hover:text-foreground focus:bg-accent focus:text-foreground transition-colors"
+                  >
+                    <SlidersHorizontal className="h-3 w-3" />
+                    Rules
+                  </button>
+                </DropdownMenu.Item>
+              )}
+            </div>
           </div>
 
           {loading && !triage && (
@@ -310,7 +597,14 @@ export function MailPanel({ loadMail }: MailPanelProps) {
             </div>
           )}
 
-          {!loading && triage && pendingCount > 0 && <TriageList triage={triage} />}
+          {!loading && triage && pendingCount > 0 && (
+            <TriageList
+              triage={triage}
+              categories={snapshot?.categories ?? []}
+              rules={snapshot?.rules ?? []}
+              onConvertToTask={onConvertToTask}
+            />
+          )}
 
           {/* Footer: when the pipeline last actually ran. An unparseable
               timestamp yields "", so render nothing rather than a dangling
@@ -322,6 +616,22 @@ export function MailPanel({ loadMail }: MailPanelProps) {
           )}
         </DropdownMenu.Content>
       </DropdownMenu.Portal>
+
+      {/*
+        Rendered as a sibling of the dropdown, not inside its Content: the
+        dropdown closes on outside-pointer-down, and a dialog nested in it would
+        be torn down by its own first click.
+      */}
+      {rulesApi && (
+        <MailRulesDialog
+          open={rulesOpen}
+          onOpenChange={(o) => { setRulesOpen(o); if (!o) invalidate(); }}
+          rules={snapshot?.rules ?? []}
+          categories={snapshot?.categories ?? []}
+          api={rulesApi}
+          onChanged={invalidate}
+        />
+      )}
     </DropdownMenu.Root>
   );
 }

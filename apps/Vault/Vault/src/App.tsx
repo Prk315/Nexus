@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef, useMemo, Suspense } from "react";
-import { useNexusRegistration, NexusHeader, useNexusAuth, CalendarSidebar, createMailLoader } from "@nexus/core";
+import { useNexusRegistration, NexusHeader, useNexusAuth, CalendarSidebar, createMailLoader, createMailRulesApi } from "@nexus/core";
 import * as api from "./lib/api";
 import { supabase } from "./lib/supabase";
 import { loadPathfinderDay, entryToEvent, toIsoDate, type PfCalEntry } from "./lib/pathfinderCalendar";
@@ -29,6 +29,7 @@ const LearnMode = lazyWithReload(() => import("./learn/LearnMode").then(m => ({ 
 
 // Authenticated client, module scope — see packages/nexus-core/src/mail/loader.ts.
 const loadMail = createMailLoader(supabase);
+const mailRulesApi = createMailRulesApi(supabase);
 
 // Some WebViews / browsers (hardware accel off, sandboxed GPU) can't create a
 // WebGL context. ForceGraph3D throws synchronously in that case and white-screens
@@ -457,6 +458,7 @@ function App() {
         // Signed out the RLS read returns [], not an error — withhold the
         // loader so the button falls back rather than claiming "no mail".
         loadMail={user ? loadMail : undefined}
+            mailRulesApi={user ? mailRulesApi : undefined}
         center={
           <div className="app-mode-toggle">
             <button className={appMode === "vault" ? "active" : ""} onClick={() => setAppMode("vault")}>Vault</button>

@@ -16,12 +16,18 @@
 
 import type { SupabaseClient } from "@supabase/supabase-js";
 import {
+  MAIL_CATEGORIES_TABLE,
+  MAIL_CATEGORY_COLUMNS,
   MAIL_COLUMNS,
+  MAIL_RULES_TABLE,
+  MAIL_RULE_COLUMNS,
   MAIL_SYNC_KIND,
   MAIL_TABLE,
   N8N_REQUESTS_TABLE,
   OPEN_STATUSES,
+  type MailCategory,
   type MailMessage,
+  type MailRule,
 } from "./types";
 
 /**
@@ -45,6 +51,13 @@ export const MAIL_FETCH_LIMIT = 100;
  */
 export type MailSnapshot = {
   messages: MailMessage[];
+  /**
+   * The user's categories, including disabled ones. Disabled rows are kept so
+   * a message already filed under one still resolves — see `resolveCategory`.
+   */
+  categories: MailCategory[];
+  /** The user's rules, for the editor. The panel never evaluates them. */
+  rules: MailRule[];
   /** ISO timestamp of the last completed sync, or `null` if n8n has never run. */
   lastSyncedAt: string | null;
 };
@@ -75,7 +88,7 @@ export function createMailLoader(
   return async () => {
     if (!client) throw new Error("mail: no Supabase client");
 
-    const [messagesRes, syncRes] = await Promise.all([
+    const [messagesRes, categoriesRes, rulesRes, syncRes] = await Promise.all([
       client
         .from(MAIL_TABLE)
         .select(MAIL_COLUMNS)
@@ -93,6 +106,19 @@ export function createMailLoader(
         .order("received_at", { ascending: false })
         .limit(limit),
       client
+        .from(MAIL_CATEGORIES_TABLE)
+        .select(MAIL_CATEGORY_COLUMNS)
+        // Disabled categories are fetched too: `enabled` governs what a picker
+        // offers, not what an already-filed message can display. Filtering here
+        // would make mail filed under a disabled category look uncategorised.
+        .order("sort", { ascending: true }),
+      client
+        .from(MAIL_RULES_TABLE)
+        .select(MAIL_RULE_COLUMNS)
+        // `sort` is precedence, so this is evaluation order. Disabled rules
+        // keep their place — see `orderRules`.
+        .order("sort", { ascending: true }),
+      client
         .from(N8N_REQUESTS_TABLE)
         .select("finished_at")
         .eq("kind", MAIL_SYNC_KIND)
@@ -105,6 +131,17 @@ export function createMailLoader(
     ]);
 
     if (messagesRes.error) throw new Error(messagesRes.error.message ?? "mail: query failed");
+    // Categories and rules are *decoration and configuration*, not the mail
+    // itself. A failure in either degrades to an empty list — every category
+    // then resolves through the unknown-name path, which renders visibly, and
+    // the rules editor shows its own empty state. Failing the whole load would
+    // hide real mail behind a broken config read.
+    const categories: MailCategory[] = categoriesRes.error
+      ? []
+      : ((categoriesRes.data ?? []) as unknown as MailCategory[]);
+    const rules: MailRule[] = rulesRes.error
+      ? []
+      : ((rulesRes.data ?? []) as unknown as MailRule[]);
     // A freshness read that fails must not be reported as "never synced" —
     // that is the very conflation this field exists to prevent. Fail the whole
     // load instead and let the panel show "unavailable" over the last good
@@ -112,7 +149,9 @@ export function createMailLoader(
     if (syncRes.error) throw new Error(syncRes.error.message ?? "mail: freshness query failed");
 
     return {
-      messages: (messagesRes.data ?? []) as MailMessage[],
+      messages: (messagesRes.data ?? []) as unknown as MailMessage[],
+      categories,
+      rules,
       lastSyncedAt: (syncRes.data?.finished_at as string | null | undefined) ?? null,
     };
   };
