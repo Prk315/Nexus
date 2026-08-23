@@ -32,6 +32,12 @@ const IS_IOS = /iPhone|iPad|iPod/.test(navigator.userAgent);
  * Resolves to `void` — the panel only needs to know it worked, and a rejection
  * carries the message the user has to see (notably the "task created but not
  * linked" case, where converting again would duplicate).
+ *
+ * Note the prop is `onConvertMailToTask` on `NexusHeader` but `onConvertToTask`
+ * on `MailPanel` — the header disambiguates because it carries several `on*`
+ * handlers. Pass it as a plain attribute and never through a spread: the header
+ * destructures a fixed prop list, so a spread of a misspelled key is dropped in
+ * silence and the button renders but does nothing.
  */
 async function handleConvertMail(m: ConvertibleMail): Promise<void> {
   await convertMailToTask(m);
@@ -39,26 +45,6 @@ async function handleConvertMail(m: ConvertibleMail): Promise<void> {
   // waiting out the 30s staleTime or a manual reload.
   await queryClient.invalidateQueries({ queryKey: qk.tasks });
 }
-
-/**
- * ⚠️ TEMPORARY, AND CURRENTLY INERT. Passed by spread rather than as a plain
- * JSX attribute because `NexusHeaderProps` has no `onConvertToTask` — not on
- * `main`, and not on the mail-header branch (PR #118) either, whose `MailPanel`
- * still destructures `({ loadMail })` only. A JSX spread of a variable skips
- * excess-property checking, where a literal attribute would not compile.
- *
- * So nothing calls this today: `NexusHeader` destructures a fixed prop list and
- * silently drops the unknown key. Nothing in the toolchain will report that —
- * `handleConvertMail` *is* referenced, so it is not dead code to tsc.
- *
- * The moment nexus-core's `MailPanel` accepts
- * `onConvertToTask?: (m: MailMessage) => Promise<void>` and `NexusHeader`
- * forwards it, delete this object and pass the handler directly, so that a
- * signature change becomes a compile error again. The contravariance works out:
- * `MailMessage` is a superset of `ConvertibleMail`, so a handler taking the
- * narrower type is assignable where the wider one is expected.
- */
-const mailConvertProps = { onConvertToTask: handleConvertMail };
 
 function App() {
   useNexusRegistration("PathFinder");
@@ -91,7 +77,7 @@ function App() {
             userEmail={user?.email}
             onSignOut={() => signOut()}
             loadScreenSpans={() => loadScreenSpansForDate(ymd(new Date()))}
-            {...mailConvertProps}
+            onConvertMailToTask={handleConvertMail}
           />
         )}
 
