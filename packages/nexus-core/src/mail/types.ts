@@ -157,34 +157,106 @@ export type MailCategory = {
   enabled: boolean;
 };
 
-/** What a `mail_rules` row matches on. */
-export type MailRuleField = "sender" | "domain" | "subject" | "list_id";
+/**
+ * The four match columns. Columns rather than a `jsonb` blob so a typo'd key
+ * is a column error instead of a rule that silently never fires.
+ */
+export type MailRuleMatchField =
+  | "match_sender"
+  | "match_domain"
+  | "match_subject"
+  | "match_list_id";
+
+export const MAIL_RULE_MATCH_FIELDS: readonly MailRuleMatchField[] = [
+  "match_sender",
+  "match_domain",
+  "match_subject",
+  "match_list_id",
+] as const;
+
+/** The four action columns. */
+export type MailRuleActionField =
+  | "set_category"
+  | "set_importance"
+  | "set_urgency"
+  | "set_status";
+
+export const MAIL_RULE_ACTION_FIELDS: readonly MailRuleActionField[] = [
+  "set_category",
+  "set_importance",
+  "set_urgency",
+  "set_status",
+] as const;
+
+/**
+ * What a rule may set `status` to.
+ *
+ * Deliberately a **subset** of `MailStatus`, and CHECK-constrained to it: a
+ * rule may pre-read or archive, but may never claim you `replied` to
+ * something. Offering `replied` in the editor would fail at write time.
+ */
+export type MailRuleStatus = "read" | "archived";
+
+export const MAIL_RULE_STATUSES: readonly MailRuleStatus[] = ["read", "archived"];
 
 /**
  * A user-defined triage rule.
  *
  * The panel **edits** these; it never evaluates them. `n8n-ingest` applies them
- * server-side, before the model, so a rule always beats the model
- * deterministically and the same message cannot be classified two ways by two
- * clients. That split is the same one as `focus-evaluate` → `blocking_state`:
- * the thing that can compute the verdict does so once, and every reader just
- * reads it.
+ * server-side, *after* the model, and a rule always wins over the model's
+ * verdict. That split is the house "no client derives policy" rule — the same
+ * shape as `focus-evaluate` collapsing six tables into one `blocking_state`
+ * row — and it is what makes an override deterministic. If the rules lived in
+ * the n8n workflow instead, the verdict would depend on which version of the
+ * workflow happened to run.
+ *
+ * # Matching is AND
+ *
+ * All **non-null** match fields must match; a null field does not constrain.
+ * So one rule expresses "from `@bank.dk` *and* subject contains invoice"; it
+ * cannot express "or" — that is two rules, which the precedence model below
+ * makes cheap.
+ *
+ * # Precedence is all-match-apply, last write wins
+ *
+ * Every enabled matching rule applies in ascending `sort`, each non-null action
+ * overwriting the previous, so the **highest `sort`** among matching rules wins
+ * a direct conflict. Not first-match-wins: a rule that only sets a category
+ * must not block a later rule that only sets urgency, or the user would have to
+ * write the cross product.
+ *
+ * A null action **does not clear** an earlier rule's value — it simply declines
+ * to participate in that field.
+ *
+ * Both constraints are enforced in the database (`mail_rules_has_match`,
+ * `mail_rules_has_action`), so a rule that matches nothing or does nothing
+ * cannot be stored. That is not fussiness: a rule with no match fields matches
+ * *every* message, and with `set_status = 'archived'` it silently empties the
+ * inbox — a symptom that points nowhere near the rule.
  */
 export type MailRule = {
   id: string;
-  name: string;
+  /** Optional label for the UI ("Bank statements"). Not a key. */
+  name: string | null;
   enabled: boolean;
-  /** Precedence. Lower runs first — see `RULE_PRECEDENCE`. */
+  /** Precedence, ascending. Highest matching `sort` wins a conflict. */
   sort: number;
-  field: MailRuleField;
-  /** The value to match. Substring for `subject`, exact-ish otherwise. */
-  pattern: string;
-  /** Actions. A null action leaves the field for the model to decide. */
+  /** Tie-break after `sort`, mirroring the evaluator. */
+  created_at: string;
+
+  /** Full address, compared case-insensitively. */
+  match_sender: string | null;
+  /** Everything after the `@`, stored without it. */
+  match_domain: string | null;
+  /** Case-insensitive substring of the subject. */
+  match_subject: string | null;
+  /** RFC 2919 List-Id — how bulk mail is honestly identified. */
+  match_list_id: string | null;
+
   set_category: string | null;
   set_importance: MailAxis | null;
   set_urgency: MailAxis | null;
-  /** Skip the tray entirely — the message lands already `archived`. */
-  auto_archive: boolean;
+  set_status: MailRuleStatus | null;
 };
 
 export const MAIL_TABLE = "mail_messages";
@@ -209,4 +281,5 @@ export const MAIL_COLUMNS =
 export const MAIL_CATEGORY_COLUMNS = "id,name,color,emoji,sort,enabled";
 
 export const MAIL_RULE_COLUMNS =
-  "id,name,enabled,sort,field,pattern,set_category,set_importance,set_urgency,auto_archive";
+  "id,name,enabled,sort,created_at,match_sender,match_domain,match_subject,match_list_id," +
+  "set_category,set_importance,set_urgency,set_status";

@@ -18,7 +18,9 @@ export {
   type MailCategory,
   type MailMessage,
   type MailRule,
-  type MailRuleField,
+  type MailRuleMatchField,
+  type MailRuleActionField,
+  type MailRuleStatus,
   type MailStatus,
 } from "./mail/types";
 export { createMailRulesApi, type MailRulesApi } from "./mail/rulesApi";

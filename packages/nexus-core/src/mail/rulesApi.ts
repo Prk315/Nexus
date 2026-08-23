@@ -15,8 +15,9 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import { MAIL_RULES_TABLE, MAIL_RULE_COLUMNS, type MailRule } from "./types";
 
 export type MailRulesApi = {
-  create: (rule: Omit<MailRule, "id">) => Promise<MailRule>;
-  update: (id: string, patch: Partial<Omit<MailRule, "id">>) => Promise<MailRule>;
+  /** `id` and `created_at` are assigned by the database. */
+  create: (rule: Omit<MailRule, "id" | "created_at">) => Promise<MailRule>;
+  update: (id: string, patch: Partial<MailRule>) => Promise<MailRule>;
   remove: (id: string) => Promise<void>;
   /** Persist a whole renumbered order — see `reorderRules`. */
   reorder: (order: readonly { id: string; sort: number }[]) => Promise<void>;
@@ -42,7 +43,7 @@ export function createMailRulesApi(
         .select(MAIL_RULE_COLUMNS)
         .single();
       if (error) throw new Error(error.message ?? "mail: rule create failed");
-      return data as MailRule;
+      return data as unknown as MailRule;
     },
 
     async update(id, patch) {
@@ -53,7 +54,7 @@ export function createMailRulesApi(
         .select(MAIL_RULE_COLUMNS)
         .single();
       if (error) throw new Error(error.message ?? "mail: rule update failed");
-      return data as MailRule;
+      return data as unknown as MailRule;
     },
 
     async remove(id) {
@@ -67,9 +68,11 @@ export function createMailRulesApi(
     async reorder(order) {
       if (order.length === 0) return;
       // One statement, not N. A per-row loop can fail partway and leave the
-      // precedence list interleaved — which, under first-match-wins, silently
-      // changes which rule decides every future message. `upsert` on the
-      // primary key applies the whole renumbering atomically.
+      // precedence list interleaved — and under all-match-apply that is worse
+      // than it would be under first-match-wins: a conflicting pair silently
+      // swaps which one wins for all future mail, while both still sit in the
+      // list looking exactly as before. `upsert` on the primary key applies the
+      // whole renumbering atomically.
       const { error } = await requireClient()
         .from(MAIL_RULES_TABLE)
         .upsert(order as { id: string; sort: number }[], { onConflict: "id" });
