@@ -13,6 +13,7 @@ query after each.
 | 2 | `20260805120100_pomodoro_config.sql` | `pomodoro_config` table + seed `'default'` row |
 | 3 | `20260805120200_schedule_block_targets.sql` | `schedule_block_apps`, `schedule_block_sites` |
 | 4 | `20260805120300_unlock_rules_enabled_and_evaluator_indexes.sql` | `unlock_rules.enabled` + three evaluator indexes |
+| 5 | `20260822120000_n8n_mail_bus.sql` | `mail_messages`, `n8n_requests` — **apply before deploying `n8n-ingest` / `n8n-requests`, or both 500 on every call** |
 
 Files 1–3 are independent of each other and of file 4. File 4 has an **internal**
 ordering requirement (the `ALTER` must precede the index that uses the new
@@ -21,6 +22,12 @@ file as a whole is always correct.
 
 File 3 requires `focus_blocks` to already exist — it does, live since the
 TimeTracker era.
+
+File 5 is not part of the productivity stack — it is the mail bus behind
+`NexusHeader`'s mail panel (see CLAUDE.md, "Mail triage: n8n on the Mac, Supabase
+as the bus"). It depends on nothing in files 1–4 and can be applied on its own.
+Its RLS posture is deliberately the **opposite** of theirs; verify it with §5
+below, not with the "RLS, all new tables" section.
 
 Every file is forward-only and re-runnable: `CREATE TABLE IF NOT EXISTS`,
 `CREATE INDEX IF NOT EXISTS`, `ADD COLUMN IF NOT EXISTS`, `INSERT … ON CONFLICT
@@ -147,7 +154,72 @@ order  by 1, 2;
 
 Expect all five (the last two land with file 3).
 
-### RLS, all new tables
+### 5. `mail_messages` and `n8n_requests`
+
+```sql
+select * from public.mail_messages;
+select * from public.n8n_requests;
+```
+
+Expect **0 rows in both** — deliberate, and for the same reason `blocking_state`
+has no seed row. An empty `mail_messages` must be readable as "n8n has never
+run", which is not the same fact as "the inbox is clean"; last-synced is read
+from the newest `n8n_requests` row with `kind = 'mail_sync'` and
+`status = 'done'`, never from a row count.
+
+Confirm the shapes and the upsert target instead:
+
+```sql
+select table_name, column_name, data_type, is_nullable
+from   information_schema.columns
+where  table_schema = 'public'
+  and  table_name in ('mail_messages', 'n8n_requests')
+order  by table_name, ordinal_position;
+```
+
+Expect `user_id` to be **`uuid NO`** on both — not the legacy `text default
+'default'` the productivity tables use — and `priority`, `category`,
+`suggested_reply`, `triaged_at` on `mail_messages` all **nullable** (`YES`).
+NULL means "not yet triaged", which the panel sorts to the top; a `not null
+default 0` would bury un-triaged mail at the bottom.
+
+```sql
+select indexname, indexdef
+from   pg_indexes
+where  schemaname = 'public'
+  and  tablename in ('mail_messages', 'n8n_requests')
+order  by 1;
+```
+
+Expect `mail_messages_user_external` to be **UNIQUE and not partial** — it is the
+`on_conflict` target for the ingest upsert, and PostgREST cannot infer a partial
+index, which surfaces at runtime as an opaque 409 on every write rather than at
+deploy time. `n8n_requests_queued` *is* partial, and safely so: nothing upserts
+onto that table.
+
+RLS — note this is the inverse of every table above:
+
+```sql
+select tablename, rowsecurity from pg_tables
+where  schemaname = 'public'
+  and  tablename in ('mail_messages', 'n8n_requests');
+
+select tablename, policyname, roles::text, cmd, qual, with_check
+from   pg_policies
+where  schemaname = 'public'
+  and  tablename in ('mail_messages', 'n8n_requests')
+order  by tablename;
+```
+
+Expect `rowsecurity = true` on both and exactly **one** policy each —
+`{authenticated}`, `ALL`, `qual = with_check = (user_id = auth.uid())`. **A row
+with `{anon}` in `roles` is a bug**, not a convenience: these tables hold
+senders, subjects, body snippets and draft replies, and the anon key is
+committed in a public repo. The omission is the security model — same reasoning
+as `usage_intervals`. Writes get in via the service-role client inside the edge
+functions, which bypasses RLS by design.
+
+### RLS, all new tables (files 1–4 only)
 
 ```sql
 select tablename, rowsecurity from pg_tables
@@ -182,6 +254,7 @@ violation then surfaces as an opaque HTTP 409. Writers must send:
 | `pomodoro_config` | `user_id` |
 | `schedule_block_apps` | `block_id,process_name` |
 | `schedule_block_sites` | `block_id,domain` |
+| `mail_messages` | `user_id,external_id` |
 
 ## After applying
 
@@ -194,16 +267,37 @@ supabase functions deploy focus-evaluate --project-ref efxmzsdisaymtpebaxlp
 
 Its pg_cron schedule is likewise not created here — see work unit 8.
 
+Likewise for file 5's two functions, which will 500 on every call until the
+migration is applied:
+
+```bash
+supabase functions deploy n8n-ingest   --project-ref efxmzsdisaymtpebaxlp
+supabase functions deploy n8n-requests --project-ref efxmzsdisaymtpebaxlp
+```
+
+Each needs its own scoped secret set separately (`npx supabase secrets set`) —
+n8n has no Supabase session and cannot satisfy `auth.uid()`, exactly like the
+Rust daemon and `usage-ingest`. Never put a key in the repo; it is public.
+
 ## Rollback
 
 Forward-only by policy. If you must undo, do it by hand and note that dropping
 `blocking_state` loses the current verdict (the next `focus-evaluate` run
 rebuilds it), dropping `pomodoro_config` loses the user's durations, and dropping
 `schedule_block_apps` / `schedule_block_sites` loses every focus-block payload
-with no way to rebuild it:
+with no way to rebuild it.
+
+Dropping `mail_messages` loses the triage history and the `raw` Gmail payloads a
+re-triage would have replayed; dropping `n8n_requests` loses both the queued work
+and the only "last synced" signal. And both are read by deployed code the moment
+the header ships — **stop reading it → merge → deploy → then drop**, per the
+`pf_reminders` incident in CLAUDE.md.
 
 ```sql
 -- destructive; only with intent
+drop table if exists public.n8n_requests;
+drop table if exists public.mail_messages;
+drop function if exists public.mail_messages_touch();
 drop table if exists public.schedule_block_apps;
 drop table if exists public.schedule_block_sites;
 drop table if exists public.pomodoro_config;
