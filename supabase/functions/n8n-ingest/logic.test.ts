@@ -7,6 +7,7 @@ import {
   coerceTimestamp,
   DEFAULT_STATUS,
   domainMatches,
+  EMPTY_RULE_SUBJECT,
   dedupeByExternalId,
   type MailRow,
   MAX_CATEGORY,
@@ -16,7 +17,7 @@ import {
   MAX_SUBJECT,
   MAIL_SYNC_KIND,
   type MailRule,
-  MATCH_KINDS,
+  MATCH_FIELDS,
   MAX_SUGGESTED_REPLY,
   MAX_RULES,
   MAX_TIME_ESTIMATE,
@@ -30,6 +31,7 @@ import {
   parseMinutes,
   parsePayload,
   parseRun,
+  RULE_PRECEDENCE,
   ruleMatches,
   type RuleSubject,
   SCORE_MAX,
@@ -38,6 +40,7 @@ import {
   secretIsUsable,
   secretMatches,
   senderAddress,
+  listIdValue,
   senderDomain,
   truncateSafe,
   withRules,
@@ -1173,22 +1176,32 @@ Deno.test("the model's `priority` spelling is still accepted for `score`", () =>
 // "a rule always beats the model, deterministically" actually be asserted.
 
 const RULE_SUBJECT: RuleSubject = {
-  sender: "Ada Lovelace <ada@mail.example.com>",
+  sender: "Ada Lovelace <ada@mail.bank.dk>",
   subject: "Invoice #42 for August",
   list_id: "Nexus Announce <announce.example.org>",
 };
 
-const rule = (over: Partial<MailRule> = {}): MailRule => ({
-  id: "r1",
+/** A `mail_rules` row as PostgREST returns it. */
+const ruleRow = (over: Record<string, unknown> = {}) => ({
+  id: "11111111-1111-1111-1111-111111111111",
   sort: 0,
-  match: "sender",
-  value: "ada@mail.example.com",
-  category: null,
-  importance: null,
-  urgency: null,
-  status: null,
+  created_at: "2026-08-01T00:00:00Z",
+  match_sender: null,
+  match_domain: "bank.dk",
+  match_subject: null,
+  match_list_id: null,
+  set_category: null,
+  set_importance: null,
+  set_urgency: null,
+  set_status: null,
   ...over,
 });
+
+const rule = (over: Record<string, unknown> = {}): MailRule => {
+  const r = normalizeRule(ruleRow(over));
+  if (!r) throw new Error(`rule was dropped: ${JSON.stringify(over)}`);
+  return r;
+};
 
 Deno.test("senderAddress finds the address inside a display name", () => {
   assertEquals(senderAddress("Ada Lovelace <ada@example.com>"), "ada@example.com");
@@ -1204,35 +1217,80 @@ Deno.test("senderAddress finds the address inside a display name", () => {
 });
 
 Deno.test("domain matching respects label boundaries", () => {
-  assertEquals(senderDomain("Ada <ada@mail.example.com>"), "mail.example.com");
-  assertEquals(domainMatches("example.com", "example.com"), true);
-  assertEquals(domainMatches("mail.example.com", "example.com"), true);
-  assertEquals(domainMatches("a.b.example.com", "example.com"), true);
-  // THE trap: a bare endsWith makes a rule for example.com match a different
+  // `match_domain` is stored without the '@', which is the form this compares.
+  assertEquals(senderDomain("Ada <ada@mail.bank.dk>"), "mail.bank.dk");
+  assertEquals(domainMatches("bank.dk", "bank.dk"), true);
+  assertEquals(domainMatches("mail.bank.dk", "bank.dk"), true);
+  assertEquals(domainMatches("a.b.bank.dk", "bank.dk"), true);
+  // THE trap: a bare endsWith makes a rule for bank.dk match a different
   // organisation, and that is exactly the shape a phishing domain takes.
-  assertEquals(domainMatches("notexample.com", "example.com"), false);
-  assertEquals(domainMatches("example.com.evil.net", "example.com"), false);
-  assertEquals(domainMatches("com", "example.com"), false);
+  assertEquals(domainMatches("notbank.dk", "bank.dk"), false);
+  assertEquals(domainMatches("bank.dk.evil.net", "bank.dk"), false);
+  assertEquals(domainMatches("dk", "bank.dk"), false);
 });
 
-Deno.test("ruleMatches covers all four kinds and matches literally", () => {
-  assertEquals(ruleMatches(rule({ match: "sender" }), RULE_SUBJECT), true);
+Deno.test("listIdValue reads the bracketed RFC 2919 id", () => {
+  assertEquals(listIdValue("Nexus Announce <announce.example.org>"), "announce.example.org");
+  assertEquals(listIdValue("announce.example.org"), "announce.example.org");
+  assertEquals(listIdValue("  <ANNOUNCE.Example.ORG>  "), "announce.example.org");
+  for (const bad of [null, "", "   ", "<>"]) {
+    assertEquals(listIdValue(bad), null, JSON.stringify(bad));
+  }
+});
+
+Deno.test("a rule's match fields are ANDed, not ORed", () => {
+  // Within one rule every non-null field must match. This is what lets "from
+  // @bank.dk AND subject contains invoice" be one rule instead of a cross
+  // product of every combination the user wants.
+  const both = rule({ match_domain: "bank.dk", match_subject: "invoice", set_category: "Bill" });
+  assertEquals(ruleMatches(both, RULE_SUBJECT), true);
+  // Either half failing fails the whole rule.
   assertEquals(
-    ruleMatches(rule({ match: "sender", value: "eve@mail.example.com" }), RULE_SUBJECT),
+    ruleMatches(
+      rule({ match_domain: "bank.dk", match_subject: "receipt", set_category: "Bill" }),
+      RULE_SUBJECT,
+    ),
     false,
   );
-  assertEquals(ruleMatches(rule({ match: "domain", value: "example.com" }), RULE_SUBJECT), true);
-  assertEquals(ruleMatches(rule({ match: "domain", value: "notexample.com" }), RULE_SUBJECT), false);
-  assertEquals(ruleMatches(rule({ match: "subject", value: "invoice" }), RULE_SUBJECT), true);
-  assertEquals(ruleMatches(rule({ match: "subject", value: "receipt" }), RULE_SUBJECT), false);
   assertEquals(
-    ruleMatches(rule({ match: "list_id", value: "announce.example.org" }), RULE_SUBJECT),
+    ruleMatches(
+      rule({ match_domain: "other.dk", match_subject: "invoice", set_category: "Bill" }),
+      RULE_SUBJECT,
+    ),
+    false,
+  );
+  // A null field does not constrain.
+  assertEquals(
+    ruleMatches(rule({ match_domain: null, match_subject: "invoice", set_category: "x" }), RULE_SUBJECT),
+    true,
+  );
+});
+
+Deno.test("ruleMatches covers all four match fields", () => {
+  assertEquals(
+    ruleMatches(rule({ match_domain: null, match_sender: "ada@mail.bank.dk", set_category: "x" }), RULE_SUBJECT),
+    true,
+  );
+  assertEquals(
+    ruleMatches(rule({ match_domain: null, match_sender: "eve@mail.bank.dk", set_category: "x" }), RULE_SUBJECT),
+    false,
+  );
+  assertEquals(ruleMatches(rule({ set_category: "x" }), RULE_SUBJECT), true);
+  assertEquals(
+    ruleMatches(rule({ match_domain: null, match_subject: "invoice", set_category: "x" }), RULE_SUBJECT),
+    true,
+  );
+  assertEquals(
+    ruleMatches(
+      rule({ match_domain: null, match_list_id: "announce.example.org", set_category: "x" }),
+      RULE_SUBJECT,
+    ),
     true,
   );
   // Nothing to match against is not a match.
-  const empty: RuleSubject = { sender: null, subject: null, list_id: null };
-  for (const match of MATCH_KINDS) {
-    assertEquals(ruleMatches(rule({ match, value: "x" }), empty), false, match);
+  for (const field of MATCH_FIELDS) {
+    const r = rule({ match_domain: null, [field]: "announce.example.org", set_category: "x" });
+    assertEquals(ruleMatches(r, EMPTY_RULE_SUBJECT), false, field);
   }
 });
 
@@ -1241,165 +1299,220 @@ Deno.test("rule values are matched literally, never as a regex", () => {
   // everything and `(a+)+$` against a long subject would hang the ingest path
   // with every message queued behind it. They must simply not match.
   const subject: RuleSubject = { sender: null, subject: "Invoice #42", list_id: null };
-  assertEquals(ruleMatches(rule({ match: "subject", value: ".*" }), subject), false);
-  assertEquals(ruleMatches(rule({ match: "subject", value: "^invoice" }), subject), false);
-  assertEquals(ruleMatches(rule({ match: "subject", value: "invoice.#42" }), subject), false);
+  const sub = (value: string) =>
+    ruleMatches(rule({ match_domain: null, match_subject: value, set_category: "x" }), subject);
+  assertEquals(sub(".*"), false);
+  assertEquals(sub("^invoice"), false);
+  assertEquals(sub("invoice.#42"), false);
+  assertEquals(sub("(a+)+$"), false);
   // ...while the literal text does match.
-  assertEquals(ruleMatches(rule({ match: "subject", value: "invoice #42" }), subject), true);
+  assertEquals(sub("invoice #42"), true);
 });
 
-Deno.test("normalizeRule drops rules that cannot match or cannot act", () => {
-  // Dropping, not rejecting: one malformed rule must not disable the other
-  // forty, and must certainly not fail the ingest.
-  assertEquals(normalizeRule({ id: "r", match: "sender", value: "a@b.com", enabled: false }), null);
-  assertEquals(normalizeRule({ id: "r", match: "nonsense", value: "x", category: "c" }), null);
-  assertEquals(normalizeRule({ id: "r", match: "sender", value: "", category: "c" }), null);
-  assertEquals(normalizeRule({ match: "sender", value: "a@b.com", category: "c" }), null);
-  // A rule that sets nothing is not a rule.
-  assertEquals(normalizeRule({ id: "r", match: "sender", value: "a@b.com" }), null);
-  // Only `archived` is a settable status — a rule that could set `unread` or
-  // `replied` would be a way to overwrite the user's own triage from a config row.
+Deno.test("normalizeRule enforces both CHECK constraints in code", () => {
+  // Re-asserted rather than trusted: this code also runs against whatever a
+  // future migration leaves behind.
+  //
+  // mail_rules_has_match — a rule constraining nothing matches EVERY message,
+  // and with set_status='archived' that silently empties the inbox while the
+  // symptom points nowhere near the rule.
   assertEquals(
-    normalizeRule({ id: "r", match: "sender", value: "a@b.com", status: "unread" }),
+    normalizeRule({ ...ruleRow({ set_category: "Bill" }), match_domain: null }),
     null,
   );
-  const archived = normalizeRule({ id: "r", match: "sender", value: "a@b.com", status: "archived" });
-  assertEquals(archived?.status, "archived");
-  // Values are lower-cased once at normalisation, not per message.
-  assertEquals(
-    normalizeRule({ id: "r", match: "subject", value: "  INVOICE  ", category: "bills" })?.value,
-    "invoice",
-  );
+  // mail_rules_has_action — a no-op rule the user will swear is broken.
+  assertEquals(normalizeRule(ruleRow()), null);
+  // Disabled rules never reach the engine, and are re-checked here so the pure
+  // function is correct on its own.
+  assertEquals(normalizeRule(ruleRow({ enabled: false, set_category: "Bill" })), null);
+  assertEquals(normalizeRule(ruleRow({ id: null, set_category: "Bill" })), null);
+  for (const bad of [null, undefined, 1, "x", []]) {
+    assertEquals(normalizeRule(bad), null, JSON.stringify(bad));
+  }
 });
 
-Deno.test("normalizeRules orders by sort and is bounded", () => {
+Deno.test("a rule may pre-read or archive, but may never claim you replied", () => {
+  assertEquals(rule({ set_status: "archived" }).set_status, "archived");
+  assertEquals(rule({ set_status: "read" }).set_status, "read");
+  // `replied` is excluded at the database and again here: nothing automated
+  // gets to claim you answered something. `unread` is excluded because it is
+  // the default, so a rule setting it could only ever undo another rule.
+  for (const bad of ["replied", "unread", "deleted", "", 1, true]) {
+    assertEquals(
+      normalizeRule(ruleRow({ set_status: bad })),
+      null,
+      JSON.stringify(bad),
+    );
+  }
+  // ...and it does not take the whole rule down when another action is present.
+  assertEquals(rule({ set_status: "replied", set_category: "Bill" }).set_status, null);
+});
+
+Deno.test("normalizeRule lower-cases match values once, at normalisation", () => {
+  const r = rule({
+    match_domain: "  BANK.dk  ",
+    match_subject: "  INVOICE  ",
+    set_category: "Bill",
+  });
+  assertEquals(r.match_domain, "bank.dk");
+  assertEquals(r.match_subject, "invoice");
+  // Axes are normalised through the same closed set as the model's.
+  assertEquals(rule({ set_importance: "HIGH" }).set_importance, "high");
+  assertEquals(normalizeRule(ruleRow({ set_importance: "critical" })), null);
+});
+
+Deno.test("normalizeRules orders by sort, then created_at, then id", () => {
+  // The tie-breakers are not decoration. Since the LAST matching write wins,
+  // two rules sharing a `sort` applied in planner order would flip between
+  // runs — the same message re-polled five minutes later would get a different
+  // importance with nothing in the data to explain it.
   const rows = [
-    { id: "c", sort: 3, match: "subject", value: "c", category: "c" },
-    { id: "a", sort: 1, match: "subject", value: "a", category: "a" },
-    { id: "b", sort: 2, match: "subject", value: "b", category: "b" },
+    ruleRow({ id: "d", sort: 2, created_at: "2026-01-02T00:00:00Z", set_category: "d" }),
+    ruleRow({ id: "b", sort: 1, created_at: "2026-01-02T00:00:00Z", set_category: "b" }),
+    ruleRow({ id: "a", sort: 1, created_at: "2026-01-01T00:00:00Z", set_category: "a" }),
+    ruleRow({ id: "c", sort: 2, created_at: "2026-01-02T00:00:00Z", set_category: "c" }),
   ];
-  assertEquals(normalizeRules(rows).map((r) => r.id), ["a", "b", "c"]);
-  // A rule set past the cap is a configuration mistake, not a rule set.
-  const many = Array.from({ length: MAX_RULES + 50 }, (_, i) => ({
-    id: `r${i}`,
-    sort: i,
-    match: "subject",
-    value: `v${i}`,
-    category: "c",
-  }));
+  assertEquals(normalizeRules(rows).map((r) => r.id), ["a", "b", "c", "d"]);
+  // Same input in any order gives the same output.
+  assertEquals(
+    normalizeRules([...rows].reverse().map((r) => r)).map((r) => r.id),
+    ["a", "b", "c", "d"],
+  );
+  // Bounded, and junk is skipped rather than fatal.
+  const many = Array.from({ length: MAX_RULES + 50 }, (_, i) =>
+    ruleRow({ id: `r${i}`, sort: i, set_category: "c" }));
   assertEquals(normalizeRules(many).length, MAX_RULES);
-  // Junk in the list is skipped, not fatal.
-  assertEquals(normalizeRules([null, 1, "x", rows[0]]).map((r) => r.id), ["c"]);
+  assertEquals(normalizeRules([null, 1, "x", rows[0]]).map((r) => r.id), ["d"]);
 });
 
 Deno.test("a rule beats the model, and only for the fields it names", () => {
-  const model = rowOf({ score: 90, importance: "low", urgency: "low", category: "personal" });
+  const model = rowOf({ score: 90, importance: "low", urgency: "low", category: "Personal" });
   const outcome = applyRules(
     RULE_SUBJECT,
-    [rule({ importance: "high", category: "bills" })],
-    "first_match",
+    normalizeRules([ruleRow({ set_importance: "high", set_category: "Bill" })]),
   );
   const ruled = withRules(model, outcome);
 
   // Replaced, not merged or averaged — a rule is an instruction, not a hint.
   assertEquals(ruled.importance, "high");
-  assertEquals(ruled.category, "bills");
+  assertEquals(ruled.category, "Bill");
   // Untouched, because the rule named neither.
   assertEquals(ruled.urgency, "low");
   // `score` is the model's evidence and rules never overwrite it: doing so
   // would destroy the record of what the model thought while making the axes
   // look model-derived.
   assertEquals(ruled.score, 90);
-  assertEquals(ruled.rule_id, "r1");
+  assertEquals(ruled.rule_id, "11111111-1111-1111-1111-111111111111");
 });
 
 Deno.test("a message no rule matches keeps the model's verdict untouched", () => {
-  const model = rowOf({ score: 90, importance: "low", category: "personal" });
-  const ruled = withRules(model, applyRules(RULE_SUBJECT, [], "first_match"));
+  const model = rowOf({ score: 90, importance: "low", category: "Personal" });
+  const ruled = withRules(model, applyRules(RULE_SUBJECT, []));
   assertEquals(ruled.importance, "low");
-  assertEquals(ruled.category, "personal");
+  assertEquals(ruled.category, "Personal");
   assertEquals(ruled.rule_id, null);
   assertEquals(ruled, { ...model, rule_id: null });
 });
 
-Deno.test("first_match precedence stops at the first matching rule", () => {
+Deno.test("overwrite precedence: the HIGHEST sort wins a direct conflict", () => {
+  // This is the pinned semantics, straight from mail_rules' documentation:
+  // every matching rule applies in ascending sort and each non-null action
+  // overwrites what came before.
   const rules = normalizeRules([
-    { id: "broad", sort: 1, match: "domain", value: "example.com", importance: "low" },
-    { id: "narrow", sort: 2, match: "sender", value: "ada@mail.example.com", importance: "high" },
+    ruleRow({ id: "broad", sort: 1, set_importance: "low" }),
+    ruleRow({ id: "narrow", sort: 2, match_sender: "ada@mail.bank.dk", set_importance: "high" }),
   ]);
-  const outcome = applyRules(RULE_SUBJECT, rules, "first_match");
-  assertEquals(outcome.importance, "low");
-  assertEquals(outcome.rule_id, "broad");
-  // Only the winner is recorded as having been applied.
-  assertEquals(outcome.matched, ["broad"]);
-});
-
-Deno.test("layer precedence applies every match, first writer winning each field", () => {
-  // This is where the two modes differ observably: two rules matching and
-  // setting DIFFERENT fields is the common case in a real rule set, so the
-  // choice is not a detail.
-  const rules = normalizeRules([
-    { id: "broad", sort: 1, match: "domain", value: "example.com", category: "work" },
-    { id: "narrow", sort: 2, match: "sender", value: "ada@mail.example.com", urgency: "high" },
-  ]);
-  const outcome = applyRules(RULE_SUBJECT, rules, "layer");
-  assertEquals(outcome.category, "work");
-  assertEquals(outcome.urgency, "high");
-  assertEquals(outcome.matched, ["broad", "narrow"]);
-  // Provenance names the rule that set the AXES, not the one that set category.
-  assertEquals(outcome.rule_id, "narrow");
-
-  // ...and under first_match the same rule set gives a different answer, which
-  // is precisely why the mode has to come from unit 1's migration.
-  const first = applyRules(RULE_SUBJECT, rules, "first_match");
-  assertEquals(first.category, "work");
-  assertEquals(first.urgency, null);
-});
-
-Deno.test("layer precedence: an earlier rule's field is not overwritten", () => {
-  const rules = normalizeRules([
-    { id: "a", sort: 1, match: "domain", value: "example.com", importance: "high" },
-    { id: "b", sort: 2, match: "subject", value: "invoice", importance: "low", category: "bills" },
-  ]);
-  const outcome = applyRules(RULE_SUBJECT, rules, "layer");
+  const outcome = applyRules(RULE_SUBJECT, rules, "overwrite");
   assertEquals(outcome.importance, "high");
-  assertEquals(outcome.rule_id, "a");
-  // ...but a field the first rule left alone is still claimable by the second.
-  assertEquals(outcome.category, "bills");
+  assertEquals(outcome.rule_id, "narrow");
+  assertEquals(outcome.matched, ["broad", "narrow"]);
+  assertEquals(RULE_PRECEDENCE, "overwrite");
 });
 
-Deno.test("rule provenance records only the rule that set the axes", () => {
+Deno.test("overwrite precedence: a rule that sets nothing for a field leaves it alone", () => {
+  // A null action does not CLEAR an earlier rule's value — it does not
+  // constrain. Otherwise a late narrow rule setting only urgency would wipe a
+  // broad rule's category, which is the opposite of "each non-null overwrites".
+  const rules = normalizeRules([
+    ruleRow({ id: "a", sort: 1, set_category: "Newsletter", set_importance: "low" }),
+    ruleRow({ id: "b", sort: 2, match_subject: "invoice", set_urgency: "high" }),
+  ]);
+  const outcome = applyRules(RULE_SUBJECT, rules, "overwrite");
+  assertEquals(outcome.category, "Newsletter");
+  assertEquals(outcome.importance, "low");
+  assertEquals(outcome.urgency, "high");
+});
+
+Deno.test("first_match is retained only as the record of why overwrite was chosen", () => {
+  // Under first_match a rule that only sets a category BLOCKS a later rule that
+  // only sets urgency: the two become mutually exclusive and the user has to
+  // write the cross product of every combination they want. The two modes
+  // giving different answers for the same rule set is exactly why this could
+  // not be left to whichever was easier to implement.
+  const rules = normalizeRules([
+    ruleRow({ id: "broad", sort: 1, set_category: "Newsletter" }),
+    ruleRow({ id: "narrow", sort: 2, match_subject: "invoice", set_urgency: "high" }),
+  ]);
+  const overwrite = applyRules(RULE_SUBJECT, rules, "overwrite");
+  assertEquals(overwrite.category, "Newsletter");
+  assertEquals(overwrite.urgency, "high");
+
+  const first = applyRules(RULE_SUBJECT, rules, "first_match");
+  assertEquals(first.category, "Newsletter");
+  assertEquals(first.urgency, null);
+  assertEquals(first.matched, ["broad"]);
+  assertNotEquals(overwrite, first);
+});
+
+Deno.test("rule provenance records only the rule that last set an axis", () => {
   // "Why is this high urgency?" has to be answerable. A rule that only set a
   // category did not touch the axes and must not be blamed for them.
   const categoryOnly = applyRules(
     RULE_SUBJECT,
-    normalizeRules([{ id: "c", sort: 1, match: "domain", value: "example.com", category: "work" }]),
-    "layer",
+    normalizeRules([ruleRow({ id: "c", set_category: "Bill" })]),
   );
-  assertEquals(categoryOnly.category, "work");
+  assertEquals(categoryOnly.category, "Bill");
   assertEquals(categoryOnly.rule_id, null);
 
   // A rule setting only ONE axis still takes provenance — it is the reason that
   // axis reads the way it does.
   const urgencyOnly = applyRules(
     RULE_SUBJECT,
-    normalizeRules([{ id: "u", sort: 1, match: "domain", value: "example.com", urgency: "high" }]),
-    "layer",
+    normalizeRules([ruleRow({ id: "u", set_urgency: "high" })]),
   );
   assertEquals(urgencyOnly.rule_id, "u");
+
+  // One column for two axes: when an earlier rule sets importance and a later
+  // one sets urgency, the LATER is named. Lossy and known — the alternative is
+  // two provenance columns for a question users ask about the pair.
+  const split = applyRules(
+    RULE_SUBJECT,
+    normalizeRules([
+      ruleRow({ id: "imp", sort: 1, set_importance: "high" }),
+      ruleRow({ id: "urg", sort: 2, set_urgency: "low" }),
+    ]),
+  );
+  assertEquals(split.importance, "high");
+  assertEquals(split.urgency, "low");
+  assertEquals(split.rule_id, "urg");
 });
 
-Deno.test("applyRules is deterministic — no clock, no ordering surprises", () => {
+Deno.test("applyRules is deterministic — no clock, no planner order", () => {
   // The reason rules run here and not in the workflow: the same message and the
   // same rules produce the same row today and on a re-import next year, rather
   // than depending on which workflow version happened to run.
-  const rules = normalizeRules([
-    { id: "b", sort: 1, match: "domain", value: "example.com", importance: "high" },
-    { id: "a", sort: 1, match: "subject", value: "invoice", category: "bills" },
-  ]);
-  for (const mode of ["first_match", "layer"] as const) {
-    assertEquals(applyRules(RULE_SUBJECT, rules, mode), applyRules(RULE_SUBJECT, rules, mode));
-  }
+  const rows = [
+    ruleRow({ id: "b", sort: 1, created_at: "2026-01-01T00:00:00Z", set_importance: "high" }),
+    ruleRow({ id: "a", sort: 1, created_at: "2026-01-01T00:00:00Z", set_importance: "low" }),
+  ];
+  // Same rules delivered in either order resolve identically, because the
+  // tie-break is total.
+  assertEquals(
+    applyRules(RULE_SUBJECT, normalizeRules(rows)),
+    applyRules(RULE_SUBJECT, normalizeRules([...rows].reverse())),
+  );
+  // ...and "a" sorts before "b" on id, so "b" is the last write.
+  assertEquals(applyRules(RULE_SUBJECT, normalizeRules(rows)).importance, "high");
 });
 
 // MARK: - Auto-archive
@@ -1474,25 +1587,3 @@ Deno.test("parsePayload carries a rule subject per message", () => {
   // raw is truncated past MAX_RAW_CHARS.
 });
 
-Deno.test("the rules fetch is not wired, and says so", () => {
-  // Guard against this shipping half-done. `mail_rules` exists in no branch of
-  // this repo, so its column names and its precedence semantics are both
-  // unknown; guessing them would either 400 the select (stopping ALL mail,
-  // because a rules-fetch failure must fail the request) or match nothing and
-  // ignore the user's rules silently. Delete this test in the same commit that
-  // adds the real fetch.
-  const src = Deno.readTextFileSync(new URL("./index.ts", import.meta.url));
-  assertEquals(src.includes("DELIBERATELY NOT WIRED"), true);
-  // Comment lines are stripped first — the integration sketch in index.ts names
-  // `mail_rules` on purpose, and matching that would make this test pass by
-  // accident forever.
-  const executable = src
-    .split("\n")
-    .filter((line) => !line.trim().startsWith("//") && !line.trim().startsWith("*"))
-    .join("\n");
-  assertEquals(
-    executable.includes("mail_rules"),
-    false,
-    "mail_rules is queried for real now — delete this test and pin RulePrecedence",
-  );
-});

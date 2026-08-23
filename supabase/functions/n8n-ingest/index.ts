@@ -1,15 +1,20 @@
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { createClient } from "jsr:@supabase/supabase-js@2";
 import {
+  applyRules,
   chunk,
+  EMPTY_RULE_SUBJECT,
   type ExistingRow,
   MAX_ITEMS,
   mergeStatus,
+  normalizeRules,
   parsePayload,
   parseRun,
+  RULE_PRECEDENCE,
   type RunMarker,
   secretIsUsable,
   secretMatches,
+  withRules,
 } from "./logic.ts";
 
 /**
@@ -69,6 +74,18 @@ import {
  * top where a human notices it, rather than sitting mid-list looking scored.
  * This is `blocking_state`'s invariant in a different table: a missing verdict
  * must never be indistinguishable from a computed one.
+ *
+ * # Rules beat the model, server-side
+ *
+ * `mail_rules` is applied here, after the model, and a rule always wins. Same
+ * "no client derives policy" rule as `focus-evaluate` — and it is what makes an
+ * override deterministic: in the workflow the verdict would depend on which
+ * workflow version ran, and a re-import would disagree with the live pass.
+ * All matching enabled rules apply in ascending `sort` (ties: `created_at`,
+ * `id`) and each non-null action overwrites, so the highest `sort` wins a
+ * conflict. A rules-fetch failure **fails the request**: silently degrading to
+ * model-only verdicts would apply the wrong importance to real mail and look
+ * entirely successful doing it.
  *
  * # The sync marker, and why it is written last
  *
@@ -151,7 +168,7 @@ Deno.serve(async (req: Request) => {
     );
   }
 
-  const { rows, rejected, rejectedReasons } = parsed;
+  const { rows, ruleSubjects, rejected, rejectedReasons } = parsed;
 
   // A batch that was entirely rejected is not a success, even though nothing
   // failed. It is what a broken field mapping looks like, and without this it
@@ -311,55 +328,64 @@ Deno.serve(async (req: Request) => {
 
   // MARK: - Inbox rules
   //
-  // ⚠️ **DELIBERATELY NOT WIRED.** The engine (`applyRules`, `normalizeRules`,
-  // `withRules` in logic.ts) is complete and tested against both precedence
-  // modes. What is missing is the fetch, and it is missing on purpose:
-  // `mail_rules` does not exist in any branch of this repo yet, so its column
-  // names and its documented precedence semantics are both unknown.
+  // Applied server-side, after the model, and a rule always wins. That is the
+  // house "no client derives policy" rule — the same shape as `focus-evaluate`
+  // collapsing six tables into one `blocking_state` row — and it is what makes
+  // an override deterministic. In the n8n workflow the verdict would silently
+  // depend on which workflow version happened to run, and re-running triage
+  // over history would disagree with the live pass.
   //
-  // Guessing them is not a small risk here, it is the worst available outcome.
-  // The rule below — a rules-fetch failure must fail the request — means that
-  // if any guessed column name is wrong, the `select` 400s and **every message
-  // stops flowing**, for a feature that was meant to be additive. And the
-  // tempting mitigation, `select("*")` with tolerant normalisation, is worse
-  // still: a renamed match field would then match nothing and the user's rules
-  // would be silently ignored, which is precisely the "looks like it worked"
-  // failure this whole endpoint is built to avoid.
-  //
-  // Turning it on, once unit 1's amended migration lands, is this shape:
-  //
-  //   const { data: ruleRows, error: rulesError } = await supabase
-  //     .from("mail_rules")
-  //     .select("<the real columns>")
-  //     .eq("user_id", OWNER_UID)
-  //     .eq("enabled", true)
-  //     .order("sort", { ascending: true });
-  //
-  //   // Fail loudly, before any write. Silently falling through to model-only
-  //   // verdicts would apply the wrong importance to real mail and look
-  //   // entirely successful doing it. Same discipline as the status lookup.
-  //   if (rulesError) {
-  //     console.error("n8n-ingest: rules fetch failed —", rulesError.message);
-  //     return json({ error: "rules_fetch_failed" }, 500);
-  //   }
-  //
-  //   const rules = normalizeRules(ruleRows ?? []);
-  //   const ruleStatus = new Map<string, string>();
-  //   const ruled = rows.map((row) => {
-  //     const outcome = applyRules(
-  //       ruleSubjects.get(row.external_id) ?? EMPTY_SUBJECT,
-  //       rules,
-  //       RULE_PRECEDENCE,          // pin from the migration; see logic.ts
-  //     );
-  //     if (outcome.status) ruleStatus.set(row.external_id, outcome.status);
-  //     return withRules(row, outcome);
-  //   });
-  //
-  // ...then pass `ruled` and `ruleStatus` to `mergeStatus` below. Everything in
-  // that sketch except the `select` is already written and under test.
+  // Named columns, never `select("*")`: a renamed column then arrives as
+  // `undefined`, `normalizeRule` drops the rule, and the user's rules are
+  // silently ignored while everything reports success. Named columns turn that
+  // same mistake into a loud 400 here.
+  const { data: ruleRows, error: rulesError } = await supabase
+    .from("mail_rules")
+    .select(
+      "id,sort,created_at,match_sender,match_domain,match_subject,match_list_id,set_category,set_importance,set_urgency,set_status",
+    )
+    .eq("user_id", OWNER_UID)
+    .eq("enabled", true)
+    // Precedence order, tie-breakers included, so the engine never depends on
+    // planner order for a tied pair. `normalizeRules` re-sorts identically —
+    // see the note there for why that repetition is load-bearing.
+    .order("sort", { ascending: true })
+    .order("created_at", { ascending: true })
+    .order("id", { ascending: true });
+
+  // Fail loudly, before any write. Falling through to model-only verdicts would
+  // apply the wrong importance to real mail and look entirely successful doing
+  // it — the user's rules would simply stop existing, with no error anywhere.
+  // Same discipline as the status lookup below.
+  if (rulesError) {
+    console.error("n8n-ingest: rules fetch failed —", rulesError.message);
+    return json({ error: "rules_fetch_failed" }, 500);
+  }
+
+  const rules = normalizeRules(ruleRows ?? []);
+
+  // Known, narrow: `mail_messages.rule_id` is a real FK, so a rule deleted
+  // between this fetch and the upsert below would 23503 and fail the batch.
+  // The window is milliseconds, n8n retries, and the retry re-reads the rules
+  // and succeeds — so this is left unhandled deliberately rather than papered
+  // over with a rule_id-less retry that would silently drop provenance.
+
+  // A rule's status is collected separately from the row: it is only ever the
+  // *default* for a new message, never an override of one the user has touched.
+  // `mergeStatus` is where that precedence lives.
+  const ruleStatus = new Map<string, string>();
+  const ruled = rows.map((row) => {
+    const outcome = applyRules(
+      ruleSubjects.get(row.external_id) ?? EMPTY_RULE_SUBJECT,
+      rules,
+      RULE_PRECEDENCE,
+    );
+    if (outcome.status !== null) ruleStatus.set(row.external_id, outcome.status);
+    return withRules(row, outcome);
+  });
 
   // `user_id` is stamped here, from the module constant. Never from the request.
-  const { rows: payload, inserted } = mergeStatus(rows, existing, OWNER_UID);
+  const { rows: payload, inserted } = mergeStatus(ruled, existing, OWNER_UID, ruleStatus);
 
   // One statement for the whole batch: it either lands or it does not, so a
   // failure leaves the table exactly as it was rather than half-synced.
