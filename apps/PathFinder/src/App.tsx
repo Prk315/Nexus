@@ -16,9 +16,36 @@ import { Schedules } from "./pages/Schedules";
 import { Workspace } from "./pages/Workspace";
 import { CommandPalette } from "./components/CommandPalette";
 import { QuickPanelsProvider } from "./components/QuickPanels";
+import { convertMailToTask } from "./lib/api";
+import type { ConvertibleMail } from "./lib/mailConvert";
+import { queryClient, qk } from "./lib/queryClient";
 
 const IS_IOS = /iPhone|iPad|iPod/.test(navigator.userAgent);
 
+/**
+ * The one-click "make this mail a task" action the header's `MailPanel` calls.
+ *
+ * PathFinder owns it, not nexus-core: `MailPanel` is presentational and receives
+ * injected callbacks, exactly like `loadMail` and `loadScreenSpans`. The mapping
+ * knows about `pf_tasks`, its ISA subtypes and the discriminator trap, none of
+ * which belong in a package that Vault and Protocol also render.
+ *
+ * Resolves to `void` — the panel only needs to know it worked, and a rejection
+ * carries the message the user has to see (notably the "task created but not
+ * linked" case, where converting again would duplicate).
+ *
+ * Note the prop is `onConvertMailToTask` on `NexusHeader` but `onConvertToTask`
+ * on `MailPanel` — the header disambiguates because it carries several `on*`
+ * handlers. Pass it as a plain attribute and never through a spread: the header
+ * destructures a fixed prop list, so a spread of a misspelled key is dropped in
+ * silence and the button renders but does nothing.
+ */
+async function handleConvertMail(m: ConvertibleMail): Promise<void> {
+  await convertMailToTask(m);
+  // The draft lands in `refine`; invalidate so the workspace shows it without
+  // waiting out the 30s staleTime or a manual reload.
+  await queryClient.invalidateQueries({ queryKey: qk.tasks });
+}
 // Authenticated client, module scope — see packages/nexus-core/src/mail/loader.ts.
 const loadMail = createMailLoader(supabase);
 const mailRulesApi = createMailRulesApi(supabase);
@@ -54,6 +81,7 @@ function App() {
             userEmail={user?.email}
             onSignOut={() => signOut()}
             loadScreenSpans={() => loadScreenSpansForDate(ymd(new Date()))}
+            onConvertMailToTask={handleConvertMail}
             // Signed out the RLS read returns [], not an error — withhold the
             // loader so the button falls back rather than claiming "no mail".
             loadMail={user ? loadMail : undefined}
