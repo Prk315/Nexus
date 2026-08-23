@@ -4,6 +4,7 @@ import { useConnectedApps } from "../hooks/useConnectedApps";
 import { cn } from "../utils";
 import type { ConnectedApp } from "../types";
 import { ClockDropdown, type ClockDropdownProps } from "./ClockDropdown";
+import { MailPanel, type MailPanelProps } from "./MailPanel";
 
 // Deployed ecosystem web apps, from per-deployment env vars. Entries with no URL
 // are hidden. Used by the header's app switcher to jump between the web apps.
@@ -26,6 +27,7 @@ interface NexusHeaderProps {
   onAppSelect?: (app: ConnectedApp) => void;
   onHub?: () => void;
   onAgent?: () => void;
+  /** Only used when `loadMail` is absent — see below. */
   onMail?: () => void;
   onMessages?: () => void;
   /** Deprecated: when provided, the Clock button reverts to a plain no-op-able
@@ -37,6 +39,29 @@ interface NexusHeaderProps {
    *  category and mini timetrack strip. Only apps with a usage bridge pass
    *  this (PathFinder). */
   loadScreenSpans?: ClockDropdownProps["loadScreenSpans"];
+  /**
+   * Optional: reads n8n's triaged Gmail rows out of Supabase. When present the
+   * Mail button becomes the `MailPanel` dropdown; when absent it stays the
+   * plain `onMail` button it has always been.
+   *
+   * Injected rather than built here because `mail_messages` is
+   * `auth.uid()`-scoped and only the app owns an authenticated client —
+   * `apps/nexus`, `apps/Stonks` and `apps/TimeTrackerApp` have no session at
+   * all and pass nothing. Build one with `createMailLoader(supabase)`.
+   */
+  loadMail?: MailPanelProps["loadMail"];
+  /**
+   * Writes for the triage-rules editor. Without it the Mail panel is read-only
+   * and its Rules button does not render — a form that cannot save is worse
+   * than no form.
+   */
+  mailRulesApi?: MailPanelProps["rulesApi"];
+  /**
+   * Turn a triaged message into a PathFinder task. Injected for the same
+   * reason `loadMail` is: nexus-core cannot import an app, and only the app
+   * owns the mail-field → task-field mapping.
+   */
+  onConvertMailToTask?: MailPanelProps["onConvertToTask"];
 }
 
 // Small icon button — used for the right-side action row
@@ -80,6 +105,9 @@ export function NexusHeader({
   onClock,
   onCalendar,
   loadScreenSpans,
+  loadMail,
+  mailRulesApi,
+  onConvertMailToTask,
 }: NexusHeaderProps) {
   const { apps, isNexusRunning } = useConnectedApps();
 
@@ -162,7 +190,10 @@ export function NexusHeader({
       <div className="flex items-center gap-0.5">
         <IconBtn onClick={onHub}      title="Network"><Network      className="h-4 w-4" /></IconBtn>
         <IconBtn onClick={onAgent}    title="AI Agent"><Bot         className="h-4 w-4" /></IconBtn>
-        <IconBtn onClick={onMail}     title="Mail">   <Mail         className="h-4 w-4" /></IconBtn>
+        {/* No loader (nexus / Stonks / TimeTracker — no session) → unchanged button. */}
+        {loadMail
+          ? <MailPanel loadMail={loadMail} rulesApi={mailRulesApi} onConvertToTask={onConvertMailToTask} />
+          : <IconBtn onClick={onMail} title="Mail"><Mail className="h-4 w-4" /></IconBtn>}
         <IconBtn onClick={onMessages} title="Messages"><MessageSquare className="h-4 w-4" /></IconBtn>
         {onClock
           ? <IconBtn onClick={onClock} title="Clock"><Clock className="h-4 w-4" /></IconBtn>

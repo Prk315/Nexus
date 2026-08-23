@@ -1,7 +1,8 @@
 import { useState } from "react";
-import { useNexusRegistration, NexusHeader, useNexusAuth } from "@nexus/core";
+import { useNexusRegistration, NexusHeader, useNexusAuth, createMailLoader, createMailRulesApi } from "@nexus/core";
 import { ymd } from "@nexus/core/coverage";
 import { loadScreenSpansForDate } from "./lib/actual";
+import { supabase } from "./lib/supabase";
 import "./App.css";
 import { Sidebar, type Page } from "./components/Sidebar";
 import { SchedulesProvider } from "./contexts/SchedulesContext";
@@ -45,6 +46,9 @@ async function handleConvertMail(m: ConvertibleMail): Promise<void> {
   // waiting out the 30s staleTime or a manual reload.
   await queryClient.invalidateQueries({ queryKey: qk.tasks });
 }
+// Authenticated client, module scope — see packages/nexus-core/src/mail/loader.ts.
+const loadMail = createMailLoader(supabase);
+const mailRulesApi = createMailRulesApi(supabase);
 
 function App() {
   useNexusRegistration("PathFinder");
@@ -78,6 +82,10 @@ function App() {
             onSignOut={() => signOut()}
             loadScreenSpans={() => loadScreenSpansForDate(ymd(new Date()))}
             onConvertMailToTask={handleConvertMail}
+            // Signed out the RLS read returns [], not an error — withhold the
+            // loader so the button falls back rather than claiming "no mail".
+            loadMail={user ? loadMail : undefined}
+            mailRulesApi={user ? mailRulesApi : undefined}
           />
         )}
 
