@@ -309,6 +309,55 @@ Deno.serve(async (req: Request) => {
     if (data) existing.push(...data);
   }
 
+  // MARK: - Inbox rules
+  //
+  // ⚠️ **DELIBERATELY NOT WIRED.** The engine (`applyRules`, `normalizeRules`,
+  // `withRules` in logic.ts) is complete and tested against both precedence
+  // modes. What is missing is the fetch, and it is missing on purpose:
+  // `mail_rules` does not exist in any branch of this repo yet, so its column
+  // names and its documented precedence semantics are both unknown.
+  //
+  // Guessing them is not a small risk here, it is the worst available outcome.
+  // The rule below — a rules-fetch failure must fail the request — means that
+  // if any guessed column name is wrong, the `select` 400s and **every message
+  // stops flowing**, for a feature that was meant to be additive. And the
+  // tempting mitigation, `select("*")` with tolerant normalisation, is worse
+  // still: a renamed match field would then match nothing and the user's rules
+  // would be silently ignored, which is precisely the "looks like it worked"
+  // failure this whole endpoint is built to avoid.
+  //
+  // Turning it on, once unit 1's amended migration lands, is this shape:
+  //
+  //   const { data: ruleRows, error: rulesError } = await supabase
+  //     .from("mail_rules")
+  //     .select("<the real columns>")
+  //     .eq("user_id", OWNER_UID)
+  //     .eq("enabled", true)
+  //     .order("sort", { ascending: true });
+  //
+  //   // Fail loudly, before any write. Silently falling through to model-only
+  //   // verdicts would apply the wrong importance to real mail and look
+  //   // entirely successful doing it. Same discipline as the status lookup.
+  //   if (rulesError) {
+  //     console.error("n8n-ingest: rules fetch failed —", rulesError.message);
+  //     return json({ error: "rules_fetch_failed" }, 500);
+  //   }
+  //
+  //   const rules = normalizeRules(ruleRows ?? []);
+  //   const ruleStatus = new Map<string, string>();
+  //   const ruled = rows.map((row) => {
+  //     const outcome = applyRules(
+  //       ruleSubjects.get(row.external_id) ?? EMPTY_SUBJECT,
+  //       rules,
+  //       RULE_PRECEDENCE,          // pin from the migration; see logic.ts
+  //     );
+  //     if (outcome.status) ruleStatus.set(row.external_id, outcome.status);
+  //     return withRules(row, outcome);
+  //   });
+  //
+  // ...then pass `ruled` and `ruleStatus` to `mergeStatus` below. Everything in
+  // that sketch except the `select` is already written and under test.
+
   // `user_id` is stamped here, from the module constant. Never from the request.
   const { rows: payload, inserted } = mergeStatus(rows, existing, OWNER_UID);
 

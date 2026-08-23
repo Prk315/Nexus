@@ -46,8 +46,8 @@ export const MIN_KEY_LEN = 32;
 export const MAX_ITEMS = 500;
 
 /**
- * Priority is an integer 0–100, higher = more urgent, and the panel reads
- * `priority desc nulls first`. The range is pinned *here* rather than left to
+ * `score` is an integer 0–100, higher = more urgent, and the panel reads
+ * `score desc nulls first`. The range is pinned *here* rather than left to
  * the model: a triage list whose sort key can be any number the LLM felt like
  * emitting is not a priority list, it is whatever the loudest hallucination
  * was. A value that is present but outside the range clamps to the nearest end.
@@ -62,8 +62,8 @@ export const MAX_ITEMS = 500;
  * nothing downstream could ever tell. `nulls first` instead surfaces it at the
  * top, where a human notices.
  */
-export const PRIORITY_MIN = 0;
-export const PRIORITY_MAX = 100;
+export const SCORE_MIN = 0;
+export const SCORE_MAX = 100;
 
 /**
  * Triage state, owned by the *user*, never by the ingester. It is only ever
@@ -266,7 +266,7 @@ function optionalId(candidates: unknown[]): string | null {
 }
 
 /**
- * A score in `[PRIORITY_MIN, PRIORITY_MAX]`, or `null` if the payload does not
+ * A score in `[SCORE_MIN, SCORE_MAX]`, or `null` if the payload does not
  * contain one.
  *
  * Accepts a numeric string because LLM JSON routinely quotes numbers. A number
@@ -280,7 +280,7 @@ function optionalId(candidates: unknown[]): string | null {
  * `triaged_at` off, so a row that was never scored carries no triage timestamp
  * either — the two can never disagree.
  */
-export function clampPriority(value: unknown): number | null {
+export function clampScore(value: unknown): number | null {
   let n: number;
   if (typeof value === "number") {
     n = value;
@@ -290,7 +290,7 @@ export function clampPriority(value: unknown): number | null {
     return null;
   }
   if (!Number.isFinite(n)) return null;
-  return Math.min(PRIORITY_MAX, Math.max(PRIORITY_MIN, Math.round(n)));
+  return Math.min(SCORE_MAX, Math.max(SCORE_MIN, Math.round(n)));
 }
 
 /** Epoch seconds and epoch milliseconds are 1000x apart; disambiguate by magnitude. */
@@ -364,6 +364,86 @@ function firstTimestamp(candidates: unknown[]): string | null {
     if (t !== null) return t;
   }
   return null;
+}
+
+// MARK: - The two axes, and the task-shaped fields
+
+/**
+ * `importance` and `urgency` share PathFinder's domain exactly.
+ *
+ * That is the whole point of the alignment: `pf_tasks.priority` and
+ * `pf_task_planning.urgency` use these three values and nothing else, so a mail
+ * converts into a draft task without a translation table in between — and a
+ * translation table is precisely where two vocabularies silently drift apart.
+ */
+export const AXIS_VALUES = ["high", "medium", "low"] as const;
+export type Axis = (typeof AXIS_VALUES)[number];
+
+/**
+ * One of the three axis values, or `null`.
+ *
+ * A closed set, matched case-insensitively after trimming, because "High" and
+ * "HIGH" are the same verdict spelled by a model that does not care. Anything
+ * outside it — "urgent", "critical", "p1", a number — is `null` rather than a
+ * nearest-neighbour guess: mapping "critical" onto "high" invents a verdict the
+ * model did not give, and the whole nullable design exists to keep "no verdict"
+ * distinguishable from a real one.
+ */
+export function parseAxis(value: unknown): Axis | null {
+  if (typeof value !== "string") return null;
+  const v = value.trim().toLowerCase();
+  return (AXIS_VALUES as readonly string[]).includes(v) ? (v as Axis) : null;
+}
+
+/**
+ * The largest `time_estimate` worth believing, in minutes. A week of solid work
+ * is already absurd for a reply to an email; past that it is a malformed
+ * verdict (a model emitting seconds, or milliseconds, or a hallucinated
+ * constant) rather than an estimate.
+ */
+export const MAX_TIME_ESTIMATE = 60 * 24 * 7;
+
+/**
+ * A positive, bounded whole number of minutes, or `null`.
+ *
+ * Deliberately **not** clamped at the ends. Clamping 999999 to 10080 would
+ * store a confident "one week" that nothing produced, and a value that far out
+ * is not an estimate that overshot — it is a unit error or a hallucination, and
+ * the honest record of it is the same `null` an absent field gets. Zero is also
+ * null: "this takes no time" is not an estimate anyone means.
+ */
+export function parseMinutes(value: unknown): number | null {
+  const n = typeof value === "number"
+    ? value
+    : typeof value === "string" && value.trim().length > 0
+    ? Number(value)
+    : NaN;
+  if (!Number.isFinite(n)) return null;
+  const m = Math.round(n);
+  return m > 0 && m <= MAX_TIME_ESTIMATE ? m : null;
+}
+
+/**
+ * A due date as `YYYY-MM-DD`, or `null`.
+ *
+ * **Why a calendar date and not a timestamp.** A deadline the model read out of
+ * "can you get this to me by Friday" is a *day*, not an instant. Storing an
+ * instant would mean inventing a time of day, and then rendering it in the
+ * viewer's zone can move it to Thursday or Saturday — the classic off-by-one
+ * that makes a deadline column untrustworthy. The column is `date`-shaped on
+ * unit 1's side and this form is also unambiguous if it is `timestamptz`
+ * (it reads as UTC midnight), so the same value is correct either way.
+ *
+ * It routes through `coerceTimestamp` first, which is what applies the
+ * offset-less-is-UTC rule. Without that, `"2026-08-25T09:00:00"` would be read
+ * in the *runtime's* zone and could land on the 24th — the exact bug caught in
+ * the timestamp path earlier, and it is worth restating that `Date.parse` does
+ * this silently and only on some hosts.
+ */
+export function parseDueDate(value: unknown): string | null {
+  const instant = coerceTimestamp(value);
+  if (instant === null) return null;
+  return instant.slice(0, 10);
 }
 
 // MARK: - `raw`
@@ -448,19 +528,61 @@ export interface MailRow {
   subject: string | null;
   snippet: string | null;
   received_at: string;
-  /** `null` = triage produced no verdict for this row. Never a default. */
-  priority: number | null;
+
+  // --- the triage triple: these three move together, always ---------------
+  /**
+   * The model's 0-100 evidence, renamed from `priority`. `null` = triage
+   * produced no verdict for this row. Never a default.
+   *
+   * The number is the model's *evidence*; `importance`/`urgency` below are the
+   * verdict, and they are deliberately not part of this triple.
+   */
+  score: number | null;
+  /** When triage scored it. `null` exactly when `score` is null. */
+  triaged_at: string | null;
+  /** Which model scored it. `null` exactly when `score` is null. */
+  triage_model: string | null;
+
+  // --- the two axes, independent of the triple ----------------------------
+  /**
+   * `high` | `medium` | `low`, or null. **Not** part of the triage triple: a
+   * rule can set these without the model ever having run, so they are
+   * independently nullable. Same domain as PathFinder's `Priority`/`Urgency`,
+   * which is what makes a mail convertible into a draft task.
+   */
+  importance: Axis | null;
+  urgency: Axis | null;
+  /**
+   * Which `mail_rules` row last set the axes, so "why is this high urgency?"
+   * is answerable. `null` when the axes came from the model, or are unset.
+   */
+  rule_id: string | null;
+
+  // --- task-shaped fields, for the convert-to-task flow --------------------
+  /** `YYYY-MM-DD`. See `parseDueDate` for why it is a calendar date. */
+  due_date: string | null;
+  /** Minutes. Positive and bounded, else null — never a clamped guess. */
+  time_estimate: number | null;
+
   category: string | null;
   suggested_reply: string | null;
-  /** When triage scored it. `null` exactly when `priority` is null. */
-  triaged_at: string | null;
-  /** Which model scored it. `null` exactly when `priority` is null. */
-  triage_model: string | null;
   raw: unknown;
+
+  // NOTE: `task_id` is deliberately absent. It is set by the panel's
+  // convert-to-task flow and by nothing else; an ingest that wrote it would
+  // silently re-point or clear a link the user made.
 }
 
 export type NormalizeResult =
-  | { ok: true; row: MailRow }
+  /**
+   * `ruleSubject` travels beside the row rather than on it: `list_id` is
+   * matchable but is **not** a `mail_messages` column, and an extra key on the
+   * row object would reach the upsert as an unknown column and fail the batch.
+   * Deriving it from `raw` instead would be worse — `raw` is truncated above
+   * `MAX_RAW_CHARS`, so list rules would silently stop matching on long
+   * messages only.
+   */
+  | { ok: true; row: MailRow; ruleSubject: RuleSubject }
   | { ok: false; error: string };
 
 /**
@@ -517,11 +639,16 @@ export function normalizeItem(item: unknown, ingestedAt: string): NormalizeResul
   // it rather than read independently — otherwise a payload could produce a row
   // that is unscored but carries a fresh `triaged_at`, which is precisely the
   // "looks computed, isn't" state the nullable column exists to prevent.
-  const priority = clampPriority(o.priority);
-  const triaged = priority !== null;
+  const score = clampScore(o.score ?? o.priority);
+  const triaged = score !== null;
 
   return {
     ok: true,
+    ruleSubject: {
+      sender,
+      subject: sanitizeText(o.subject, MAX_SUBJECT),
+      list_id: firstText([o.list_id, o.listId], MAX_RULE_VALUE),
+    },
     row: {
       external_id: externalId,
       thread_id: optionalId([o.thread_id, o.threadId]),
@@ -529,13 +656,7 @@ export function normalizeItem(item: unknown, ingestedAt: string): NormalizeResul
       subject: sanitizeText(o.subject, MAX_SUBJECT),
       snippet: sanitizeText(o.snippet, MAX_SNIPPET, { multiline: true }),
       received_at: receivedAt,
-      priority,
-      category: sanitizeText(o.category, MAX_CATEGORY),
-      suggested_reply: firstText(
-        [o.suggested_reply, o.suggestedReply],
-        MAX_SUGGESTED_REPLY,
-        { multiline: true },
-      ),
+      score,
       // Prefer the moment the model actually ran, which n8n knows; fall back to
       // this ingest so a scored row is never left with a null triage timestamp.
       triaged_at: triaged
@@ -544,6 +665,21 @@ export function normalizeItem(item: unknown, ingestedAt: string): NormalizeResul
       triage_model: triaged
         ? firstText([o.triage_model, o.triageModel, o.model], MAX_TRIAGE_MODEL)
         : null,
+      // Read independently of the triple: the model may return an axis without
+      // a usable score, and a rule may set one with no model run at all.
+      importance: parseAxis(o.importance),
+      urgency: parseAxis(o.urgency),
+      // Provenance belongs to whatever *sets* the axes. Nothing in the payload
+      // may claim it — a rule id is assigned by `applyRules`, server-side.
+      rule_id: null,
+      due_date: parseDueDate(o.due_date ?? o.dueDate),
+      time_estimate: parseMinutes(o.time_estimate ?? o.timeEstimate),
+      category: sanitizeText(o.category, MAX_CATEGORY),
+      suggested_reply: firstText(
+        [o.suggested_reply, o.suggestedReply],
+        MAX_SUGGESTED_REPLY,
+        { multiline: true },
+      ),
       raw: boundRaw(item),
     },
   };
@@ -569,7 +705,14 @@ export function dedupeByExternalId(rows: MailRow[]): MailRow[] {
 // MARK: - Payload parsing
 
 export type ParsedPayload =
-  | { ok: true; rows: MailRow[]; rejected: number; rejectedReasons: Record<string, number> }
+  | {
+    ok: true;
+    rows: MailRow[];
+    /** Keyed by `external_id`, which is unique after deduplication. */
+    ruleSubjects: Map<string, RuleSubject>;
+    rejected: number;
+    rejectedReasons: Record<string, number>;
+  }
   | { ok: false; error: string; status: number };
 
 /**
@@ -601,6 +744,7 @@ export function parsePayload(body: unknown, ingestedAt: string): ParsedPayload {
   }
 
   const rows: MailRow[] = [];
+  const ruleSubjects = new Map<string, RuleSubject>();
   const rejectedReasons: Record<string, number> = {};
   let rejected = 0;
   for (const item of messages) {
@@ -611,9 +755,328 @@ export function parsePayload(body: unknown, ingestedAt: string): ParsedPayload {
       continue;
     }
     rows.push(parsed.row);
+    // Last write wins, matching `dedupeByExternalId` — so the subject kept here
+    // is the one belonging to the row that survives deduplication.
+    ruleSubjects.set(parsed.row.external_id, parsed.ruleSubject);
   }
 
-  return { ok: true, rows: dedupeByExternalId(rows), rejected, rejectedReasons };
+  return { ok: true, rows: dedupeByExternalId(rows), ruleSubjects, rejected, rejectedReasons };
+}
+
+// MARK: - Inbox rules
+//
+// ⚠️ **NOT WIRED YET — the engine is complete, the fetch is not.** See the
+// `applyRules` doc comment and the integration point in `index.ts`. Everything
+// below is pure and tested; what is missing is the one adapter from a
+// `mail_rules` row to `MailRule`, which cannot be written until unit 1's
+// amended migration lands and names the columns.
+
+/**
+ * How a rule decides whether it applies to a message.
+ *
+ * Four match kinds, all of them **literal** — there is no regex anywhere in
+ * this engine and there must never be one compiled from a rule. Rules are
+ * user-authored but the *subject* they run against is attacker-authored, and a
+ * catastrophically-backtracking pattern against a 1000-character subject is a
+ * denial of service on the ingest path that stalls every message behind it. If
+ * a pattern language is ever wanted, it needs a bounded matcher (globs
+ * compiled by us, or `RE2`), not `new RegExp(rule.pattern)`.
+ *
+ * - `sender`     — exact address match, case-insensitive.
+ * - `domain`     — the sender's domain, or any parent of it, so `example.com`
+ *                  matches `mail.example.com`. Suffix-matched on a label
+ *                  boundary, never as a bare `endsWith`: `notexample.com` ends
+ *                  with `example.com` and is a different organisation.
+ * - `subject`    — case-insensitive substring.
+ * - `list_id`    — exact match against the `List-Id` header, case-insensitive.
+ */
+export type MatchKind = "sender" | "domain" | "subject" | "list_id";
+
+export const MATCH_KINDS: readonly MatchKind[] = ["sender", "domain", "subject", "list_id"];
+
+export function isMatchKind(v: unknown): v is MatchKind {
+  return typeof v === "string" && (MATCH_KINDS as readonly string[]).includes(v);
+}
+
+/** Longest match value worth evaluating. Bounds the per-message work. */
+export const MAX_RULE_VALUE = 256;
+
+/** Beyond this, a rule set is a configuration mistake, not a rule set. */
+export const MAX_RULES = 200;
+
+/**
+ * One inbox rule, normalised. This is the shape the engine consumes; mapping a
+ * `mail_rules` row onto it is a separate adapter (see the warning above).
+ */
+export interface MailRule {
+  id: string;
+  /** Ascending. Lower runs first — see `applyRules` for what "first" buys. */
+  sort: number;
+  match: MatchKind;
+  /** Already trimmed, lower-cased and length-bounded by `normalizeRule`. */
+  value: string;
+  /** Actions. Every one is optional; a rule that sets nothing is dropped. */
+  category: string | null;
+  importance: Axis | null;
+  urgency: Axis | null;
+  /** Auto-archive sets this to `archived`. Nothing else may set a status. */
+  status: "archived" | null;
+}
+
+/** The subset of a message a rule can see. Nothing else is matchable. */
+export interface RuleSubject {
+  sender: string | null;
+  subject: string | null;
+  list_id: string | null;
+}
+
+/**
+ * The address inside a `From` header, lower-cased.
+ *
+ * Senders arrive as `Ada Lovelace <ada@example.com>` about as often as bare
+ * addresses, and a rule authored as `ada@example.com` has to match both or the
+ * feature is quietly useless. Returns null when there is no plausible address,
+ * so a rule never matches on a fragment of a display name.
+ */
+export function senderAddress(sender: string | null): string | null {
+  if (!sender) return null;
+  const angled = sender.match(/<([^<>]+)>\s*$/);
+  const candidate = (angled ? angled[1] : sender).trim().toLowerCase();
+  // One `@`, something either side, no whitespace. Deliberately not RFC 5322 —
+  // this decides rule matching, not deliverability, and a permissive parse here
+  // means a rule matching more mail than its author intended.
+  return /^[^\s@]+@[^\s@]+$/.test(candidate) ? candidate : null;
+}
+
+/** The domain part of the sender address, lower-cased. */
+export function senderDomain(sender: string | null): string | null {
+  const address = senderAddress(sender);
+  if (address === null) return null;
+  const at = address.lastIndexOf("@");
+  const domain = address.slice(at + 1);
+  return domain.length > 0 ? domain : null;
+}
+
+/**
+ * Does `domain` equal `suffix`, or is it a subdomain of it?
+ *
+ * The label-boundary check is the whole function: a bare
+ * `domain.endsWith(suffix)` makes a rule for `example.com` also match
+ * `notexample.com`, which is a different organisation and very much the shape a
+ * phishing domain takes.
+ */
+export function domainMatches(domain: string, suffix: string): boolean {
+  if (domain === suffix) return true;
+  return domain.endsWith(`.${suffix}`);
+}
+
+/** Does one rule apply to one message? Pure, literal, no regex. */
+export function ruleMatches(rule: MailRule, subject: RuleSubject): boolean {
+  switch (rule.match) {
+    case "sender": {
+      const address = senderAddress(subject.sender);
+      return address !== null && address === rule.value;
+    }
+    case "domain": {
+      const domain = senderDomain(subject.sender);
+      return domain !== null && domainMatches(domain, rule.value);
+    }
+    case "subject": {
+      if (subject.subject === null) return false;
+      return subject.subject.toLowerCase().includes(rule.value);
+    }
+    case "list_id": {
+      const listId = subject.list_id;
+      // `List-Id` is conventionally `Description <list.example.com>`; match the
+      // bracketed id when there is one, and the whole value otherwise.
+      if (listId === null) return false;
+      const bracketed = listId.match(/<([^<>]+)>/);
+      const id = (bracketed ? bracketed[1] : listId).trim().toLowerCase();
+      return id === rule.value;
+    }
+  }
+}
+
+/**
+ * Normalise one row into a `MailRule`, or drop it.
+ *
+ * Dropping rather than rejecting: one malformed rule must not disable the
+ * user's other forty, and it certainly must not fail the ingest — the mail is
+ * the thing that matters. A rule that matches nothing (empty value) or does
+ * nothing (no action) is not a rule.
+ */
+export function normalizeRule(row: unknown): MailRule | null {
+  if (row === null || typeof row !== "object" || Array.isArray(row)) return null;
+  const o = row as Record<string, unknown>;
+
+  if (o.enabled === false) return null;
+
+  const id = typeof o.id === "string" && o.id.length > 0 ? o.id : null;
+  if (id === null) return null;
+
+  const match = typeof o.match === "string" ? o.match.trim().toLowerCase() : "";
+  if (!isMatchKind(match)) return null;
+
+  // Lower-cased once here rather than per message: every comparison in
+  // `ruleMatches` is case-insensitive, and doing it at normalisation time keeps
+  // the hot loop free of allocation per rule per message.
+  const value = sanitizeText(o.value, MAX_RULE_VALUE)?.toLowerCase() ?? null;
+  if (value === null) return null;
+
+  const category = sanitizeText(o.category, MAX_CATEGORY);
+  const importance = parseAxis(o.importance);
+  const urgency = parseAxis(o.urgency);
+  // Only one status is settable, and only by a rule: auto-archive. A rule that
+  // could set `unread`/`read`/`replied` would be a way to overwrite the user's
+  // own triage state from a config row.
+  const status = sanitizeText(o.status, MAX_CATEGORY)?.toLowerCase() === "archived"
+    ? "archived" as const
+    : null;
+
+  if (category === null && importance === null && urgency === null && status === null) {
+    return null;
+  }
+
+  const sort = typeof o.sort === "number" && Number.isFinite(o.sort) ? o.sort : 0;
+
+  return { id, sort, match, value, category, importance, urgency, status };
+}
+
+/** Normalise and order a rule set. Stable within equal `sort`. */
+export function normalizeRules(rows: unknown[]): MailRule[] {
+  const rules: MailRule[] = [];
+  for (const row of rows.slice(0, MAX_RULES)) {
+    const rule = normalizeRule(row);
+    if (rule) rules.push(rule);
+  }
+  // Stable sort (ES2019+), so rows that share a `sort` keep the order the
+  // database returned them in rather than shuffling between runs — a verdict
+  // that changes on re-poll for no reason is indistinguishable from a bug.
+  return rules.sort((a, b) => a.sort - b.sort);
+}
+
+/**
+ * Which precedence rule the engine applies.
+ *
+ * ⚠️ **UNPINNED — unit 1's amended migration is the authority and has not
+ * landed.** Both modes are implemented and tested so that whichever it
+ * documents is already proven; pinning it is a one-line change here.
+ *
+ * - `first_match` — the first matching rule in `sort` order sets everything it
+ *   names and evaluation stops. Easy to reason about; a later, more specific
+ *   rule can be shadowed by an earlier broad one.
+ * - `layer`       — every matching rule applies in `sort` order, and the first
+ *   rule to set a given field wins that field. Lets a broad "newsletters are
+ *   low importance" rule coexist with a narrow "but this list is high urgency"
+ *   one.
+ *
+ * They differ observably whenever two rules match and set *different* fields,
+ * which is the common case in a real rule set — so this is not a detail that
+ * can be left to whichever is more convenient.
+ */
+export type RulePrecedence = "first_match" | "layer";
+
+export interface RuleOutcome {
+  category: string | null;
+  importance: Axis | null;
+  urgency: Axis | null;
+  status: "archived" | null;
+  /**
+   * The rule that set the **axes**, for provenance — which is what answers
+   * "why is this high urgency?". A rule that only set a category is not
+   * recorded here; it did not touch the axes.
+   */
+  rule_id: string | null;
+  /** Every rule that contributed, in application order. Diagnostics only. */
+  matched: string[];
+}
+
+export const NO_RULE_OUTCOME: RuleOutcome = {
+  category: null,
+  importance: null,
+  urgency: null,
+  status: null,
+  rule_id: null,
+  matched: [],
+};
+
+/**
+ * Apply a rule set to one message.
+ *
+ * # Why this runs here and not in the n8n workflow
+ *
+ * A rule always beats the model, **deterministically**. In the workflow the
+ * verdict would depend on which workflow version happened to run, and
+ * re-running triage over history could silently change past verdicts. Here it
+ * is a pure function of (payload, rules): the same message and the same rules
+ * produce the same row, today and on a re-import next year. That is also why
+ * this function takes no clock and no client.
+ *
+ * # What "a rule beats the model" means precisely
+ *
+ * The rule's value **replaces** the model's for any field the rule sets, and
+ * leaves every field it does not set alone. It never merges, never averages,
+ * and never falls back to the model for a field a rule named — a rule that
+ * says "invoices are high importance" is an instruction, not a hint.
+ *
+ * `score` is untouched by rules on purpose: it is the model's evidence, and
+ * overwriting it would destroy the record of what the model actually thought
+ * while making the axes look model-derived.
+ */
+export function applyRules(
+  subject: RuleSubject,
+  rules: MailRule[],
+  precedence: RulePrecedence,
+): RuleOutcome {
+  const out: RuleOutcome = { ...NO_RULE_OUTCOME, matched: [] };
+
+  for (const rule of rules) {
+    if (!ruleMatches(rule, subject)) continue;
+    out.matched.push(rule.id);
+
+    const setsAxis = rule.importance !== null || rule.urgency !== null;
+
+    if (precedence === "first_match") {
+      out.category = rule.category;
+      out.importance = rule.importance;
+      out.urgency = rule.urgency;
+      out.status = rule.status;
+      out.rule_id = setsAxis ? rule.id : null;
+      return out;
+    }
+
+    // layer: first writer wins each field independently.
+    if (out.category === null && rule.category !== null) out.category = rule.category;
+    if (out.status === null && rule.status !== null) out.status = rule.status;
+
+    // The axes are claimed together so `rule_id` names one rule rather than
+    // being ambiguous between two. A rule that sets only `urgency` still takes
+    // provenance — it is the reason the urgency reads the way it does.
+    const axisUnclaimed = out.importance === null && out.urgency === null;
+    if (axisUnclaimed && setsAxis) {
+      out.importance = rule.importance;
+      out.urgency = rule.urgency;
+      out.rule_id = rule.id;
+    }
+  }
+
+  return out;
+}
+
+/**
+ * Fold a rule outcome onto a row.
+ *
+ * Separate from `applyRules` so the merge is testable on its own and so the
+ * "rule replaces model" rule is stated in exactly one place.
+ */
+export function withRules(row: MailRow, outcome: RuleOutcome): MailRow {
+  return {
+    ...row,
+    category: outcome.category ?? row.category,
+    importance: outcome.importance ?? row.importance,
+    urgency: outcome.urgency ?? row.urgency,
+    rule_id: outcome.rule_id,
+  };
 }
 
 // MARK: - Status preservation
@@ -645,6 +1108,9 @@ export interface MergedPayload {
  * `inserted` tally would call it new on every single sync) but takes the
  * default, which is what "no decision recorded" means.
  *
+ * Precedence, highest first: **the user's existing status**, then a rule's
+ * auto-archive, then `DEFAULT_STATUS`.
+ *
  * `userId` is a parameter rather than a constant so this stays pure and
  * testable; `index.ts` passes its module-level `OWNER_UID` and nothing else can.
  */
@@ -652,6 +1118,18 @@ export function mergeStatus(
   rows: MailRow[],
   existing: ExistingRow[],
   userId: string,
+  /**
+   * Per-message status a *rule* asked for, keyed by `external_id` — in practice
+   * only ever `archived`, from auto-archive.
+   *
+   * It is the default for a **new** row, never an override for an existing one.
+   * That ordering is the whole point: auto-archive files mail the user has not
+   * seen, but the moment they touch a message their status is theirs, and a
+   * re-poll five minutes later must not re-archive something they deliberately
+   * un-archived. The mail is still written either way — auto-archive archives
+   * a message, it does not drop it.
+   */
+  ruleStatus: ReadonlyMap<string, string> = new Map(),
 ): MergedPayload {
   const statusById = new Map<string, string>();
   const known = new Set<string>();
@@ -667,7 +1145,9 @@ export function mergeStatus(
     rows: rows.map((row) => ({
       ...row,
       user_id: userId,
-      status: statusById.get(row.external_id) ?? DEFAULT_STATUS,
+      status: statusById.get(row.external_id) ??
+        ruleStatus.get(row.external_id) ??
+        DEFAULT_STATUS,
     })),
     inserted: rows.reduce((n, row) => n + (known.has(row.external_id) ? 0 : 1), 0),
   };
