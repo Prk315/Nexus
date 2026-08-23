@@ -98,11 +98,23 @@ export function createMailLoader(
         // pending in it and making the panel announce "inbox clear" off a
         // window that never contained the mail.
         .in("status", OPEN_STATUSES as readonly string[])
-        // `priority desc nulls first, received_at desc` — the ordering
-        // `mail_messages_user_priority` is built for. `nullsFirst` is the
+        // `score desc nulls first, received_at desc` — the ordering
+        // `mail_messages_user_score` is built for. `nullsFirst` is the
         // contract, not a default: un-triaged mail is the most likely to need a
         // human, so it must survive the cap, not be the first thing dropped.
-        .order("priority", { ascending: false, nullsFirst: true })
+        //
+        // The column is `score`, NOT `priority`. It was renamed precisely
+        // because `pf_tasks.priority` means *importance* on a high|medium|low
+        // domain, and a 0-100 `priority` in the same database would be the same
+        // word with the opposite meaning. This call was the one place the
+        // rename was missed, and the failure was total rather than partial:
+        // PostgREST rejects the whole query with `42703 column
+        // mail_messages.priority does not exist`, the loader throws, and the
+        // panel shows "Mail is unavailable" — with real, correctly-triaged mail
+        // sitting in the table. Nothing in `tsc` can catch a column name in a
+        // string, which is why `MAIL_COLUMNS` is a pinned constant; this
+        // `.order()` argument was outside it.
+        .order("score", { ascending: false, nullsFirst: true })
         .order("received_at", { ascending: false })
         .limit(limit),
       client
