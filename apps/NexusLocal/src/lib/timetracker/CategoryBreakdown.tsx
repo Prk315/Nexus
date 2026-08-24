@@ -86,9 +86,15 @@ function groupByAppAcrossDays(days: DayCoverage[]): ScreenAppSpans[] {
   return groupByApp(days.flatMap((d) => d.screen));
 }
 
-/** `useDayCoverage`'s planned spans (Span & category) -> categoryTotals' shape. */
-function toPlannedBlocks(spans: (Span & { category: string | null })[]): PlannedBlock[] {
-  return spans.map((p) => ({ category: p.category, title: p.label ?? "", span: p }));
+/**
+ * `useDayCoverage`/`history.ts`'s planned spans -> categoryTotals' shape.
+ * Carries `id`/`parentId` through (Phase U1) so `categoryTotals`'
+ * children-win rule actually fires here — without this, threading those
+ * fields onto `PlannedSpan` upstream would be dead weight, since this is the
+ * one place they get converted into what `categoryTotals` reads.
+ */
+function toPlannedBlocks(spans: (Span & { category: string | null; id?: string; parentBlockId?: string | null })[]): PlannedBlock[] {
+  return spans.map((p) => ({ category: p.category, title: p.label ?? "", span: p, id: p.id, parentId: p.parentBlockId }));
 }
 
 /** "1h 23m" for minutes rather than seconds — the budget inputs are minutes. */

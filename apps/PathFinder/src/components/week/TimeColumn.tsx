@@ -160,6 +160,197 @@ export function TaskPopupChip({ t, parentTitle, scheduledMin, hasSteps, onToggle
   );
 }
 
+// ── Nested cal block card ────────────────────────────────────────────────────
+//
+// A block can contain its own children (a Deep-work segment scheduled inside
+// a 10-13 "transport" task) — this component is what makes a block a
+// CONTAINER instead of a flat leaf. It renders itself, then recurses into its
+// own children the same way, so "tasks within tasks" is just this component
+// calling itself with `depth + 1`.
+//
+// Coordinate system: `style` (passed in by the caller) is this card's own
+// absolute box — {top, height, left, right} in the SAME minute→px units the
+// grid uses for everything else. A child's position is computed the same
+// way and made relative to ITS PARENT's box, so a child 11:00–11:45 inside a
+// parent 10:57–12:06 sits at exactly the pixel offset (11:00 - 10:57) from
+// the parent's own top — proportional to real time, not to the parent's
+// rendered pixel height. The header (title/time/tick) is an OVERLAY pinned
+// to the card's top edge rather than a flow element that reserves space —
+// reserving space would shift every child down by the header's height and
+// break that exact alignment.
+const NEST_INSET_PX = 8;
+const NEST_MAX_INSET_LEVEL = 3; // inset visually caps after this many levels; deeper data still renders
+const NEST_MIN_PARENT_PX = 48;  // below this, children collapse to a count badge instead of drawing slivers
+const NEST_MIN_CHILD_PX = 14;   // ...or if ANY child would render thinner than this
+const NEST_MAX_DEPTH = 24;      // pure runaway-recursion guard; real chains are refused at write time
+
+function CalBlockCard({
+  block, depth, style, childrenOf, categories, sessionsByBlock, hiddenIds, toggleHidden, onClickBlock, onToggleWorked,
+}: {
+  block: CalBlock;
+  /** 0 for a top-level (parentless) block, 1 for its direct children, and so on. */
+  depth: number;
+  style: React.CSSProperties;
+  childrenOf: Map<number, CalBlock[]>;
+  categories: CoverageCategoryOption[];
+  sessionsByBlock: Map<number, TaskSession>;
+  hiddenIds: Set<string>;
+  toggleHidden: (id: string) => void;
+  onClickBlock: (b: CalBlock) => void;
+  onToggleWorked: (b: CalBlock) => void;
+}) {
+  if (depth > NEST_MAX_DEPTH) return null; // defensive only — cycles are refused before they can be saved
+
+  const clr = BLOCK_COLORS[block.color] ?? BLOCK_COLORS.blue;
+  const cbId = `cb-${block.recurring_id ?? block.id}-${block.date}`;
+  const cbHidden = hiddenIds.has(cbId);
+  // A block committed to a task can be worked off right here at ANY depth: a
+  // child linked to a subtask is ticked independently of its parent/siblings.
+  const worked = block.task_id != null && sessionsByBlock.has(block.id);
+  const children = childrenOf.get(block.id) ?? [];
+  const small = depth > 0;
+
+  const startMin = timeToMinutes(block.start_time);
+  const endMin = timeToMinutes(block.end_time);
+  const heightPx = typeof style.height === "number" ? style.height : Number(style.height ?? 0) || 0;
+
+  // Each child's position/height within THIS card, proportional to real time
+  // and clamped into this card's own span — a child whose times spill past
+  // the parent is rendered clamped with a warning edge rather than hidden.
+  const childLayout = children.map((child) => {
+    const cStart = timeToMinutes(child.start_time);
+    const cEnd = timeToMinutes(child.end_time);
+    // Clamp BOTH ends into [startMin, endMin] — a child entirely before or
+    // entirely after the parent's span (e.g. the parent was edited shorter
+    // after the child was created) must still land inside the card as a
+    // clamped sliver, not at an out-of-box offset that `overflow-hidden`
+    // then clips into invisibility.
+    const clampedStart = Math.min(Math.max(cStart, startMin), endMin);
+    const clampedEnd = Math.max(Math.min(cEnd, endMin), startMin);
+    const top = minutesToPx(clampedStart) - minutesToPx(startMin);
+    const height = Math.max(1, minutesToPx(clampedEnd) - minutesToPx(clampedStart));
+    const spills = cStart < startMin || cEnd > endMin;
+    return { child, top, height, spills };
+  });
+
+  const collapse = children.length > 0 && (
+    heightPx < NEST_MIN_PARENT_PX || childLayout.some((c) => c.height < NEST_MIN_CHILD_PX)
+  );
+
+  return (
+    <div
+      style={style}
+      className={cn(
+        "absolute rounded border overflow-hidden group",
+        small ? "px-1 py-px" : "px-1.5 py-0.5",
+        clr.bg, clr.border,
+        "cursor-pointer",
+        cbHidden && "opacity-15",
+        worked && "ring-1 ring-emerald-400/60",
+      )}
+      onClick={(e) => { e.stopPropagation(); onClickBlock(block); }}
+    >
+      {/* Visibility toggle — top-level only. Hiding a parent hides its whole
+          subtree for free (the parent's own DOM node, children included,
+          just dims); a per-child toggle isn't offered, matching the header
+          zone spec (title/time/tick only). */}
+      {depth === 0 && (
+        <button
+          className={cn("absolute top-0.5 right-0.5 z-20 p-0.5 rounded transition-opacity", cbHidden ? "opacity-100" : "opacity-0 group-hover:opacity-100")}
+          onClick={(e) => { e.stopPropagation(); toggleHidden(cbId); }}
+        >
+          {cbHidden ? <EyeOff className={cn("h-3.5 w-3.5", clr.text)} /> : <Eye className={cn("h-3.5 w-3.5", clr.text)} />}
+        </button>
+      )}
+
+      {/* Header zone — pinned to the top of the card (relative flow, but the
+          body below is absolutely positioned so it never pushes on this).
+          `pointer-events-none` on the wrapper is load-bearing: a child that
+          starts at (or near) this card's own start time — the common case,
+          since an empty parent's first free sub-span IS the parent's start —
+          renders directly underneath this header in the body zone below.
+          Without this, the header's bounding box (blank space included, not
+          just the glyphs) would win hit-testing over that whole area and
+          every click there would open the PARENT instead of the child.
+          Interactive header controls opt back in with pointer-events-auto. */}
+      <div className="relative z-10 pointer-events-none">
+        <div className="flex items-center gap-1">
+          {block.task_id != null && (
+            <button
+              title={worked ? "Worked — click to undo" : "Mark this block as worked"}
+              onClick={(e) => { e.stopPropagation(); onToggleWorked(block); }}
+              className={cn(
+                "pointer-events-auto flex h-3 w-3 shrink-0 items-center justify-center rounded-[3px] border transition-colors",
+                worked
+                  ? "bg-emerald-500 border-emerald-500 text-white"
+                  : cn("border-current opacity-50 hover:opacity-100", clr.text),
+              )}
+            >
+              {worked && <Check className="h-2 w-2" />}
+            </button>
+          )}
+          {block.is_recurring && <Repeat2 className={cn("h-2.5 w-2.5 shrink-0 opacity-70", clr.text)} />}
+          <p className={cn(small ? "text-[10px]" : "text-[11px]", "font-semibold leading-tight truncate", clr.text, worked && "line-through opacity-70")}>
+            {block.category && categories.find((c) => c.name === block.category)?.emoji
+              ? `${categories.find((c) => c.name === block.category)!.emoji} `
+              : ""}
+            {block.title}
+          </p>
+          {/* Degradation: too small to draw children as real cards — a count
+              badge instead of slivers. */}
+          {collapse && (
+            <span className={cn("pointer-events-auto ml-auto shrink-0 text-[9px] font-medium opacity-80", clr.text)} title={`${children.length} nested inside`}>
+              ▤ {children.length}
+            </span>
+          )}
+        </div>
+        {heightPx > 30 && (
+          <p className={cn("text-[10px] leading-tight opacity-70", clr.text)}>{block.start_time}–{block.end_time}</p>
+        )}
+        {heightPx > 46 && block.location && (
+          <div className={cn("flex items-center gap-0.5 mt-0.5", clr.text)}>
+            <MapPin className="h-2.5 w-2.5 shrink-0 opacity-70" />
+            <p className="text-[10px] leading-tight opacity-70 truncate">{block.location}</p>
+          </div>
+        )}
+      </div>
+
+      {/* Body zone — children, absolutely positioned by real time within
+          this card. The parent's own background stays visible around them
+          (unsegmented time), and recursion is just this component rendering
+          its own children the same way. */}
+      {children.length > 0 && !collapse && (
+        <div className="absolute inset-0">
+          {childLayout.map(({ child, top, height, spills }) => {
+            const inset = depth + 1 <= NEST_MAX_INSET_LEVEL ? NEST_INSET_PX : 0;
+            return (
+              <CalBlockCard
+                key={child.id}
+                block={child}
+                depth={depth + 1}
+                style={{
+                  position: "absolute", top, height, left: inset, right: inset,
+                  // Spill warning — a thin amber edge, not a hide. The child
+                  // still renders clamped into this card's own box (`top`/
+                  // `height` above are already clamped to [startMin, endMin]).
+                  boxShadow: spills ? "inset 0 0 0 1.5px rgba(245, 158, 11, 0.85)" : undefined,
+                }}
+                childrenOf={childrenOf}
+                categories={categories}
+                sessionsByBlock={sessionsByBlock}
+                hiddenIds={hiddenIds}
+                toggleHidden={toggleHidden}
+                onClickBlock={onClickBlock}
+                onToggleWorked={onToggleWorked}
+              />
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ── Time column ───────────────────────────────────────────────────────────────
 
 export function TimeColumn({ date, isToday, blocks, systems, courseAssignments, scheduleEntries, actual, sleepSpans, categories, sessionsByBlock, onClickSlot, onClickBlock, onToggleWorked }: {
@@ -243,6 +434,31 @@ export function TimeColumn({ date, isToday, blocks, systems, courseAssignments, 
           const timedCAs = courseAssignments.filter((a) => a.start_time);
           const timedSEs = scheduleEntries.filter((e) => e.start_time);
 
+          // Nested blocks: a block whose parent_block_id points at another
+          // block present in THIS day's list attaches under it and never
+          // claims its own overlap column. Orphans — no parent, a parent on
+          // another date (impossible here since `blocks` is already this
+          // day's only), or a parent that's been deleted/not loaded — render
+          // top-level, same as before nesting existed. A block is never
+          // dropped. `pid !== b.id` is a defensive no-op (the DB CHECK
+          // already refuses a self-parent) and `blocksById.has` alone can't
+          // walk a multi-hop cycle, so a stale cyclic chain sitting in
+          // already-loaded data (which the write-time guard cannot happen
+          // after the fact) is capped by depth, not detected here — see
+          // CalBlockCard's own depth guard below.
+          const blocksById = new Map(blocks.map((b) => [b.id, b]));
+          const childrenOf = new Map<number, CalBlock[]>();
+          const topLevelBlocks: CalBlock[] = [];
+          for (const b of blocks) {
+            const pid = b.parent_block_id;
+            if (pid != null && pid !== b.id && blocksById.has(pid)) {
+              const list = childrenOf.get(pid);
+              if (list) list.push(b); else childrenOf.set(pid, [b]);
+            } else {
+              topLevelBlocks.push(b);
+            }
+          }
+
           type WkEvt =
             | { kind: "sys"; startMin: number; endMin: number; s: SystemEntry }
             | { kind: "ca";  startMin: number; endMin: number; a: CourseAssignment }
@@ -262,7 +478,9 @@ export function TimeColumn({ date, isToday, blocks, systems, courseAssignments, 
               endMin:   a.end_time ? timeToMinutes(a.end_time) : timeToMinutes(a.start_time!) + 60,
               a,
             })),
-            ...blocks.map((b) => ({
+            // Only TOP-LEVEL blocks go through the overlap algorithm —
+            // children are drawn inside their parent's own card, below.
+            ...topLevelBlocks.map((b) => ({
               kind: "blk" as const,
               startMin: timeToMinutes(b.start_time),
               endMin:   timeToMinutes(b.end_time),
@@ -383,61 +601,23 @@ export function TimeColumn({ date, isToday, blocks, systems, courseAssignments, 
               );
             }
 
-            // cal block
+            // cal block — a top-level card that may contain its own nested
+            // children (recursively rendered by CalBlockCard itself).
             const { b } = item;
-            const clr = BLOCK_COLORS[b.color] ?? BLOCK_COLORS.blue;
-            const cbId = `cb-${b.recurring_id ?? b.id}-${b.date}`;
-            const cbHidden = hiddenIds.has(cbId);
-            // A block committed to a task can be worked off right here: ticking
-            // it logs a session against this occurrence, which is what advances
-            // sessions- and time-mode completion. Untickable blocks (no task)
-            // show nothing, so the calendar is unchanged for everything else.
-            const worked = b.task_id != null && sessionsByBlock.has(b.id);
             return (
-              <div key={`${b.is_recurring ? "r" : "b"}-${b.recurring_id ?? b.id}-${b.date}`}
-                className={cn("absolute rounded border px-1.5 py-0.5 cursor-pointer overflow-hidden group", clr.bg, clr.border, cbHidden && "opacity-15", worked && "ring-1 ring-emerald-400/60")}
-                style={{ top, height, left, right }}
-                onClick={(e) => { e.stopPropagation(); onClickBlock(b); }}
-              >
-                <button
-                  className={cn("absolute top-0.5 right-0.5 z-10 p-0.5 rounded transition-opacity", cbHidden ? "opacity-100" : "opacity-0 group-hover:opacity-100")}
-                  onClick={(e) => { e.stopPropagation(); toggleHidden(cbId); }}
-                >
-                  {cbHidden ? <EyeOff className={cn("h-3.5 w-3.5", clr.text)} /> : <Eye className={cn("h-3.5 w-3.5", clr.text)} />}
-                </button>
-                <div className="flex items-center gap-1">
-                  {b.task_id != null && (
-                    <button
-                      title={worked ? "Worked — click to undo" : "Mark this block as worked"}
-                      onClick={(e) => { e.stopPropagation(); onToggleWorked(b); }}
-                      className={cn(
-                        "flex h-3 w-3 shrink-0 items-center justify-center rounded-[3px] border transition-colors",
-                        worked
-                          ? "bg-emerald-500 border-emerald-500 text-white"
-                          : cn("border-current opacity-50 hover:opacity-100", clr.text),
-                      )}
-                    >
-                      {worked && <Check className="h-2 w-2" />}
-                    </button>
-                  )}
-                  {b.is_recurring && <Repeat2 className={cn("h-2.5 w-2.5 shrink-0 opacity-70", clr.text)} />}
-                  <p className={cn("text-[11px] font-semibold leading-tight truncate", clr.text, worked && "line-through opacity-70")}>
-                    {b.category && categories.find((c) => c.name === b.category)?.emoji
-                      ? `${categories.find((c) => c.name === b.category)!.emoji} `
-                      : ""}
-                    {b.title}
-                  </p>
-                </div>
-                {height > 30 && (
-                  <p className={cn("text-[10px] leading-tight opacity-70", clr.text)}>{b.start_time}–{b.end_time}</p>
-                )}
-                {height > 46 && b.location && (
-                  <div className={cn("flex items-center gap-0.5 mt-0.5", clr.text)}>
-                    <MapPin className="h-2.5 w-2.5 shrink-0 opacity-70" />
-                    <p className="text-[10px] leading-tight opacity-70 truncate">{b.location}</p>
-                  </div>
-                )}
-              </div>
+              <CalBlockCard
+                key={`${b.is_recurring ? "r" : "b"}-${b.recurring_id ?? b.id}-${b.date}`}
+                block={b}
+                depth={0}
+                style={{ position: "absolute", top, height, left, right }}
+                childrenOf={childrenOf}
+                categories={categories}
+                sessionsByBlock={sessionsByBlock}
+                hiddenIds={hiddenIds}
+                toggleHidden={toggleHidden}
+                onClickBlock={onClickBlock}
+                onToggleWorked={onToggleWorked}
+              />
             );
           });
         })()}

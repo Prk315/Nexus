@@ -38,7 +38,10 @@ export type DayCoverage = {
   // spans carry `category` from pf_cal_blocks/pf_recurring_cal_blocks.
   screen: Span[];
   training: Span[];
-  planned: (Span & { category: string | null })[];
+  // `id`/`parentBlockId` (Phase U1) — see the matching comment on
+  // useDayCoverage.ts's `PlannedSpan`. Same optional-and-omitted-for-
+  // recurring-occurrences contract, same reason (id-namespace collision risk).
+  planned: (Span & { category: string | null; id?: string; parentBlockId?: string | null })[];
 };
 
 export type GapSuggestion = {
@@ -181,12 +184,14 @@ type UsageSpanRow = { name: string; start: string; end: string; seconds: number 
 type UsageDayRow = { date: string; spans: UsageSpanRow[] };
 
 type CalRow = {
+  id: number | string;
   date: string;
   title: string;
   start_time: string;
   end_time: string;
   color: string | null;
   category: string | null;
+  parent_block_id: number | string | null;
 };
 
 type RecurringRow = {
@@ -306,7 +311,7 @@ export async function loadHistory(days = 30): Promise<DayCoverage[]> {
   const [{ data: blocks }, { data: recurring }] = await Promise.all([
     supabasePublic
       .from("pf_cal_blocks")
-      .select("date, title, start_time, end_time, color, category")
+      .select("id, date, title, start_time, end_time, color, category, parent_block_id")
       .eq("user_id", user)
       .gte("date", rangeStart)
       .lte("date", rangeEnd),
@@ -362,14 +367,30 @@ export async function loadHistory(days = 30): Promise<DayCoverage[]> {
           (r.recurrence === "weekly" &&
             String(r.days_of_week ?? "").split(",").map(Number).includes(dow))),
     );
-    const plannedSpans: (Span & { category: string | null })[] = [];
-    for (const b of [...(blocksByDate.get(date) ?? []), ...todaysRecurring] as CalRow[]) {
+    const plannedSpans: DayCoverage["planned"] = [];
+    // One-off blocks: real ids, nesting-eligible on either side.
+    for (const b of (blocksByDate.get(date) ?? []) as CalRow[]) {
       const s = hmOn(date, b.start_time);
       let e = hmOn(date, b.end_time);
       if (s === null || e === null) continue;
       if (e <= s) e = winEnd; // crosses midnight — count the part on this day
       const clipped = clip({ start: s, end: e, label: b.title }, winStart, winEnd);
-      if (clipped) plannedSpans.push({ ...clipped, category: b.category ?? null });
+      if (clipped) {
+        plannedSpans.push({
+          ...clipped, category: b.category ?? null,
+          id: String(b.id), parentBlockId: b.parent_block_id != null ? String(b.parent_block_id) : null,
+        });
+      }
+    }
+    // Recurring occurrences: never carry an id — see the `planned` field
+    // comment on `DayCoverage` and `useDayCoverage.ts`'s matching note.
+    for (const r of todaysRecurring as RecurringRow[]) {
+      const s = hmOn(date, r.start_time);
+      let e = hmOn(date, r.end_time);
+      if (s === null || e === null) continue;
+      if (e <= s) e = winEnd;
+      const clipped = clip({ start: s, end: e, label: r.title }, winStart, winEnd);
+      if (clipped) plannedSpans.push({ ...clipped, category: r.category ?? null });
     }
 
     const covered = union([...sleepSpans, ...screenSpans, ...trainingSpans, ...plannedSpans]);

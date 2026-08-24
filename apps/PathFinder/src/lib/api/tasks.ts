@@ -456,6 +456,7 @@ export const getTaskBlocks = async (taskIds: number[]): Promise<CalBlock[]> => {
     days_of_week: null, series_start_date: null, series_end_date: null,
     task_id: b.task_id ? num(b.task_id) : null,
     category: b.category ?? null,
+    parent_block_id: b.parent_block_id != null ? num(b.parent_block_id) : null,
   }));
 
   // Series are returned as a single representative entry (dated at the series
@@ -469,6 +470,7 @@ export const getTaskBlocks = async (taskIds: number[]): Promise<CalBlock[]> => {
     days_of_week: r.days_of_week, series_start_date: r.start_date,
     series_end_date: r.end_date, task_id: r.task_id ? num(r.task_id) : null,
     category: r.category ?? null,
+    parent_block_id: null, // recurring series never nest
   }));
 
   return [...oneOff, ...seriesRows].sort(

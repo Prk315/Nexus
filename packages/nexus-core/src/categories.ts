@@ -60,7 +60,21 @@ function titlePrefixCategory(title: string): string | null {
 }
 
 export type ScreenAppSpans = { name: string; spans: Span[] };
-export type PlannedBlock = { category: string | null; title: string; span: Span };
+/**
+ * `id`/`parentId` are optional — every existing caller that doesn't know
+ * about nesting keeps working unchanged (nothing to subtract, nothing lost).
+ * They are `string`, not tied to any one app's id representation (PathFinder
+ * calendar block ids are `bigint`/`number` today; `String(id)` at the call
+ * site is all nesting requires from this shared package).
+ */
+export type PlannedBlock = {
+  category: string | null; title: string; span: Span;
+  id?: string;
+  /** This block's parent, if any — matched against another block's `id` in
+   * the SAME `categoryTotals` call. A `parentId` with no matching `id` in
+   * the input is treated as top-level (nothing to subtract against). */
+  parentId?: string | null;
+};
 
 export type CategoryTotalsInput = {
   /** Per-app screen spans (app name -> that app's foreground intervals). */
@@ -79,6 +93,19 @@ export type CategoryTotalsInput = {
  * Attribute a day's (or week's) spans to categories and sum seconds per
  * category. The contract, in order of application:
  *
+ * 0. Children win. A block with children present in THIS call's `planned`
+ *    array (matched by `parentId` -> another block's `id`) has its span
+ *    reduced to (its span minus the union of its DIRECT children's spans)
+ *    before it is attributed at all — a nested Deep-work segment inside an
+ *    Errands "transport" block must not count under both. Children
+ *    themselves are never reduced by this rule (only by their OWN children,
+ *    if any) — they attribute fully, at their own line. Because a child's
+ *    span is always time-nested inside its parent's by construction, one
+ *    pass per node against its DIRECT children only is enough: a grandchild
+ *    already carved its sliver out of its own parent (the middle node), so
+ *    the top parent subtracting the middle node's ORIGINAL (un-reduced) span
+ *    already excludes the grandchild's time too. No multi-level recursion
+ *    needed, and no ordering dependency between rows in `planned`.
  * 1. Screen spans attribute via `appMap`; an app with no mapping falls into
  *    the pseudo-category `UNCATEGORIZED` rather than being dropped, so
  *    "where did the day go" always accounts for 100% of screen time.
@@ -127,15 +154,31 @@ export function categoryTotals(input: CategoryTotalsInput): Map<string, number> 
     }
   }
 
-  // Rules 2 + 3 — planned blocks, category column or title-prefix fallback,
-  // minus whatever screen evidence already covers.
+  // Rule 0 — children win: build each block's direct-children spans once.
+  const childSpansByParent = new Map<string, Span[]>();
+  for (const block of planned) {
+    if (block.parentId == null) continue;
+    const list = childSpansByParent.get(block.parentId);
+    if (list) list.push(block.span);
+    else childSpansByParent.set(block.parentId, [block.span]);
+  }
+
+  // Rules 0 + 2 + 3 — planned blocks, category column or title-prefix
+  // fallback, minus this block's own children, minus whatever screen
+  // evidence already covers. Set subtraction is commutative/associative, so
+  // doing the children cut before the screen cut (rather than the other way,
+  // or combined) is a documentation choice, not a correctness one.
   for (const block of planned) {
     const category = block.category ?? titlePrefixCategory(block.title);
     if (!category) continue;
     const clippedSpan = clip(block.span, window.start, window.end);
     if (!clippedSpan) continue;
-    for (const remaining of subtract(clippedSpan, allScreenSpans)) {
-      contribute(category, remaining);
+    const childSpans = block.id != null ? childSpansByParent.get(block.id) : undefined;
+    const ownSpans = childSpans && childSpans.length > 0 ? subtract(clippedSpan, childSpans) : [clippedSpan];
+    for (const ownSpan of ownSpans) {
+      for (const remaining of subtract(ownSpan, allScreenSpans)) {
+        contribute(category, remaining);
+      }
     }
   }
 

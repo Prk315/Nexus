@@ -442,6 +442,15 @@ export interface CalBlock {
   task_id: number | null;
   /** Name of a `coverage_categories` row, matched by name (no FK). Null = uncategorized. */
   category: string | null;
+  /**
+   * Nested-block support: set when this block is a segment scheduled inside
+   * another `pf_cal_blocks` row on the same date (Week view renders it as an
+   * inset card inside its parent). `null` = top-level. `number`, not
+   * `string` — matches `id`, since `pf_cal_blocks.id` is `bigint`, not
+   * `uuid`. Always `null` on a virtual recurring occurrence (negative `id`):
+   * recurring series never nest, see `expandRecurring`.
+   */
+  parent_block_id: number | null;
 }
 
 export interface PipelineStep {

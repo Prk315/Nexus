@@ -72,6 +72,72 @@ export function pxToTime(px: number, containerHeight: number): string {
   const m = rounded % 60;
   return `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}`;
 }
+/** "HH:MM" for a minute-of-day count, clamped into [0, 23:59]. */
+export function minToHHMM(min: number): string {
+  const clamped = Math.max(0, Math.min(23 * 60 + 59, Math.round(min)));
+  const h = Math.floor(clamped / 60);
+  const m = clamped % 60;
+  return `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}`;
+}
+
+/**
+ * The first free stretch of time inside `parent`'s span, after subtracting
+ * its existing `children` (already-placed segments) — used to prefill a new
+ * segment's start/end so "Add segment" lands somewhere useful instead of on
+ * top of another child.
+ *
+ * Returns the FULL extent of the first gap found (not a fixed duration): if
+ * the parent opens with 20 free minutes before its first child, that whole
+ * 20-minute window is offered. Falls back to 30 minutes from the parent's own
+ * start when there is no free time left at all (fully booked) — the modal's
+ * save-time clamp brings an over-long segment back inside the parent's range.
+ */
+export function firstFreeSubSpan(parent: CalBlock, children: CalBlock[]): { start: string; end: string } {
+  const pStart = timeToMinutes(parent.start_time);
+  const pEnd   = timeToMinutes(parent.end_time);
+
+  const busy = children
+    .map((c): [number, number] => [
+      Math.max(pStart, timeToMinutes(c.start_time)),
+      Math.min(pEnd,   timeToMinutes(c.end_time)),
+    ])
+    .filter(([s, e]) => e > s)
+    .sort((a, b) => a[0] - b[0]);
+
+  let cursor = pStart;
+  for (const [s, e] of busy) {
+    if (s > cursor) return { start: minToHHMM(cursor), end: minToHHMM(s) };
+    cursor = Math.max(cursor, e);
+  }
+  if (cursor < pEnd) return { start: minToHHMM(cursor), end: minToHHMM(pEnd) };
+
+  // Fully booked — 30 minutes from the parent's start; may run past the
+  // parent's own end, which the modal clamps at save time.
+  return { start: minToHHMM(pStart), end: minToHHMM(pStart + 30) };
+}
+
+/**
+ * Clamps a [startTime, endTime) span into `parent`'s own range, preserving
+ * the original duration where it fits. Used on save (create or edit) for any
+ * block that carries a `parent_block_id` — "silent clamp", matching the
+ * app's existing forgiving style elsewhere (addHour/pxToTime never block a
+ * save over an out-of-range time, they just bring it back in range).
+ *
+ * Always returns start < end when `parent`'s own span is non-empty (true for
+ * every real block — `start_time < end_time` is enforced by the modal's own
+ * `ok` check before either side is ever saved).
+ */
+export function clampChildSpan(startTime: string, endTime: string, parent: CalBlock): { start: string; end: string } {
+  const pStart = timeToMinutes(parent.start_time);
+  const pEnd   = timeToMinutes(parent.end_time);
+  const dur    = Math.max(1, timeToMinutes(endTime) - timeToMinutes(startTime));
+
+  let s = Math.min(Math.max(timeToMinutes(startTime), pStart), Math.max(pStart, pEnd - 1));
+  let e = Math.min(pEnd, s + dur);
+  if (e <= s) e = Math.min(pEnd, s + 1);
+  return { start: minToHHMM(s), end: minToHHMM(e) };
+}
+
 export function addHour(t: string, h: number): string {
   // Cap at 23:59, not `HOUR_END * 60` (23:00) — a block starting at 23:30
   // plus a 1h default duration must still end *after* its own start, or the
@@ -159,5 +225,17 @@ export type ModalState =
   | { kind: "edit-plan";     plan: Plan }
   | { kind: "create-system" }
   | { kind: "edit-system";   system: SystemEntry }
-  | { kind: "create-block";  date: string; startTime: string }
+  | {
+      kind: "create-block"; date: string; startTime: string;
+      /**
+       * Set when this creation is the "Add segment" flow from a parent's
+       * edit view: the date is locked to the parent's, `parent_block_id` is
+       * preset on save, and the modal shows a read-only "Inside: <title>"
+       * line instead of the normal free-form date context.
+       */
+      parentBlock?: CalBlock;
+      /** One-tap step chip prefill — title/task_id straight from an unscheduled step. */
+      presetTitle?: string;
+      presetTaskId?: number | null;
+    }
   | { kind: "edit-block";    block: CalBlock };

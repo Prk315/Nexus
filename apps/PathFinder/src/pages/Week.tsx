@@ -12,7 +12,7 @@ import { Button } from "../components/ui/button";
 import { cn } from "../lib/utils";
 import { blockMinutes } from "../lib/taskTree";
 import type { Goal, Plan, TaskWithContext, SystemEntry, WeekItems, CalBlock, Deadline, CourseAssignment, TaskSession, TaskCoverage } from "../types";
-import { BLOCK_COLORS, DAY_NAMES, DEFAULT_SCROLL_HOUR, HOURS, HOUR_PX, HOUR_START, MONTHS, ModalState, addDays, timeToMinutes, toISO, todayISO, weekStart } from "../components/week/_shared";
+import { BLOCK_COLORS, DAY_NAMES, DEFAULT_SCROLL_HOUR, HOURS, HOUR_PX, HOUR_START, MONTHS, ModalState, addDays, clampChildSpan, timeToMinutes, toISO, todayISO, weekStart } from "../components/week/_shared";
 import { CalBlockModal, TaskModal, GoalModal, PlanModal, SystemModal, TypePickerModal } from "../components/week/modals";
 import { TaskPopupChip, TimeColumn } from "../components/week/TimeColumn";
 import { SystemsBar, HeaderPanel, LeftPanel, RightPanel } from "../components/week/panels";
@@ -324,7 +324,18 @@ export function Week() {
         taskId = newTask.id;
         setAllTasks((prev) => [toTaskWithContext(newTask), ...prev]);
       }
-      const b = await createCalBlock(modal.date, d.title, d.start_time, d.end_time, d.color, desc, loc, taskId, d.category);
+      // A block created inside a parent (the "Add segment" flow) is silently
+      // clamped into the parent's own span before it's saved — matching the
+      // app's existing forgiving style (never blocking a save over a
+      // slightly-out-of-range time).
+      const parent = modal.parentBlock;
+      const { start: st, end: et } = parent
+        ? clampChildSpan(d.start_time, d.end_time, parent)
+        : { start: d.start_time, end: d.end_time };
+      const b = await createCalBlock(
+        modal.date, d.title, st, et, d.color, desc, loc, taskId, d.category,
+        parent?.id ?? null, blocksFor(modal.date),
+      );
       setCalBlocks((prev) => [...prev, b]);
     }
     setModal(null);
@@ -338,7 +349,19 @@ export function Week() {
       await updateRecurringCalBlock(block.recurring_id, d.title, d.start_time, d.end_time, d.color, d.recurrence, dow, d.series_end_date || null, desc, loc, d.category);
       load();
     } else {
-      const b = await updateCalBlock(block.id, d.title, d.start_time, d.end_time, d.color, desc, loc, d.task_id, d.category);
+      // Editing never changes WHO a block's parent is (moving blocks between
+      // parents is phase-2 drag work) — parentBlockId is simply never passed
+      // to updateCalBlock here, so the omit-means-untouched rule leaves any
+      // existing parent_block_id exactly as it was. If this block IS itself
+      // someone's child, its own times still get the same silent clamp a
+      // freshly-created segment gets.
+      const parent = block.parent_block_id != null
+        ? calBlocks.find((x) => x.id === block.parent_block_id) ?? null
+        : null;
+      const { start: st, end: et } = parent
+        ? clampChildSpan(d.start_time, d.end_time, parent)
+        : { start: d.start_time, end: d.end_time };
+      const b = await updateCalBlock(block.id, d.title, st, et, d.color, desc, loc, d.task_id, d.category);
       setCalBlocks((prev) => prev.map((x) => x.id === block.id ? b : x));
     }
     setModal(null);
@@ -394,7 +417,24 @@ export function Week() {
       load();
     } else {
       await deleteCalBlock(block.id);
-      setCalBlocks((prev) => prev.filter((b) => b.id !== block.id));
+      // The DB cascades the delete to every descendant (parent_block_id ON
+      // DELETE CASCADE) — mirror that locally so a deleted parent's children
+      // don't sit around as stale orphans (rendered top-level, per the
+      // never-lose-a-block rule) until the next load().
+      setCalBlocks((prev) => {
+        const removed = new Set<number>([block.id]);
+        let grew = true;
+        while (grew) {
+          grew = false;
+          for (const b of prev) {
+            if (b.parent_block_id != null && removed.has(b.parent_block_id) && !removed.has(b.id)) {
+              removed.add(b.id);
+              grew = true;
+            }
+          }
+        }
+        return prev.filter((b) => !removed.has(b.id));
+      });
     }
     setModal(null);
   };
@@ -435,13 +475,26 @@ export function Week() {
         )}
         {modal?.kind === "create-block" && (
           <CalBlockModal date={modal.date} startTime={modal.startTime} tasks={allTasks} categories={categories}
+            taskCoverage={taskCoverage} dayBlocks={blocksFor(modal.date)}
+            parentBlock={modal.parentBlock} presetTitle={modal.presetTitle} presetTaskId={modal.presetTaskId}
             onSave={handleCreateBlock} onClose={() => setModal(null)} />
         )}
         {modal?.kind === "edit-block" && (
           <CalBlockModal initial={modal.block} date={modal.block.date} startTime={modal.block.start_time} tasks={allTasks} categories={categories}
+            taskCoverage={taskCoverage} dayBlocks={blocksFor(modal.block.date)}
             onSave={(d) => handleEditBlock(modal.block, d)}
             onDelete={() => handleDeleteBlock(modal.block)}
-            onClose={() => setModal(null)} />
+            onClose={() => setModal(null)}
+            // Nesting is never offered on a recurring block or a virtual
+            // (negative-id) occurrence — see the header-zone rule that
+            // recurring blocks never nest.
+            onAddSegment={!modal.block.is_recurring && modal.block.id > 0
+              ? () => setModal({
+                  kind: "create-block", date: modal.block.date, startTime: modal.block.start_time,
+                  parentBlock: modal.block,
+                })
+              : undefined}
+          />
         )}
         {modal?.kind === "create-task" && (
           <TaskModal date={modal.date} plans={allPlans} onSave={handleCreateTask} onClose={() => setModal(null)} />

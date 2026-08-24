@@ -21,14 +21,30 @@ import { type Span, clip, dayStartMs, hmOn, parseSleepTs, shiftYmd } from "./cov
 
 type UsageInterval = { name: string; start: string; end: string; seconds: number };
 
-export type PlannedSpan = Span & { category: string | null };
+/**
+ * `id`/`parentBlockId` (Phase U1) carry `pf_cal_blocks.id`/`parent_block_id`
+ * through to `PlannedBlock` (`@nexus/core/categories`) so `categoryTotals`
+ * can apply its children-win rule — otherwise a Deep-work segment nested
+ * inside an Errands "transport" block would count under both categories.
+ * Stringified: `PlannedBlock.id`/`parentId` are `string` (id-representation-
+ * agnostic in the shared package), while `pf_cal_blocks.id` is `bigint`.
+ * Recurring occurrences never carry a `parent_block_id` at all (recurring
+ * blocks never nest — see `expandRecurring` in PathFinder's api/_shared.ts).
+ * `id`/`parentBlockId` are optional and OMITTED entirely for recurring
+ * occurrences below, not defaulted to a sentinel — a recurring series row's
+ * `id` lives in a separate sequence from `pf_cal_blocks.id` and could
+ * numerically collide with an unrelated real block's id once stringified.
+ */
+export type PlannedSpan = Span & { category: string | null; id?: string; parentBlockId?: string | null };
 
 type CalRow = {
+  id: number | string;
   title: string;
   start_time: string;
   end_time: string;
   color: string | null;
   category: string | null;
+  parent_block_id: number | string | null;
 };
 
 function sessionSpanEnd(startMs: number, durationSec: number): number {
@@ -151,7 +167,7 @@ export function useDayCoverage(date: string): DayCoverageData {
     const [{ data: blocks }, { data: recurring }] = await Promise.all([
       supabasePublic
         .from("pf_cal_blocks")
-        .select("title, start_time, end_time, color, category")
+        .select("id, title, start_time, end_time, color, category, parent_block_id")
         .eq("user_id", user)
         .eq("date", day),
       supabasePublic
@@ -172,13 +188,32 @@ export function useDayCoverage(date: string): DayCoverageData {
           String(r.days_of_week ?? "").split(",").map(Number).includes(dow)),
     );
 
-    for (const b of [...(blocks ?? []), ...todaysRecurring] as CalRow[]) {
+    // One-off blocks: real ids, eligible to participate in nesting either
+    // side (as a parent OR as a child pointing at one).
+    for (const b of (blocks ?? []) as CalRow[]) {
       const s = hmOn(day, b.start_time);
       let e = hmOn(day, b.end_time);
       if (s === null || e === null) continue;
       if (e <= s) e = end; // crosses midnight — count the part on this day
       const clipped = clip({ start: s, end: e, label: b.title }, start, end);
-      if (clipped) plannedSpans.push({ ...clipped, category: b.category ?? null });
+      if (clipped) {
+        plannedSpans.push({
+          ...clipped, category: b.category ?? null,
+          id: String(b.id), parentBlockId: b.parent_block_id != null ? String(b.parent_block_id) : null,
+        });
+      }
+    }
+    // Recurring occurrences: NEVER carry an id here — see the type comment
+    // above. Recurring blocks never nest (can't be a parent, can't be a
+    // child — the DB column doesn't exist on this table), so omitting `id`
+    // entirely (never even attempting a match) is the only safe choice.
+    for (const r of todaysRecurring) {
+      const s = hmOn(day, r.start_time);
+      let e = hmOn(day, r.end_time);
+      if (s === null || e === null) continue;
+      if (e <= s) e = end;
+      const clipped = clip({ start: s, end: e, label: r.title }, start, end);
+      if (clipped) plannedSpans.push({ ...clipped, category: r.category ?? null });
     }
 
     if (!alive.current) return;

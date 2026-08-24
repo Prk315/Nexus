@@ -118,6 +118,88 @@ describe("categoryTotals", () => {
     expect(totals.has("Rest")).toBe(false);
   });
 
+  // ── Nested blocks: children win, parent keeps only its remainder ────────
+  // (PathFinder Week's nested cal blocks — a Deep-work segment scheduled
+  // inside an Errands "transport" block.)
+
+  it("does not double-count a nested child of a DIFFERENT category — parent keeps its remainder (rule 0)", () => {
+    const totals = categoryTotals({
+      screen: [],
+      planned: [
+        // Errands 10:00-13:00 (180min), Deep work child 11:00-11:45 (45min) inside it.
+        { id: "p1", parentId: null, category: "Errands", title: "Transport", span: { start: min(600), end: min(780) } },
+        { id: "c1", parentId: "p1", category: "Deep work", title: "School work", span: { start: min(660), end: min(705) } },
+      ],
+      training: [],
+      appMap: new Map(),
+      window,
+    });
+    expect(totals.get("Errands")).toBe((180 - 45) * 60);
+    expect(totals.get("Deep work")).toBe(45 * 60);
+  });
+
+  it("a child of the SAME category as its parent still unions to the full span, not double the overlap (rule 0)", () => {
+    const totals = categoryTotals({
+      screen: [],
+      planned: [
+        // Deep work parent 10:00-12:00 (120min), Deep work child 10:30-10:45 (15min) inside it.
+        { id: "p1", parentId: null, category: "Deep work", title: "Focus block", span: { start: min(600), end: min(720) } },
+        { id: "c1", parentId: "p1", category: "Deep work", title: "Sub-focus", span: { start: min(630), end: min(645) } },
+      ],
+      training: [],
+      appMap: new Map(),
+      window,
+    });
+    // Parent remainder [600,630)+[645,720) union child [630,645) = one
+    // contiguous [600,720) = 120 minutes, not 105 + 15 double-counted as if
+    // they were unrelated same-category spans (they aren't — this IS the
+    // "still correct" case, just arriving at the same number a non-nested
+    // reading of the parent's un-reduced span also would).
+    expect(totals.get("Deep work")).toBe(120 * 60);
+  });
+
+  it("recurses through a grandchild — each node subtracts only its own DIRECT children (rule 0)", () => {
+    const totals = categoryTotals({
+      screen: [],
+      planned: [
+        // Errands parent 10:00-13:00 (180min).
+        { id: "p1", parentId: null, category: "Errands", title: "Transport", span: { start: min(600), end: min(780) } },
+        // Deep work child of the parent, 10:30-12:30 (120min).
+        { id: "c1", parentId: "p1", category: "Deep work", title: "School work", span: { start: min(630), end: min(750) } },
+        // Social grandchild of the CHILD (not the parent), 11:00-11:15 (15min).
+        { id: "g1", parentId: "c1", category: "Social", title: "Text a friend", span: { start: min(660), end: min(675) } },
+      ],
+      training: [],
+      appMap: new Map(),
+      window,
+    });
+    // Grandchild attributes fully as itself.
+    expect(totals.get("Social")).toBe(15 * 60);
+    // Child keeps its span minus its OWN direct child (the grandchild): 120 - 15.
+    expect(totals.get("Deep work")).toBe((120 - 15) * 60);
+    // Parent keeps its span minus its OWN direct child's ORIGINAL (un-reduced)
+    // span — the child's full 120 minutes already covers the grandchild's
+    // time too, so the parent excludes both in one subtraction: 180 - 120.
+    expect(totals.get("Errands")).toBe((180 - 120) * 60);
+    // No time lost and none double-counted across the three: 15+105+60=180.
+    const sum = (totals.get("Social") ?? 0) + (totals.get("Deep work") ?? 0) + (totals.get("Errands") ?? 0);
+    expect(sum).toBe(180 * 60);
+  });
+
+  it("a block with no id is simply never subtracted from, even if something claims it as a parent (defensive)", () => {
+    const totals = categoryTotals({
+      screen: [],
+      planned: [
+        // No `id` at all — pre-nesting callers keep working unchanged.
+        { category: "Errands", title: "Transport", span: { start: min(600), end: min(780) } },
+      ],
+      training: [],
+      appMap: new Map(),
+      window,
+    });
+    expect(totals.get("Errands")).toBe(180 * 60);
+  });
+
   it("seeds the same names the coverage_categories migration expects", () => {
     expect(CATEGORIES.map((c) => c.name)).toEqual([
       "Deep work",

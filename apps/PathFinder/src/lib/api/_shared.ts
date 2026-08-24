@@ -425,6 +425,11 @@ export function expandRecurring(block: any, startDate: string, endDate: string):
         // commitment counts once per occurrence in the coverage roll-up.
         task_id: block.task_id != null ? num(block.task_id) : null,
         category: block.category ?? null,
+        // Recurring series never nest — a virtual (negative-id) occurrence
+        // has no real row for a child to reference, and `pf_recurring_cal_blocks`
+        // itself carries no `parent_block_id` column. Always null here,
+        // unconditionally, regardless of anything on `block`.
+        parent_block_id: null,
       });
     }
     cursor.setUTCDate(cursor.getUTCDate() + 1);
