@@ -928,6 +928,80 @@ rescues or the keys read as a freeze. Containment is schema-enforced: `column`
 and the toggle parts are deliberately **not** in `group: "block"`, which is what
 makes them unplaceable anywhere else.
 
+**Nesting was never a schema limit — the UI was refusing it.** `columnBlock` is
+`column{2,}` and `column` is `block+`, so a row inside a column, or a callout
+inside a column inside a row, has always been legal. What blocked it was an
+`isAvailable` guard in `blockRegistry.ts` and a `return false` in the resize
+plugin's `descendants` walk, both written on the belief that a row cannot
+contain a row — true only because nothing could make one. Both are gone; nesting
+is now offered and every nested row gets its own resize gutters.
+
+**Three things are stored on nodes rather than as structure, and the reason is
+always the same one.** The per-note width lives on the DOC node (`noteDocument.ts`),
+a heading's fold state lives on the HEADING (`headingFold.ts`), and a sketch's
+strokes live on the block (`SketchBlock.ts`). An attribute an older client
+doesn't know is **dropped silently** — `Node.fromJSON` builds attrs by iterating
+the *type's* declared attributes and never looks for extras — whereas an unknown
+NODE type blanks the whole note. So an attribute can ship ahead of the Mac and
+iPad builds; a node type cannot. `sketchBlock` IS a node type, so it must be
+deployed everywhere (including a fresh `npm run ios:vault`) before any note
+containing one is created.
+
+Two consequences worth knowing:
+- **ProseMirror never renders the TOP node**, so a doc attribute reaches no DOM
+  and CSS cannot see it. `NoteDocument` runs a plugin whose `props.attributes`
+  projects `data-note-width` onto the editable. Without it the setting silently
+  does nothing.
+- **`setContent` replaces the content RANGE, not the doc node**, so doc-level
+  attributes survive it untouched. Loading a `wide` note into an editor showing
+  `full` keeps `full`. The mount path is fine (`useEditor` builds the doc from
+  the JSON); NoteEditor's `[content]` effect dispatches the width explicitly.
+
+**Folding a heading hides its siblings; it does not contain them.** The document
+stays flat and the fold is decorations — a class on each block the heading owns,
+plus a widget for the arrow. Wrapping the section in a `toggleBlock` would make
+every fold and unfold a structural edit (lose one and you have lost the section,
+not its fold state), and would reshuffle the outline, which walks siblings.
+Ownership is scoped to the heading's PARENT, so a heading in a column folds that
+column and cannot reach across the row — that falls out of the recursion rather
+than being special-cased.
+
+Two traps it hit:
+- **`display: none` on a folded block needs `!important`.** `.columns-row` is
+  `display: flex` at equal specificity and declared later in App.css, so a folded
+  row stayed fully visible while correctly carrying `is-folded`. Folding must beat
+  every block type's own layout, including types added later.
+- **Hiding the block the caret is in does not move the caret**, so typing edits
+  invisible text. Collapsing parks the selection at the end of the heading.
+
+**The inline sketch keeps its strokes in the document, unlike every other ink
+surface in Vault.** PDF annotations (`{id}_annot`) and book margins
+(`{id}_margins`) get their own `vault_content` row; a sketch cannot, because
+`NoteEditor`'s `nodeId` is optional (WorkbookEditor passes none) and one note may
+hold many sketches. In the document, copy-paste clones the drawing, Cmd-Z undoes
+a stroke, and deleting the block deletes the ink. The cost is size, capped at
+`SKETCH_MAX_CHARS` (400 kB) — a sketch shares the note's 2 MB `saveContent`
+budget, so an unbounded one would stop the note's *text* saving too.
+
+Two rules it depends on:
+- **Coordinates are a 1000-unit logical space, not CSS pixels**, and `height` is
+  in those units — an aspect ratio. Note width now spans 720 px to full-bleed and
+  the same note opens on an iPad, so pixel coordinates would put a third of a
+  drawing outside its box with nothing to suggest it was ever wider.
+- **The eraser hit-tests SEGMENTS, not stored points.** `simplify` (RDP) exists
+  to delete interior points from straight runs, so a ruled line or a box edge is
+  stored as exactly two points — a point-wise eraser can only rub out its ends,
+  and in a diagram that is most of the ink.
+
+**BubbleMenu's props must be referentially stable.** `@tiptap/react`'s BubbleMenu
+has an effect that DISPATCHES A TRANSACTION when any prop changes identity, and
+NoteEditor's `onTransaction` calls `forceUpdate` so the toolbar refreshes. An
+inline `options={{ placement: "top" }}` therefore closed the circle: render → new
+identity → dispatch → forceUpdate → render, at ~130 transactions a second, with
+React's "Maximum update depth exceeded" filling the console and every keystroke
+competing with it. `BUBBLE_OPTIONS` and `bubbleShouldShow` are module-level
+constants so there is no dependency array to get wrong.
+
 **Costly drags dispatch nothing until pointerup.** Column resize writes
 `flexGrow` straight to the DOM while the pointer moves and commits one
 transaction on release; a transaction per `pointermove` would be ~60 document

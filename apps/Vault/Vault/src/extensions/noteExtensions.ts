@@ -24,6 +24,9 @@ import { Container } from "./structural/Container";
 import { ToggleBlock, ToggleSummary, ToggleContent } from "./structural/Toggle";
 import { ColumnBlock, Column } from "./structural/Columns";
 import { BlockHandle } from "./structural/BlockHandle";
+import { NoteDocument } from "./noteDocument";
+import { FoldableHeading } from "./headingFold";
+import { SketchBlock } from "./SketchBlock";
 import { NoteImage } from "./noteImage";
 import { NoteCodeBlock } from "./noteCodeBlock";
 import TextAlign from "@tiptap/extension-text-align";
@@ -42,6 +45,7 @@ export function buildNoteExtensions(opts: NoteExtensionOpts = {}): Extensions {
   const { onMathClick, extra = [], placeholder = "Write here… (type / for commands)" } = opts;
 
   return [
+    NoteDocument,
     StarterKit.configure({
       // StarterKit v3 already ships Link (and Underline). The only thing wrong
       // with the default is `openOnClick: true`: inside an *editable* document
@@ -50,15 +54,25 @@ export function buildNoteExtensions(opts: NoteExtensionOpts = {}): Extensions {
       // surprise and at worst leaves the app. The link popover offers an
       // explicit Open instead.
       link: { openOnClick: false },
-      // Four levels, matching what the outline renders. This IS a schema
-      // option, so it must stay identical to whatever noteSchema() derives —
-      // see the note on cachedSchema below.
-      heading: { levels: [1, 2, 3, 4] },
+      // Replaced by FoldableHeading, which adds the `collapsed` attribute.
+      // Note it is configured *there*, not here: StarterKit's own heading is
+      // off, so this key would configure nothing.
+      heading: false,
+      // Replaced by NoteDocument, which carries the per-note width attribute.
+      document: false,
       // Replaced below by the lowlight version. Leaving StarterKit's plain
       // codeBlock registered too would be a duplicate node name.
       codeBlock: false,
     }),
+    // Four levels, matching what the outline renders. `levels` IS a schema
+    // option, so it must stay identical to whatever noteSchema() derives — see
+    // the note on cachedSchema below.
+    FoldableHeading.configure({ levels: [1, 2, 3, 4] }),
     NoteCodeBlock,
+    // A small drawing surface. Strokes live in the document, not in a
+    // vault_content row — see SketchBlock.ts for why, and for the size cap
+    // that keeps a sketch from taking the note's text down with it.
+    SketchBlock,
     // Storage URLs only — see noteImage.ts for the incident this prevents.
     NoteImage,
     TextAlign.configure({ types: ["heading", "paragraph"] }),

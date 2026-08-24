@@ -3412,6 +3412,258 @@ body {
   .tiptap-editor .ProseMirror .toggle-caret-glyph { font-size: 11px; }
 }
 
+/* ── Inline sketch block ───────────────────────────────────────────
+   A small drawing surface embedded in a note. The surface sizes itself by
+   ASPECT RATIO, not by a pixel height, because the strokes are stored in a
+   1000-unit-wide logical space (see extensions/SketchBlock.ts) — the same
+   sketch therefore fills the same fraction of the note at any note width and
+   on any device, instead of being clipped when the measure narrows. */
+.tiptap-editor .ProseMirror .sketch-block {
+  margin: 14px 0;
+  border: 1px solid var(--border-base);
+  border-radius: 10px;
+  background: var(--bg-base);
+  overflow: hidden;
+  position: relative;
+}
+
+.tiptap-editor .ProseMirror .sketch-block.is-selected {
+  outline: 2px solid var(--edge-in);
+  outline-offset: 1px;
+}
+
+.sketch-bar {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 5px 7px;
+  border-bottom: 1px solid var(--border-base);
+  background: var(--bg-subtle);
+  flex-wrap: wrap;
+  /* The bar is chrome, not content: it must never take a caret, and a
+     selection dragged across the note must not sweep through it. */
+  user-select: none;
+}
+
+.sketch-tools { display: flex; align-items: center; gap: 2px; }
+.sketch-spacer { flex: 1 1 auto; }
+.sketch-sep {
+  width: 1px;
+  align-self: stretch;
+  margin: 2px 4px;
+  background: var(--border-base);
+}
+
+.sketch-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 26px;
+  height: 26px;
+  padding: 0 5px;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--fg-secondary);
+  font-size: 13px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.sketch-btn:hover:not(:disabled) { background: var(--bg-subtle); }
+.sketch-btn:disabled { opacity: 0.35; cursor: default; }
+.sketch-btn.is-active {
+  background: var(--bg-muted);
+  border-color: var(--border-strong, var(--border-base));
+  color: var(--fg-primary);
+}
+
+.sketch-width span {
+  display: block;
+  border-radius: 50%;
+  background: currentColor;
+}
+
+.sketch-swatch {
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  border: 2px solid transparent;
+  border-radius: 50%;
+  cursor: pointer;
+}
+.sketch-swatch.is-active { border-color: var(--fg-primary); }
+
+.sketch-select {
+  height: 26px;
+  border: 1px solid var(--border-base);
+  border-radius: 6px;
+  background: var(--bg-base);
+  color: var(--fg-secondary);
+  font-size: 12px;
+  padding: 0 4px;
+}
+
+.sketch-surface {
+  position: relative;
+  width: 100%;
+  /* aspect-ratio is set inline from the height attribute. */
+  cursor: crosshair;
+  background-color: var(--bg-base);
+}
+
+.sketch-surface[data-bg="grid"] {
+  background-image:
+    linear-gradient(to right, var(--border-strong) 1px, transparent 1px),
+    linear-gradient(to bottom, var(--border-strong) 1px, transparent 1px);
+  background-size: 22px 22px;
+}
+
+.sketch-surface[data-bg="lines"] {
+  background-image: linear-gradient(to bottom, var(--border-strong) 1px, transparent 1px);
+  background-size: 100% 26px;
+}
+
+.sketch-svg {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  /* Every pointer event is handled on the surface, which owns the coordinate
+     transform. Letting the SVG take them would make `e.target` depend on
+     whether the pointer happened to be over a stroke. */
+  pointer-events: none;
+  touch-action: none;
+}
+
+.sketch-hint {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--fg-ghost);
+  font-size: 13px;
+  pointer-events: none;
+}
+
+.sketch-full {
+  position: absolute;
+  left: 8px;
+  right: 8px;
+  bottom: 8px;
+  padding: 6px 10px;
+  border-radius: 6px;
+  background: color-mix(in oklab, var(--sticky-border) 30%, var(--bg-base));
+  color: var(--fg-primary);
+  font-size: 12px;
+  pointer-events: none;
+}
+
+.sketch-resize {
+  height: 10px;
+  cursor: ns-resize;
+  background: var(--bg-subtle);
+  border-top: 1px solid var(--border-base);
+  /* The handle is a pointer target during a drag that leaves it; without this
+     the browser would try to select text under the moving pointer. */
+  touch-action: none;
+}
+.sketch-resize:hover { background: var(--bg-subtle); }
+
+@media (pointer: coarse) {
+  .sketch-btn { min-width: 32px; height: 32px; }
+  .sketch-swatch { width: 24px; height: 24px; }
+  .sketch-resize { height: 18px; }
+}
+
+/* ── Foldable headings ─────────────────────────────────────────────
+   The arrow is a widget decoration at the start of the heading's text, pulled
+   into the left gutter so it doesn't reflow the title. `position: relative` on
+   the heading is what gives it something to be absolute against — without it
+   the arrow anchors to the editor and stacks every fold arrow in one corner.
+   The gutter is the same one the block drag handle uses, so the two must not
+   collide: the handle sits further left (see .block-handle). */
+.tiptap-editor .ProseMirror .has-fold {
+  position: relative;
+}
+
+.tiptap-editor .ProseMirror .heading-fold {
+  position: absolute;
+  left: -1.35em;
+  /* Optically centred on the first line of the title rather than on the whole
+     heading box, which for a wrapped h1 would put it halfway down. */
+  top: 0.12em;
+  width: 1.05em;
+  height: 1.05em;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--fg-invisible);
+  font-size: 0.62em;
+  line-height: 1;
+  cursor: pointer;
+  /* Hidden until the heading is hovered — except when it is collapsed, where
+     it is the only sign the section still exists. */
+  opacity: 0;
+  transition: opacity 0.12s ease, transform 0.12s ease, color 0.12s ease;
+  user-select: none;
+}
+
+.tiptap-editor .ProseMirror .has-fold:hover .heading-fold,
+.tiptap-editor .ProseMirror .heading-fold:focus-visible,
+.tiptap-editor .ProseMirror .has-fold.is-collapsed .heading-fold {
+  opacity: 1;
+}
+
+.tiptap-editor .ProseMirror .heading-fold:hover {
+  background: var(--bg-subtle);
+  color: var(--fg-secondary);
+}
+
+.tiptap-editor .ProseMirror .heading-fold.is-collapsed {
+  transform: rotate(-90deg);
+}
+
+/* The fold itself. Decorations put this class on each sibling the heading
+   owns; the document is unchanged, only these are hidden.
+
+   `!important` is deliberate and is the one place in this file that earns it.
+   Every block type sets its own `display` — `.columns-row` is flex, and it is
+   declared later at equal specificity, so a folded row stayed on screen with
+   the class correctly applied and nothing visibly wrong to debug. Folding has
+   to beat every block's own layout, including block types added later; losing
+   that race means a section that reports itself folded and isn't. */
+.tiptap-editor .ProseMirror .is-folded {
+  display: none !important;
+}
+
+/* Same reasoning as the collapsed toggle: a folded section must not look like
+   an empty one, or the note appears to have lost content. */
+.tiptap-editor .ProseMirror .has-fold.is-collapsed::after {
+  content: "…";
+  margin-left: 0.4em;
+  color: var(--fg-invisible);
+  font-weight: 400;
+}
+
+@media (pointer: coarse) {
+  /* No hover on a touch screen, so the arrow is always visible and finger
+     sized — and the heading is indented to make room, since a gutter that
+     overlaps the text is worse than no gutter. */
+  .tiptap-editor .ProseMirror .has-fold { padding-left: 1.5em; }
+  .tiptap-editor .ProseMirror .heading-fold {
+    opacity: 1;
+    left: 0;
+    width: 1.3em;
+    height: 1.3em;
+  }
+}
+
 /* ── Columns ─────────────────────────────────────────────────────────────────
    Widths are flex-grow values on each column, written into the style attribute
    by the node's renderHTML — so a saved document lays itself out with no JS,
@@ -3424,6 +3676,11 @@ body {
 }
 
 .tiptap-editor .ProseMirror .column {
+  /* The DEFAULT share. renderHTML only writes an inline `flex` when a width
+     was explicitly set, so an unweighted column relies on this — which is what
+     lets width:null survive an HTML round trip as null instead of becoming an
+     explicit 1. */
+  flex: 1 1 0%;
   /* min-width: 0 is load-bearing in a flex row: without it a long unbroken
      word sets the column's min-content width and the flex-grow ratios are
      silently ignored, so dragging the gutter appears to do nothing. */
@@ -3479,13 +3736,63 @@ body.vault-col-resizing * {
   }
 }
 
-/* A note that actually uses columns widens itself, rather than every note
-   paying for the possibility. :has() is well supported in both WebKit and the
-   Chromium WebView2 this ships in; a browser without it simply keeps the
-   reading measure, which is a degradation and not a break. */
+/* ── Per-note width ──────────────────────────────────────────────────────────
+   `auto` (the default, no attribute emitted) keeps the behaviour notes already
+   had: a reading measure that widens on its own when the note actually
+   contains a column row, so nothing changes for existing content. An explicit
+   choice overrides it — hence the higher-specificity selectors below. */
 .tiptap-editor .ProseMirror:has(.columns-row) {
   --note-measure: 980px;
 }
+
+.tiptap-editor .ProseMirror[data-note-width="wide"],
+.tiptap-editor .ProseMirror[data-note-width="wide"]:has(.columns-row) {
+  --note-measure: 1180px;
+}
+
+/* "Full" fills the pane rather than naming a pixel width, so it keeps working
+   when the sidebar or outline is toggled and on a split pane. */
+.tiptap-editor .ProseMirror[data-note-width="full"],
+.tiptap-editor .ProseMirror[data-note-width="full"]:has(.columns-row) {
+  --note-measure: 100%;
+}
+
+/* Deep nesting eats horizontal space fast: every column adds 14px of padding
+   per side, so three levels costs ~84px before any text. Tighten the padding
+   as rows nest so the innermost column is still usable. */
+.tiptap-editor .ProseMirror .columns-row .columns-row > .column {
+  padding: 0 10px;
+}
+
+.tiptap-editor .ProseMirror .columns-row .columns-row .columns-row > .column {
+  padding: 0 6px;
+}
+
+/* A nested row shouldn't inherit the full vertical rhythm of a top-level one,
+   or three levels of margin stack into a visible gap. */
+.tiptap-editor .ProseMirror .column > .columns-row {
+  margin: 0.4em 0;
+}
+
+.tiptap-editor .ProseMirror .column > .columns-row:first-child { margin-top: 0; }
+.tiptap-editor .ProseMirror .column > .columns-row:last-child { margin-bottom: 0; }
+
+/* Same for boxes nested inside columns — the card padding is sized for a
+   full-measure note, not a third of one. */
+.tiptap-editor .ProseMirror .column .container-block,
+.tiptap-editor .ProseMirror .column .callout {
+  padding-left: 12px;
+  padding-right: 12px;
+}
+
+.tiptap-editor .ProseMirror .column .callout {
+  padding-left: 34px;
+}
+
+.tiptap-editor .ProseMirror .column .container-block:first-child,
+.tiptap-editor .ProseMirror .column .callout:first-child { margin-top: 0; }
+.tiptap-editor .ProseMirror .column .container-block:last-child,
+.tiptap-editor .ProseMirror .column .callout:last-child { margin-bottom: 0; }
 
 
 /* ── Images ──────────────────────────────────────────────────────────────────

@@ -20,6 +20,8 @@ import { unwrapNearestContainer } from "./structural/containerCommands";
 import { insertToggle } from "./structural/toggleCommands";
 import { insertColumns, addColumn, deleteColumn } from "./structural/columnCommands";
 import { CODE_LANGUAGES } from "./noteCodeBlock";
+import { NOTE_WIDTHS, NOTE_WIDTH_LABELS, DEFAULT_NOTE_WIDTH } from "./noteDocument";
+import { headingForSelection, toggleFoldAtSelection, setAllHeadingFolds } from "./headingFold";
 
 /** Every node in the structural family that "remove surrounding box" applies to. */
 export const STRUCTURAL_CONTAINERS = ["calloutBlock", "containerBlock"] as const;
@@ -41,6 +43,8 @@ export type BlockGroup =
   | "align"
   | "color"
   | "code"       // code-block language, only inside one
+  | "width"      // per-note page width
+  | "fold"       // collapse / expand heading sections
   | "vault"      // highlighters, database records
   | "history";
 
@@ -305,9 +309,11 @@ export function buildBlockRegistry(opts: BlockRegistryOptions = {}): BlockAction
           dispatch: (tr: any) => editor.view.dispatch(tr),
         });
       },
-      // Nesting a row inside a column is legal in the schema but a usability
-      // trap at this width, so it isn't offered.
-      isAvailable: (e) => !e.isActive("columnBlock"),
+      // Deliberately NOT gated on being outside a row any more. Nesting was
+      // always legal in the schema — `column` is `block+` and `columnBlock` is
+      // a block — and this guard was the only thing preventing it. Columns
+      // inside columns, boxes inside columns and columns inside boxes all
+      // compose to arbitrary depth; see structural/nesting.test.ts.
     })),
     {
       id: "columnAdd",
@@ -523,6 +529,82 @@ export function buildBlockRegistry(opts: BlockRegistryOptions = {}): BlockAction
     });
   }
 
+  // ── Note width ────────────────────────────────────────────────────────────
+  // A property of the note, stored on the doc node, so it follows the note to
+  // every device instead of living in this browser's localStorage.
+  for (const w of NOTE_WIDTHS) {
+    actions.push({
+      id: `noteWidth:${w}`,
+      title: NOTE_WIDTH_LABELS[w],
+      icon: w === "auto" ? "▯" : w === "wide" ? "▭" : "▬",
+      group: "width",
+      surfaces: ["toolbar"],
+      keywords: ["width", "wide", "narrow", "page", "measure"],
+      isActive: (e) => (e.state.doc.attrs.width ?? DEFAULT_NOTE_WIDTH) === w,
+      run: (e) => {
+        // A doc-level attribute needs a plain transaction; there is no
+        // updateAttributes for the top node.
+        const tr = e.state.tr.setDocAttribute("width", w);
+        e.view.dispatch(tr);
+      },
+    });
+  }
+
+  // ── Sketch ────────────────────────────────────────────────────────────────
+  actions.push({
+    id: "sketch",
+    title: "Sketch",
+    // Not ✎ — the Note callout and the highlighter-categories button already
+    // use it, and three identical pencils in one menu is a coin toss.
+    icon: "✍",
+    group: "media",
+    surfaces: ["slash", "toolbar"],
+    keywords: ["draw", "sketch", "canvas", "diagram", "ink", "pen"],
+    run: atCursor((c) => c.insertSketch()),
+  });
+
+  // ── Folding ───────────────────────────────────────────────────────────────
+  // Section folding is a VIEW state, not an edit — see extensions/headingFold.ts
+  // for why it is decorations over a flat document rather than a container node.
+  actions.push(
+    {
+      id: "fold:toggle",
+      title: "Fold section",
+      icon: "⌄",
+      group: "fold",
+      surfaces: ["toolbar"],
+      shortcut: "⌥⌘.",
+      keywords: ["fold", "collapse", "section", "heading"],
+      // Only offered where there is a heading to fold. `isAvailable` rather
+      // than a no-op button: a control that silently does nothing is worse
+      // than one that isn't there.
+      isAvailable: (e) => headingForSelection(e.state.doc, e.state.selection.head) != null,
+      isActive: (e) => {
+        const at = headingForSelection(e.state.doc, e.state.selection.head);
+        return at != null && e.state.doc.nodeAt(at)?.attrs.collapsed === true;
+      },
+      run: (e) => { toggleFoldAtSelection(e.view); },
+    },
+    {
+      id: "fold:all",
+      title: "Fold all sections",
+      icon: "⌃",
+      group: "fold",
+      surfaces: ["toolbar"],
+      keywords: ["fold", "collapse", "all"],
+      run: (e) => { setAllHeadingFolds(e.view, true); },
+    },
+    {
+      id: "fold:none",
+      title: "Expand all sections",
+      icon: "⌄",
+      group: "fold",
+      surfaces: ["toolbar"],
+      keywords: ["unfold", "expand", "all"],
+      run: (e) => { setAllHeadingFolds(e.view, false); },
+    }
+  );
+
   // ── History ───────────────────────────────────────────────────────────────
   actions.push(
     { id: "undo", title: "Undo", icon: "↩", group: "history", surfaces: ["toolbar"], shortcut: "⌘Z", run: (e) => e.chain().focus().undo().run() },
@@ -559,6 +641,8 @@ export const GROUP_LABELS: Record<BlockGroup, string> = {
   align: "Align",
   color: "Colour",
   code: "Language",
+  width: "Note width",
+  fold: "Sections",
   table: "Table",
   tableOps: "Table",
   tableMore: "Table",
