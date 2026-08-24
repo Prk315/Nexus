@@ -25,6 +25,7 @@ machine that can do the work does it, and the devices only read.
 |---|---|
 | `workflows/mail-triage.json` | the workflow, importable into n8n 2.35.7 |
 | `workflows/mail-heartbeat.json` | the scheduled "we looked, and there was nothing" marker |
+| `workflows/mail-drain.json` | the scheduled queue drainer — classifies anything still untriaged |
 
 ---
 
@@ -759,21 +760,31 @@ an Error, so it reads:
 There was a problem in 'Gmail Trigger' node in workflow 'X': 'undefined'
 ```
 
-To check whether polling is actually happening, read the watermark and confirm it moves:
+⚠️ **Do not use the watermark as a health signal.** An earlier version of this section
+said a stale `lastTimeChecked` means the trigger is wedged. That is wrong, and wrong in
+the expensive direction: **the watermark only advances when mail is actually found.**
 
-```bash
-docker compose exec -T n8n node -e "
-const {DatabaseSync}=require('node:sqlite');
-const db=new DatabaseSync('/home/node/.n8n/database.sqlite',{readOnly:true});
-const s=JSON.parse(db.prepare(\"select staticData from workflow_entity where id='nexusMailTriage1'\").get().staticData);
-const t=s['node:Gmail Trigger']['Gmail Trigger'].lastTimeChecked;
-console.log(new Date(t*1000).toISOString());"
+```js
+effectiveLastTimeChecked = Math.floor(Math.max(lastEmailDate, +startDate)) || +startDate
 ```
 
-A watermark older than the poll interval means the trigger is wedged, **not** that no mail
-has arrived. Those two look identical from the UI, which is the same
-missing-versus-empty conflation the schema was designed around — reappearing one layer up,
-in someone else's code.
+It moves to the newest *email's* date, not to "now" — and when the query returns nothing
+the function has already `return null`ed before reaching that line. So a watermark hours
+old is the **normal, healthy** state of a quiet inbox. Measured here: frozen for 22
+minutes with zero poll errors and the heartbeat succeeding throughout, then a message
+arrived and the run completed fine.
+
+The freeze described above is real, but you cannot distinguish it from a quiet inbox by
+reading the watermark. **Use the log instead** — it separates the two:
+
+```bash
+# 🍎 MAC — any output is a real failure; silence means healthy
+docker compose logs --since 30m n8n 2>&1 | grep "problem in 'Gmail Trigger'"
+```
+
+Note the catch block swallows poll errors once a watermark exists
+(`if (mode === 'manual' || !lastTimeChecked) throw error;`), which is why these failures
+never appear as executions and why that log line is the only trace they leave.
 
 ### "uses invalid credential", but only on triggered runs
 
@@ -824,3 +835,59 @@ Genuine OAuth expiry does exist and looks different: it fails manual runs too. G
 expires refresh tokens for apps left in **Testing**, so publish the consent screen
 (Google Auth Platform → Audience → Publish app) — but treat that as routine hygiene,
 not as the explanation for this symptom.
+
+## The queue: fetch and classify are separate
+
+Classification used to happen **before** anything was persisted. A slow Ollama, a stopped
+container or a lid closing mid-batch therefore lost the whole batch — and irrecoverably,
+because the Gmail trigger's watermark had already moved past those messages, so they were
+never fetched again.
+
+The pipeline is now split at the write:
+
+```
+mail-triage   Gmail ─┬─► persist rows with NO verdict      (fast, no model)
+                     └─► classify ──► write verdicts       (best effort)
+
+mail-drain    every 5 min ──► "which rows have no verdict?" ──► re-fetch body
+                          ──► classify ──► write verdicts
+```
+
+**`score IS NULL` is the queue.** That is not a new state bolted on: it is what the column
+has always meant — *nothing has decided this yet*, as distinct from *decided, and the
+answer was low* — and `MailPanel` already sorts those rows to the top under their own
+`untriaged` bucket. Writing first simply makes the queue durable instead of implicit.
+
+The guarantee is narrow and worth stating exactly: **a message that was fetched is a
+message that exists.** Whether it has a verdict yet is a separate question, and one the
+UI already answers honestly.
+
+### Why the drain re-fetches from Gmail
+
+Because the body is not stored and must not be. `raw` deliberately carries no message
+text and `snippet` is capped at 200 characters — that is the whole reason the model runs
+locally. So the queue holds **ids**, and Gmail holds the mail.
+
+The pleasant side effect is that re-running a changed prompt over history becomes
+possible: nothing about a row prevents it being classified again.
+
+### The `pending` action
+
+`n8n-ingest` answers `{"action":"pending","limit":N}` with **external ids only** — no
+sender, no subject, no snippet. A read path inside a function whose entire posture is
+"accepts no table name, no user id and no filter" is a widening, so it is kept as narrow
+as the write path: a leaked key still cannot read a word of anyone's mail.
+
+Ordering is `received_at` ascending, so a backlog drains oldest-first. After a night
+asleep the morning's mail is classified in the order it arrived, rather than leaving the
+oldest — the most likely to be waited on — until last.
+
+### What happens when the model fails on a message
+
+Nothing is marked done. The row keeps `score IS NULL` and the next pass tries again.
+
+The cost, stated plainly: a permanently unparseable message is retried every 5 minutes
+forever, burning roughly 24 s of inference each time. The symptom is honest — a row that
+never leaves the top of the panel — but if you see one, that is what it is. The
+alternative designs were worse: giving up silently would lose mail, and scoring from the
+subject line alone would produce a verdict indistinguishable from a real one.
