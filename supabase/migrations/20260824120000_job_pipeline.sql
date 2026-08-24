@@ -210,15 +210,24 @@ create index if not exists job_matches_user_score_idx
 -- updated_at
 -- ---------------------------------------------------------------------------
 
+-- `set search_path = ''` is not decoration. Supabase's security linter flags a
+-- mutable search_path (0011_function_search_path_mutable): a function that
+-- resolves names against a caller-controlled path can be aimed at a shadowing
+-- object. The body only assigns a timestamp, but `now()` is itself resolved
+-- through that path — so pin it, and schema-qualify what remains.
+--
+-- The older `public.set_updated_at` in this database still carries the warning.
+-- New functions should not add to it.
 create or replace function public.job_touch_updated_at()
 returns trigger
 language plpgsql
-as $$
+set search_path = ''
+as $fn$
 begin
-  new.updated_at = now();
+  new.updated_at = pg_catalog.now();
   return new;
 end;
-$$;
+$fn$;
 
 do $$
 declare t text;

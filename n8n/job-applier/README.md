@@ -42,11 +42,30 @@ Commit `extract.js` and the regenerated `job-harvest.json` together.
 
 ## Setup
 
-### 1. Apply the migration
+### 1. Apply the migration — ✅ already applied 2026-08-24
 
 `supabase/migrations/20260824120000_job_pipeline.sql` — see
 `supabase/migrations/APPLY.md`. Deploying the function does **not** create the
 tables, and `job-ingest` returns 500 against a project where they are missing.
+
+Applied to `efxmzsdisaymtpebaxlp` and verified: four tables, RLS on, one
+`{authenticated}`-only policy each (`user_id = auth.uid()` on both `USING` and
+`WITH CHECK`), both unique indexes non-partial, `updated_at` triggers firing,
+`score` CHECK enforced, anon confirmed unable to read or insert. The Supabase
+security linter reports **no findings** against these tables.
+
+The file is re-runnable (`create table if not exists`, `create or replace`,
+`drop policy if exists`), so applying it again is harmless.
+
+Two notes for anyone verifying by hand:
+
+- `job_matches_user_score_idx` reads back as `(user_id, score DESC)` with no
+  `nulls first`. Nothing was lost — **`DESC` already implies `NULLS FIRST`** in
+  Postgres, so it drops the redundant clause. Un-scored still sorts to the top.
+- Testing the `updated_at` trigger by comparing `now()` before and after **does
+  not work**: `now()` is `transaction_timestamp()` and is constant within a
+  transaction, so both reads are identical and the trigger looks dead. Write a
+  deliberately stale `updated_at` in an UPDATE and check it gets overridden.
 
 ### 2. Deploy the function and set its secret
 
