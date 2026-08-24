@@ -44,6 +44,10 @@ import {
   senderDomain,
   truncateSafe,
   withRules,
+  isPendingRequest,
+  parsePendingRequest,
+  PENDING_DEFAULT_LIMIT,
+  PENDING_MAX_LIMIT
 } from "./logic.ts";
 
 const KEY = "x".repeat(32);
@@ -1587,3 +1591,59 @@ Deno.test("parsePayload carries a rule subject per message", () => {
   // raw is truncated past MAX_RAW_CHARS.
 });
 
+
+// ───────────────────────────────────────────────────────────────────────────
+// The `pending` action
+// ───────────────────────────────────────────────────────────────────────────
+
+Deno.test("isPendingRequest only fires on an explicit action", () => {
+  assertEquals(isPendingRequest({ action: "pending" }), true);
+  // A normal delivery must never be mistaken for a queue read — that would
+  // silently drop a batch of mail and answer 200.
+  assertEquals(isPendingRequest({ messages: [] }), false);
+  assertEquals(isPendingRequest({ action: "ingest" }), false);
+  assertEquals(isPendingRequest({}), false);
+  assertEquals(isPendingRequest(null), false);
+  assertEquals(isPendingRequest("pending"), false);
+  // Near-misses stay writes. Case matters: there is one spelling.
+  assertEquals(isPendingRequest({ action: "PENDING" }), false);
+  assertEquals(isPendingRequest({ action: " pending" }), false);
+});
+
+Deno.test("pending: an absent limit is the default, not an error", () => {
+  assertEquals(parsePendingRequest({ action: "pending" }), {
+    ok: true,
+    limit: PENDING_DEFAULT_LIMIT,
+  });
+  assertEquals(parsePendingRequest({ action: "pending", limit: null }), {
+    ok: true,
+    limit: PENDING_DEFAULT_LIMIT,
+  });
+});
+
+Deno.test("pending: a limit is capped, never allowed to run unbounded", () => {
+  assertEquals(parsePendingRequest({ action: "pending", limit: 10 }), { ok: true, limit: 10 });
+  assertEquals(parsePendingRequest({ action: "pending", limit: PENDING_MAX_LIMIT }), {
+    ok: true,
+    limit: PENDING_MAX_LIMIT,
+  });
+  // At ~24s per message locally, an uncapped page would simply overlap the next
+  // scheduled drain rather than finishing sooner.
+  assertEquals(parsePendingRequest({ action: "pending", limit: 100000 }), {
+    ok: true,
+    limit: PENDING_MAX_LIMIT,
+  });
+  // A numeric string is what an n8n expression yields when it stringifies.
+  assertEquals(parsePendingRequest({ action: "pending", limit: "10" }), { ok: true, limit: 10 });
+});
+
+Deno.test("pending: nonsense is refused rather than silently defaulted", () => {
+  // Clamping these would let a caller keep a false belief about the endpoint.
+  for (const bad of ["all", "", "  ", 0, -1, 2.5, NaN, Infinity, true, {}, []]) {
+    assertEquals(
+      parsePendingRequest({ action: "pending", limit: bad }),
+      { ok: false, error: "invalid_limit" },
+      `limit=${JSON.stringify(bad)} should be refused`,
+    );
+  }
+});
