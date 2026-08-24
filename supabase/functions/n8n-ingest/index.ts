@@ -26,7 +26,7 @@ import {
  * # Why this function exists at all
  *
  * The Gmail triage pipeline runs entirely on the Mac: n8n pulls messages, hands
- * them to a local Qwen via Ollama for a priority score and a suggested reply,
+ * them to a local Qwen via Ollama for a score and a suggested reply,
  * and the result has to reach a UI that is served from Vercel and read on an
  * iPhone. Those clients cannot reach `http://localhost:5678` — an HTTPS page
  * cannot fetch plaintext localhost, and the phone is not on the Mac's loopback
@@ -70,11 +70,22 @@ import {
  *
  * # An untriaged row says so
  *
- * `priority` is nullable and NULL means "triage produced no verdict", which is
+ * `score` is nullable and NULL means "triage produced no verdict", which is
  * a different fact from "triage scored it medium". `triaged_at` and
- * `triage_model` are NULL exactly when `priority` is. The panel reads
- * `priority desc nulls first`, so a message the model failed on surfaces at the
+ * `triage_model` are NULL exactly when `score` is. The panel reads
+ * `score desc nulls first`, so a message the model failed on surfaces at the
  * top where a human notices it, rather than sitting mid-list looking scored.
+ *
+ * The column is `score`, NOT `priority` — renamed because `pf_tasks.priority`
+ * means *importance* on a high|medium|low domain, and the same word with the
+ * opposite meaning in one database is a bug waiting for whoever writes the
+ * conversion. One `.order("priority")` survived that rename in the panel's
+ * loader and took the whole feature down with a `42703`.
+ *
+ * NULL is also the queue. `mail-triage` persists every fetched message before
+ * the model sees it, and `mail-drain` asks this function (`{"action":"pending"}`)
+ * which rows still lack a verdict. So an unscored row is not a failure state —
+ * it is work that has not happened yet, and something is coming for it.
  * This is `blocking_state`'s invariant in a different table: a missing verdict
  * must never be indistinguishable from a computed one.
  *
