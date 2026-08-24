@@ -21,6 +21,7 @@ import { insertToggle } from "./structural/toggleCommands";
 import { insertColumns, addColumn, deleteColumn } from "./structural/columnCommands";
 import { CODE_LANGUAGES } from "./noteCodeBlock";
 import { NOTE_WIDTHS, NOTE_WIDTH_LABELS, DEFAULT_NOTE_WIDTH } from "./noteDocument";
+import { headingForSelection, toggleFoldAtSelection, setAllHeadingFolds } from "./headingFold";
 
 /** Every node in the structural family that "remove surrounding box" applies to. */
 export const STRUCTURAL_CONTAINERS = ["calloutBlock", "containerBlock"] as const;
@@ -43,6 +44,7 @@ export type BlockGroup =
   | "color"
   | "code"       // code-block language, only inside one
   | "width"      // per-note page width
+  | "fold"       // collapse / expand heading sections
   | "vault"      // highlighters, database records
   | "history";
 
@@ -548,6 +550,48 @@ export function buildBlockRegistry(opts: BlockRegistryOptions = {}): BlockAction
     });
   }
 
+  // ── Folding ───────────────────────────────────────────────────────────────
+  // Section folding is a VIEW state, not an edit — see extensions/headingFold.ts
+  // for why it is decorations over a flat document rather than a container node.
+  actions.push(
+    {
+      id: "fold:toggle",
+      title: "Fold section",
+      icon: "⌄",
+      group: "fold",
+      surfaces: ["toolbar"],
+      shortcut: "⌥⌘.",
+      keywords: ["fold", "collapse", "section", "heading"],
+      // Only offered where there is a heading to fold. `isAvailable` rather
+      // than a no-op button: a control that silently does nothing is worse
+      // than one that isn't there.
+      isAvailable: (e) => headingForSelection(e.state.doc, e.state.selection.head) != null,
+      isActive: (e) => {
+        const at = headingForSelection(e.state.doc, e.state.selection.head);
+        return at != null && e.state.doc.nodeAt(at)?.attrs.collapsed === true;
+      },
+      run: (e) => { toggleFoldAtSelection(e.view); },
+    },
+    {
+      id: "fold:all",
+      title: "Fold all sections",
+      icon: "⌃",
+      group: "fold",
+      surfaces: ["toolbar"],
+      keywords: ["fold", "collapse", "all"],
+      run: (e) => { setAllHeadingFolds(e.view, true); },
+    },
+    {
+      id: "fold:none",
+      title: "Expand all sections",
+      icon: "⌄",
+      group: "fold",
+      surfaces: ["toolbar"],
+      keywords: ["unfold", "expand", "all"],
+      run: (e) => { setAllHeadingFolds(e.view, false); },
+    }
+  );
+
   // ── History ───────────────────────────────────────────────────────────────
   actions.push(
     { id: "undo", title: "Undo", icon: "↩", group: "history", surfaces: ["toolbar"], shortcut: "⌘Z", run: (e) => e.chain().focus().undo().run() },
@@ -585,6 +629,7 @@ export const GROUP_LABELS: Record<BlockGroup, string> = {
   color: "Colour",
   code: "Language",
   width: "Note width",
+  fold: "Sections",
   table: "Table",
   tableOps: "Table",
   tableMore: "Table",

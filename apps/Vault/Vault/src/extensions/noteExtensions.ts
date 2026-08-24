@@ -25,6 +25,7 @@ import { ToggleBlock, ToggleSummary, ToggleContent } from "./structural/Toggle";
 import { ColumnBlock, Column } from "./structural/Columns";
 import { BlockHandle } from "./structural/BlockHandle";
 import { NoteDocument } from "./noteDocument";
+import { FoldableHeading } from "./headingFold";
 import { NoteImage } from "./noteImage";
 import { NoteCodeBlock } from "./noteCodeBlock";
 import TextAlign from "@tiptap/extension-text-align";
@@ -52,16 +53,20 @@ export function buildNoteExtensions(opts: NoteExtensionOpts = {}): Extensions {
       // surprise and at worst leaves the app. The link popover offers an
       // explicit Open instead.
       link: { openOnClick: false },
-      // Four levels, matching what the outline renders. This IS a schema
-      // option, so it must stay identical to whatever noteSchema() derives —
-      // see the note on cachedSchema below.
-      heading: { levels: [1, 2, 3, 4] },
+      // Replaced by FoldableHeading, which adds the `collapsed` attribute.
+      // Note it is configured *there*, not here: StarterKit's own heading is
+      // off, so this key would configure nothing.
+      heading: false,
       // Replaced by NoteDocument, which carries the per-note width attribute.
       document: false,
       // Replaced below by the lowlight version. Leaving StarterKit's plain
       // codeBlock registered too would be a duplicate node name.
       codeBlock: false,
     }),
+    // Four levels, matching what the outline renders. `levels` IS a schema
+    // option, so it must stay identical to whatever noteSchema() derives — see
+    // the note on cachedSchema below.
+    FoldableHeading.configure({ levels: [1, 2, 3, 4] }),
     NoteCodeBlock,
     // Storage URLs only — see noteImage.ts for the incident this prevents.
     NoteImage,

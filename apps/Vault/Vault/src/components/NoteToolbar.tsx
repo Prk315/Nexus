@@ -27,7 +27,7 @@ const MENU_GROUPS: BlockGroup[] = ["structure", "callout", "container", "media",
 const TABLE_MENU_GROUPS: BlockGroup[] = ["tableMore"];
 // Page width is a per-note setting rather than an insertable thing, so it gets
 // its own small menu at the end rather than living under "Insert".
-const WIDTH_MENU_GROUPS: BlockGroup[] = ["width"];
+const WIDTH_MENU_GROUPS: BlockGroup[] = ["width", "fold"];
 // Trailing groups, shown inline after the menu.
 const TAIL_GROUPS: BlockGroup[] = ["vault", "history"];
 
@@ -116,7 +116,7 @@ export function NoteToolbar({ editor, registry, swatches, trailing }: Props) {
       {widthMenuSections.length > 0 && (
         <>
           <span className="tt-sep" />
-          <ToolbarMenu label="Width" sections={widthMenuSections} editor={editor} flags={flags} />
+          <ToolbarMenu label="View" sections={widthMenuSections} editor={editor} flags={flags} />
         </>
       )}
 

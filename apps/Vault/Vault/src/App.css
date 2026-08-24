@@ -3412,6 +3412,93 @@ body {
   .tiptap-editor .ProseMirror .toggle-caret-glyph { font-size: 11px; }
 }
 
+/* ── Foldable headings ─────────────────────────────────────────────
+   The arrow is a widget decoration at the start of the heading's text, pulled
+   into the left gutter so it doesn't reflow the title. `position: relative` on
+   the heading is what gives it something to be absolute against — without it
+   the arrow anchors to the editor and stacks every fold arrow in one corner.
+   The gutter is the same one the block drag handle uses, so the two must not
+   collide: the handle sits further left (see .block-handle). */
+.tiptap-editor .ProseMirror .has-fold {
+  position: relative;
+}
+
+.tiptap-editor .ProseMirror .heading-fold {
+  position: absolute;
+  left: -1.35em;
+  /* Optically centred on the first line of the title rather than on the whole
+     heading box, which for a wrapped h1 would put it halfway down. */
+  top: 0.12em;
+  width: 1.05em;
+  height: 1.05em;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--fg-invisible);
+  font-size: 0.62em;
+  line-height: 1;
+  cursor: pointer;
+  /* Hidden until the heading is hovered — except when it is collapsed, where
+     it is the only sign the section still exists. */
+  opacity: 0;
+  transition: opacity 0.12s ease, transform 0.12s ease, color 0.12s ease;
+  user-select: none;
+}
+
+.tiptap-editor .ProseMirror .has-fold:hover .heading-fold,
+.tiptap-editor .ProseMirror .heading-fold:focus-visible,
+.tiptap-editor .ProseMirror .has-fold.is-collapsed .heading-fold {
+  opacity: 1;
+}
+
+.tiptap-editor .ProseMirror .heading-fold:hover {
+  background: var(--bg-hover);
+  color: var(--fg-secondary);
+}
+
+.tiptap-editor .ProseMirror .heading-fold.is-collapsed {
+  transform: rotate(-90deg);
+}
+
+/* The fold itself. Decorations put this class on each sibling the heading
+   owns; the document is unchanged, only these are hidden.
+
+   `!important` is deliberate and is the one place in this file that earns it.
+   Every block type sets its own `display` — `.columns-row` is flex, and it is
+   declared later at equal specificity, so a folded row stayed on screen with
+   the class correctly applied and nothing visibly wrong to debug. Folding has
+   to beat every block's own layout, including block types added later; losing
+   that race means a section that reports itself folded and isn't. */
+.tiptap-editor .ProseMirror .is-folded {
+  display: none !important;
+}
+
+/* Same reasoning as the collapsed toggle: a folded section must not look like
+   an empty one, or the note appears to have lost content. */
+.tiptap-editor .ProseMirror .has-fold.is-collapsed::after {
+  content: "…";
+  margin-left: 0.4em;
+  color: var(--fg-invisible);
+  font-weight: 400;
+}
+
+@media (pointer: coarse) {
+  /* No hover on a touch screen, so the arrow is always visible and finger
+     sized — and the heading is indented to make room, since a gutter that
+     overlaps the text is worse than no gutter. */
+  .tiptap-editor .ProseMirror .has-fold { padding-left: 1.5em; }
+  .tiptap-editor .ProseMirror .heading-fold {
+    opacity: 1;
+    left: 0;
+    width: 1.3em;
+    height: 1.3em;
+  }
+}
+
 /* ── Columns ─────────────────────────────────────────────────────────────────
    Widths are flex-grow values on each column, written into the style attribute
    by the node's renderHTML — so a saved document lays itself out with no JS,
