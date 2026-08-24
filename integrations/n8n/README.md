@@ -715,7 +715,7 @@ import always arrives with `{"id": null}` and n8n resolves credentials by **id**
 by name, so a perfectly-named credential still reports "uses invalid credential" until
 you select it on the node.
 
-## Two n8n traps that cost a morning
+## Three n8n traps that cost a morning
 
 ### A workflow with `active = 1` is not necessarily active
 
@@ -775,14 +775,52 @@ has arrived. Those two look identical from the UI, which is the same
 missing-versus-empty conflation the schema was designed around — reappearing one layer up,
 in someone else's code.
 
-### "uses invalid credential" is usually an OAuth refresh failure
+### "uses invalid credential", but only on triggered runs
 
-Reported identically by the Gmail node, the Gmail trigger and a plain HTTP Request node
-using `predefinedCredentialType`, so it is not node-specific. A *manual* execution can
-still succeed on a cached access token while every scheduled poll fails, which makes it
-look intermittent.
+**The tell is that a manual execution succeeds and every triggered one fails.** If you
+see that, the credential is almost certainly fine and the OAuth token is fine. Do not
+reconnect it — that was the first guess here and it was wrong, and it sends you to
+Google Cloud for an hour chasing nothing.
 
-The fix is to reopen the credential and reconnect it. If the Google consent screen is
-still in **Testing**, do that *after* publishing it (Google Auth Platform → Audience →
-Publish app) — Google expires refresh tokens for unpublished apps, so reconnecting first
-just restarts the same clock.
+**Manual and triggered executions run different copies of the workflow.** A manual run
+uses `workflow_entity.nodes` — the live version. An active trigger runs the
+**published** version, a snapshot stored in `workflow_history` and pointed at by
+`workflow_entity.activeVersionId`. When those two disagree, this is what it looks like.
+
+They disagree easily, because **writing `workflow_entity.nodes` directly does not create
+a version.** A raw `UPDATE` — the obvious way to script credential wiring after an
+import, since import always leaves `{"id": null}` — changes what manual runs read and
+nothing else. `versionId` still points at the pre-edit snapshot, so a subsequent
+`publish:workflow` faithfully publishes *that*, credential nulls and all. It reports
+success. Nothing anywhere says the published copy differs from the one you just fixed.
+
+Diagnose by comparing the two directly, never by reading `workflow_entity.nodes` alone:
+
+```bash
+docker compose exec -T n8n node -e "
+const {DatabaseSync}=require('node:sqlite');
+const db=new DatabaseSync('/home/node/.n8n/database.sqlite',{readOnly:true});
+const w=db.prepare(\"select nodes,activeVersionId,name from workflow_entity where id='nexusMailTriage1'\").get();
+const h=db.prepare('select nodes from workflow_history where versionId=?').get(w.activeVersionId);
+const refs=j=>JSON.parse(j).flatMap(n=>Object.entries(n.credentials||{}).map(([t,r])=>n.name+' '+t+' '+JSON.stringify(r)));
+console.log('LIVE (manual):\n  '+refs(w.nodes).join('\n  '));
+console.log('PUBLISHED (trigger):\n  '+refs(h.nodes).join('\n  '));"
+```
+
+The fix is to make the credential ids part of an actual import, so n8n creates a real
+version, and then publish that:
+
+```bash
+# resolve {"id": null} to the real ids in a COPY — never commit instance ids to the repo
+docker cp /tmp/mail-triage.resolved.json n8n:/tmp/wf.json
+docker compose exec -T n8n n8n import:workflow --input=/tmp/wf.json
+docker compose exec -T n8n n8n publish:workflow --id nexusMailTriage1
+docker compose restart n8n
+```
+
+Then re-run the comparison above and confirm the **published** side carries real ids.
+
+Genuine OAuth expiry does exist and looks different: it fails manual runs too. Google
+expires refresh tokens for apps left in **Testing**, so publish the consent screen
+(Google Auth Platform → Audience → Publish app) — but treat that as routine hygiene,
+not as the explanation for this symptom.
