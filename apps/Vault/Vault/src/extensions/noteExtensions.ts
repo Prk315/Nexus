@@ -26,6 +26,7 @@ import { ColumnBlock, Column } from "./structural/Columns";
 import { BlockHandle } from "./structural/BlockHandle";
 import { NoteDocument } from "./noteDocument";
 import { FoldableHeading } from "./headingFold";
+import { SketchBlock } from "./SketchBlock";
 import { NoteImage } from "./noteImage";
 import { NoteCodeBlock } from "./noteCodeBlock";
 import TextAlign from "@tiptap/extension-text-align";
@@ -68,6 +69,10 @@ export function buildNoteExtensions(opts: NoteExtensionOpts = {}): Extensions {
     // the note on cachedSchema below.
     FoldableHeading.configure({ levels: [1, 2, 3, 4] }),
     NoteCodeBlock,
+    // A small drawing surface. Strokes live in the document, not in a
+    // vault_content row — see SketchBlock.ts for why, and for the size cap
+    // that keeps a sketch from taking the note's text down with it.
+    SketchBlock,
     // Storage URLs only — see noteImage.ts for the incident this prevents.
     NoteImage,
     TextAlign.configure({ types: ["heading", "paragraph"] }),

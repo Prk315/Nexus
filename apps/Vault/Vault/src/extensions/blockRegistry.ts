@@ -550,6 +550,19 @@ export function buildBlockRegistry(opts: BlockRegistryOptions = {}): BlockAction
     });
   }
 
+  // ── Sketch ────────────────────────────────────────────────────────────────
+  actions.push({
+    id: "sketch",
+    title: "Sketch",
+    // Not ✎ — the Note callout and the highlighter-categories button already
+    // use it, and three identical pencils in one menu is a coin toss.
+    icon: "✍",
+    group: "media",
+    surfaces: ["slash", "toolbar"],
+    keywords: ["draw", "sketch", "canvas", "diagram", "ink", "pen"],
+    run: atCursor((c) => c.insertSketch()),
+  });
+
   // ── Folding ───────────────────────────────────────────────────────────────
   // Section folding is a VIEW state, not an edit — see extensions/headingFold.ts
   // for why it is decorations over a flat document rather than a container node.

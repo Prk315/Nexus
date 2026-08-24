@@ -1,6 +1,8 @@
 import { useEditor, EditorContent } from "@tiptap/react";
 import { BubbleMenu } from "@tiptap/react/menus";
 import { Extension } from "@tiptap/core";
+import type { Editor } from "@tiptap/core";
+import type { EditorState } from "@tiptap/pm/state";
 import { useEffect, useMemo, useRef, useState } from "react";
 import katex from "katex";
 import { createSlashCommandsExtension, type SlashMenuState } from "../extensions/SlashCommands";
@@ -172,6 +174,37 @@ function parseContent(raw: string) {
  * editor instead would be a much weaker guarantee — an editor that exists can
  * emit, and one emit is all it takes (see lib/noteSchemaGuard.ts).
  */
+/**
+ * BubbleMenu's props MUST be referentially stable, and this is not a style
+ * preference — an inline `options={{ placement: "top" }}` is an infinite render
+ * loop.
+ *
+ * @tiptap/react's BubbleMenu has an effect that DISPATCHES A TRANSACTION when
+ * any of its props change identity (react/dist/menus/index.js — the
+ * `updateOptions` dispatch). NoteEditor's `onTransaction` calls forceUpdate so
+ * the toolbar's isActive states refresh. A fresh object literal per render
+ * therefore closes the circle: render → new options identity → dispatch →
+ * forceUpdate → render. It ran at ~130 transactions a second and filled the
+ * console with React's "Maximum update depth exceeded", while every keystroke
+ * competed with it for the main thread.
+ *
+ * Declared at module scope rather than memoized with useMemo so there is no
+ * dependency array to get wrong later.
+ */
+const BUBBLE_OPTIONS = { placement: "top" } as const;
+
+const bubbleShouldShow = ({ editor: ed, state }: { editor: Editor; state: EditorState }) =>
+  !state.selection.empty &&
+  // A NodeSelection is a whole block picked up by the drag handle, not a run
+  // of text. Bold/italic/link mean nothing for one, and worse: it pops the
+  // menu open the moment a drag starts and covers the very drop target you're
+  // aiming at.
+  !(state.selection as any).node &&
+  // A selection inside a code block or a math node has nothing here worth
+  // applying, and the menu would just cover the content.
+  !ed.isActive("codeBlock") &&
+  !ed.isActive("blockMath");
+
 export function NoteEditor(props: Props) {
   const audit = useMemo(
     () => auditNoteContent(parseNoteContent(props.content), noteSchema()),
@@ -687,22 +720,7 @@ function NoteEditorInner({ content, onChange, nodeId, graph, variant = "full" }:
       {/* Formatting where the text is. This is the iPad answer above all —
           .tt-btn is a 13px, 4×8px-padded target, which is fine with a mouse
           and miserable with a thumb at the top of the screen. */}
-      <BubbleMenu
-        editor={editor}
-        options={{ placement: "top" }}
-        shouldShow={({ editor: ed, state }) =>
-          !state.selection.empty &&
-          // A NodeSelection is a whole block picked up by the drag handle, not
-          // a run of text. Bold/italic/link mean nothing for one, and worse:
-          // it pops the menu open the moment a drag starts and covers the very
-          // drop target you're aiming at.
-          !(state.selection as any).node &&
-          // A selection inside a code block or a math node has nothing here
-          // worth applying, and the menu would just cover the content.
-          !ed.isActive("codeBlock") &&
-          !ed.isActive("blockMath")
-        }
-      >
+      <BubbleMenu editor={editor} options={BUBBLE_OPTIONS} shouldShow={bubbleShouldShow}>
         <div className="tt-bubble">
           {actionsFor(registry, "bubble").map((a) => (
             <button

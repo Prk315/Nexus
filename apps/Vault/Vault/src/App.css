@@ -3412,6 +3412,171 @@ body {
   .tiptap-editor .ProseMirror .toggle-caret-glyph { font-size: 11px; }
 }
 
+/* ── Inline sketch block ───────────────────────────────────────────
+   A small drawing surface embedded in a note. The surface sizes itself by
+   ASPECT RATIO, not by a pixel height, because the strokes are stored in a
+   1000-unit-wide logical space (see extensions/SketchBlock.ts) — the same
+   sketch therefore fills the same fraction of the note at any note width and
+   on any device, instead of being clipped when the measure narrows. */
+.tiptap-editor .ProseMirror .sketch-block {
+  margin: 14px 0;
+  border: 1px solid var(--border-base);
+  border-radius: 10px;
+  background: var(--bg-base);
+  overflow: hidden;
+  position: relative;
+}
+
+.tiptap-editor .ProseMirror .sketch-block.is-selected {
+  outline: 2px solid var(--edge-in);
+  outline-offset: 1px;
+}
+
+.sketch-bar {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 5px 7px;
+  border-bottom: 1px solid var(--border-base);
+  background: var(--bg-subtle);
+  flex-wrap: wrap;
+  /* The bar is chrome, not content: it must never take a caret, and a
+     selection dragged across the note must not sweep through it. */
+  user-select: none;
+}
+
+.sketch-tools { display: flex; align-items: center; gap: 2px; }
+.sketch-spacer { flex: 1 1 auto; }
+.sketch-sep {
+  width: 1px;
+  align-self: stretch;
+  margin: 2px 4px;
+  background: var(--border-base);
+}
+
+.sketch-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 26px;
+  height: 26px;
+  padding: 0 5px;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--fg-secondary);
+  font-size: 13px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.sketch-btn:hover:not(:disabled) { background: var(--bg-subtle); }
+.sketch-btn:disabled { opacity: 0.35; cursor: default; }
+.sketch-btn.is-active {
+  background: var(--bg-muted);
+  border-color: var(--border-strong, var(--border-base));
+  color: var(--fg-primary);
+}
+
+.sketch-width span {
+  display: block;
+  border-radius: 50%;
+  background: currentColor;
+}
+
+.sketch-swatch {
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  border: 2px solid transparent;
+  border-radius: 50%;
+  cursor: pointer;
+}
+.sketch-swatch.is-active { border-color: var(--fg-primary); }
+
+.sketch-select {
+  height: 26px;
+  border: 1px solid var(--border-base);
+  border-radius: 6px;
+  background: var(--bg-base);
+  color: var(--fg-secondary);
+  font-size: 12px;
+  padding: 0 4px;
+}
+
+.sketch-surface {
+  position: relative;
+  width: 100%;
+  /* aspect-ratio is set inline from the height attribute. */
+  cursor: crosshair;
+  background-color: var(--bg-base);
+}
+
+.sketch-surface[data-bg="grid"] {
+  background-image:
+    linear-gradient(to right, var(--border-strong) 1px, transparent 1px),
+    linear-gradient(to bottom, var(--border-strong) 1px, transparent 1px);
+  background-size: 22px 22px;
+}
+
+.sketch-surface[data-bg="lines"] {
+  background-image: linear-gradient(to bottom, var(--border-strong) 1px, transparent 1px);
+  background-size: 100% 26px;
+}
+
+.sketch-svg {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  /* Every pointer event is handled on the surface, which owns the coordinate
+     transform. Letting the SVG take them would make `e.target` depend on
+     whether the pointer happened to be over a stroke. */
+  pointer-events: none;
+  touch-action: none;
+}
+
+.sketch-hint {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--fg-ghost);
+  font-size: 13px;
+  pointer-events: none;
+}
+
+.sketch-full {
+  position: absolute;
+  left: 8px;
+  right: 8px;
+  bottom: 8px;
+  padding: 6px 10px;
+  border-radius: 6px;
+  background: color-mix(in oklab, var(--sticky-border) 30%, var(--bg-base));
+  color: var(--fg-primary);
+  font-size: 12px;
+  pointer-events: none;
+}
+
+.sketch-resize {
+  height: 10px;
+  cursor: ns-resize;
+  background: var(--bg-subtle);
+  border-top: 1px solid var(--border-base);
+  /* The handle is a pointer target during a drag that leaves it; without this
+     the browser would try to select text under the moving pointer. */
+  touch-action: none;
+}
+.sketch-resize:hover { background: var(--bg-subtle); }
+
+@media (pointer: coarse) {
+  .sketch-btn { min-width: 32px; height: 32px; }
+  .sketch-swatch { width: 24px; height: 24px; }
+  .sketch-resize { height: 18px; }
+}
+
 /* ── Foldable headings ─────────────────────────────────────────────
    The arrow is a widget decoration at the start of the heading's text, pulled
    into the left gutter so it doesn't reflow the title. `position: relative` on
@@ -3456,7 +3621,7 @@ body {
 }
 
 .tiptap-editor .ProseMirror .heading-fold:hover {
-  background: var(--bg-hover);
+  background: var(--bg-subtle);
   color: var(--fg-secondary);
 }
 
