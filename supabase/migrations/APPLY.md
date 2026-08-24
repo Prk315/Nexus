@@ -13,7 +13,8 @@ query after each.
 | 2 | `20260805120100_pomodoro_config.sql` | `pomodoro_config` table + seed `'default'` row |
 | 3 | `20260805120200_schedule_block_targets.sql` | `schedule_block_apps`, `schedule_block_sites` |
 | 4 | `20260805120300_unlock_rules_enabled_and_evaluator_indexes.sql` | `unlock_rules.enabled` + three evaluator indexes |
-| 5 | `20260822120000_n8n_mail_bus.sql` | `mail_messages`, `n8n_requests` — **apply before deploying `n8n-ingest` / `n8n-requests`, or both 500 on every call** |
+| 5 | `20260823120000_n8n_mail_bus.sql` | `mail_messages`, `n8n_requests` — **apply before deploying `n8n-ingest` / `n8n-requests`, or both 500 on every call** |
+| 6 | `20260824120000_job_pipeline.sql` | `job_profiles`, `job_sources`, `job_postings`, `job_matches` — **apply before deploying `job-ingest`, or it 500s on every call** |
 
 Files 1–3 are independent of each other and of file 4. File 4 has an **internal**
 ordering requirement (the `ALTER` must precede the index that uses the new
@@ -28,6 +29,14 @@ File 5 is not part of the productivity stack — it is the mail bus behind
 as the bus"). It depends on nothing in files 1–4 and can be applied on its own.
 Its RLS posture is deliberately the **opposite** of theirs; verify it with §5
 below, not with the "RLS, all new tables" section.
+
+File 6 is the job applier's ingestion tables (see `JOB_APPLIER_PLAN.md` and
+`n8n/job-applier/README.md`). Like file 5 it depends on nothing in files 1–4 and
+can be applied on its own, and like file 5 its RLS is `auth.uid()`-scoped with no
+anon policy — verify it the same way, not with the "RLS, all new tables" section.
+It seeds **nothing**: `job_profiles` and `job_sources` are user-scoped and a
+migration has no session to attribute rows to, so the first profile is inserted by
+hand or by the panel.
 
 Every file is forward-only and re-runnable: `CREATE TABLE IF NOT EXISTS`,
 `CREATE INDEX IF NOT EXISTS`, `ADD COLUMN IF NOT EXISTS`, `INSERT … ON CONFLICT
