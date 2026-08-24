@@ -24,6 +24,7 @@ import { Container } from "./structural/Container";
 import { ToggleBlock, ToggleSummary, ToggleContent } from "./structural/Toggle";
 import { ColumnBlock, Column } from "./structural/Columns";
 import { BlockHandle } from "./structural/BlockHandle";
+import { NoteDocument } from "./noteDocument";
 import { NoteImage } from "./noteImage";
 import { NoteCodeBlock } from "./noteCodeBlock";
 import TextAlign from "@tiptap/extension-text-align";
@@ -42,6 +43,7 @@ export function buildNoteExtensions(opts: NoteExtensionOpts = {}): Extensions {
   const { onMathClick, extra = [], placeholder = "Write here… (type / for commands)" } = opts;
 
   return [
+    NoteDocument,
     StarterKit.configure({
       // StarterKit v3 already ships Link (and Underline). The only thing wrong
       // with the default is `openOnClick: true`: inside an *editable* document
@@ -54,6 +56,8 @@ export function buildNoteExtensions(opts: NoteExtensionOpts = {}): Extensions {
       // option, so it must stay identical to whatever noteSchema() derives —
       // see the note on cachedSchema below.
       heading: { levels: [1, 2, 3, 4] },
+      // Replaced by NoteDocument, which carries the per-note width attribute.
+      document: false,
       // Replaced below by the lowlight version. Leaving StarterKit's plain
       // codeBlock registered too would be a duplicate node name.
       codeBlock: false,

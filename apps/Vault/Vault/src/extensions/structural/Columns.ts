@@ -62,9 +62,14 @@ export const Column = Node.create({
           const grow = parseFloat((el as HTMLElement).style.flexGrow || "");
           return Number.isFinite(grow) && grow > 0 ? grow : null;
         },
-        renderHTML: (attrs) => ({
-          style: `flex: ${attrs.width ?? DEFAULT_COLUMN_GROW} 1 0%`,
-        }),
+        // Only emit a style when a width was actually SET. Always emitting
+        // `flex: 1 1 0%` meant an unweighted column parsed back as an explicit
+        // width of 1 — so a copy-paste silently converted "equal share" into
+        // "pinned to 1", and the HTML round trip wasn't identity. CSS carries
+        // the default instead (see .column in App.css), which also keeps the
+        // serialized markup smaller and says what was meant.
+        renderHTML: (attrs) =>
+          attrs.width ? { style: `flex: ${attrs.width} 1 0%` } : {},
       },
     };
   },

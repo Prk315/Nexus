@@ -322,7 +322,23 @@ function NoteEditorInner({ content, onChange, nodeId, graph, variant = "full" }:
       // catch, so with the flag on this can throw synchronously inside an
       // effect. The wrapper's audit makes that near-unreachable for unknown
       // types; this covers the invalid-nesting case it doesn't check.
-      editor.commands.setContent(parseContent(content), { emitUpdate: false });
+      const parsed = parseContent(content);
+      editor.commands.setContent(parsed, { emitUpdate: false });
+
+      // setContent replaces the content RANGE, not the doc node, so doc-level
+      // attributes survive it untouched — asking it to load a doc with
+      // width:"wide" into an editor currently showing width:"full" silently
+      // keeps "full". Harmless on the mount path (useEditor builds the doc
+      // from the JSON, attributes and all), but this effect also runs when the
+      // same open note changes underneath us — another device, another pane —
+      // and without this the width would quietly stay stale.
+      const nextWidth = parsed && typeof parsed === "object" ? (parsed as any).attrs?.width : undefined;
+      const current = editor.state.doc.attrs?.width;
+      if (nextWidth !== undefined && nextWidth !== current) {
+        editor.view.dispatch(
+          editor.state.tr.setDocAttribute("width", nextWidth).setMeta("addToHistory", false)
+        );
+      }
     } catch (e) {
       console.error("[vault] refusing to load note content into the editor", e);
       setHardBlocked(true);

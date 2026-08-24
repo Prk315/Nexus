@@ -3424,6 +3424,11 @@ body {
 }
 
 .tiptap-editor .ProseMirror .column {
+  /* The DEFAULT share. renderHTML only writes an inline `flex` when a width
+     was explicitly set, so an unweighted column relies on this — which is what
+     lets width:null survive an HTML round trip as null instead of becoming an
+     explicit 1. */
+  flex: 1 1 0%;
   /* min-width: 0 is load-bearing in a flex row: without it a long unbroken
      word sets the column's min-content width and the flex-grow ratios are
      silently ignored, so dragging the gutter appears to do nothing. */
@@ -3479,13 +3484,63 @@ body.vault-col-resizing * {
   }
 }
 
-/* A note that actually uses columns widens itself, rather than every note
-   paying for the possibility. :has() is well supported in both WebKit and the
-   Chromium WebView2 this ships in; a browser without it simply keeps the
-   reading measure, which is a degradation and not a break. */
+/* ── Per-note width ──────────────────────────────────────────────────────────
+   `auto` (the default, no attribute emitted) keeps the behaviour notes already
+   had: a reading measure that widens on its own when the note actually
+   contains a column row, so nothing changes for existing content. An explicit
+   choice overrides it — hence the higher-specificity selectors below. */
 .tiptap-editor .ProseMirror:has(.columns-row) {
   --note-measure: 980px;
 }
+
+.tiptap-editor .ProseMirror[data-note-width="wide"],
+.tiptap-editor .ProseMirror[data-note-width="wide"]:has(.columns-row) {
+  --note-measure: 1180px;
+}
+
+/* "Full" fills the pane rather than naming a pixel width, so it keeps working
+   when the sidebar or outline is toggled and on a split pane. */
+.tiptap-editor .ProseMirror[data-note-width="full"],
+.tiptap-editor .ProseMirror[data-note-width="full"]:has(.columns-row) {
+  --note-measure: 100%;
+}
+
+/* Deep nesting eats horizontal space fast: every column adds 14px of padding
+   per side, so three levels costs ~84px before any text. Tighten the padding
+   as rows nest so the innermost column is still usable. */
+.tiptap-editor .ProseMirror .columns-row .columns-row > .column {
+  padding: 0 10px;
+}
+
+.tiptap-editor .ProseMirror .columns-row .columns-row .columns-row > .column {
+  padding: 0 6px;
+}
+
+/* A nested row shouldn't inherit the full vertical rhythm of a top-level one,
+   or three levels of margin stack into a visible gap. */
+.tiptap-editor .ProseMirror .column > .columns-row {
+  margin: 0.4em 0;
+}
+
+.tiptap-editor .ProseMirror .column > .columns-row:first-child { margin-top: 0; }
+.tiptap-editor .ProseMirror .column > .columns-row:last-child { margin-bottom: 0; }
+
+/* Same for boxes nested inside columns — the card padding is sized for a
+   full-measure note, not a third of one. */
+.tiptap-editor .ProseMirror .column .container-block,
+.tiptap-editor .ProseMirror .column .callout {
+  padding-left: 12px;
+  padding-right: 12px;
+}
+
+.tiptap-editor .ProseMirror .column .callout {
+  padding-left: 34px;
+}
+
+.tiptap-editor .ProseMirror .column .container-block:first-child,
+.tiptap-editor .ProseMirror .column .callout:first-child { margin-top: 0; }
+.tiptap-editor .ProseMirror .column .container-block:last-child,
+.tiptap-editor .ProseMirror .column .callout:last-child { margin-bottom: 0; }
 
 
 /* ── Images ──────────────────────────────────────────────────────────────────

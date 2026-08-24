@@ -203,7 +203,11 @@ export function buildColumnDecorations(doc: PMNode): DecorationSet {
       }
       offset += node.child(i).nodeSize;
     }
-    return false; // a row can't contain another row
+    // Keep descending. This used to `return false` on the belief that "a row
+    // can't contain another row" — true only because the UI refused to create
+    // one, never because the schema forbade it. Now that nesting is offered,
+    // stopping here would leave every nested row without resize gutters.
+    return true;
   });
 
   return DecorationSet.create(doc, decorations);
