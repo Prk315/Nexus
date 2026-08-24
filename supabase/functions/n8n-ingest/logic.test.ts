@@ -122,7 +122,7 @@ Deno.test("clampScore holds a present score inside the range", () => {
 });
 
 Deno.test("clampScore rounds to an integer", () => {
-  // `priority` is an int column; a float would be silently truncated by
+  // `score` is an int column; a float would be silently truncated by
   // Postgres in a direction nobody chose.
   assertEquals(clampScore(72.4), 72);
   assertEquals(clampScore(72.5), 73);
@@ -1162,7 +1162,10 @@ Deno.test("parseDueDate returns a calendar date, read as UTC", () => {
 });
 
 Deno.test("the model's `priority` spelling is still accepted for `score`", () => {
-  // Unit 5's workflow currently emits `priority`; the column is now `score`.
+  // A compatibility alias. The workflow now emits `score` (it was updated in the
+  // same round the column was renamed), so this no longer fires in practice —
+  // it is kept because the two ship separately and an older workflow JSON, or a
+  // hand-run of one, would otherwise write every message unscored in silence.
   // Accepting both is what keeps the chain working across the two merges,
   // rather than every message arriving unscored for however long they differ.
   assertEquals(rowOf({ priority: 80 }).score, 80);

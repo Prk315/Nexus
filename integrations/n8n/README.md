@@ -688,7 +688,7 @@ assuming the pipeline is broken, check the newest
 synced" signal. No such row means n8n has never completed a run, which is a
 different fact from an empty inbox.
 
-## The heartbeat, and why there are two workflows
+## The heartbeat, and why there are three workflows
 
 `mail-triage` is driven by a **Gmail trigger**, and a polling trigger only runs when
 it has something to emit. Its `mail_sync` marker therefore means *"the last time mail
