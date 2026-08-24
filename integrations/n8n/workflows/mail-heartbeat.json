@@ -10,7 +10,10 @@
       "name": "Why this exists",
       "type": "n8n-nodes-base.stickyNote",
       "typeVersion": 1,
-      "position": [-160, -220],
+      "position": [
+        -160,
+        -220
+      ],
       "parameters": {
         "width": 760,
         "height": 300,
@@ -22,7 +25,10 @@
       "name": "Every 15 minutes",
       "type": "n8n-nodes-base.scheduleTrigger",
       "typeVersion": 1.2,
-      "position": [-160, 140],
+      "position": [
+        -160,
+        140
+      ],
       "parameters": {
         "rule": {
           "interval": [
@@ -37,17 +43,33 @@
     {
       "id": "gmail-probe",
       "name": "Probe Gmail",
-      "type": "n8n-nodes-base.gmail",
-      "typeVersion": 2.1,
-      "position": [80, 140],
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        80,
+        140
+      ],
       "parameters": {
-        "resource": "message",
-        "operation": "getAll",
-        "returnAll": false,
-        "limit": 1,
-        "simple": true,
-        "filters": {},
-        "options": {}
+        "method": "GET",
+        "url": "https://gmail.googleapis.com/gmail/v1/users/me/messages",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "gmailOAuth2",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "maxResults",
+              "value": "1"
+            },
+            {
+              "name": "q",
+              "value": "in:inbox"
+            }
+          ]
+        },
+        "options": {
+          "timeout": 30000
+        }
       },
       "credentials": {
         "gmailOAuth2": {
@@ -55,7 +77,6 @@
           "name": "Nexus Gmail"
         }
       },
-      "alwaysOutputData": true,
       "onError": "stopWorkflow"
     },
     {
@@ -63,10 +84,13 @@
       "name": "Build run marker",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
-      "position": [320, 140],
+      "position": [
+        320,
+        140
+      ],
       "parameters": {
         "mode": "runOnceForAllItems",
-        "jsCode": "// Build the `run` object `n8n-ingest` records as an `n8n_requests` row.\n//\n// The shape is fixed by the function's `RunPayload`; anything else it ignores.\n// `kind` is echoed for readability but the server writes its own constant — a\n// caller cannot forge a marker for another queue.\n//\n// `fetched: 0` is the honest number and the whole point of this workflow: we\n// looked, and we are not claiming to have ingested anything. Ingestion is the\n// trigger workflow's job, and it reports its own counts.\n//\n// Reaching this node at all means the Gmail call succeeded, because the probe\n// node is set to stop the workflow on error rather than continue. That is\n// deliberate: a heartbeat that still fires after Gmail starts refusing us would\n// keep `finished_at` moving and report a healthy sync over a dead credential —\n// the precise failure this exists to make visible. A failed run writes no\n// marker, `finished_at` goes stale, and the panel says so.\n\nconst probed = items.length;\n\nreturn [{\n  json: {\n    messages: [],\n    run: {\n      kind: 'mail_sync',\n      source: 'n8n:mail-heartbeat',\n      finished_at: new Date().toISOString(),\n      fetched: 0,\n      triaged: 0,\n      untriaged: 0,\n      probed_messages: probed,\n    },\n  },\n}];"
+        "jsCode": "// Build the `run` object `n8n-ingest` records as an `n8n_requests` row.\n//\n// Shape is fixed by the function's `RunPayload`. `kind` is echoed for\n// readability only — the server writes its own constant, so a caller cannot\n// forge a marker for another queue.\n//\n// `fetched: 0` is the honest number and the entire point: we looked, and we\n// are not claiming to have ingested anything. Ingesting is the trigger\n// workflow's job and it reports its own counts.\n//\n// Reaching this node means the Gmail call SUCCEEDED — the probe is set to\n// stop the workflow on error. That is deliberate: a heartbeat that still\n// fired after Gmail started refusing us would keep `finished_at` moving and\n// report a healthy sync over a dead credential, which is precisely the\n// failure this workflow exists to make visible. A failed run writes no\n// marker, `finished_at` goes stale, and the panel says so.\n//\n// The probe is a plain HTTP call to the Gmail API rather than the Gmail\n// node: the node rejected this credential with 'uses invalid credential'\n// while the very same credential worked in the Gmail *trigger*. The REST\n// call proves the same thing — the token is live and Gmail answers — with\n// one less abstraction between us and that fact.\n\nconst res = $input.first()?.json ?? {};\nconst probed = Array.isArray(res.messages) ? res.messages.length : 0;\n\nreturn [{\n  json: {\n    messages: [],\n    run: {\n      kind: 'mail_sync',\n      source: 'n8n:mail-heartbeat',\n      finished_at: new Date().toISOString(),\n      fetched: 0,\n      triaged: 0,\n      untriaged: 0,\n      probed_messages: probed,\n    },\n  },\n}];"
       }
     },
     {
@@ -74,7 +98,10 @@
       "name": "POST n8n-ingest",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
-      "position": [560, 140],
+      "position": [
+        560,
+        140
+      ],
       "parameters": {
         "method": "POST",
         "url": "https://efxmzsdisaymtpebaxlp.supabase.co/functions/v1/n8n-ingest",
@@ -97,13 +124,37 @@
   ],
   "connections": {
     "Every 15 minutes": {
-      "main": [[{ "node": "Probe Gmail", "type": "main", "index": 0 }]]
+      "main": [
+        [
+          {
+            "node": "Probe Gmail",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
     },
     "Probe Gmail": {
-      "main": [[{ "node": "Build run marker", "type": "main", "index": 0 }]]
+      "main": [
+        [
+          {
+            "node": "Build run marker",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
     },
     "Build run marker": {
-      "main": [[{ "node": "POST n8n-ingest", "type": "main", "index": 0 }]]
+      "main": [
+        [
+          {
+            "node": "POST n8n-ingest",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
     }
   }
 }
