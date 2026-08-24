@@ -714,3 +714,75 @@ Import it the same way as `mail-triage`, and wire the same two credentials — a
 import always arrives with `{"id": null}` and n8n resolves credentials by **id**, not
 by name, so a perfectly-named credential still reports "uses invalid credential" until
 you select it on the node.
+
+## Two n8n traps that cost a morning
+
+### A workflow with `active = 1` is not necessarily active
+
+n8n 2.x versions workflows. A workflow is only really live when
+**`workflow_entity.activeVersionId` is set** — the `active` flag alone is not enough,
+and nothing warns you. The tell is n8n's own startup log:
+
+```
+Currently active workflows:
+   - Nexus — Gmail triage (ID: nexusMailTriage1)      <- heartbeat absent
+```
+
+while the database cheerfully reports `active=1, triggerCount=1, isArchived=0` for both.
+
+**`n8n import:workflow` clears `activeVersionId`.** So re-importing a running workflow
+silently retires it, and setting `active = 1` by hand does not bring it back. Use:
+
+```bash
+docker compose exec -T n8n n8n publish:workflow --id <workflowId>
+docker compose restart n8n     # publish/activate changes need a restart
+```
+
+Then confirm against the startup log, not the `active` column.
+
+### A failing poll freezes the watermark forever
+
+`GmailTrigger.poll()` stamps its watermark **before** it fetches:
+
+```js
+nodeStaticData.lastTimeChecked ??= +now;   // set first
+...                                        // fetch may then throw
+```
+
+So the first poll records a timestamp and every subsequent failure leaves it untouched.
+The trigger then re-queries `after:<that same timestamp>` every interval, forever — and
+because a failed poll creates no execution record, the UI shows nothing at all. The only
+visible symptom is a log line, and n8n prints `error.message` from something that is not
+an Error, so it reads:
+
+```
+There was a problem in 'Gmail Trigger' node in workflow 'X': 'undefined'
+```
+
+To check whether polling is actually happening, read the watermark and confirm it moves:
+
+```bash
+docker compose exec -T n8n node -e "
+const {DatabaseSync}=require('node:sqlite');
+const db=new DatabaseSync('/home/node/.n8n/database.sqlite',{readOnly:true});
+const s=JSON.parse(db.prepare(\"select staticData from workflow_entity where id='nexusMailTriage1'\").get().staticData);
+const t=s['node:Gmail Trigger']['Gmail Trigger'].lastTimeChecked;
+console.log(new Date(t*1000).toISOString());"
+```
+
+A watermark older than the poll interval means the trigger is wedged, **not** that no mail
+has arrived. Those two look identical from the UI, which is the same
+missing-versus-empty conflation the schema was designed around — reappearing one layer up,
+in someone else's code.
+
+### "uses invalid credential" is usually an OAuth refresh failure
+
+Reported identically by the Gmail node, the Gmail trigger and a plain HTTP Request node
+using `predefinedCredentialType`, so it is not node-specific. A *manual* execution can
+still succeed on a cached access token while every scheduled poll fails, which makes it
+look intermittent.
+
+The fix is to reopen the credential and reconnect it. If the Google consent screen is
+still in **Testing**, do that *after* publishing it (Google Auth Platform → Audience →
+Publish app) — Google expires refresh tokens for unpublished apps, so reconnecting first
+just restarts the same clock.
