@@ -44,8 +44,41 @@ export const MONTHS    = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep",
 export const HOUR_START = 0;
 export const HOUR_END   = 23;
 export const HOURS      = Array.from({ length: HOUR_END - HOUR_START + 1 }, (_, i) => HOUR_START + i);
-export const HOUR_PX    = 56; // pixels per hour — unchanged, so a 24h day scrolls instead of compressing rows
+export const HOUR_PX    = 56; // pixels per hour — the DEFAULT/unzoomed scale, and what the
+                               // always-fixed mobile grid still renders at (U2 is desktop-only).
 export const GRID_END_MIN = (HOUR_END + 1) * 60;
+
+// ── Zoom (U2) ─────────────────────────────────────────────────────────────────
+//
+// Desktop's `hourPx` is state in Week.tsx (default HOUR_PX, persisted in
+// localStorage), threaded down to every grid-geometry consumer below.
+// Mobile never reads this state — it always renders at the fixed HOUR_PX
+// default, unaffected by desktop zoom/pan/drag (see spec U2 §"desktop-only").
+export const HOUR_PX_MIN = 28;
+export const HOUR_PX_MAX = 160;
+export const HOUR_PX_STORAGE_KEY = "pf-week-hour-px";
+
+/** Clamps a candidate pixels-per-hour value into the zoomable range, falling
+ *  back to the default for anything non-finite (a corrupt/cleared localStorage
+ *  value, for instance). */
+export function clampHourPx(px: number): number {
+  if (!Number.isFinite(px)) return HOUR_PX;
+  return Math.min(HOUR_PX_MAX, Math.max(HOUR_PX_MIN, px));
+}
+
+/** One multiplicative wheel-zoom step, already clamped. `deltaY` is the raw
+ *  wheel event value (ctrl/meta-wheel, which is how trackpad pinch arrives). */
+export function zoomHourPx(hourPx: number, deltaY: number): number {
+  return clampHourPx(hourPx * (1 - deltaY * 0.002));
+}
+
+/** Rounds a minute-of-day value to the nearest `step` minutes (default 5 —
+ *  the drag/resize snap increment; pxToTime's own 30-minute click-to-create
+ *  snap is unrelated and untouched). Pure and unclamped — callers that need
+ *  the result inside the grid's bounds clamp separately. */
+export function snapMinutes(min: number, step = 5): number {
+  return Math.round(min / step) * step;
+}
 
 /** The previous bounded window's start, kept as the initial scroll position
  *  now that the grid always renders the full day — see the mount-scroll
@@ -56,12 +89,18 @@ export function timeToMinutes(t: string): number {
   const [h, m] = t.split(":").map(Number);
   return h * 60 + (m || 0);
 }
-export function minutesToPx(min: number): number {
-  return ((min - HOUR_START * 60) / 60) * HOUR_PX;
+export function minutesToPx(min: number, hourPx: number = HOUR_PX): number {
+  return ((min - HOUR_START * 60) / 60) * hourPx;
 }
-export function pxToTime(px: number, containerHeight: number): string {
+/** Inverse of `minutesToPx`, unsnapped and unclamped into the grid's own
+ *  bounds — used by the zoom-anchor and drag-geometry math, which each apply
+ *  their own snap/clamp afterward. */
+export function pxToMinutes(px: number, hourPx: number = HOUR_PX): number {
+  return HOUR_START * 60 + (px / hourPx) * 60;
+}
+export function pxToTime(px: number, containerHeight: number, hourPx: number = HOUR_PX): string {
   const clamped = Math.max(0, Math.min(px, containerHeight));
-  const totalMin = HOUR_START * 60 + (clamped / HOUR_PX) * 60;
+  const totalMin = pxToMinutes(clamped, hourPx);
   // Clamp to the grid's actual last selectable half-hour slot (23:30), not
   // `HOUR_END * 60` (23:00) — the old formula capped `h` at HOUR_END *after*
   // rounding, which mapped every click in the grid's final hour to :00 and
@@ -71,6 +110,12 @@ export function pxToTime(px: number, containerHeight: number): string {
   const h = Math.floor(rounded / 60);
   const m = rounded % 60;
   return `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}`;
+}
+/** Binds `pxToTime` to one zoom scale — "close over hourPx" per spec §1,
+ *  for a call site that wants a plain `(px, containerHeight) => string`
+ *  without repeating the scale at every call. */
+export function makePxToTime(hourPx: number): (px: number, containerHeight: number) => string {
+  return (px, containerHeight) => pxToTime(px, containerHeight, hourPx);
 }
 /** "HH:MM" for a minute-of-day count, clamped into [0, 23:59]. */
 export function minToHHMM(min: number): string {
@@ -157,13 +202,13 @@ export function addHour(t: string, h: number): string {
  * (23:00) and would truncate anything in the final hour, which is exactly
  * where a bed-time band tends to land.
  */
-export function actualSpanPx(span: Span, iso: string): { top: number; height: number } | null {
+export function actualSpanPx(span: Span, iso: string, hourPx: number = HOUR_PX): { top: number; height: number } | null {
   const dayStart = dayStartMs(iso);
   const startMin = Math.max(HOUR_START * 60, (span.start - dayStart) / 60_000);
   const endMin   = Math.min(GRID_END_MIN,    (span.end   - dayStart) / 60_000);
   if (endMin <= startMin) return null;
-  const top = minutesToPx(startMin);
-  return { top, height: Math.max(1, minutesToPx(endMin) - top) };
+  const top = minutesToPx(startMin, hourPx);
+  return { top, height: Math.max(1, minutesToPx(endMin, hourPx) - top) };
 }
 
 // Sleep is no longer a track here — it renders as its own always-on

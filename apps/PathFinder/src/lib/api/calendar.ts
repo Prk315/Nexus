@@ -110,7 +110,7 @@ export const updateCalBlock = async (
   id: number, title: string, startTime: string, endTime: string,
   color: string, description: string | null, location: string | null,
   taskId?: number | null, category?: string | null,
-  parentBlockId?: number | null, dayBlocks?: CalBlock[],
+  parentBlockId?: number | null, dayBlocks?: CalBlock[], date?: string,
 ): Promise<CalBlock> => {
   // `category` is only written when the caller actually passes it — omitting
   // the argument (older call sites, e.g. Dashboard's block editor) must leave
@@ -118,6 +118,8 @@ export const updateCalBlock = async (
   // `parent_block_id` follows the SAME discipline: only written when
   // `parentBlockId !== undefined`, so a caller that doesn't know about
   // nesting can never wipe an existing block's parent out from under it.
+  // `date` follows suit too (added for U2's drag-across-days move) — every
+  // pre-existing caller omits it and leaves the block's date untouched.
   if (
     parentBlockId !== undefined && parentBlockId != null && dayBlocks &&
     wouldCreateCalBlockCycle(dayBlocks, id, parentBlockId)
@@ -127,6 +129,7 @@ export const updateCalBlock = async (
   const patch: Record<string, unknown> = { title, start_time: startTime, end_time: endTime, color, description, location, task_id: taskId ?? null };
   if (category !== undefined) patch.category = category;
   if (parentBlockId !== undefined) patch.parent_block_id = parentBlockId;
+  if (date !== undefined) patch.date = date;
   const { data, error } = await supabase
     .from("pf_cal_blocks")
     .update(patch)

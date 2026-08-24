@@ -7,11 +7,17 @@ import { planningOf, isFullTask } from "../../lib/taskTree";
 import { isSystemScheduledOn } from "../../lib/systems";
 import { UrgencyMeter } from "../../components/UrgencyMeter";
 import type { TaskWithContext, SystemEntry, CalBlock, CourseAssignment, ScheduleEntry, TaskSession } from "../../types";
-import { BLOCK_COLORS, GRID_END_MIN, HOURS, HOUR_PX, HOUR_START, fmtWeekMinutes, minutesToPx, pxToTime, timeToMinutes, toISO } from "./_shared";
+import { BLOCK_COLORS, GRID_END_MIN, HOURS, HOUR_START, fmtWeekMinutes, minutesToPx, pxToTime, timeToMinutes, toISO } from "./_shared";
 import type { Span } from "@nexus/core/coverage";
 import type { ActualDay } from "../../lib/actual";
 import type { CoverageCategoryOption } from "../../lib/api";
 import { ActualOverlay, SleepBand } from "./overlays";
+import type { WeekInteractions } from "./useWeekInteractions";
+
+// Resize grab-zone height, and the minimum card height that leaves room for
+// one (spec U2 §2: "6px grab zones ... Only on blocks tall enough (≥ 24px)").
+const RESIZE_HANDLE_PX = 6;
+const RESIZE_MIN_CARD_PX = 24;
 
 export function TaskPopupChip({ t, parentTitle, scheduledMin, hasSteps, onToggle, onEdit }: {
   t: TaskWithContext;
@@ -186,6 +192,7 @@ const NEST_MAX_DEPTH = 24;      // pure runaway-recursion guard; real chains are
 
 function CalBlockCard({
   block, depth, style, childrenOf, categories, sessionsByBlock, hiddenIds, toggleHidden, onClickBlock, onToggleWorked,
+  hourPx, interactions, columnIso,
 }: {
   block: CalBlock;
   /** 0 for a top-level (parentless) block, 1 for its direct children, and so on. */
@@ -198,6 +205,11 @@ function CalBlockCard({
   toggleHidden: (id: string) => void;
   onClickBlock: (b: CalBlock) => void;
   onToggleWorked: (b: CalBlock) => void;
+  hourPx: number;
+  /** Undefined on mobile — every pointer-drag code path below is gated on this. */
+  interactions?: WeekInteractions;
+  /** The day column this card (and its whole subtree) belongs to. */
+  columnIso: string;
 }) {
   if (depth > NEST_MAX_DEPTH) return null; // defensive only — cycles are refused before they can be saved
 
@@ -227,8 +239,8 @@ function CalBlockCard({
     // then clips into invisibility.
     const clampedStart = Math.min(Math.max(cStart, startMin), endMin);
     const clampedEnd = Math.max(Math.min(cEnd, endMin), startMin);
-    const top = minutesToPx(clampedStart) - minutesToPx(startMin);
-    const height = Math.max(1, minutesToPx(clampedEnd) - minutesToPx(clampedStart));
+    const top = minutesToPx(clampedStart, hourPx) - minutesToPx(startMin, hourPx);
+    const height = Math.max(1, minutesToPx(clampedEnd, hourPx) - minutesToPx(clampedStart, hourPx));
     const spills = cStart < startMin || cEnd > endMin;
     return { child, top, height, spills };
   });
@@ -237,6 +249,20 @@ function CalBlockCard({
     heightPx < NEST_MIN_PARENT_PX || childLayout.some((c) => c.height < NEST_MIN_CHILD_PX)
   );
 
+  // U2: pointer-drag wiring — entirely additive, and a no-op tree whenever
+  // `interactions` is undefined (mobile). `draggable` false for virtual
+  // recurring occurrences: cursor-default, no handlers armed at all (spec §2).
+  const draggable = interactions ? interactions.isDraggable(block) : false;
+  const isDragSource = interactions?.draggingId === block.id;
+  const isDropTarget = interactions?.isDropTarget(block.id) ?? false;
+  // Resize handles are offered only on LEAF cards (no children): a parent's
+  // top edge sits directly under the header, and its body zone can start a
+  // child at the parent's own start time (the common "Add segment" prefill)
+  // — layering a pointer-events-auto resize strip there would re-create the
+  // exact header-eats-child-clicks bug the U1 review just fixed. Resizing a
+  // parent stays a modal edit, same as before U2.
+  const canResize = interactions && draggable && children.length === 0 && heightPx >= RESIZE_MIN_CARD_PX;
+
   return (
     <div
       style={style}
@@ -244,12 +270,45 @@ function CalBlockCard({
         "absolute rounded border overflow-hidden group",
         small ? "px-1 py-px" : "px-1.5 py-0.5",
         clr.bg, clr.border,
-        "cursor-pointer",
+        interactions ? (draggable ? "cursor-pointer" : "cursor-default") : "cursor-pointer",
         cbHidden && "opacity-15",
         worked && "ring-1 ring-emerald-400/60",
+        isDragSource && "opacity-30",
+        isDropTarget && "ring-2 ring-primary ring-offset-1",
       )}
-      onClick={(e) => { e.stopPropagation(); onClickBlock(block); }}
+      onPointerDown={interactions ? (e) => {
+        // Stops the column background's own pointerdown (pan / click-to-
+        // create) from also seeing this gesture — the same delegation-guard
+        // role the click handler's stopPropagation already played below.
+        e.stopPropagation();
+        // Called unconditionally (not just when `draggable`) — the hook
+        // itself now no-ops for a non-draggable (virtual recurring) block,
+        // and that no-op path is what clears a stale wasDragRef flag left
+        // over from an unrelated drag elsewhere (see useWeekInteractions).
+        interactions.onBlockPointerDown(e, block, columnIso);
+      } : undefined}
+      onClick={(e) => {
+        e.stopPropagation();
+        if (interactions?.consumeWasDrag()) return; // a real drag just ended — swallow the trailing click
+        onClickBlock(block);
+      }}
     >
+      {canResize && (
+        <>
+          <div
+            className="absolute top-0 left-0 right-0 z-30"
+            style={{ height: RESIZE_HANDLE_PX, cursor: "ns-resize" }}
+            onPointerDown={(e) => { e.stopPropagation(); interactions!.onResizePointerDown(e, block, "top", columnIso); }}
+            onClick={(e) => e.stopPropagation()}
+          />
+          <div
+            className="absolute bottom-0 left-0 right-0 z-30"
+            style={{ height: RESIZE_HANDLE_PX, cursor: "ns-resize" }}
+            onPointerDown={(e) => { e.stopPropagation(); interactions!.onResizePointerDown(e, block, "bottom", columnIso); }}
+            onClick={(e) => e.stopPropagation()}
+          />
+        </>
+      )}
       {/* Visibility toggle — top-level only. Hiding a parent hides its whole
           subtree for free (the parent's own DOM node, children included,
           just dims); a per-child toggle isn't offered, matching the header
@@ -257,6 +316,7 @@ function CalBlockCard({
       {depth === 0 && (
         <button
           className={cn("absolute top-0.5 right-0.5 z-20 p-0.5 rounded transition-opacity", cbHidden ? "opacity-100" : "opacity-0 group-hover:opacity-100")}
+          onPointerDown={(e) => e.stopPropagation()}
           onClick={(e) => { e.stopPropagation(); toggleHidden(cbId); }}
         >
           {cbHidden ? <EyeOff className={cn("h-3.5 w-3.5", clr.text)} /> : <Eye className={cn("h-3.5 w-3.5", clr.text)} />}
@@ -278,6 +338,7 @@ function CalBlockCard({
           {block.task_id != null && (
             <button
               title={worked ? "Worked — click to undo" : "Mark this block as worked"}
+              onPointerDown={(e) => e.stopPropagation()}
               onClick={(e) => { e.stopPropagation(); onToggleWorked(block); }}
               className={cn(
                 "pointer-events-auto flex h-3 w-3 shrink-0 items-center justify-center rounded-[3px] border transition-colors",
@@ -342,6 +403,9 @@ function CalBlockCard({
                 toggleHidden={toggleHidden}
                 onClickBlock={onClickBlock}
                 onToggleWorked={onToggleWorked}
+                hourPx={hourPx}
+                interactions={interactions}
+                columnIso={columnIso}
               />
             );
           })}
@@ -353,7 +417,7 @@ function CalBlockCard({
 
 // ── Time column ───────────────────────────────────────────────────────────────
 
-export function TimeColumn({ date, isToday, blocks, systems, courseAssignments, scheduleEntries, actual, sleepSpans, categories, sessionsByBlock, onClickSlot, onClickBlock, onToggleWorked }: {
+export function TimeColumn({ date, isToday, blocks, systems, courseAssignments, scheduleEntries, actual, sleepSpans, categories, sessionsByBlock, hourPx, interactions, onClickSlot, onClickBlock, onToggleWorked }: {
   date: Date; isToday: boolean;
   blocks: CalBlock[];
   systems: SystemEntry[];
@@ -366,6 +430,10 @@ export function TimeColumn({ date, isToday, blocks, systems, courseAssignments, 
   categories: CoverageCategoryOption[];
   /** Sessions already logged, keyed by the occurrence's cal_block_id. */
   sessionsByBlock: Map<number, TaskSession>;
+  /** Pixels-per-hour — the desktop zoom scale, or the fixed HOUR_PX default on mobile. */
+  hourPx: number;
+  /** Undefined on mobile: every U2 pointer-drag/pan code path below is gated on this. */
+  interactions?: WeekInteractions;
   onClickSlot: (date: string, time: string) => void;
   onClickBlock: (b: CalBlock) => void;
   onToggleWorked: (b: CalBlock) => void;
@@ -377,17 +445,26 @@ export function TimeColumn({ date, isToday, blocks, systems, courseAssignments, 
     setHiddenIds(prev => { const next = new Set(prev); next.has(id) ? next.delete(id) : next.add(id); return next; });
   }, []);
 
+  // Reports this column's own grid element up to the interactions hook, so
+  // it can turn a clientX/clientY into "which day, which minute" without
+  // TimeColumn needing to know anything about drag geometry itself. A no-op
+  // on mobile (`interactions` undefined).
+  useEffect(() => {
+    interactions?.registerColumn(iso, colRef.current);
+    return () => interactions?.registerColumn(iso, null);
+  }, [interactions, iso]);
+
   function handleClick(e: React.MouseEvent) {
     if (!colRef.current) return;
     const rect = colRef.current.getBoundingClientRect();
     const y = e.clientY - rect.top;
-    const time = pxToTime(y, HOURS.length * HOUR_PX);
+    const time = pxToTime(y, HOURS.length * hourPx, hourPx);
     onClickSlot(iso, time);
   }
 
   const now = new Date();
   const nowMin = now.getHours() * 60 + now.getMinutes();
-  const nowPx = minutesToPx(nowMin);
+  const nowPx = minutesToPx(nowMin, hourPx);
   // GRID_END_MIN (midnight), not HOUR_END * 60 (23:00) — see the comment on
   // GRID_END_MIN. With the old bound the now-line silently vanished for the
   // whole 23:00-24:00 hour.
@@ -399,25 +476,31 @@ export function TimeColumn({ date, isToday, blocks, systems, courseAssignments, 
       <div
         ref={colRef}
         className="relative flex-1 cursor-crosshair"
-        style={{ height: HOURS.length * HOUR_PX }}
-        onClick={handleClick}
+        style={{ height: HOURS.length * hourPx }}
+        // Below the 4px threshold this fires onClickSlot exactly like the
+        // old onClick did (spec §3: "Plain click on empty cell still
+        // creates a block"); past it, it pans the scroll container instead
+        // and no modal opens. Mobile (`interactions` undefined) keeps the
+        // original plain onClick untouched.
+        onPointerDown={interactions ? (e) => interactions.onBackgroundPointerDown(e, iso) : undefined}
+        onClick={interactions ? undefined : handleClick}
       >
         {/* Hour lines */}
         {HOURS.map((h, i) => (
           <div key={h} className="absolute left-0 right-0 border-t border-border/30"
-            style={{ top: i * HOUR_PX }} />
+            style={{ top: i * hourPx }} />
         ))}
         {/* Half-hour lines */}
         {HOURS.slice(0, -1).map((h, i) => (
           <div key={`${h}h`} className="absolute left-0 right-0 border-t border-border/10 border-dashed"
-            style={{ top: i * HOUR_PX + HOUR_PX / 2 }} />
+            style={{ top: i * hourPx + hourPx / 2 }} />
         ))}
 
         {/* Sleep band — ALWAYS on, independent of the Actual toggle */}
-        {sleepSpans && sleepSpans.length > 0 && <SleepBand spans={sleepSpans} iso={iso} />}
+        {sleepSpans && sleepSpans.length > 0 && <SleepBand spans={sleepSpans} iso={iso} hourPx={hourPx} />}
 
         {/* Actual-day overlay (screen/training) — behind everything else, purely visual */}
-        {actual && <ActualOverlay actual={actual} iso={iso} />}
+        {actual && <ActualOverlay actual={actual} iso={iso} hourPx={hourPx} />}
 
         {/* Current time indicator */}
         {showNow && (
@@ -495,8 +578,8 @@ export function TimeColumn({ date, isToday, blocks, systems, courseAssignments, 
           ];
 
           return layoutCalItems(evts).map(({ item, col, totalCols }) => {
-            const top    = minutesToPx(item.startMin);
-            const height = Math.max(20, minutesToPx(item.endMin) - top);
+            const top    = minutesToPx(item.startMin, hourPx);
+            const height = Math.max(20, minutesToPx(item.endMin, hourPx) - top);
             const left   = `calc(${(col / totalCols) * 100}% + 1px)`;
             const right  = `calc(${((totalCols - col - 1) / totalCols) * 100}% + 1px)`;
 
@@ -617,6 +700,9 @@ export function TimeColumn({ date, isToday, blocks, systems, courseAssignments, 
                 toggleHidden={toggleHidden}
                 onClickBlock={onClickBlock}
                 onToggleWorked={onToggleWorked}
+                hourPx={hourPx}
+                interactions={interactions}
+                columnIso={iso}
               />
             );
           });

@@ -12,14 +12,16 @@ import { Button } from "../components/ui/button";
 import { cn } from "../lib/utils";
 import { blockMinutes } from "../lib/taskTree";
 import type { Goal, Plan, TaskWithContext, SystemEntry, WeekItems, CalBlock, Deadline, CourseAssignment, TaskSession, TaskCoverage } from "../types";
-import { BLOCK_COLORS, DAY_NAMES, DEFAULT_SCROLL_HOUR, HOURS, HOUR_PX, HOUR_START, MONTHS, ModalState, addDays, clampChildSpan, timeToMinutes, toISO, todayISO, weekStart } from "../components/week/_shared";
+import { BLOCK_COLORS, DAY_NAMES, DEFAULT_SCROLL_HOUR, HOURS, HOUR_PX, HOUR_PX_STORAGE_KEY, HOUR_START, MONTHS, ModalState, addDays, clampChildSpan, clampHourPx, pxToMinutes, minutesToPx, timeToMinutes, toISO, todayISO, weekStart, zoomHourPx } from "../components/week/_shared";
 import { CalBlockModal, TaskModal, GoalModal, PlanModal, SystemModal, TypePickerModal } from "../components/week/modals";
 import { TaskPopupChip, TimeColumn } from "../components/week/TimeColumn";
 import { SystemsBar, HeaderPanel, LeftPanel, RightPanel } from "../components/week/panels";
 import { WeekTimeStrip } from "../components/week/WeekTimeStrip";
 import { MonthView } from "../components/week/MonthView";
+import { DragGhostLayer, useWeekInteractions } from "../components/week/useWeekInteractions";
 import type { TaskDraft, GoalDraft, PlanDraft, SystemDraft } from "../components/week/modals";
 import type { BlockDraft } from "../components/week/_shared";
+import type { DragCommitPatch } from "../components/week/useWeekInteractions";
 import type { Span } from "@nexus/core/coverage";
 import type { ActualDay } from "../lib/actual";
 import type { CoverageCategoryOption } from "../lib/api";
@@ -60,6 +62,22 @@ export function Week() {
   const [taskCoverage, setTaskCoverage] = useState<Map<number, TaskCoverage>>(new Map());
   const [modal,        setModal]       = useState<ModalState | null>(null);
   const gridRef = useRef<HTMLDivElement>(null);
+
+  // Vertical zoom (U2 §1) — desktop only; mobile always renders at the fixed
+  // HOUR_PX default (see the mobile TimeColumn call below) and never reads
+  // this state at all. Read once on mount, written back debounced.
+  const [hourPx, setHourPxRaw] = useState<number>(() => {
+    const saved = Number(localStorage.getItem(HOUR_PX_STORAGE_KEY));
+    return clampHourPx(saved > 0 ? saved : HOUR_PX);
+  });
+  const setHourPx = useCallback((v: number) => setHourPxRaw((prev) => {
+    const next = clampHourPx(v);
+    return next === prev ? prev : next;
+  }), []);
+  useEffect(() => {
+    const t = setTimeout(() => localStorage.setItem(HOUR_PX_STORAGE_KEY, String(hourPx)), 300);
+    return () => clearTimeout(t);
+  }, [hourPx]);
 
   // Panel visibility — persisted in localStorage
   const [showLeft,   setShowLeft]   = useState(() => localStorage.getItem("week_panel_left")   === "1");
@@ -140,8 +158,12 @@ export function Week() {
   // midnight (week view only).
   useEffect(() => {
     if (view === "week" && gridRef.current) {
-      gridRef.current.scrollTop = (DEFAULT_SCROLL_HOUR - HOUR_START) * HOUR_PX;
+      gridRef.current.scrollTop = (DEFAULT_SCROLL_HOUR - HOUR_START) * hourPx;
     }
+    // Intentionally NOT depending on hourPx — this only resets the scroll
+    // position on a week/view change, same as before U2; zooming must not
+    // yank the view back to the default scroll target.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [start, view]);
 
   // Actual-day data (screen/training) — loads once per visible week while
@@ -439,6 +461,100 @@ export function Week() {
     setModal(null);
   };
 
+  /**
+   * Commits a drag-resolved patch (move/resize/nest/unnest — U2 §2) exactly
+   * the way every other handler above does: optimistic local update first,
+   * then the API call, reverting via a full `load()` on failure (same
+   * pattern `handleToggleWorked` uses) rather than hand-tracking a snapshot.
+   * The interactions hook has already done all the geometry/clamp work by
+   * the time this runs — this is purely the data layer.
+   */
+  const handleDragCommit = useCallback((block: CalBlock, patch: DragCommitPatch) => {
+    setCalBlocks((prev) => prev.map((b) => (b.id === block.id ? { ...b, ...patch } : b)));
+    updateCalBlock(
+      block.id, block.title,
+      patch.start_time ?? block.start_time,
+      patch.end_time ?? block.end_time,
+      block.color, block.description, block.location, block.task_id, block.category,
+      patch.parent_block_id !== undefined ? patch.parent_block_id : undefined,
+      calBlocks,
+      patch.date,
+    ).catch((e) => { console.error("drag commit failed, reloading", e); load(); });
+  }, [calBlocks, load]);
+
+  const handleDragClickSlot = useCallback(
+    (date: string, time: string) => setModal({ kind: "create-block", date, startTime: time }),
+    [],
+  );
+
+  const { interactions } = useWeekInteractions({
+    hourPx,
+    calBlocks,
+    scrollContainerRef: gridRef,
+    onClickSlot: handleDragClickSlot,
+    onCommitBlock: handleDragCommit,
+  });
+
+  // ── Zoom + horizontal week-nav wheel handling (U2 §1, §3) ──────────────────
+  //
+  // ctrl/meta-wheel (also how browsers deliver trackpad pinch) zooms,
+  // anchoring the minute currently under the cursor so the grid doesn't jump.
+  // A dominant horizontal wheel (trackpad two-finger horizontal swipe)
+  // navigates prev/next week, debounced so one gesture moves exactly one
+  // week — everything else (plain vertical wheel) is left to fall through to
+  // native scrolling, untouched.
+  const hDeltaAccum = useRef(0);
+  const hNavCooldownUntil = useRef(0);
+  // A plain `onWheel` JSX prop is a React SYNTHETIC handler, and React 17+
+  // registers its delegated wheel listener as PASSIVE by default (matching
+  // the browser's own default for wheel/touch) — `e.preventDefault()` inside
+  // one is silently a no-op. Verified live: dispatching a ctrl-wheel through
+  // the normal event path updated hourPx correctly but left
+  // `event.defaultPrevented === false`. Without a real preventDefault, ctrl/
+  // meta-wheel would zoom the grid AND the browser's native page zoom at the
+  // same time. A native listener registered with `{ passive: false }`
+  // (below) is the only way to actually cancel it.
+  const handleGridWheel = useCallback((e: WheelEvent) => {
+    if (e.ctrlKey || e.metaKey) {
+      e.preventDefault();
+      const container = gridRef.current;
+      if (!container) return;
+      const rect = container.getBoundingClientRect();
+      const cursorYInGrid = e.clientY - rect.top + container.scrollTop;
+      const minuteUnderCursor = pxToMinutes(cursorYInGrid, hourPx);
+      const next = zoomHourPx(hourPx, e.deltaY);
+      if (next === hourPx) return;
+      const distFromTop = e.clientY - rect.top;
+      setHourPx(next);
+      requestAnimationFrame(() => {
+        if (!gridRef.current) return;
+        gridRef.current.scrollTop = minutesToPx(minuteUnderCursor, next) - distFromTop;
+      });
+      return;
+    }
+    if (Math.abs(e.deltaX) > Math.abs(e.deltaY)) {
+      e.preventDefault();
+      hDeltaAccum.current += e.deltaX;
+      const now = performance.now();
+      if (now < hNavCooldownUntil.current) return;
+      if (Math.abs(hDeltaAccum.current) > 120) {
+        const dir = hDeltaAccum.current > 0 ? 1 : -1;
+        hDeltaAccum.current = 0;
+        hNavCooldownUntil.current = now + 400;
+        if (dir > 0) nextWeek(); else prevWeek();
+      }
+    } else {
+      hDeltaAccum.current = 0;
+    }
+  }, [hourPx, setHourPx]);
+
+  useEffect(() => {
+    const el = gridRef.current;
+    if (!el || view !== "week" || isMobile) return;
+    el.addEventListener("wheel", handleGridWheel, { passive: false });
+    return () => el.removeEventListener("wheel", handleGridWheel);
+  }, [handleGridWheel, view, isMobile]);
+
   // ── Header label ─────────────────────────────────────────────────────────────
 
   const headerLabel = view === "month"
@@ -645,6 +761,7 @@ export function Week() {
               sleepSpans={sleepByDate.get(selectedDay)}
               categories={categories}
               sessionsByBlock={sessionsByBlock}
+              hourPx={HOUR_PX}
               onClickSlot={(date, time) => setModal({ kind: "create-block", date, startTime: time })}
               onClickBlock={(b) => setModal({ kind: "edit-block", block: b })}
               onToggleWorked={handleToggleWorked}
@@ -699,6 +816,17 @@ export function Week() {
               </button>
             ))}
           </div>
+          {/* Zoom reset — only visible once the grid has actually been
+              zoomed away from the default scale (U2 §1). */}
+          {view === "week" && hourPx !== HOUR_PX && (
+            <button
+              onClick={() => setHourPx(HOUR_PX)}
+              title="Reset zoom to the default scale"
+              className="rounded-md border border-border px-2 py-1 text-xs font-medium text-muted-foreground hover:text-foreground hover:bg-secondary transition-colors"
+            >
+              1×
+            </button>
+          )}
           <Button size="sm" variant="outline" className="h-7 text-xs" onClick={goToday}>Today</Button>
           <div className="w-px h-4 bg-border" />
           {/* Actual-day overlay toggle */}
@@ -881,13 +1009,13 @@ export function Week() {
 
             {/* Scrollable time area */}
             <div ref={gridRef} className="flex-1 overflow-y-auto">
-              <div className="flex" style={{ height: HOURS.length * HOUR_PX + 1 }}>
+              <div className="flex" style={{ height: HOURS.length * hourPx + 1 }}>
 
                 {/* Time labels */}
                 <div className="w-12 shrink-0 relative select-none">
                   {HOURS.map((h, i) => (
                     <div key={h} className="absolute right-2 text-[10px] text-muted-foreground/60 tabular-nums"
-                      style={{ top: i * HOUR_PX - 6 }}>
+                      style={{ top: i * hourPx - 6 }}>
                       {h}:00
                     </div>
                   ))}
@@ -909,6 +1037,8 @@ export function Week() {
                       sleepSpans={sleepByDate.get(iso)}
                       categories={categories}
                       sessionsByBlock={sessionsByBlock}
+                      hourPx={hourPx}
+                      interactions={interactions}
                       onClickSlot={(date, time) => setModal({ kind: "create-block", date, startTime: time })}
                       onClickBlock={(b) => setModal({ kind: "edit-block", block: b })}
                       onToggleWorked={handleToggleWorked}
@@ -944,6 +1074,10 @@ export function Week() {
           onAdd={() => setModal({ kind: "create-system" })}
           onEdit={(s) => setModal({ kind: "edit-system", system: s })}
         />
+      )}
+
+      {view === "week" && (
+        <DragGhostLayer subscribe={interactions.subscribeGhost} getSnapshot={interactions.getGhostSnapshot} />
       )}
 
       {renderModals()}
