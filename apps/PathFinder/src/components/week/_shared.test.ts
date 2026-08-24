@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import {
-  HOUR_PX, HOUR_PX_MAX, HOUR_PX_MIN, clampHourPx, makePxToTime, minutesToPx,
+  EXTERNAL_DRAG_DEFAULT_DURATION_MIN, EXTERNAL_DRAG_MAX_DURATION_MIN, EXTERNAL_DRAG_MIN_DURATION_MIN,
+  HOUR_PX, HOUR_PX_MAX, HOUR_PX_MIN, clampHourPx, externalDragDurationMin, makePxToTime, minutesToPx,
   pxToMinutes, pxToTime, snapMinutes, zoomHourPx,
 } from "./_shared";
 
@@ -119,5 +120,33 @@ describe("makePxToTime — bound factory", () => {
     // The same raw pixel offset lands at a much earlier clock time on the
     // zoomed-in (larger hourPx) scale.
     expect(at56(300, 24 * 56)).not.toBe(at160(300, 24 * 160));
+  });
+});
+
+describe("externalDragDurationMin — U3 Part A's drag-to-schedule duration heuristic", () => {
+  it("prefers unscheduled minutes when there's any", () => {
+    expect(externalDragDurationMin(45, 90)).toBe(45);
+  });
+
+  it("falls back to the time estimate once nothing is left unscheduled", () => {
+    expect(externalDragDurationMin(0, 90)).toBe(90);
+  });
+
+  it("falls back to the flat default when both are empty", () => {
+    expect(externalDragDurationMin(0, null)).toBe(EXTERNAL_DRAG_DEFAULT_DURATION_MIN);
+    expect(externalDragDurationMin(0, 0)).toBe(EXTERNAL_DRAG_DEFAULT_DURATION_MIN);
+  });
+
+  it("clamps a short result up to the floor", () => {
+    expect(externalDragDurationMin(5, null)).toBe(EXTERNAL_DRAG_MIN_DURATION_MIN);
+  });
+
+  it("clamps a long result down to the ceiling", () => {
+    expect(externalDragDurationMin(600, null)).toBe(EXTERNAL_DRAG_MAX_DURATION_MIN);
+    expect(externalDragDurationMin(0, 500)).toBe(EXTERNAL_DRAG_MAX_DURATION_MIN);
+  });
+
+  it("passes an in-range value through unchanged", () => {
+    expect(externalDragDurationMin(60, null)).toBe(60);
   });
 });

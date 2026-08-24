@@ -2,31 +2,41 @@
 
 import { useEffect, useState, useCallback, useRef } from "react";
 import { Check, RefreshCw, Repeat2, MapPin, GraduationCap, CalendarOff, CalendarRange, Eye, EyeOff } from "lucide-react";
-import { cn, layoutCalItems, URGENCY_LABEL, STAGE_LABEL, STAGE_CLASSES } from "../../lib/utils";
+import { cn, layoutCalItems, PRIORITY_LABEL, URGENCY_LABEL, STAGE_LABEL, STAGE_CLASSES } from "../../lib/utils";
 import { planningOf, isFullTask } from "../../lib/taskTree";
 import { isSystemScheduledOn } from "../../lib/systems";
-import { UrgencyMeter } from "../../components/UrgencyMeter";
+import { chipBgClasses, chipCheckClasses, PRIORITY_TEXT } from "../task/taskVisual";
+import { DueChip } from "../task/DueChip";
 import type { TaskWithContext, SystemEntry, CalBlock, CourseAssignment, ScheduleEntry, TaskSession } from "../../types";
 import { BLOCK_COLORS, GRID_END_MIN, HOURS, HOUR_START, fmtWeekMinutes, minutesToPx, pxToTime, timeToMinutes, toISO } from "./_shared";
 import type { Span } from "@nexus/core/coverage";
 import type { ActualDay } from "../../lib/actual";
 import type { CoverageCategoryOption } from "../../lib/api";
 import { ActualOverlay, SleepBand } from "./overlays";
-import type { WeekInteractions } from "./useWeekInteractions";
+import type { WeekInteractions, ExternalDragPayload } from "./useWeekInteractions";
 
 // Resize grab-zone height, and the minimum card height that leaves room for
 // one (spec U2 §2: "6px grab zones ... Only on blocks tall enough (≥ 24px)").
 const RESIZE_HANDLE_PX = 6;
 const RESIZE_MIN_CARD_PX = 24;
 
-export function TaskPopupChip({ t, parentTitle, scheduledMin, hasSteps, onToggle, onEdit }: {
+export function TaskPopupChip({ t, today, parentTitle, scheduledMin, hasSteps, interactions, dragPayload, onToggle, onEdit }: {
   t: TaskWithContext;
+  /** Today's ISO date, for the popup's due chip (overdue/today/plain). */
+  today: string;
   /** Set when this is a step of a larger task — shown so it isn't an orphan line. */
   parentTitle?: string | null;
   /** Committed calendar minutes across the task's subtree, all time. */
   scheduledMin: number;
   /** True when the task is broken down — completing it means completing its steps. */
   hasSteps?: boolean;
+  /** Undefined on mobile (desktop-only, U3 Part A) and in the mobile all-day
+   *  strip — every drag-to-schedule code path below is gated on this. */
+  interactions?: WeekInteractions;
+  /** Precomputed once per render by the caller (needs allTasks + taskCoverage,
+   *  which this component doesn't have) — what dragging this chip onto the
+   *  grid would create. Only read when `interactions` is also set. */
+  dragPayload?: ExternalDragPayload;
   onToggle: () => void;
   onEdit: () => void;
 }) {
@@ -34,19 +44,12 @@ export function TaskPopupChip({ t, parentTitle, scheduledMin, hasSteps, onToggle
   const cardRef = useRef<HTMLDivElement>(null);
   const [pos, setPos] = useState<{ top: number; left: number } | null>(null);
 
-  const chip = t.done
-    ? "bg-emerald-500/15 border-emerald-400/40"
-    : t.priority === "high"    ? "bg-red-500/10 border-red-400/40"
-    : t.priority === "medium"  ? "bg-amber-500/10 border-amber-400/40"
-    :                            "bg-blue-500/10 border-blue-400/40";
-  const check = t.done
-    ? "bg-emerald-500 border-emerald-500"
-    : t.priority === "high"    ? "border-red-400 hover:bg-red-400/20"
-    : t.priority === "medium"  ? "border-amber-400 hover:bg-amber-400/20"
-    :                            "border-blue-400 hover:bg-blue-400/20";
-
-  const priorityLabel: Record<string, string> = { high: "High", medium: "Medium", low: "Low" };
-  const priorityColor: Record<string, string> = { high: "text-red-500", medium: "text-amber-500", low: "text-blue-500" };
+  // Priority tint + done state (spec U3 Part B — the shared task-visual
+  // vocabulary) — the SAME hue set and emerald-done rule as every other
+  // task surface (Dashboard rows, MonthView pills).
+  const chip = chipBgClasses(t.priority, t.done);
+  const check = chipCheckClasses(t.priority, t.done);
+  const isDraggingThis = interactions?.externalDraggingTaskId === t.id;
 
   // close on outside click
   useEffect(() => {
@@ -63,6 +66,7 @@ export function TaskPopupChip({ t, parentTitle, scheduledMin, hasSteps, onToggle
 
   function toggle(e: React.MouseEvent) {
     e.stopPropagation();
+    if (interactions?.consumeWasDrag()) return; // a real drag just ended — swallow the trailing click
     if (pos) { setPos(null); return; }
     const r = chipRef.current?.getBoundingClientRect();
     if (!r) return;
@@ -74,9 +78,16 @@ export function TaskPopupChip({ t, parentTitle, scheduledMin, hasSteps, onToggle
       <div
         ref={chipRef}
         onClick={toggle}
-        className={cn("flex items-center gap-1 px-1.5 py-0.5 rounded border cursor-pointer transition-colors select-none", chip)}
+        onPointerDown={interactions && dragPayload ? (e) => interactions.onExternalDragPointerDown(e, dragPayload) : undefined}
+        className={cn(
+          "flex items-center gap-1 px-1.5 py-0.5 rounded border cursor-pointer transition-colors select-none",
+          chip,
+          interactions && dragPayload && "cursor-grab",
+          isDraggingThis && "opacity-30",
+        )}
       >
         <button
+          onPointerDown={(e) => e.stopPropagation()}
           onClick={(e) => { e.stopPropagation(); if (!hasSteps) onToggle(); }}
           disabled={hasSteps}
           title={hasSteps ? "Finish its steps to complete this" : undefined}
@@ -88,7 +99,11 @@ export function TaskPopupChip({ t, parentTitle, scheduledMin, hasSteps, onToggle
         >
           {t.done && <Check className="h-2 w-2 text-white" />}
         </button>
-        {isFullTask(t) && <UrgencyMeter urgency={planningOf(t).urgency} />}
+        {/*
+          Density pass (spec U3 Part C): first glance is title + priority tint
+          + done state. Urgency used to render here too — it still shows in
+          the click popup below, which is where "everything else" belongs.
+        */}
         <span className={cn("text-[11px] truncate flex-1", t.done ? "line-through text-muted-foreground" : "text-foreground")}>
           {parentTitle && <span className="opacity-50">{parentTitle} › </span>}
           {t.title}
@@ -97,6 +112,7 @@ export function TaskPopupChip({ t, parentTitle, scheduledMin, hasSteps, onToggle
           Due here, but no time committed anywhere. This is the one fact a weekly
           overview can tell you that a task list can't, and it is the same
           predicate the board's stage gate uses — so the two views agree.
+          Stays first-glance (Part C): it's actionable, not decoration.
         */}
         {!t.done && isFullTask(t) && scheduledMin === 0 && (
           <CalendarOff className="h-2.5 w-2.5 shrink-0 text-amber-500" />
@@ -110,9 +126,14 @@ export function TaskPopupChip({ t, parentTitle, scheduledMin, hasSteps, onToggle
           className="w-56 rounded-xl border border-border bg-card shadow-2xl p-3 flex flex-col gap-2"
           onClick={(e) => e.stopPropagation()}
         >
-          <p className={cn("text-xs font-semibold leading-snug", t.done ? "line-through text-muted-foreground" : "text-foreground")}>
-            {t.title}
-          </p>
+          <div className="flex items-start justify-between gap-2">
+            <p className={cn("text-xs font-semibold leading-snug", t.done ? "line-through text-muted-foreground" : "text-foreground")}>
+              {t.title}
+            </p>
+            {/* "Everything else" the collapsed chip demoted (Part C) — the
+                due date lands here, same encoding as every other surface. */}
+            {t.due_date && <DueChip due={t.due_date} today={today} />}
+          </div>
 
           <div className="flex flex-col gap-0.5">
             {t.plan_title && <p className="text-[11px] text-muted-foreground truncate">Plan: {t.plan_title}</p>}
@@ -120,8 +141,8 @@ export function TaskPopupChip({ t, parentTitle, scheduledMin, hasSteps, onToggle
           </div>
 
           <div className="flex items-center gap-2">
-            <span className={cn("text-[11px] font-medium", priorityColor[t.priority] ?? "text-muted-foreground")}>
-              {priorityLabel[t.priority] ?? t.priority} priority
+            <span className={cn("text-[11px] font-medium", PRIORITY_TEXT[t.priority] ?? "text-muted-foreground")}>
+              {PRIORITY_LABEL[t.priority] ?? t.priority} priority
             </span>
             {isFullTask(t) && (
               <span className="text-[11px] text-muted-foreground">

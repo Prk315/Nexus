@@ -183,6 +183,29 @@ export function clampChildSpan(startTime: string, endTime: string, parent: CalBl
   return { start: minToHHMM(s), end: minToHHMM(e) };
 }
 
+// ── External drag-to-schedule (U3 Part A) ───────────────────────────────────
+
+export const EXTERNAL_DRAG_MIN_DURATION_MIN = 15;
+export const EXTERNAL_DRAG_MAX_DURATION_MIN = 240;
+export const EXTERNAL_DRAG_DEFAULT_DURATION_MIN = 30;
+
+/**
+ * Duration (minutes) for a calendar block created by dragging a task onto
+ * the Week grid: the task's own unscheduled time if it has any, else its own
+ * estimate, else a flat default — always clamped into a sane block length so
+ * a huge, zero, or missing estimate can never produce an unusable block.
+ *
+ * Pure on purpose: the caller (Week.tsx) resolves `unscheduledMin` via
+ * `subtreeNode` + `taskTree.unscheduledMinutes` against the live task tree
+ * and coverage map — the same rollup the board's own scheduling gate reads —
+ * and passes the two plain numbers in here rather than this function taking
+ * a task and reaching for that state itself.
+ */
+export function externalDragDurationMin(unscheduledMin: number, timeEstimateMin: number | null): number {
+  const raw = unscheduledMin || timeEstimateMin || EXTERNAL_DRAG_DEFAULT_DURATION_MIN;
+  return Math.min(EXTERNAL_DRAG_MAX_DURATION_MIN, Math.max(EXTERNAL_DRAG_MIN_DURATION_MIN, raw));
+}
+
 export function addHour(t: string, h: number): string {
   // Cap at 23:59, not `HOUR_END * 60` (23:00) — a block starting at 23:30
   // plus a 1h default duration must still end *after* its own start, or the

@@ -10,18 +10,18 @@ import { getWeekItems, getAllTasks, getGoals, getPlans, getSystems, createTask, 
 import { loadActualWeek, loadSleepWeek } from "../lib/actual";
 import { Button } from "../components/ui/button";
 import { cn } from "../lib/utils";
-import { blockMinutes } from "../lib/taskTree";
+import { blockMinutes, subtreeNode, unscheduledMinutes } from "../lib/taskTree";
 import type { Goal, Plan, TaskWithContext, SystemEntry, WeekItems, CalBlock, Deadline, CourseAssignment, TaskSession, TaskCoverage } from "../types";
-import { BLOCK_COLORS, DAY_NAMES, DEFAULT_SCROLL_HOUR, HOURS, HOUR_PX, HOUR_PX_STORAGE_KEY, HOUR_START, MONTHS, ModalState, addDays, clampChildSpan, clampHourPx, pxToMinutes, minutesToPx, timeToMinutes, toISO, todayISO, weekStart, zoomHourPx } from "../components/week/_shared";
+import { BLOCK_COLORS, DAY_NAMES, DEFAULT_SCROLL_HOUR, HOURS, HOUR_PX, HOUR_PX_STORAGE_KEY, HOUR_START, MONTHS, ModalState, addDays, clampChildSpan, clampHourPx, externalDragDurationMin, pxToMinutes, minutesToPx, timeToMinutes, toISO, todayISO, weekStart, zoomHourPx } from "../components/week/_shared";
 import { CalBlockModal, TaskModal, GoalModal, PlanModal, SystemModal, TypePickerModal } from "../components/week/modals";
 import { TaskPopupChip, TimeColumn } from "../components/week/TimeColumn";
 import { SystemsBar, HeaderPanel, LeftPanel, RightPanel } from "../components/week/panels";
 import { WeekTimeStrip } from "../components/week/WeekTimeStrip";
 import { MonthView } from "../components/week/MonthView";
-import { DragGhostLayer, useWeekInteractions } from "../components/week/useWeekInteractions";
+import { DragGhostLayer, ExternalDragGhostLayer, useWeekInteractions } from "../components/week/useWeekInteractions";
 import type { TaskDraft, GoalDraft, PlanDraft, SystemDraft } from "../components/week/modals";
 import type { BlockDraft } from "../components/week/_shared";
-import type { DragCommitPatch } from "../components/week/useWeekInteractions";
+import type { DragCommitPatch, ExternalDragPayload, ExternalDropDest } from "../components/week/useWeekInteractions";
 import type { Span } from "@nexus/core/coverage";
 import type { ActualDay } from "../lib/actual";
 import type { CoverageCategoryOption } from "../lib/api";
@@ -239,10 +239,29 @@ export function Week() {
   }, [allTasks]);
 
   const chipProps = (t: TaskWithContext) => ({
+    today,
     parentTitle: t.parent_id != null ? taskTitleById.get(t.parent_id) ?? null : null,
     scheduledMin: taskCoverage.get(t.id)?.scheduledMin ?? 0,
     hasSteps: (stepCountByParent.get(t.id) ?? 0) > 0,
   });
+
+  /**
+   * What dragging `task` onto the grid would create (U3 Part A). Runs the
+   * exact same rollup the board's scheduling gate reads — `subtreeNode` +
+   * `taskTree.unscheduledMinutes` against the live `allTasks` tree and
+   * `taskCoverage` map — rather than a hand-rolled duplicate, so the
+   * duration this proposes can never quietly disagree with "Xh booked"
+   * elsewhere on this same page.
+   */
+  const computeDragPayload = (task: TaskWithContext): ExternalDragPayload => {
+    const node = subtreeNode(allTasks, task.id);
+    const unscheduled = node ? unscheduledMinutes(node, taskCoverage) : 0;
+    return {
+      taskId: task.id,
+      title: task.title,
+      durationMin: externalDragDurationMin(unscheduled, task.time_estimate),
+    };
+  };
   const goalsFor             = (iso: string) => items.goals.filter((g) => g.deadline  === iso);
   const deadlinesFor         = (iso: string) => items.deadlines.filter((d) => d.due_date === iso);
   const courseAssignmentsFor = (iso: string) => items.course_assignments.filter((a) => a.due_date === iso);
@@ -487,12 +506,50 @@ export function Week() {
     [],
   );
 
+  /**
+   * Commits an external drag-to-schedule drop (U3 Part A) — dragging a task
+   * from RightPanel or an all-day TaskPopupChip onto the grid. Same
+   * optimistic-insert-then-reload-on-error shape as `handleDragCommit`
+   * above, with one addition: it reloads on SUCCESS too (not only on
+   * failure), because unlike a move/resize this creates a new commitment
+   * against a task — `taskCoverage` (the map behind "Xh booked" on every
+   * chip/popup, and the board's own scheduling gate) has no local optimistic
+   * update path, so it's stale until the next `load()` regardless of outcome.
+   *
+   * The optimistic block uses a large negative temp id — distinct from both
+   * real rows (positive) and virtual recurring occurrences (bounded negative
+   * ids derived from `recurring_id × 100000 + dayOffset`) — purely for the
+   * brief window before `load()` replaces it with the server's row.
+   */
+  const handleExternalDrop = (payload: ExternalDragPayload, dest: ExternalDropDest) => {
+    const tempId = -Date.now();
+    const temp: CalBlock = {
+      id: tempId, date: dest.date, title: payload.title, start_time: dest.startTime, end_time: dest.endTime,
+      color: "blue", description: null, location: null, created_at: new Date().toISOString(),
+      is_recurring: false, recurring_id: null, recurrence: null, days_of_week: null,
+      series_start_date: null, series_end_date: null, task_id: payload.taskId, category: null,
+      parent_block_id: dest.parentBlockId,
+    };
+    setCalBlocks((prev) => [...prev, temp]);
+    createCalBlock(
+      dest.date, payload.title, dest.startTime, dest.endTime, "blue", null, null,
+      payload.taskId, null, dest.parentBlockId, blocksFor(dest.date),
+    )
+      .then(() => load())
+      .catch((e) => {
+        console.error("external drag drop failed, reloading", e);
+        setCalBlocks((prev) => prev.filter((b) => b.id !== tempId));
+        load();
+      });
+  };
+
   const { interactions } = useWeekInteractions({
     hourPx,
     calBlocks,
     scrollContainerRef: gridRef,
     onClickSlot: handleDragClickSlot,
     onCommitBlock: handleDragCommit,
+    onExternalDrop: handleExternalDrop,
   });
 
   // ── Zoom + horizontal week-nav wheel handling (U2 §1, §3) ──────────────────
@@ -955,6 +1012,8 @@ export function Week() {
                         key={`t-${t.id}`}
                         t={t}
                         {...chipProps(t)}
+                        interactions={interactions}
+                        dragPayload={computeDragPayload(t)}
                         onToggle={() => handleToggleTask(t.id)}
                         onEdit={() => setModal({ kind: "edit-task", task: t })}
                       />
@@ -1058,6 +1117,8 @@ export function Week() {
             deadlines={allDeadlines}
             courseAssignments={items.course_assignments}
             today={today}
+            interactions={interactions}
+            getDragPayload={computeDragPayload}
             onToggleTask={handleToggleTask}
             onToggleDeadline={handleToggleDeadline}
             onToggleAssignment={handleToggleAssignment}
@@ -1077,7 +1138,10 @@ export function Week() {
       )}
 
       {view === "week" && (
-        <DragGhostLayer subscribe={interactions.subscribeGhost} getSnapshot={interactions.getGhostSnapshot} />
+        <>
+          <DragGhostLayer subscribe={interactions.subscribeGhost} getSnapshot={interactions.getGhostSnapshot} />
+          <ExternalDragGhostLayer subscribe={interactions.subscribeExternalGhost} getSnapshot={interactions.getExternalGhostSnapshot} />
+        </>
       )}
 
       {renderModals()}

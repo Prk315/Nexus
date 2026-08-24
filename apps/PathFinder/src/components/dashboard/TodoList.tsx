@@ -1,23 +1,20 @@
 // The dashboard's task list: grouped cards, the row, and the today-centred unfold.
 
 import { useState, useMemo } from "react";
-import { CalendarClock, CheckCircle, CheckSquare, Check, ChevronDown, ChevronRight, Plus, X, Clock, BookOpen } from "lucide-react";
-import { daysUntil, cn, formatDateShort } from "../../lib/utils";
+import { CalendarClock, CheckCircle, CheckSquare, Check, ChevronDown, ChevronRight, Plus, X, BookOpen } from "lucide-react";
+import { cn } from "../../lib/utils";
 import { blockMinutes, planningOf, isFullTask } from "../../lib/taskTree";
 import { UrgencyMeter } from "../UrgencyMeter";
+import { PRIORITY_BAR } from "../task/taskVisual";
+import { DueChip } from "../task/DueChip";
+import { TimeEstimateBadge } from "../task/TimeEstimateBadge";
 import type { Plan, TaskWithContext, CalBlock, CourseAssignment } from "../../types";
-import { todayDate } from "./_shared";
-import { formatMinutes } from "./_shared";
+import { formatMinutes, todayDate } from "./_shared";
 
-export function TimeEstimateBadge({ min, className }: { min: number | null; className?: string }) {
-  if (!min) return null;
-  return (
-    <span className={cn("inline-flex items-center gap-0.5 text-[10px] font-medium text-muted-foreground shrink-0", className)}>
-      <Clock className="h-2.5 w-2.5" />
-      {formatMinutes(min)}
-    </span>
-  );
-}
+// Re-exported so WelcomeBox's `import { TimeEstimateBadge } from "./TodoList"`
+// keeps resolving after the component moved to components/task/ (spec U3
+// Part B — the shared task-visual vocabulary).
+export { TimeEstimateBadge };
 
 export function TimeEstimateInput({ value, onChange, onBlur, className }: {
   value: string; onChange: (v: string) => void; onBlur: () => void; className?: string;
@@ -40,44 +37,9 @@ export function TimeEstimateInput({ value, onChange, onBlur, className }: {
 // ── Top Goals ─────────────────────────────────────────────────────────────────
 
 // ── Dashboard task row ───────────────────────────────────────────────────────
-
-/** Left accent bar per importance — scannable down a column in a way a dot isn't. */
-const PRIORITY_BAR: Record<string, string> = {
-  high: "bg-rose-500",
-  medium: "bg-amber-400",
-  low: "bg-slate-400/50",
-};
-
-/**
- * A due-date chip that says how urgent the date actually is.
- *
- * Overdue and today are the only two states worth colour: everything else is a
- * quiet grey date. Colouring every future date turns the list into confetti and
- * makes the two states that need attention stop standing out.
- */
-function DueChip({ due, today }: { due: string; today: string }) {
-  const overdue = due < today;
-  const isToday = due === today;
-  if (!overdue && !isToday) {
-    return (
-      <span className="shrink-0 text-[10px] tabular-nums text-muted-foreground/50">
-        {formatDateShort(due)}
-      </span>
-    );
-  }
-  return (
-    <span
-      className={cn(
-        "shrink-0 rounded px-1 py-px text-[10px] font-medium tabular-nums",
-        overdue
-          ? "bg-rose-500/15 text-rose-600 dark:text-rose-400"
-          : "bg-amber-500/15 text-amber-600 dark:text-amber-400",
-      )}
-    >
-      {overdue ? `${daysUntil(due) * -1}d late` : "Today"}
-    </span>
-  );
-}
+//
+// PRIORITY_BAR and DueChip now live in components/task/ (spec U3 Part B —
+// the shared task-visual vocabulary), imported above.
 
 /**
  * One task on the dashboard.
@@ -117,6 +79,14 @@ function DashTaskRow({
 
   return (
     <div className="flex flex-col">
+      {/*
+        Density pass (spec U3 Part C): first glance is priority bar, checkbox,
+        title, due chip — everything a scan of the list needs. Urgency,
+        estimate and step count are real but secondary, so they're demoted
+        into one subdued cluster (smaller, muted, grouped right, opacity-60
+        rising to 100 on row hover) rather than hidden outright — hover-only
+        data is lost data on a laptop trackpad, and touch has no hover at all.
+      */}
       <div className="group/task flex items-center gap-2 rounded-md pr-1 py-1 hover:bg-secondary/50 transition-colors">
         {/* Importance as a left accent bar. */}
         <span className={cn("w-0.5 self-stretch rounded-full shrink-0", PRIORITY_BAR[task.priority] ?? PRIORITY_BAR.medium)} />
@@ -134,8 +104,6 @@ function DashTaskRow({
           <Check className="h-2.5 w-2.5 opacity-0 group-hover/task:opacity-40 transition-opacity" />
         </button>
 
-        {isFullTask(task) && <UrgencyMeter urgency={plan.urgency} />}
-
         {/*
           With steps, clicking the title unfolds — that is the gesture people
           reach for, and the planner is still one click away inside. Without
@@ -149,19 +117,24 @@ function DashTaskRow({
           {task.title}
         </button>
 
-        {/* Steps — click to reveal them inline. */}
-        {hasKids && (
-          <button
-            onClick={onToggleExpand}
-            title={`${doneKids} of ${steps.length} steps done`}
-            className="shrink-0 inline-flex items-center gap-1 rounded px-1 py-px text-[10px] tabular-nums text-muted-foreground hover:bg-secondary hover:text-foreground transition-colors"
-          >
-            {expanded ? <ChevronDown className="h-2.5 w-2.5" /> : <ChevronRight className="h-2.5 w-2.5" />}
-            {doneKids}/{steps.length}
-          </button>
-        )}
+        {/* Meta cluster — subdued, grouped right; brightens on row hover. */}
+        <div className="flex shrink-0 items-center gap-1.5 text-muted-foreground opacity-60 transition-opacity group-hover/task:opacity-100">
+          {isFullTask(task) && <UrgencyMeter urgency={plan.urgency} />}
 
-        {effort > 0 && <TimeEstimateBadge min={effort} />}
+          {hasKids && (
+            <button
+              onClick={onToggleExpand}
+              title={`${doneKids} of ${steps.length} steps done`}
+              className="shrink-0 inline-flex items-center gap-1 rounded px-1 py-px text-[10px] tabular-nums hover:bg-secondary hover:text-foreground transition-colors"
+            >
+              {expanded ? <ChevronDown className="h-2.5 w-2.5" /> : <ChevronRight className="h-2.5 w-2.5" />}
+              {doneKids}/{steps.length}
+            </button>
+          )}
+
+          {effort > 0 && <TimeEstimateBadge min={effort} />}
+        </div>
+
         {task.due_date && <DueChip due={task.due_date} today={today} />}
 
         <button

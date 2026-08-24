@@ -1,9 +1,19 @@
 // Desktop-only pointer interactions for the week grid's calendar blocks:
 // move, resize, nest-by-drag, unnest-by-drag, and pan-on-empty-background
-// (spec U2 §2-3). Mobile never constructs or receives this — TimeColumn's
-// `interactions` prop stays `undefined` there, and every new code path in
-// TimeColumn/CalBlockCard is additive behind that prop, so mobile is
-// byte-for-byte unaffected.
+// (spec U2 §2-3) — PLUS (spec U3 Part A) drag-to-schedule: dragging a task
+// from an external source (RightPanel's rows, the all-day TaskPopupChip)
+// onto the grid creates a calendar block linked to it. Mobile never
+// constructs or receives this — TimeColumn's `interactions` prop stays
+// `undefined` there, and every new code path in TimeColumn/CalBlockCard is
+// additive behind that prop, so mobile is byte-for-byte unaffected.
+//
+// The external-drag family is a SEPARATE entry point (`onExternalDragPointerDown`,
+// called from outside the grid entirely) but shares the same state machine,
+// pointer-threshold gesture and window-level move/up listeners as U2's block
+// drag — see "pending-external" / "placing" below. It reuses `findDropTarget`'s
+// dwell-to-nest logic verbatim (so "virtual recurring occurrences never
+// nest" falls out for free — they're already excluded there) and
+// `clampChildSpan` for the commit math, same as a block move.
 //
 // A 4px movement threshold separates "click" (unchanged existing behaviour —
 // open a block, create one at a clicked cell) from "drag". Below the
@@ -34,6 +44,27 @@
 //       here; the caller (Week.tsx) just applies it optimistically and
 //       calls the API, mirroring every other handler in that file.
 //
+//   -- U3 Part A: drag-to-schedule, started OUTSIDE the grid ---------------
+//
+//   idle --onExternalDragPointerDown (RightPanel row / TaskPopupChip)--> pending-external
+//
+//   pending-external --moved < 4px, pointerup--> idle
+//     (the source's own click still fires natively — same "browser still
+//      delivers the click, we just don't act on it" contract as pending-
+//      block/pending-resize above.)
+//
+//   pending-external --moved >= 4px--> placing (ghost follows the pointer;
+//     over a registered day column it ALSO snaps a block-shaped preview into
+//     the grid at 5-minute slots, and dwelling 300ms over an existing block
+//     rings it exactly like a block move's nest detection)
+//
+//   placing --pointerup, pointer over a valid grid column--> idle,
+//     onExternalDrop(payload, dest) — dest.parentBlockId set when the drop
+//     resolved onto a dwell-ringed target (times clamped via
+//     clampChildSpan), else a top-level block at the snapped time.
+//   placing --pointerup, pointer NOT over any grid column--> idle, no commit
+//     ("drop outside the grid: cancel, nothing created").
+//
 //   any active mode --Escape / pointercancel--> idle, no commit.
 //
 // Ghost geometry is published through a tiny external store
@@ -48,7 +79,7 @@ import { cn } from "../../lib/utils";
 import { wouldCreateCalBlockCycle } from "../../lib/api";
 import type { CalBlock } from "../../types";
 import {
-  BLOCK_COLORS, GRID_END_MIN, HOUR_START, HOURS, clampChildSpan, minToHHMM,
+  BLOCK_COLORS, GRID_END_MIN, HOUR_START, HOURS, clampChildSpan, fmtWeekMinutes, minToHHMM,
   minutesToPx, pxToMinutes, pxToTime, snapMinutes, timeToMinutes,
 } from "./_shared";
 
@@ -72,11 +103,53 @@ export interface GhostSnapshot {
   targetTitle: string | null;
 }
 
+/** What dragging a task onto the grid would create — computed by the caller
+ *  (Week.tsx, spec U3 Part A's duration heuristic: `clamp(unscheduledMinutes
+ *  (task) || time_estimate || 30, 15, 240)`) since this hook has no access to
+ *  the task tree or coverage map. Fixed for the whole gesture: there's no
+ *  resize handle on a not-yet-created block. */
+export interface ExternalDragPayload {
+  taskId: number;
+  title: string;
+  durationMin: number;
+}
+
+/** Where an external drag resolved on drop. */
+export interface ExternalDropDest {
+  date: string;
+  startTime: string;
+  endTime: string;
+  /** Set when the drop landed on a dwell-ringed existing block. */
+  parentBlockId: number | null;
+}
+
+/** Ghost for an in-flight external (task -> grid) drag — see the file header. */
+export interface ExternalGhostSnapshot {
+  /** Raw pointer position — the floating "title + duration" badge always
+   *  follows this, on or off the grid. */
+  x: number; y: number;
+  title: string;
+  /** Duration text while off the grid ("45m"); the snapped time range
+   *  ("09:00–09:45") once a valid column is hovered — the grid preview below
+   *  already shows the range, so the floating badge doesn't repeat it. */
+  detail: string;
+  /** Present only while hovering a registered day column — the snapped
+   *  block-shaped drop preview, in the same fixed-viewport coordinates the
+   *  block-move ghost uses. */
+  grid: { top: number; left: number; width: number; height: number } | null;
+  willNest: boolean;
+  targetTitle: string | null;
+}
+
 export interface WeekInteractions {
   registerColumn: (iso: string, el: HTMLDivElement | null) => void;
   onBackgroundPointerDown: (e: React.PointerEvent, iso: string) => void;
   onBlockPointerDown: (e: React.PointerEvent, block: CalBlock, iso: string) => void;
   onResizePointerDown: (e: React.PointerEvent, block: CalBlock, edge: "top" | "bottom", iso: string) => void;
+  /** Entry point for U3 Part A's drag family — called from a pointerdown on
+   *  an external source (a RightPanel task row, an all-day TaskPopupChip),
+   *  which lives outside the grid's own DOM entirely. */
+  onExternalDragPointerDown: (e: React.PointerEvent, payload: ExternalDragPayload) => void;
   /** True once, right after a real drag ends — lets the block's own onClick
    *  swallow the click the browser still fires after pointerup, without a
    *  React re-render round-trip. Resets itself on read. */
@@ -84,8 +157,13 @@ export interface WeekInteractions {
   isDraggable: (block: CalBlock) => boolean;
   isDropTarget: (blockId: number) => boolean;
   draggingId: number | null;
+  /** id of the task currently being external-dragged, so its own source row
+   *  can dim itself — null the rest of the time. */
+  externalDraggingTaskId: number | null;
   subscribeGhost: (fn: () => void) => () => void;
   getGhostSnapshot: () => GhostSnapshot | null;
+  subscribeExternalGhost: (fn: () => void) => () => void;
+  getExternalGhostSnapshot: () => ExternalGhostSnapshot | null;
 }
 
 interface Args {
@@ -94,9 +172,13 @@ interface Args {
   scrollContainerRef: React.RefObject<HTMLDivElement | null>;
   onClickSlot: (date: string, time: string) => void;
   onCommitBlock: (block: CalBlock, patch: DragCommitPatch) => void;
+  /** U3 Part A's commit path — called once, on a successful drop. */
+  onExternalDrop: (payload: ExternalDragPayload, dest: ExternalDropDest) => void;
 }
 
-type Mode = "idle" | "pending-bg" | "pending-block" | "pending-resize" | "panning" | "moving" | "resizing";
+type Mode =
+  | "idle" | "pending-bg" | "pending-block" | "pending-resize" | "panning" | "moving" | "resizing"
+  | "pending-external" | "placing";
 
 interface Internal {
   mode: Mode;
@@ -125,10 +207,12 @@ interface Internal {
   willNest: boolean;
   willDetach: boolean;
   parentAtStart: CalBlock | null;
+  /** Set only for "pending-external"/"placing" — see ExternalDragPayload. */
+  externalPayload?: ExternalDragPayload;
 }
 
 export function useWeekInteractions({
-  hourPx, calBlocks, scrollContainerRef, onClickSlot, onCommitBlock,
+  hourPx, calBlocks, scrollContainerRef, onClickSlot, onCommitBlock, onExternalDrop,
 }: Args): { interactions: WeekInteractions } {
   const columns = useRef<Map<string, HTMLDivElement>>(new Map());
   const state = useRef<Internal | null>(null);
@@ -139,6 +223,7 @@ export function useWeekInteractions({
 
   const [draggingId, setDraggingId] = useState<number | null>(null);
   const [dropTargetId, setDropTargetId] = useState<number | null>(null);
+  const [externalDraggingTaskId, setExternalDraggingTaskId] = useState<number | null>(null);
 
   // Ghost micro-store — see file header.
   const ghostListeners = useRef<Set<() => void>>(new Set());
@@ -152,6 +237,24 @@ export function useWeekInteractions({
     return () => { ghostListeners.current.delete(fn); };
   }, []);
   const getGhostSnapshot = useCallback(() => ghostSnap.current, []);
+
+  // Second, parallel micro-store for the external-drag ghost (U3 Part A) —
+  // kept separate from the block-move ghost above rather than folded into
+  // one wider snapshot type, because the two have almost no shared shape
+  // (this one tracks the raw pointer position too, for the always-visible
+  // floating badge) and separating them means DragGhostLayer's existing
+  // render logic doesn't grow a branch for a case it can never hit.
+  const externalGhostListeners = useRef<Set<() => void>>(new Set());
+  const externalGhostSnap = useRef<ExternalGhostSnapshot | null>(null);
+  const setExternalGhost = useCallback((g: ExternalGhostSnapshot | null) => {
+    externalGhostSnap.current = g;
+    externalGhostListeners.current.forEach((fn) => fn());
+  }, []);
+  const subscribeExternalGhost = useCallback((fn: () => void) => {
+    externalGhostListeners.current.add(fn);
+    return () => { externalGhostListeners.current.delete(fn); };
+  }, []);
+  const getExternalGhostSnapshot = useCallback(() => externalGhostSnap.current, []);
 
   const registerColumn = useCallback((iso: string, el: HTMLDivElement | null) => {
     if (el) columns.current.set(iso, el); else columns.current.delete(iso);
@@ -185,6 +288,22 @@ export function useWeekInteractions({
     return { top: r.top, height: r.height, left: r.left, width: r.width };
   }
 
+  /** Strict version of `columnAtX` — no nearest-column fallback. Used by the
+   *  external drag (U3 Part A) to tell "hovering a real grid cell" (snap +
+   *  show the drop preview) apart from "still over the source panel /
+   *  sidebar / anywhere else" (just follow the pointer, no preview) — the
+   *  fallback in `columnAtX` exists for a gesture that's already IN the
+   *  grid (a block drag can't leave its own column strip sideways without
+   *  still being "over the grid" vertically); an external drag starts
+   *  outside the grid entirely and must be able to tell it hasn't arrived. */
+  function columnUnderPointer(clientX: number, clientY: number): string | null {
+    for (const [iso, el] of columns.current) {
+      const r = el.getBoundingClientRect();
+      if (clientX >= r.left && clientX < r.right && clientY >= r.top && clientY < r.bottom) return iso;
+    }
+    return null;
+  }
+
   function releasePointerListeners() {
     window.removeEventListener("pointermove", onWindowPointerMove);
     window.removeEventListener("pointerup", onWindowPointerUp);
@@ -198,6 +317,8 @@ export function useWeekInteractions({
     setDraggingId(null);
     setDropTargetId(null);
     setGhost(null);
+    setExternalDraggingTaskId(null);
+    setExternalGhost(null);
     document.body.style.cursor = "";
     document.body.style.userSelect = "";
   }
@@ -227,7 +348,11 @@ export function useWeekInteractions({
   // ── Candidate nest target under the pointer: same day, time-overlap, not
   //    itself/its own descendant, not virtual. Ties go to the shortest
   //    span — the more specific card under the cursor when several overlap. ──
-  function findDropTarget(iso: string, minute: number, draggedId: number): CalBlock | null {
+  // `draggedId` accepts `null` for an external drag (U3 Part A): there's no
+  // existing block to exclude by id, and `wouldCreateCalBlockCycle`'s own
+  // `draggedId: number | null` parameter already treats null the same way
+  // createCalBlock's own cycle check does for a brand-new block.
+  function findDropTarget(iso: string, minute: number, draggedId: number | null): CalBlock | null {
     let best: CalBlock | null = null;
     let bestDur = Infinity;
     for (const b of calBlocks) {
@@ -248,13 +373,19 @@ export function useWeekInteractions({
 
     const dist = Math.hypot(e.clientX - s.startClientX, e.clientY - s.startClientY);
 
-    if (s.mode === "pending-bg" || s.mode === "pending-block" || s.mode === "pending-resize") {
+    if (s.mode === "pending-bg" || s.mode === "pending-block" || s.mode === "pending-resize" || s.mode === "pending-external") {
       if (dist < DRAG_THRESHOLD_PX) return;
-      s.mode = s.mode === "pending-bg" ? "panning" : s.mode === "pending-block" ? "moving" : "resizing";
+      s.mode = s.mode === "pending-bg" ? "panning"
+        : s.mode === "pending-block" ? "moving"
+        : s.mode === "pending-resize" ? "resizing"
+        : "placing";
       wasDragRef.current = true;
       document.body.style.userSelect = "none";
       if (s.mode === "panning") {
         document.body.style.cursor = "grabbing";
+      } else if (s.mode === "placing") {
+        document.body.style.cursor = "grabbing";
+        setExternalDraggingTaskId(s.externalPayload!.taskId);
       } else {
         document.body.style.cursor = s.mode === "resizing" ? "ns-resize" : "grabbing";
         setDraggingId(s.block!.id);
@@ -357,8 +488,75 @@ export function useWeekInteractions({
         label: `${minToHHMM(startMin)}–${minToHHMM(endMin)}`,
         color: s.block.color, willNest: false, willDetach: false, targetTitle: null,
       });
+      return;
     }
-  }, [hourPx, calBlocks, scrollContainerRef, setGhost]);
+
+    // U3 Part A — external drag (task -> grid). Unlike a block move, this
+    // gesture can be hovering ANYWHERE (it starts outside the grid), so the
+    // first question every move is "are we even over a registered day
+    // column right now" (columnUnderPointer's strict bounds check) — off the
+    // grid, only the floating pointer-following badge updates; on it, this
+    // mirrors "moving"'s own snap + dwell-to-nest math (fixed duration, no
+    // grab offset — there's no existing card to preserve the grab point of).
+    if (s.mode === "placing" && s.externalPayload) {
+      const durationMin = s.externalPayload.durationMin;
+      const hoveredIso = columnUnderPointer(e.clientX, e.clientY);
+
+      if (!hoveredIso) {
+        s.curDate = "";
+        s.hoverTargetId = null;
+        s.hoverSince = null;
+        s.willNest = false;
+        setDropTargetId((prev) => (prev === null ? prev : null));
+        setExternalGhost({
+          x: e.clientX, y: e.clientY,
+          title: s.externalPayload.title,
+          detail: fmtWeekMinutes(durationMin),
+          grid: null, willNest: false, targetTitle: null,
+        });
+        return;
+      }
+
+      const geo = geometryOf(hoveredIso);
+      if (!geo) return;
+      const relY = e.clientY - geo.top;
+      const rawMinute = pxToMinutes(relY, hourPx);
+      let startMin = snapMinutes(rawMinute, 5);
+      startMin = Math.max(HOUR_START * 60, Math.min(GRID_END_MIN - durationMin, startMin));
+      const endMin = startMin + durationMin;
+
+      s.curDate = hoveredIso;
+      s.curStartMin = startMin;
+      s.curEndMin = endMin;
+
+      const hoverTarget = findDropTarget(hoveredIso, (startMin + endMin) / 2, null);
+      const now = performance.now();
+      if ((hoverTarget?.id ?? null) !== s.hoverTargetId) {
+        s.hoverTargetId = hoverTarget?.id ?? null;
+        s.hoverSince = hoverTarget ? now : null;
+        s.willNest = false;
+      } else if (hoverTarget && s.hoverSince != null && now - s.hoverSince >= NEST_HOVER_MS) {
+        s.willNest = true;
+      }
+      if (!hoverTarget) s.willNest = false;
+
+      setDropTargetId((prev) => {
+        const next = s.willNest ? s.hoverTargetId : null;
+        return prev === next ? prev : next;
+      });
+
+      const top = geo.top + minutesToPx(startMin, hourPx);
+      const height = Math.max(1, minutesToPx(endMin, hourPx) - minutesToPx(startMin, hourPx));
+      setExternalGhost({
+        x: e.clientX, y: e.clientY,
+        title: s.externalPayload.title,
+        detail: `${minToHHMM(startMin)}–${minToHHMM(endMin)}`,
+        grid: { top, left: geo.left, width: geo.width, height },
+        willNest: s.willNest,
+        targetTitle: s.willNest && hoverTarget ? hoverTarget.title : null,
+      });
+    }
+  }, [hourPx, calBlocks, scrollContainerRef, setGhost, setExternalGhost]);
 
   const onWindowPointerUp = useCallback((e: PointerEvent) => {
     const s = state.current;
@@ -403,14 +601,35 @@ export function useWeekInteractions({
         const time = pxToTime(relY, HOURS.length * hourPx, hourPx);
         onClickSlot(s.iso, time);
       }
+    } else if (s.mode === "placing" && s.externalPayload) {
+      // U3 Part A commit. `s.curDate` is the "" sentinel whenever the
+      // pointer never entered a registered grid column this gesture — same
+      // "cancel, nothing created" contract as Escape/blur, just reached via
+      // a plain drop instead. `willNest` reuses the exact same dwell state
+      // "moving"'s own nest commit reads above.
+      if (s.curDate) {
+        if (s.willNest && s.hoverTargetId != null) {
+          const target = blocksById.current.get(s.hoverTargetId);
+          if (target) {
+            const clamped = clampChildSpan(minToHHMM(s.curStartMin), minToHHMM(s.curEndMin), target);
+            onExternalDrop(s.externalPayload, {
+              date: target.date, startTime: clamped.start, endTime: clamped.end, parentBlockId: target.id,
+            });
+          }
+        } else {
+          onExternalDrop(s.externalPayload, {
+            date: s.curDate, startTime: minToHHMM(s.curStartMin), endTime: minToHHMM(s.curEndMin), parentBlockId: null,
+          });
+        }
+      }
     }
-    // pending-block / pending-resize under threshold: intentionally a no-op
-    // — the browser's own click event still reaches the block's existing
-    // onClick handler, unmolested.
+    // pending-block / pending-resize / pending-external under threshold:
+    // intentionally a no-op — the browser's own click event still reaches
+    // the source's existing onClick handler, unmolested.
 
     releasePointerListeners();
     endGesture();
-  }, [hourPx, onClickSlot, onCommitBlock]);
+  }, [hourPx, onClickSlot, onCommitBlock, onExternalDrop]);
 
   useEffect(() => {
     function cancelActiveGesture() {
@@ -515,6 +734,41 @@ export function useWeekInteractions({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [onWindowPointerMove, onWindowPointerUp, isDraggable]);
 
+  // U3 Part A's entry point — deliberately NOT routed through `beginGesture`
+  // above: that helper's signature (iso, block?, edge?) is shaped around a
+  // gesture that starts ON a grid element, and an external drag starts
+  // outside the grid's DOM entirely (a RightPanel row, an all-day chip) with
+  // no iso/block to give it yet — both are discovered on the first move that
+  // lands over a registered column (`columnUnderPointer`, above).
+  function beginExternalGesture(e: React.PointerEvent, payload: ExternalDragPayload) {
+    wasDragRef.current = false;
+    state.current = {
+      mode: "pending-external",
+      pointerId: e.pointerId, startClientX: e.clientX, startClientY: e.clientY,
+      iso: "", // unknown until a column is hovered
+      originStartMin: 0, originEndMin: 0, originDate: "",
+      originScrollTop: 0,
+      curStartMin: 0, curEndMin: 0,
+      // "" is the sentinel `onWindowPointerUp` reads as "never entered a
+      // valid grid column this gesture" — see its "placing" branch.
+      curDate: "",
+      hoverTargetId: null, hoverSince: null, willNest: false, willDetach: false,
+      parentAtStart: null,
+      grabOffsetMin: 0,
+      externalPayload: payload,
+    };
+    lastPointerRef.current = { x: e.clientX, y: e.clientY };
+    window.addEventListener("pointermove", onWindowPointerMove);
+    window.addEventListener("pointerup", onWindowPointerUp);
+    window.addEventListener("pointercancel", onWindowPointerUp);
+  }
+
+  const onExternalDragPointerDown = useCallback((e: React.PointerEvent, payload: ExternalDragPayload) => {
+    if (e.button !== 0) return;
+    beginExternalGesture(e, payload);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [onWindowPointerMove, onWindowPointerUp]);
+
   const consumeWasDrag = useCallback(() => {
     const v = wasDragRef.current;
     wasDragRef.current = false;
@@ -525,7 +779,9 @@ export function useWeekInteractions({
 
   const interactions: WeekInteractions = {
     registerColumn, onBackgroundPointerDown, onBlockPointerDown, onResizePointerDown,
-    consumeWasDrag, isDraggable, isDropTarget, draggingId, subscribeGhost, getGhostSnapshot,
+    onExternalDragPointerDown,
+    consumeWasDrag, isDraggable, isDropTarget, draggingId, externalDraggingTaskId,
+    subscribeGhost, getGhostSnapshot, subscribeExternalGhost, getExternalGhostSnapshot,
   };
 
   return { interactions };
@@ -555,5 +811,52 @@ export function DragGhostLayer({ subscribe, getSnapshot }: {
       )}
       {snap.willDetach && <p className={cn("text-[10px] leading-tight opacity-80", clr.text)}>detach</p>}
     </div>
+  );
+}
+
+/** U3 Part A's ghost — standalone for the same reason as `DragGhostLayer`
+ *  above. Renders up to two pieces: a snapped block-shaped drop preview
+ *  (only while hovering a real grid column) and a floating title+duration
+ *  badge that follows the raw pointer at all times, including off the grid
+ *  — "drag a task and see where it's going to land, wherever the pointer
+ *  currently is" (spec: "show a ghost near the pointer"). Always styled
+ *  `blue` — the create-modal's own default color for a new block, and this
+ *  ghost previews a block that doesn't exist yet, so there's no block color
+ *  of its own to read. */
+export function ExternalDragGhostLayer({ subscribe, getSnapshot }: {
+  subscribe: (fn: () => void) => () => void;
+  getSnapshot: () => ExternalGhostSnapshot | null;
+}) {
+  const snap = useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
+  if (!snap) return null;
+  const clr = BLOCK_COLORS.blue;
+  return (
+    <>
+      {snap.grid && (
+        <div
+          style={{ position: "fixed", top: snap.grid.top, left: snap.grid.left, width: snap.grid.width, height: snap.grid.height, zIndex: 9997 }}
+          className={cn(
+            "pointer-events-none rounded border-2 border-dashed px-1.5 py-0.5 shadow-lg overflow-hidden",
+            clr.bg, clr.border, snap.willNest && "ring-2 ring-primary",
+          )}
+        >
+          <p className={cn("text-[11px] font-semibold leading-tight truncate", clr.text)}>{snap.title}</p>
+          <p className={cn("text-[10px] leading-tight opacity-80", clr.text)}>{snap.detail}</p>
+          {snap.willNest && snap.targetTitle && (
+            <p className={cn("text-[10px] leading-tight opacity-80 truncate", clr.text)}>→ inside {snap.targetTitle}</p>
+          )}
+        </div>
+      )}
+      <div
+        style={{ position: "fixed", top: snap.y + 14, left: snap.x + 14, zIndex: 9999 }}
+        className="pointer-events-none max-w-[200px] rounded-md border border-border bg-card px-2 py-1 shadow-xl"
+      >
+        <p className="truncate text-[11px] font-semibold leading-tight text-foreground">{snap.title}</p>
+        {/* Duration only shown here while off the grid — once a column is
+            hovered the drop preview above already shows the snapped range,
+            and repeating it in the floating badge would just be noise. */}
+        {!snap.grid && <p className="text-[10px] leading-tight text-muted-foreground">{snap.detail}</p>}
+      </div>
+    </>
   );
 }
