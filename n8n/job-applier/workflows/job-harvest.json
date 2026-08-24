@@ -1,0 +1,579 @@
+{
+  "id": "nexus-job-harvest",
+  "name": "Job Harvest — Jobindex + TheHub",
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "saveManualExecutions": true
+  },
+  "tags": [],
+  "nodes": [
+    {
+      "id": "trigger",
+      "name": "Every 4 Hours",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        -620,
+        300
+      ],
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "hours",
+              "hoursInterval": 4
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "config",
+      "name": "Load Config",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        -400,
+        300
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.NEXUS_SUPABASE_URL }}/functions/v1/job-ingest",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "X-Job-Key",
+              "value": "={{ $env.JOB_INGEST_KEY }}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={ \"action\": \"config\", \"user_id\": \"{{ $env.NEXUS_USER_ID }}\" }",
+        "options": {}
+      }
+    },
+    {
+      "id": "fanout",
+      "name": "Fan Out Sources",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -180,
+        300
+      ],
+      "parameters": {
+        "jsCode": "// One item per enabled source, each carrying the profiles and the seen-set.\n// The workflow deliberately holds no configuration of its own: profiles and\n// sources are rows in Supabase so that adding a fourth focus is an insert.\nconst cfg = $input.first().json;\nif (!cfg || cfg.ok !== true) {\n  throw new Error('job-ingest config failed: ' + JSON.stringify(cfg).slice(0, 300));\n}\nconst profiles = cfg.profiles || [];\nconst sources = cfg.sources || [];\nif (profiles.length === 0) throw new Error('no enabled job_profiles — set one up in the panel first');\n\nreturn sources.map((s) => ({\n  json: {\n    source: s,\n    profiles,\n    seen: cfg.seen || [],\n    seen_urls: cfg.seen_urls || [],\n  },\n}));"
+      }
+    },
+    {
+      "id": "route",
+      "name": "Route Source",
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3,
+      "position": [
+        40,
+        300
+      ],
+      "parameters": {
+        "rules": {
+          "values": [
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "version": 2
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.source.kind }}",
+                    "rightValue": "jobindex_rss",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "outputKey": "jobindex"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "version": 2
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.source.kind }}",
+                    "rightValue": "thehub_sitemap",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "outputKey": "thehub"
+            }
+          ]
+        },
+        "options": {
+          "fallbackOutput": "none"
+        }
+      }
+    },
+    {
+      "id": "ji_feed",
+      "name": "Fetch Jobindex Feed",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        280,
+        180
+      ],
+      "parameters": {
+        "url": "={{ $json.source.config.feed_url }}",
+        "options": {
+          "response": {
+            "response": {
+              "responseFormat": "text"
+            }
+          }
+        }
+      }
+    },
+    {
+      "id": "ji_parse",
+      "name": "Parse Feed",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        500,
+        180
+      ],
+      "parameters": {
+        "jsCode": "/**\n * Job-post extraction — the canonical implementation.\n *\n * Pure, dependency-free, and deliberately regex-based rather than DOM-based: this\n * file is inlined verbatim into an n8n Code node, which has no npm modules and no\n * DOM. `n8n/job-applier/README.md` describes the copy that must stay in sync.\n *\n * # Two sources, two paths — and the reason they cannot share one\n *\n * The original plan said \"one generic extractor\": Google Jobs requires schema.org\n * `JobPosting`, so most boards emit it and one parser handles everything. That is\n * true for TheHub and it is NOT true for Jobindex. Probed 2026-08-24:\n *\n *   - TheHub job page          -> one <script type=\"application/ld+json\"> JobPosting\n *   - Jobindex /vis-job/ page  -> ld+json is @type WebSite. No JobPosting anywhere.\n *   - The employer ATS behind it (HR-Manager, SuccessFactors) -> also no JSON-LD.\n *\n * So Jobindex is a genuine HTML scrape, and following the ad out to the employer's\n * ATS does not rescue it. Do not \"unify\" these two paths without re-probing.\n *\n * # What a Jobindex /vis-job/ page actually is\n *\n * A stub, not an ad: a banner image, an <h4> title link, a location span, and a\n * link out. The body text is NOT on the page — `og:description` carries only the\n * opening sentence (~160 chars). The full text is one fetch further on, at the\n * `<h4>` link, which is either the employer's own site or a `jobindex.dk/\n * jobannonce/...` page that Jobindex hosts itself. Both are handled by\n * `extractReadableText`.\n */\n\n// MARK: - Small helpers\n\nconst decodeEntities = (s) =>\n  String(s ?? \"\")\n    .replace(/&#x([0-9a-f]+);/gi, (_, h) => String.fromCodePoint(parseInt(h, 16)))\n    .replace(/&#(\\d+);/g, (_, d) => String.fromCodePoint(parseInt(d, 10)))\n    .replace(/&quot;/g, '\"')\n    .replace(/&apos;/g, \"'\")\n    .replace(/&nbsp;/g, \" \")\n    .replace(/&lt;/g, \"<\")\n    .replace(/&gt;/g, \">\")\n    .replace(/&amp;/g, \"&\"); // last: an entity may itself be &amp;-escaped\n\nconst collapse = (s) => String(s ?? \"\").replace(/\\s+/g, \" \").trim();\n\n/** Strip tags to plain text. Scripts and styles go first or their source leaks in. */\nfunction htmlToText(html) {\n  let t = String(html ?? \"\");\n  t = t.replace(/<(script|style)\\b[\\s\\S]*?<\\/\\1>/gi, \" \");\n  t = t.replace(/<!--[\\s\\S]*?-->/g, \" \");\n  t = t.replace(/<\\/(p|div|li|tr|h[1-6]|br)>/gi, \"\\n\");\n  t = t.replace(/<br\\s*\\/?>/gi, \"\\n\");\n  t = t.replace(/<[^>]+>/g, \" \");\n  t = decodeEntities(t);\n  return t\n    .split(\"\\n\")\n    .map((l) => collapse(l))\n    .filter(Boolean)\n    .join(\"\\n\");\n}\n\n/** `<meta property=\"og:x\" content=\"...\">` in either attribute order. */\nfunction metaContent(html, prop) {\n  const esc = prop.replace(/[.*+?^${}()|[\\]\\\\]/g, \"\\\\__EXTRACT_JS__\");\n  const a = new RegExp(\n    `<meta[^>]+(?:property|name)=[\"']${esc}[\"'][^>]+content=[\"']([^\"']*)[\"']`,\n    \"i\",\n  ).exec(html);\n  if (a) return decodeEntities(a[1]);\n  const b = new RegExp(\n    `<meta[^>]+content=[\"']([^\"']*)[\"'][^>]+(?:property|name)=[\"']${esc}[\"']`,\n    \"i\",\n  ).exec(html);\n  return b ? decodeEntities(b[1]) : null;\n}\n\n// MARK: - schema.org JobPosting (TheHub, and most ATS vendors)\n\n/**\n * Pull the first schema.org JobPosting out of a page's ld+json blocks.\n *\n * A block may be a bare object, an array, or a `@graph` wrapper — all three are\n * in the wild, and a parser that only handles the first silently returns null on\n * the other two, which looks exactly like \"this page has no JSON-LD\".\n */\nfunction extractJobPostingLd(html) {\n  const re = /<script[^>]*type=[\"']application\\/ld\\+json[\"'][^>]*>([\\s\\S]*?)<\\/script>/gi;\n  let m;\n  while ((m = re.exec(String(html ?? \"\"))) !== null) {\n    let parsed;\n    try {\n      parsed = JSON.parse(m[1].trim());\n    } catch {\n      continue; // one malformed block must not abort the others\n    }\n    const queue = Array.isArray(parsed) ? [...parsed] : [parsed];\n    while (queue.length) {\n      const node = queue.shift();\n      if (!node || typeof node !== \"object\") continue;\n      if (Array.isArray(node[\"@graph\"])) queue.push(...node[\"@graph\"]);\n      const t = node[\"@type\"];\n      const types = Array.isArray(t) ? t : [t];\n      if (types.includes(\"JobPosting\")) return node;\n    }\n  }\n  return null;\n}\n\nconst firstOf = (v) => (Array.isArray(v) ? v[0] : v);\n\n/** Flatten schema.org's nested address/organization shapes into flat strings. */\nfunction ldLocation(posting) {\n  const loc = firstOf(posting?.jobLocation);\n  const addr = loc?.address ?? loc;\n  if (!addr) {\n    // Fully-remote postings often carry applicantLocationRequirements instead.\n    const alr = firstOf(posting?.applicantLocationRequirements);\n    return alr?.name ?? null;\n  }\n  if (typeof addr === \"string\") return addr;\n  const parts = [addr.addressLocality, addr.addressRegion, addr.addressCountry]\n    .map((p) => (typeof p === \"object\" ? p?.name : p))\n    .filter(Boolean);\n  return parts.length ? parts.join(\", \") : null;\n}\n\nfunction normalizeLdJobPosting(posting, { url, sourceKind }) {\n  if (!posting) return null;\n  const org = firstOf(posting.hiringOrganization);\n  return {\n    source_kind: sourceKind,\n    url,\n    external_id: String(posting.identifier?.value ?? posting.identifier ?? \"\") || url,\n    title: collapse(posting.title),\n    company: collapse(typeof org === \"string\" ? org : org?.name) || null,\n    location: collapse(ldLocation(posting)) || null,\n    // `jobLocationType: \"TELECOMMUTE\"` is schema.org's only formal remote signal.\n    remote: posting.jobLocationType === \"TELECOMMUTE\" ? true : null,\n    employment_type: Array.isArray(posting.employmentType)\n      ? posting.employmentType.join(\",\")\n      : posting.employmentType ?? null,\n    posted_at: posting.datePosted ?? null,\n    valid_through: posting.validThrough ?? null,\n    description: htmlToText(posting.description ?? \"\"),\n    apply_channel: posting.directApply === true ? \"board\" : \"unknown\",\n    ld_json: posting,\n  };\n}\n\n// MARK: - Jobindex RSS\n\n/**\n * Parse a Jobindex RSS feed.\n *\n * The feed declares ISO-8859-1. Decode at the fetch boundary by the declared\n * charset — this function takes an already-decoded string and will happily store\n * mojibake if handed a UTF-8 read of latin-1 bytes.\n *\n * `<title>` is `\"<job title>, <company>\"`. Splitting on the LAST comma is\n * deliberate: \"Student Assistant, Component Sales, Semco Maritime A/S\" has two,\n * and the company is always the final segment.\n */\nfunction parseJobindexFeed(xml) {\n  const out = [];\n  const items = String(xml ?? \"\").match(/<item>[\\s\\S]*?<\\/item>/gi) ?? [];\n  for (const raw of items) {\n    const pick = (tag) => {\n      const m = new RegExp(`<${tag}>([\\\\s\\\\S]*?)</${tag}>`, \"i\").exec(raw);\n      return m ? decodeEntities(collapse(m[1])) : null;\n    };\n    const full = pick(\"title\");\n    if (!full) continue;\n    const link = pick(\"link\");\n    const idx = full.lastIndexOf(\",\");\n    const categories = [...raw.matchAll(/<category>([\\s\\S]*?)<\\/category>/gi)].map((m) =>\n      decodeEntities(collapse(m[1])),\n    );\n    out.push({\n      source_kind: \"jobindex_rss\",\n      url: link,\n      // /vis-job/h1691819 -> h1691819. Stable per ad and shorter than the URL.\n      external_id: link ? link.split(\"/\").filter(Boolean).pop() : null,\n      title: idx > 0 ? full.slice(0, idx).trim() : full,\n      company: idx > 0 ? full.slice(idx + 1).trim() : null,\n      posted_at: pick(\"pubDate\"),\n      categories,\n    });\n  }\n  return out;\n}\n\n// MARK: - Jobindex /vis-job/ stub\n\nconst NON_AD_HOSTS =\n  /(?:youtube\\.com|youtu\\.be|facebook\\.com|instagram\\.com|twitter\\.com|x\\.com|linkedin\\.com\\/(?:shar|company)|google\\.[a-z.]+\\/maps)/i;\n\n/**\n * Read a /vis-job/ stub: title, location, and the URL where the real ad lives.\n *\n * The target link comes from the `<h4>` heading, NOT from `data-click`. Jobindex\n * stamps `data-click` on every outbound link the employer pasted, so \"first\n * data-click link\" picks up the banner image link and — verified on a real ad —\n * a YouTube recruitment video. The <h4> is the ad's own title link.\n * `NON_AD_HOSTS` is a second belt on the same trousers.\n */\nfunction extractJobindexStub(html) {\n  const h = String(html ?? \"\");\n  let target = null;\n  const h4 = /<h4[^>]*>\\s*<a[^>]+href=[\"']([^\"']+)[\"']/i.exec(h);\n  if (h4) target = decodeEntities(h4[1]);\n  if (!target || NON_AD_HOSTS.test(target)) {\n    for (const m of h.matchAll(/<a[^>]+href=[\"'](https?:\\/\\/[^\"']+)[\"'][^>]*data-click=/gi)) {\n      const u = decodeEntities(m[1]);\n      if (!/jobindex\\.dk/i.test(u) && !NON_AD_HOSTS.test(u)) {\n        target = u;\n        break;\n      }\n    }\n  }\n  const area = /class=[\"'][^\"']*jix_robotjob--area[^\"']*[\"'][^>]*>([^<]*)</i.exec(h);\n  const areaText = area ? decodeEntities(collapse(area[1])) : null;\n  return {\n    title: metaContent(h, \"og:title\"),\n    // \"Bjerringbro, Hybrid position\" / \"Copenhagen (Hybrid)\" — one field, two facts.\n    location: areaText,\n    remote: areaText ? /hybrid|remote|hjemmearbejde|distance/i.test(areaText) : null,\n    lead: metaContent(h, \"og:description\"),\n    target_url: target && !NON_AD_HOSTS.test(target) ? target : null,\n  };\n}\n\n// MARK: - Readable text from an arbitrary ad page\n\n/** Cookie/consent boilerplate outweighs the ad on some pages. See below. */\nconst BOILERPLATE =\n  /(cookies og personoplysninger|vi og vores samarbejdspartnere|accepter alle|cookiepolitik|privacy policy|consent)/i;\n\n/**\n * Best-effort body text for a page with no JSON-LD.\n *\n * Tries Jobindex's own `jobcontent` container first, then falls back to the\n * largest plausible text block.\n *\n * The fallback filters `BOILERPLATE` for a concrete reason: on a Jobindex\n * `/jobannonce/` page the single largest <div> is the **cookie-consent banner**\n * (743 chars of it), which beat the real ad in a naive \"longest block wins\" pass.\n * A generic readability heuristic that skips this check silently fills the\n * database with GDPR notices, and every downstream score is then computed against\n * a cookie policy.\n */\nfunction extractReadableText(html) {\n  const h = String(html ?? \"\");\n  const named = /class=[\"'][^\"']*jobcontent[^\"']*[\"']/i.exec(h);\n  if (named) {\n    const text = htmlToText(h.slice(named.index, named.index + 30000));\n    if (text.length > 300) return text;\n  }\n  const stripped = h\n    .replace(/<(script|style|nav|header|footer|form)\\b[\\s\\S]*?<\\/\\1>/gi, \" \")\n    .replace(/<!--[\\s\\S]*?-->/g, \" \");\n  let best = \"\";\n  for (const m of stripped.matchAll(/<(?:div|section|article)\\b[^>]*>([\\s\\S]*?)<\\/(?:div|section|article)>/gi)) {\n    const text = htmlToText(m[1]);\n    if (text.length > best.length && !BOILERPLATE.test(text)) best = text;\n  }\n  return best.length > 200 ? best : htmlToText(stripped);\n}\n\n// MARK: - Dedup\n\n/**\n * Cross-source dedup key.\n *\n * The same ad reaches us from Jobindex, from TheHub and (later) from a LinkedIn\n * alert under three different URLs, so a URL-keyed dedup produces triplicates —\n * and three applications to one company, which is worse than a missed one.\n *\n * Company suffixes are stripped because sources disagree about them: \"Grundfos\n * A/S\" in a Jobindex feed is \"Grundfos\" in TheHub's hiringOrganization.\n */\nfunction dedupeKey(company, title) {\n  const norm = (s) =>\n    String(s ?? \"\")\n      .toLowerCase()\n      .normalize(\"NFKD\")\n      .replace(/[\\u0300-\\u036f]/g, \"\")\n      .replace(/\\b(a\\/s|aps|ivs|k\\/s|p\\/s|inc|ltd|llc|gmbh|ab|as|oy|bv|nv)\\b/g, \"\")\n      .replace(/[^a-z0-9]+/g, \" \")\n      .trim();\n  return `${norm(company)}::${norm(title)}`;\n}\n\n// MARK: - Keyword matching\n\n/**\n * Does `term` occur in `hay` as a whole token (or phrase)?\n *\n * ## Why this is not `hay.includes(term)`\n *\n * A live dry run over eight real ads passed a **chef** and a **Head of Legal** as\n * AI Engineering matches, and two Field Service Engineers as Game Dev. The cause\n * was substring matching: `\"ai\"` occurs inside *available*, *training* and\n * *maintenance*; `\"engine\"` occurs inside *Engineer*; `\"game\"` inside nothing\n * useful but `\"developer\"` and `\"c#\"` behaved just as loosely.\n *\n * Short keywords are the common case in a profile — `ai`, `ml`, `go`, `c#` — and\n * every one of them is a substring of ordinary English. A gate that admits\n * everything is worse than no gate: it hands the model a queue of chefs to score,\n * which costs seconds each and buries the real matches.\n *\n * `\\b` is not usable because it is defined in terms of word characters, so it\n * fails immediately after `+` or `#` — `/\\bc\\+\\+\\b/` never matches \"c++\". Hence\n * explicit lookarounds on the alphanumeric class, which handle `c++`, `c#`,\n * `.net` and multi-word phrases alike.\n *\n * The trailing class also excludes `+` and `#`, which is not cosmetic: without\n * it the keyword `c` matches \"c++\" and \"c#\", and those are three different\n * languages. `c++` as a keyword still matches \"c++ is required\" because what\n * follows the matched `++` is a space.\n */\nfunction termHit(hay, term) {\n  const t = String(term ?? \"\").toLowerCase().trim();\n  if (!t) return false;\n  const esc = t.replace(/[.*+?^${}()|[\\]\\\\]/g, \"\\\\__EXTRACT_JS__\");\n  return new RegExp(`(?<![a-z0-9])${esc}(?![a-z0-9+#])`, \"i\").test(hay);\n}\n\n/**\n * Pick the best of several description candidates: simply the longest.\n *\n * Following a Jobindex ad out to its \"apply\" link frequently lands on an\n * application *form* rather than the ad — `hr-manager.net/ApplicationInit.aspx`\n * is a live example — and the form's boilerplate is short. Taking the last\n * successful extraction therefore overwrote a decent `og:description` lead with\n * 34 characters of form furniture, which is what the dry run showed.\n *\n * Longest-wins is crude, but every candidate here is already a plausible\n * description, and the failure it prevents (silently storing a login form as the\n * job ad, then scoring against it) is much worse than occasionally keeping a\n * slightly longer one.\n */\nfunction pickDescription(...candidates) {\n  let best = \"\";\n  for (const c of candidates) {\n    const s = typeof c === \"string\" ? c.trim() : \"\";\n    if (s.length > best.length) best = s;\n  }\n  return best;\n}\n\n// MARK: - The cheap gate\n\n/**\n * Rule-only screening, run BEFORE the model is ever woken.\n *\n * Same posture as `mail_rules`: a 7B model on this Mac costs seconds per posting,\n * and most of a Jobindex feed is droppable on a regex. Every drop records a\n * reason — an unexplained drop is indistinguishable from a crawler bug.\n *\n * `now` is injected rather than read from the clock so the expiry branch is\n * testable without freezing time.\n */\nfunction cheapGate(posting, profile, now = new Date()) {\n  const hay = `${posting.title ?? \"\"} ${posting.description ?? \"\"}`.toLowerCase();\n\n  for (const term of profile.exclude_terms ?? []) {\n    if (term && termHit(hay, term))\n      return { verdict: \"dropped\", reason: `excluded term: ${term}` };\n  }\n\n  if (posting.valid_through) {\n    const vt = new Date(posting.valid_through);\n    // An unparseable date must NOT read as expired — that would silently drop\n    // every ad from a source with a date format we have not met yet.\n    if (!Number.isNaN(vt.getTime()) && vt < now)\n      return { verdict: \"dropped\", reason: `closed ${posting.valid_through}` };\n  }\n\n  const cats = profile.category_allow ?? [];\n  if (cats.length && Array.isArray(posting.categories) && posting.categories.length) {\n    if (!posting.categories.some((c) => cats.includes(c)))\n      return { verdict: \"dropped\", reason: `category ${posting.categories.join(\"/\")}` };\n  }\n\n  const locs = profile.locations ?? [];\n  if (locs.length && posting.location) {\n    const l = posting.location.toLowerCase();\n    const hit = locs.some((x) => l.includes(String(x).toLowerCase()));\n    // Remote overrides a location miss — a remote job in Aarhus is still viable.\n    if (!hit && posting.remote !== true)\n      return { verdict: \"dropped\", reason: `location ${posting.location}` };\n  }\n\n  const kw = profile.keywords ?? [];\n  if (kw.length && !kw.some((k) => termHit(hay, k)))\n    return { verdict: \"dropped\", reason: \"no profile keyword present\" };\n\n  return { verdict: \"pass\", reason: null };\n}\n\nconst __internal = { htmlToText, metaContent, decodeEntities, collapse };\n\n// --- node body ---\n// The feed declares ISO-8859-1. n8n's HTTP node hands us a decoded string; if\n// Danish characters arrive mangled, set the node's response encoding rather than\n// trying to repair them here — mojibake stored once is permanent.\nconst ctx = $('Fan Out Sources').first().json;\nconst xml = $input.first().json.data ?? $input.first().json.body ?? '';\nconst MAX_NEW = 25; // politeness cap: each survivor costs two more fetches\n\nconst seen = new Set(ctx.seen || []);\nconst items = parseJobindexFeed(xml)\n  .filter((i) => i.url && !seen.has('jobindex_rss ' + i.external_id))\n  .slice(0, MAX_NEW);\n\nreturn items.map((i) => ({ json: { ...i, source_id: ctx.source.id } }));"
+      }
+    },
+    {
+      "id": "ji_stub",
+      "name": "Fetch Ad Stub",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        720,
+        180
+      ],
+      "parameters": {
+        "url": "={{ $json.url }}",
+        "options": {
+          "response": {
+            "response": {
+              "responseFormat": "text"
+            }
+          },
+          "batching": {
+            "batch": {
+              "batchSize": 3,
+              "batchInterval": 1200
+            }
+          }
+        }
+      }
+    },
+    {
+      "id": "ji_stub_parse",
+      "name": "Parse Stub",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        940,
+        180
+      ],
+      "parameters": {
+        "jsCode": "/**\n * Job-post extraction — the canonical implementation.\n *\n * Pure, dependency-free, and deliberately regex-based rather than DOM-based: this\n * file is inlined verbatim into an n8n Code node, which has no npm modules and no\n * DOM. `n8n/job-applier/README.md` describes the copy that must stay in sync.\n *\n * # Two sources, two paths — and the reason they cannot share one\n *\n * The original plan said \"one generic extractor\": Google Jobs requires schema.org\n * `JobPosting`, so most boards emit it and one parser handles everything. That is\n * true for TheHub and it is NOT true for Jobindex. Probed 2026-08-24:\n *\n *   - TheHub job page          -> one <script type=\"application/ld+json\"> JobPosting\n *   - Jobindex /vis-job/ page  -> ld+json is @type WebSite. No JobPosting anywhere.\n *   - The employer ATS behind it (HR-Manager, SuccessFactors) -> also no JSON-LD.\n *\n * So Jobindex is a genuine HTML scrape, and following the ad out to the employer's\n * ATS does not rescue it. Do not \"unify\" these two paths without re-probing.\n *\n * # What a Jobindex /vis-job/ page actually is\n *\n * A stub, not an ad: a banner image, an <h4> title link, a location span, and a\n * link out. The body text is NOT on the page — `og:description` carries only the\n * opening sentence (~160 chars). The full text is one fetch further on, at the\n * `<h4>` link, which is either the employer's own site or a `jobindex.dk/\n * jobannonce/...` page that Jobindex hosts itself. Both are handled by\n * `extractReadableText`.\n */\n\n// MARK: - Small helpers\n\nconst decodeEntities = (s) =>\n  String(s ?? \"\")\n    .replace(/&#x([0-9a-f]+);/gi, (_, h) => String.fromCodePoint(parseInt(h, 16)))\n    .replace(/&#(\\d+);/g, (_, d) => String.fromCodePoint(parseInt(d, 10)))\n    .replace(/&quot;/g, '\"')\n    .replace(/&apos;/g, \"'\")\n    .replace(/&nbsp;/g, \" \")\n    .replace(/&lt;/g, \"<\")\n    .replace(/&gt;/g, \">\")\n    .replace(/&amp;/g, \"&\"); // last: an entity may itself be &amp;-escaped\n\nconst collapse = (s) => String(s ?? \"\").replace(/\\s+/g, \" \").trim();\n\n/** Strip tags to plain text. Scripts and styles go first or their source leaks in. */\nfunction htmlToText(html) {\n  let t = String(html ?? \"\");\n  t = t.replace(/<(script|style)\\b[\\s\\S]*?<\\/\\1>/gi, \" \");\n  t = t.replace(/<!--[\\s\\S]*?-->/g, \" \");\n  t = t.replace(/<\\/(p|div|li|tr|h[1-6]|br)>/gi, \"\\n\");\n  t = t.replace(/<br\\s*\\/?>/gi, \"\\n\");\n  t = t.replace(/<[^>]+>/g, \" \");\n  t = decodeEntities(t);\n  return t\n    .split(\"\\n\")\n    .map((l) => collapse(l))\n    .filter(Boolean)\n    .join(\"\\n\");\n}\n\n/** `<meta property=\"og:x\" content=\"...\">` in either attribute order. */\nfunction metaContent(html, prop) {\n  const esc = prop.replace(/[.*+?^${}()|[\\]\\\\]/g, \"\\\\__EXTRACT_JS__\");\n  const a = new RegExp(\n    `<meta[^>]+(?:property|name)=[\"']${esc}[\"'][^>]+content=[\"']([^\"']*)[\"']`,\n    \"i\",\n  ).exec(html);\n  if (a) return decodeEntities(a[1]);\n  const b = new RegExp(\n    `<meta[^>]+content=[\"']([^\"']*)[\"'][^>]+(?:property|name)=[\"']${esc}[\"']`,\n    \"i\",\n  ).exec(html);\n  return b ? decodeEntities(b[1]) : null;\n}\n\n// MARK: - schema.org JobPosting (TheHub, and most ATS vendors)\n\n/**\n * Pull the first schema.org JobPosting out of a page's ld+json blocks.\n *\n * A block may be a bare object, an array, or a `@graph` wrapper — all three are\n * in the wild, and a parser that only handles the first silently returns null on\n * the other two, which looks exactly like \"this page has no JSON-LD\".\n */\nfunction extractJobPostingLd(html) {\n  const re = /<script[^>]*type=[\"']application\\/ld\\+json[\"'][^>]*>([\\s\\S]*?)<\\/script>/gi;\n  let m;\n  while ((m = re.exec(String(html ?? \"\"))) !== null) {\n    let parsed;\n    try {\n      parsed = JSON.parse(m[1].trim());\n    } catch {\n      continue; // one malformed block must not abort the others\n    }\n    const queue = Array.isArray(parsed) ? [...parsed] : [parsed];\n    while (queue.length) {\n      const node = queue.shift();\n      if (!node || typeof node !== \"object\") continue;\n      if (Array.isArray(node[\"@graph\"])) queue.push(...node[\"@graph\"]);\n      const t = node[\"@type\"];\n      const types = Array.isArray(t) ? t : [t];\n      if (types.includes(\"JobPosting\")) return node;\n    }\n  }\n  return null;\n}\n\nconst firstOf = (v) => (Array.isArray(v) ? v[0] : v);\n\n/** Flatten schema.org's nested address/organization shapes into flat strings. */\nfunction ldLocation(posting) {\n  const loc = firstOf(posting?.jobLocation);\n  const addr = loc?.address ?? loc;\n  if (!addr) {\n    // Fully-remote postings often carry applicantLocationRequirements instead.\n    const alr = firstOf(posting?.applicantLocationRequirements);\n    return alr?.name ?? null;\n  }\n  if (typeof addr === \"string\") return addr;\n  const parts = [addr.addressLocality, addr.addressRegion, addr.addressCountry]\n    .map((p) => (typeof p === \"object\" ? p?.name : p))\n    .filter(Boolean);\n  return parts.length ? parts.join(\", \") : null;\n}\n\nfunction normalizeLdJobPosting(posting, { url, sourceKind }) {\n  if (!posting) return null;\n  const org = firstOf(posting.hiringOrganization);\n  return {\n    source_kind: sourceKind,\n    url,\n    external_id: String(posting.identifier?.value ?? posting.identifier ?? \"\") || url,\n    title: collapse(posting.title),\n    company: collapse(typeof org === \"string\" ? org : org?.name) || null,\n    location: collapse(ldLocation(posting)) || null,\n    // `jobLocationType: \"TELECOMMUTE\"` is schema.org's only formal remote signal.\n    remote: posting.jobLocationType === \"TELECOMMUTE\" ? true : null,\n    employment_type: Array.isArray(posting.employmentType)\n      ? posting.employmentType.join(\",\")\n      : posting.employmentType ?? null,\n    posted_at: posting.datePosted ?? null,\n    valid_through: posting.validThrough ?? null,\n    description: htmlToText(posting.description ?? \"\"),\n    apply_channel: posting.directApply === true ? \"board\" : \"unknown\",\n    ld_json: posting,\n  };\n}\n\n// MARK: - Jobindex RSS\n\n/**\n * Parse a Jobindex RSS feed.\n *\n * The feed declares ISO-8859-1. Decode at the fetch boundary by the declared\n * charset — this function takes an already-decoded string and will happily store\n * mojibake if handed a UTF-8 read of latin-1 bytes.\n *\n * `<title>` is `\"<job title>, <company>\"`. Splitting on the LAST comma is\n * deliberate: \"Student Assistant, Component Sales, Semco Maritime A/S\" has two,\n * and the company is always the final segment.\n */\nfunction parseJobindexFeed(xml) {\n  const out = [];\n  const items = String(xml ?? \"\").match(/<item>[\\s\\S]*?<\\/item>/gi) ?? [];\n  for (const raw of items) {\n    const pick = (tag) => {\n      const m = new RegExp(`<${tag}>([\\\\s\\\\S]*?)</${tag}>`, \"i\").exec(raw);\n      return m ? decodeEntities(collapse(m[1])) : null;\n    };\n    const full = pick(\"title\");\n    if (!full) continue;\n    const link = pick(\"link\");\n    const idx = full.lastIndexOf(\",\");\n    const categories = [...raw.matchAll(/<category>([\\s\\S]*?)<\\/category>/gi)].map((m) =>\n      decodeEntities(collapse(m[1])),\n    );\n    out.push({\n      source_kind: \"jobindex_rss\",\n      url: link,\n      // /vis-job/h1691819 -> h1691819. Stable per ad and shorter than the URL.\n      external_id: link ? link.split(\"/\").filter(Boolean).pop() : null,\n      title: idx > 0 ? full.slice(0, idx).trim() : full,\n      company: idx > 0 ? full.slice(idx + 1).trim() : null,\n      posted_at: pick(\"pubDate\"),\n      categories,\n    });\n  }\n  return out;\n}\n\n// MARK: - Jobindex /vis-job/ stub\n\nconst NON_AD_HOSTS =\n  /(?:youtube\\.com|youtu\\.be|facebook\\.com|instagram\\.com|twitter\\.com|x\\.com|linkedin\\.com\\/(?:shar|company)|google\\.[a-z.]+\\/maps)/i;\n\n/**\n * Read a /vis-job/ stub: title, location, and the URL where the real ad lives.\n *\n * The target link comes from the `<h4>` heading, NOT from `data-click`. Jobindex\n * stamps `data-click` on every outbound link the employer pasted, so \"first\n * data-click link\" picks up the banner image link and — verified on a real ad —\n * a YouTube recruitment video. The <h4> is the ad's own title link.\n * `NON_AD_HOSTS` is a second belt on the same trousers.\n */\nfunction extractJobindexStub(html) {\n  const h = String(html ?? \"\");\n  let target = null;\n  const h4 = /<h4[^>]*>\\s*<a[^>]+href=[\"']([^\"']+)[\"']/i.exec(h);\n  if (h4) target = decodeEntities(h4[1]);\n  if (!target || NON_AD_HOSTS.test(target)) {\n    for (const m of h.matchAll(/<a[^>]+href=[\"'](https?:\\/\\/[^\"']+)[\"'][^>]*data-click=/gi)) {\n      const u = decodeEntities(m[1]);\n      if (!/jobindex\\.dk/i.test(u) && !NON_AD_HOSTS.test(u)) {\n        target = u;\n        break;\n      }\n    }\n  }\n  const area = /class=[\"'][^\"']*jix_robotjob--area[^\"']*[\"'][^>]*>([^<]*)</i.exec(h);\n  const areaText = area ? decodeEntities(collapse(area[1])) : null;\n  return {\n    title: metaContent(h, \"og:title\"),\n    // \"Bjerringbro, Hybrid position\" / \"Copenhagen (Hybrid)\" — one field, two facts.\n    location: areaText,\n    remote: areaText ? /hybrid|remote|hjemmearbejde|distance/i.test(areaText) : null,\n    lead: metaContent(h, \"og:description\"),\n    target_url: target && !NON_AD_HOSTS.test(target) ? target : null,\n  };\n}\n\n// MARK: - Readable text from an arbitrary ad page\n\n/** Cookie/consent boilerplate outweighs the ad on some pages. See below. */\nconst BOILERPLATE =\n  /(cookies og personoplysninger|vi og vores samarbejdspartnere|accepter alle|cookiepolitik|privacy policy|consent)/i;\n\n/**\n * Best-effort body text for a page with no JSON-LD.\n *\n * Tries Jobindex's own `jobcontent` container first, then falls back to the\n * largest plausible text block.\n *\n * The fallback filters `BOILERPLATE` for a concrete reason: on a Jobindex\n * `/jobannonce/` page the single largest <div> is the **cookie-consent banner**\n * (743 chars of it), which beat the real ad in a naive \"longest block wins\" pass.\n * A generic readability heuristic that skips this check silently fills the\n * database with GDPR notices, and every downstream score is then computed against\n * a cookie policy.\n */\nfunction extractReadableText(html) {\n  const h = String(html ?? \"\");\n  const named = /class=[\"'][^\"']*jobcontent[^\"']*[\"']/i.exec(h);\n  if (named) {\n    const text = htmlToText(h.slice(named.index, named.index + 30000));\n    if (text.length > 300) return text;\n  }\n  const stripped = h\n    .replace(/<(script|style|nav|header|footer|form)\\b[\\s\\S]*?<\\/\\1>/gi, \" \")\n    .replace(/<!--[\\s\\S]*?-->/g, \" \");\n  let best = \"\";\n  for (const m of stripped.matchAll(/<(?:div|section|article)\\b[^>]*>([\\s\\S]*?)<\\/(?:div|section|article)>/gi)) {\n    const text = htmlToText(m[1]);\n    if (text.length > best.length && !BOILERPLATE.test(text)) best = text;\n  }\n  return best.length > 200 ? best : htmlToText(stripped);\n}\n\n// MARK: - Dedup\n\n/**\n * Cross-source dedup key.\n *\n * The same ad reaches us from Jobindex, from TheHub and (later) from a LinkedIn\n * alert under three different URLs, so a URL-keyed dedup produces triplicates —\n * and three applications to one company, which is worse than a missed one.\n *\n * Company suffixes are stripped because sources disagree about them: \"Grundfos\n * A/S\" in a Jobindex feed is \"Grundfos\" in TheHub's hiringOrganization.\n */\nfunction dedupeKey(company, title) {\n  const norm = (s) =>\n    String(s ?? \"\")\n      .toLowerCase()\n      .normalize(\"NFKD\")\n      .replace(/[\\u0300-\\u036f]/g, \"\")\n      .replace(/\\b(a\\/s|aps|ivs|k\\/s|p\\/s|inc|ltd|llc|gmbh|ab|as|oy|bv|nv)\\b/g, \"\")\n      .replace(/[^a-z0-9]+/g, \" \")\n      .trim();\n  return `${norm(company)}::${norm(title)}`;\n}\n\n// MARK: - Keyword matching\n\n/**\n * Does `term` occur in `hay` as a whole token (or phrase)?\n *\n * ## Why this is not `hay.includes(term)`\n *\n * A live dry run over eight real ads passed a **chef** and a **Head of Legal** as\n * AI Engineering matches, and two Field Service Engineers as Game Dev. The cause\n * was substring matching: `\"ai\"` occurs inside *available*, *training* and\n * *maintenance*; `\"engine\"` occurs inside *Engineer*; `\"game\"` inside nothing\n * useful but `\"developer\"` and `\"c#\"` behaved just as loosely.\n *\n * Short keywords are the common case in a profile — `ai`, `ml`, `go`, `c#` — and\n * every one of them is a substring of ordinary English. A gate that admits\n * everything is worse than no gate: it hands the model a queue of chefs to score,\n * which costs seconds each and buries the real matches.\n *\n * `\\b` is not usable because it is defined in terms of word characters, so it\n * fails immediately after `+` or `#` — `/\\bc\\+\\+\\b/` never matches \"c++\". Hence\n * explicit lookarounds on the alphanumeric class, which handle `c++`, `c#`,\n * `.net` and multi-word phrases alike.\n *\n * The trailing class also excludes `+` and `#`, which is not cosmetic: without\n * it the keyword `c` matches \"c++\" and \"c#\", and those are three different\n * languages. `c++` as a keyword still matches \"c++ is required\" because what\n * follows the matched `++` is a space.\n */\nfunction termHit(hay, term) {\n  const t = String(term ?? \"\").toLowerCase().trim();\n  if (!t) return false;\n  const esc = t.replace(/[.*+?^${}()|[\\]\\\\]/g, \"\\\\__EXTRACT_JS__\");\n  return new RegExp(`(?<![a-z0-9])${esc}(?![a-z0-9+#])`, \"i\").test(hay);\n}\n\n/**\n * Pick the best of several description candidates: simply the longest.\n *\n * Following a Jobindex ad out to its \"apply\" link frequently lands on an\n * application *form* rather than the ad — `hr-manager.net/ApplicationInit.aspx`\n * is a live example — and the form's boilerplate is short. Taking the last\n * successful extraction therefore overwrote a decent `og:description` lead with\n * 34 characters of form furniture, which is what the dry run showed.\n *\n * Longest-wins is crude, but every candidate here is already a plausible\n * description, and the failure it prevents (silently storing a login form as the\n * job ad, then scoring against it) is much worse than occasionally keeping a\n * slightly longer one.\n */\nfunction pickDescription(...candidates) {\n  let best = \"\";\n  for (const c of candidates) {\n    const s = typeof c === \"string\" ? c.trim() : \"\";\n    if (s.length > best.length) best = s;\n  }\n  return best;\n}\n\n// MARK: - The cheap gate\n\n/**\n * Rule-only screening, run BEFORE the model is ever woken.\n *\n * Same posture as `mail_rules`: a 7B model on this Mac costs seconds per posting,\n * and most of a Jobindex feed is droppable on a regex. Every drop records a\n * reason — an unexplained drop is indistinguishable from a crawler bug.\n *\n * `now` is injected rather than read from the clock so the expiry branch is\n * testable without freezing time.\n */\nfunction cheapGate(posting, profile, now = new Date()) {\n  const hay = `${posting.title ?? \"\"} ${posting.description ?? \"\"}`.toLowerCase();\n\n  for (const term of profile.exclude_terms ?? []) {\n    if (term && termHit(hay, term))\n      return { verdict: \"dropped\", reason: `excluded term: ${term}` };\n  }\n\n  if (posting.valid_through) {\n    const vt = new Date(posting.valid_through);\n    // An unparseable date must NOT read as expired — that would silently drop\n    // every ad from a source with a date format we have not met yet.\n    if (!Number.isNaN(vt.getTime()) && vt < now)\n      return { verdict: \"dropped\", reason: `closed ${posting.valid_through}` };\n  }\n\n  const cats = profile.category_allow ?? [];\n  if (cats.length && Array.isArray(posting.categories) && posting.categories.length) {\n    if (!posting.categories.some((c) => cats.includes(c)))\n      return { verdict: \"dropped\", reason: `category ${posting.categories.join(\"/\")}` };\n  }\n\n  const locs = profile.locations ?? [];\n  if (locs.length && posting.location) {\n    const l = posting.location.toLowerCase();\n    const hit = locs.some((x) => l.includes(String(x).toLowerCase()));\n    // Remote overrides a location miss — a remote job in Aarhus is still viable.\n    if (!hit && posting.remote !== true)\n      return { verdict: \"dropped\", reason: `location ${posting.location}` };\n  }\n\n  const kw = profile.keywords ?? [];\n  if (kw.length && !kw.some((k) => termHit(hay, k)))\n    return { verdict: \"dropped\", reason: \"no profile keyword present\" };\n\n  return { verdict: \"pass\", reason: null };\n}\n\nconst __internal = { htmlToText, metaContent, decodeEntities, collapse };\n\n// --- node body ---\n// A /vis-job/ page is a stub: banner, title link, location. The ad body lives one\n// hop further on, at the <h4> link. Items whose target cannot be resolved are\n// kept and fall back to the RSS title plus the og:description lead — a thin row\n// is more useful than a dropped one, and the gate can still see the title.\nconst out = [];\nconst items = $input.all();\nfor (let i = 0; i < items.length; i++) {\n  const html = items[i].json.data ?? items[i].json.body ?? '';\n  const meta = $('Parse Feed').all()[i]?.json ?? {};\n  const stub = extractJobindexStub(html);\n  out.push({ json: { ...meta, ...stub, stub_only: !stub.target_url } });\n}\nreturn out;"
+      }
+    },
+    {
+      "id": "ji_body",
+      "name": "Fetch Ad Body",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1160,
+        180
+      ],
+      "parameters": {
+        "url": "={{ $json.target_url || $json.url }}",
+        "options": {
+          "response": {
+            "response": {
+              "responseFormat": "text",
+              "neverError": true
+            }
+          },
+          "batching": {
+            "batch": {
+              "batchSize": 3,
+              "batchInterval": 1200
+            }
+          }
+        }
+      }
+    },
+    {
+      "id": "ji_build",
+      "name": "Build Jobindex Posting",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1380,
+        180
+      ],
+      "parameters": {
+        "jsCode": "/**\n * Job-post extraction — the canonical implementation.\n *\n * Pure, dependency-free, and deliberately regex-based rather than DOM-based: this\n * file is inlined verbatim into an n8n Code node, which has no npm modules and no\n * DOM. `n8n/job-applier/README.md` describes the copy that must stay in sync.\n *\n * # Two sources, two paths — and the reason they cannot share one\n *\n * The original plan said \"one generic extractor\": Google Jobs requires schema.org\n * `JobPosting`, so most boards emit it and one parser handles everything. That is\n * true for TheHub and it is NOT true for Jobindex. Probed 2026-08-24:\n *\n *   - TheHub job page          -> one <script type=\"application/ld+json\"> JobPosting\n *   - Jobindex /vis-job/ page  -> ld+json is @type WebSite. No JobPosting anywhere.\n *   - The employer ATS behind it (HR-Manager, SuccessFactors) -> also no JSON-LD.\n *\n * So Jobindex is a genuine HTML scrape, and following the ad out to the employer's\n * ATS does not rescue it. Do not \"unify\" these two paths without re-probing.\n *\n * # What a Jobindex /vis-job/ page actually is\n *\n * A stub, not an ad: a banner image, an <h4> title link, a location span, and a\n * link out. The body text is NOT on the page — `og:description` carries only the\n * opening sentence (~160 chars). The full text is one fetch further on, at the\n * `<h4>` link, which is either the employer's own site or a `jobindex.dk/\n * jobannonce/...` page that Jobindex hosts itself. Both are handled by\n * `extractReadableText`.\n */\n\n// MARK: - Small helpers\n\nconst decodeEntities = (s) =>\n  String(s ?? \"\")\n    .replace(/&#x([0-9a-f]+);/gi, (_, h) => String.fromCodePoint(parseInt(h, 16)))\n    .replace(/&#(\\d+);/g, (_, d) => String.fromCodePoint(parseInt(d, 10)))\n    .replace(/&quot;/g, '\"')\n    .replace(/&apos;/g, \"'\")\n    .replace(/&nbsp;/g, \" \")\n    .replace(/&lt;/g, \"<\")\n    .replace(/&gt;/g, \">\")\n    .replace(/&amp;/g, \"&\"); // last: an entity may itself be &amp;-escaped\n\nconst collapse = (s) => String(s ?? \"\").replace(/\\s+/g, \" \").trim();\n\n/** Strip tags to plain text. Scripts and styles go first or their source leaks in. */\nfunction htmlToText(html) {\n  let t = String(html ?? \"\");\n  t = t.replace(/<(script|style)\\b[\\s\\S]*?<\\/\\1>/gi, \" \");\n  t = t.replace(/<!--[\\s\\S]*?-->/g, \" \");\n  t = t.replace(/<\\/(p|div|li|tr|h[1-6]|br)>/gi, \"\\n\");\n  t = t.replace(/<br\\s*\\/?>/gi, \"\\n\");\n  t = t.replace(/<[^>]+>/g, \" \");\n  t = decodeEntities(t);\n  return t\n    .split(\"\\n\")\n    .map((l) => collapse(l))\n    .filter(Boolean)\n    .join(\"\\n\");\n}\n\n/** `<meta property=\"og:x\" content=\"...\">` in either attribute order. */\nfunction metaContent(html, prop) {\n  const esc = prop.replace(/[.*+?^${}()|[\\]\\\\]/g, \"\\\\__EXTRACT_JS__\");\n  const a = new RegExp(\n    `<meta[^>]+(?:property|name)=[\"']${esc}[\"'][^>]+content=[\"']([^\"']*)[\"']`,\n    \"i\",\n  ).exec(html);\n  if (a) return decodeEntities(a[1]);\n  const b = new RegExp(\n    `<meta[^>]+content=[\"']([^\"']*)[\"'][^>]+(?:property|name)=[\"']${esc}[\"']`,\n    \"i\",\n  ).exec(html);\n  return b ? decodeEntities(b[1]) : null;\n}\n\n// MARK: - schema.org JobPosting (TheHub, and most ATS vendors)\n\n/**\n * Pull the first schema.org JobPosting out of a page's ld+json blocks.\n *\n * A block may be a bare object, an array, or a `@graph` wrapper — all three are\n * in the wild, and a parser that only handles the first silently returns null on\n * the other two, which looks exactly like \"this page has no JSON-LD\".\n */\nfunction extractJobPostingLd(html) {\n  const re = /<script[^>]*type=[\"']application\\/ld\\+json[\"'][^>]*>([\\s\\S]*?)<\\/script>/gi;\n  let m;\n  while ((m = re.exec(String(html ?? \"\"))) !== null) {\n    let parsed;\n    try {\n      parsed = JSON.parse(m[1].trim());\n    } catch {\n      continue; // one malformed block must not abort the others\n    }\n    const queue = Array.isArray(parsed) ? [...parsed] : [parsed];\n    while (queue.length) {\n      const node = queue.shift();\n      if (!node || typeof node !== \"object\") continue;\n      if (Array.isArray(node[\"@graph\"])) queue.push(...node[\"@graph\"]);\n      const t = node[\"@type\"];\n      const types = Array.isArray(t) ? t : [t];\n      if (types.includes(\"JobPosting\")) return node;\n    }\n  }\n  return null;\n}\n\nconst firstOf = (v) => (Array.isArray(v) ? v[0] : v);\n\n/** Flatten schema.org's nested address/organization shapes into flat strings. */\nfunction ldLocation(posting) {\n  const loc = firstOf(posting?.jobLocation);\n  const addr = loc?.address ?? loc;\n  if (!addr) {\n    // Fully-remote postings often carry applicantLocationRequirements instead.\n    const alr = firstOf(posting?.applicantLocationRequirements);\n    return alr?.name ?? null;\n  }\n  if (typeof addr === \"string\") return addr;\n  const parts = [addr.addressLocality, addr.addressRegion, addr.addressCountry]\n    .map((p) => (typeof p === \"object\" ? p?.name : p))\n    .filter(Boolean);\n  return parts.length ? parts.join(\", \") : null;\n}\n\nfunction normalizeLdJobPosting(posting, { url, sourceKind }) {\n  if (!posting) return null;\n  const org = firstOf(posting.hiringOrganization);\n  return {\n    source_kind: sourceKind,\n    url,\n    external_id: String(posting.identifier?.value ?? posting.identifier ?? \"\") || url,\n    title: collapse(posting.title),\n    company: collapse(typeof org === \"string\" ? org : org?.name) || null,\n    location: collapse(ldLocation(posting)) || null,\n    // `jobLocationType: \"TELECOMMUTE\"` is schema.org's only formal remote signal.\n    remote: posting.jobLocationType === \"TELECOMMUTE\" ? true : null,\n    employment_type: Array.isArray(posting.employmentType)\n      ? posting.employmentType.join(\",\")\n      : posting.employmentType ?? null,\n    posted_at: posting.datePosted ?? null,\n    valid_through: posting.validThrough ?? null,\n    description: htmlToText(posting.description ?? \"\"),\n    apply_channel: posting.directApply === true ? \"board\" : \"unknown\",\n    ld_json: posting,\n  };\n}\n\n// MARK: - Jobindex RSS\n\n/**\n * Parse a Jobindex RSS feed.\n *\n * The feed declares ISO-8859-1. Decode at the fetch boundary by the declared\n * charset — this function takes an already-decoded string and will happily store\n * mojibake if handed a UTF-8 read of latin-1 bytes.\n *\n * `<title>` is `\"<job title>, <company>\"`. Splitting on the LAST comma is\n * deliberate: \"Student Assistant, Component Sales, Semco Maritime A/S\" has two,\n * and the company is always the final segment.\n */\nfunction parseJobindexFeed(xml) {\n  const out = [];\n  const items = String(xml ?? \"\").match(/<item>[\\s\\S]*?<\\/item>/gi) ?? [];\n  for (const raw of items) {\n    const pick = (tag) => {\n      const m = new RegExp(`<${tag}>([\\\\s\\\\S]*?)</${tag}>`, \"i\").exec(raw);\n      return m ? decodeEntities(collapse(m[1])) : null;\n    };\n    const full = pick(\"title\");\n    if (!full) continue;\n    const link = pick(\"link\");\n    const idx = full.lastIndexOf(\",\");\n    const categories = [...raw.matchAll(/<category>([\\s\\S]*?)<\\/category>/gi)].map((m) =>\n      decodeEntities(collapse(m[1])),\n    );\n    out.push({\n      source_kind: \"jobindex_rss\",\n      url: link,\n      // /vis-job/h1691819 -> h1691819. Stable per ad and shorter than the URL.\n      external_id: link ? link.split(\"/\").filter(Boolean).pop() : null,\n      title: idx > 0 ? full.slice(0, idx).trim() : full,\n      company: idx > 0 ? full.slice(idx + 1).trim() : null,\n      posted_at: pick(\"pubDate\"),\n      categories,\n    });\n  }\n  return out;\n}\n\n// MARK: - Jobindex /vis-job/ stub\n\nconst NON_AD_HOSTS =\n  /(?:youtube\\.com|youtu\\.be|facebook\\.com|instagram\\.com|twitter\\.com|x\\.com|linkedin\\.com\\/(?:shar|company)|google\\.[a-z.]+\\/maps)/i;\n\n/**\n * Read a /vis-job/ stub: title, location, and the URL where the real ad lives.\n *\n * The target link comes from the `<h4>` heading, NOT from `data-click`. Jobindex\n * stamps `data-click` on every outbound link the employer pasted, so \"first\n * data-click link\" picks up the banner image link and — verified on a real ad —\n * a YouTube recruitment video. The <h4> is the ad's own title link.\n * `NON_AD_HOSTS` is a second belt on the same trousers.\n */\nfunction extractJobindexStub(html) {\n  const h = String(html ?? \"\");\n  let target = null;\n  const h4 = /<h4[^>]*>\\s*<a[^>]+href=[\"']([^\"']+)[\"']/i.exec(h);\n  if (h4) target = decodeEntities(h4[1]);\n  if (!target || NON_AD_HOSTS.test(target)) {\n    for (const m of h.matchAll(/<a[^>]+href=[\"'](https?:\\/\\/[^\"']+)[\"'][^>]*data-click=/gi)) {\n      const u = decodeEntities(m[1]);\n      if (!/jobindex\\.dk/i.test(u) && !NON_AD_HOSTS.test(u)) {\n        target = u;\n        break;\n      }\n    }\n  }\n  const area = /class=[\"'][^\"']*jix_robotjob--area[^\"']*[\"'][^>]*>([^<]*)</i.exec(h);\n  const areaText = area ? decodeEntities(collapse(area[1])) : null;\n  return {\n    title: metaContent(h, \"og:title\"),\n    // \"Bjerringbro, Hybrid position\" / \"Copenhagen (Hybrid)\" — one field, two facts.\n    location: areaText,\n    remote: areaText ? /hybrid|remote|hjemmearbejde|distance/i.test(areaText) : null,\n    lead: metaContent(h, \"og:description\"),\n    target_url: target && !NON_AD_HOSTS.test(target) ? target : null,\n  };\n}\n\n// MARK: - Readable text from an arbitrary ad page\n\n/** Cookie/consent boilerplate outweighs the ad on some pages. See below. */\nconst BOILERPLATE =\n  /(cookies og personoplysninger|vi og vores samarbejdspartnere|accepter alle|cookiepolitik|privacy policy|consent)/i;\n\n/**\n * Best-effort body text for a page with no JSON-LD.\n *\n * Tries Jobindex's own `jobcontent` container first, then falls back to the\n * largest plausible text block.\n *\n * The fallback filters `BOILERPLATE` for a concrete reason: on a Jobindex\n * `/jobannonce/` page the single largest <div> is the **cookie-consent banner**\n * (743 chars of it), which beat the real ad in a naive \"longest block wins\" pass.\n * A generic readability heuristic that skips this check silently fills the\n * database with GDPR notices, and every downstream score is then computed against\n * a cookie policy.\n */\nfunction extractReadableText(html) {\n  const h = String(html ?? \"\");\n  const named = /class=[\"'][^\"']*jobcontent[^\"']*[\"']/i.exec(h);\n  if (named) {\n    const text = htmlToText(h.slice(named.index, named.index + 30000));\n    if (text.length > 300) return text;\n  }\n  const stripped = h\n    .replace(/<(script|style|nav|header|footer|form)\\b[\\s\\S]*?<\\/\\1>/gi, \" \")\n    .replace(/<!--[\\s\\S]*?-->/g, \" \");\n  let best = \"\";\n  for (const m of stripped.matchAll(/<(?:div|section|article)\\b[^>]*>([\\s\\S]*?)<\\/(?:div|section|article)>/gi)) {\n    const text = htmlToText(m[1]);\n    if (text.length > best.length && !BOILERPLATE.test(text)) best = text;\n  }\n  return best.length > 200 ? best : htmlToText(stripped);\n}\n\n// MARK: - Dedup\n\n/**\n * Cross-source dedup key.\n *\n * The same ad reaches us from Jobindex, from TheHub and (later) from a LinkedIn\n * alert under three different URLs, so a URL-keyed dedup produces triplicates —\n * and three applications to one company, which is worse than a missed one.\n *\n * Company suffixes are stripped because sources disagree about them: \"Grundfos\n * A/S\" in a Jobindex feed is \"Grundfos\" in TheHub's hiringOrganization.\n */\nfunction dedupeKey(company, title) {\n  const norm = (s) =>\n    String(s ?? \"\")\n      .toLowerCase()\n      .normalize(\"NFKD\")\n      .replace(/[\\u0300-\\u036f]/g, \"\")\n      .replace(/\\b(a\\/s|aps|ivs|k\\/s|p\\/s|inc|ltd|llc|gmbh|ab|as|oy|bv|nv)\\b/g, \"\")\n      .replace(/[^a-z0-9]+/g, \" \")\n      .trim();\n  return `${norm(company)}::${norm(title)}`;\n}\n\n// MARK: - Keyword matching\n\n/**\n * Does `term` occur in `hay` as a whole token (or phrase)?\n *\n * ## Why this is not `hay.includes(term)`\n *\n * A live dry run over eight real ads passed a **chef** and a **Head of Legal** as\n * AI Engineering matches, and two Field Service Engineers as Game Dev. The cause\n * was substring matching: `\"ai\"` occurs inside *available*, *training* and\n * *maintenance*; `\"engine\"` occurs inside *Engineer*; `\"game\"` inside nothing\n * useful but `\"developer\"` and `\"c#\"` behaved just as loosely.\n *\n * Short keywords are the common case in a profile — `ai`, `ml`, `go`, `c#` — and\n * every one of them is a substring of ordinary English. A gate that admits\n * everything is worse than no gate: it hands the model a queue of chefs to score,\n * which costs seconds each and buries the real matches.\n *\n * `\\b` is not usable because it is defined in terms of word characters, so it\n * fails immediately after `+` or `#` — `/\\bc\\+\\+\\b/` never matches \"c++\". Hence\n * explicit lookarounds on the alphanumeric class, which handle `c++`, `c#`,\n * `.net` and multi-word phrases alike.\n *\n * The trailing class also excludes `+` and `#`, which is not cosmetic: without\n * it the keyword `c` matches \"c++\" and \"c#\", and those are three different\n * languages. `c++` as a keyword still matches \"c++ is required\" because what\n * follows the matched `++` is a space.\n */\nfunction termHit(hay, term) {\n  const t = String(term ?? \"\").toLowerCase().trim();\n  if (!t) return false;\n  const esc = t.replace(/[.*+?^${}()|[\\]\\\\]/g, \"\\\\__EXTRACT_JS__\");\n  return new RegExp(`(?<![a-z0-9])${esc}(?![a-z0-9+#])`, \"i\").test(hay);\n}\n\n/**\n * Pick the best of several description candidates: simply the longest.\n *\n * Following a Jobindex ad out to its \"apply\" link frequently lands on an\n * application *form* rather than the ad — `hr-manager.net/ApplicationInit.aspx`\n * is a live example — and the form's boilerplate is short. Taking the last\n * successful extraction therefore overwrote a decent `og:description` lead with\n * 34 characters of form furniture, which is what the dry run showed.\n *\n * Longest-wins is crude, but every candidate here is already a plausible\n * description, and the failure it prevents (silently storing a login form as the\n * job ad, then scoring against it) is much worse than occasionally keeping a\n * slightly longer one.\n */\nfunction pickDescription(...candidates) {\n  let best = \"\";\n  for (const c of candidates) {\n    const s = typeof c === \"string\" ? c.trim() : \"\";\n    if (s.length > best.length) best = s;\n  }\n  return best;\n}\n\n// MARK: - The cheap gate\n\n/**\n * Rule-only screening, run BEFORE the model is ever woken.\n *\n * Same posture as `mail_rules`: a 7B model on this Mac costs seconds per posting,\n * and most of a Jobindex feed is droppable on a regex. Every drop records a\n * reason — an unexplained drop is indistinguishable from a crawler bug.\n *\n * `now` is injected rather than read from the clock so the expiry branch is\n * testable without freezing time.\n */\nfunction cheapGate(posting, profile, now = new Date()) {\n  const hay = `${posting.title ?? \"\"} ${posting.description ?? \"\"}`.toLowerCase();\n\n  for (const term of profile.exclude_terms ?? []) {\n    if (term && termHit(hay, term))\n      return { verdict: \"dropped\", reason: `excluded term: ${term}` };\n  }\n\n  if (posting.valid_through) {\n    const vt = new Date(posting.valid_through);\n    // An unparseable date must NOT read as expired — that would silently drop\n    // every ad from a source with a date format we have not met yet.\n    if (!Number.isNaN(vt.getTime()) && vt < now)\n      return { verdict: \"dropped\", reason: `closed ${posting.valid_through}` };\n  }\n\n  const cats = profile.category_allow ?? [];\n  if (cats.length && Array.isArray(posting.categories) && posting.categories.length) {\n    if (!posting.categories.some((c) => cats.includes(c)))\n      return { verdict: \"dropped\", reason: `category ${posting.categories.join(\"/\")}` };\n  }\n\n  const locs = profile.locations ?? [];\n  if (locs.length && posting.location) {\n    const l = posting.location.toLowerCase();\n    const hit = locs.some((x) => l.includes(String(x).toLowerCase()));\n    // Remote overrides a location miss — a remote job in Aarhus is still viable.\n    if (!hit && posting.remote !== true)\n      return { verdict: \"dropped\", reason: `location ${posting.location}` };\n  }\n\n  const kw = profile.keywords ?? [];\n  if (kw.length && !kw.some((k) => termHit(hay, k)))\n    return { verdict: \"dropped\", reason: \"no profile keyword present\" };\n\n  return { verdict: \"pass\", reason: null };\n}\n\nconst __internal = { htmlToText, metaContent, decodeEntities, collapse };\n\n// --- node body ---\n// An employer page may carry schema.org JobPosting even though Jobindex does not\n// — several ATS vendors do. Prefer it when present, fall back to readable text.\nconst out = [];\nconst items = $input.all();\nfor (let i = 0; i < items.length; i++) {\n  const html = items[i].json.data ?? items[i].json.body ?? '';\n  const meta = $('Parse Stub').all()[i]?.json ?? {};\n  const ld = extractJobPostingLd(html);\n  const fromLd = ld ? normalizeLdJobPosting(ld, { url: meta.url, sourceKind: 'jobindex_rss' }) : null;\n  const description = pickDescription(meta.lead, fromLd?.description, extractReadableText(html));\n  const company = meta.company || fromLd?.company || null;\n  const title = meta.title || fromLd?.title || '';\n  out.push({\n    json: {\n      source_kind: 'jobindex_rss',\n      source_id: meta.source_id ?? null,\n      url: meta.url,\n      source_url: meta.target_url ?? null,\n      apply_url: meta.target_url ?? null,\n      external_id: meta.external_id,\n      dedupe_key: dedupeKey(company, title),\n      title,\n      company,\n      location: meta.location ?? fromLd?.location ?? null,\n      remote: meta.remote ?? fromLd?.remote ?? null,\n      employment_type: fromLd?.employment_type ?? null,\n      posted_at: meta.posted_at ?? null,\n      valid_through: fromLd?.valid_through ?? null,\n      description,\n      ld_json: ld ?? null,\n      apply_channel: 'ats',\n      categories: meta.categories ?? [],\n    },\n  });\n}\nreturn out;"
+      }
+    },
+    {
+      "id": "hub_sitemap",
+      "name": "Fetch TheHub Sitemap",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        280,
+        420
+      ],
+      "parameters": {
+        "url": "={{ $json.source.config.sitemap_url }}",
+        "options": {
+          "response": {
+            "response": {
+              "responseFormat": "text"
+            }
+          }
+        }
+      }
+    },
+    {
+      "id": "hub_parse",
+      "name": "Parse Sitemap",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        500,
+        420
+      ],
+      "parameters": {
+        "jsCode": "// The sitemap lists ~1200 job URLs. Fetching all of them on the first run — when\n// EVERYTHING is new — is what gets a crawler blocked, and losing the source is a\n// permanent cost against a one-off saving. Diff against what we already have and\n// take a capped slice per run; the backlog drains over a few runs.\nconst ctx = $('Fan Out Sources').first().json;\nconst xml = $input.first().json.data ?? $input.first().json.body ?? '';\nconst MAX_NEW = 30;\n\nconst seen = new Set(ctx.seen_urls || []);\nconst locs = [...xml.matchAll(/<loc>([^<]+)<\\/loc>/g)].map((m) => m[1].trim());\nconst fresh = locs.filter((u) => /\\/jobs\\//.test(u) && !seen.has(u)).slice(0, MAX_NEW);\n\nif (fresh.length === 0) return [];\nreturn fresh.map((u) => ({ json: { url: u, source_id: ctx.source.id } }));"
+      }
+    },
+    {
+      "id": "hub_fetch",
+      "name": "Fetch Hub Job",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        720,
+        420
+      ],
+      "parameters": {
+        "url": "={{ $json.url }}",
+        "options": {
+          "response": {
+            "response": {
+              "responseFormat": "text",
+              "neverError": true
+            }
+          },
+          "batching": {
+            "batch": {
+              "batchSize": 3,
+              "batchInterval": 1200
+            }
+          }
+        }
+      }
+    },
+    {
+      "id": "hub_build",
+      "name": "Build Hub Posting",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        940,
+        420
+      ],
+      "parameters": {
+        "jsCode": "/**\n * Job-post extraction — the canonical implementation.\n *\n * Pure, dependency-free, and deliberately regex-based rather than DOM-based: this\n * file is inlined verbatim into an n8n Code node, which has no npm modules and no\n * DOM. `n8n/job-applier/README.md` describes the copy that must stay in sync.\n *\n * # Two sources, two paths — and the reason they cannot share one\n *\n * The original plan said \"one generic extractor\": Google Jobs requires schema.org\n * `JobPosting`, so most boards emit it and one parser handles everything. That is\n * true for TheHub and it is NOT true for Jobindex. Probed 2026-08-24:\n *\n *   - TheHub job page          -> one <script type=\"application/ld+json\"> JobPosting\n *   - Jobindex /vis-job/ page  -> ld+json is @type WebSite. No JobPosting anywhere.\n *   - The employer ATS behind it (HR-Manager, SuccessFactors) -> also no JSON-LD.\n *\n * So Jobindex is a genuine HTML scrape, and following the ad out to the employer's\n * ATS does not rescue it. Do not \"unify\" these two paths without re-probing.\n *\n * # What a Jobindex /vis-job/ page actually is\n *\n * A stub, not an ad: a banner image, an <h4> title link, a location span, and a\n * link out. The body text is NOT on the page — `og:description` carries only the\n * opening sentence (~160 chars). The full text is one fetch further on, at the\n * `<h4>` link, which is either the employer's own site or a `jobindex.dk/\n * jobannonce/...` page that Jobindex hosts itself. Both are handled by\n * `extractReadableText`.\n */\n\n// MARK: - Small helpers\n\nconst decodeEntities = (s) =>\n  String(s ?? \"\")\n    .replace(/&#x([0-9a-f]+);/gi, (_, h) => String.fromCodePoint(parseInt(h, 16)))\n    .replace(/&#(\\d+);/g, (_, d) => String.fromCodePoint(parseInt(d, 10)))\n    .replace(/&quot;/g, '\"')\n    .replace(/&apos;/g, \"'\")\n    .replace(/&nbsp;/g, \" \")\n    .replace(/&lt;/g, \"<\")\n    .replace(/&gt;/g, \">\")\n    .replace(/&amp;/g, \"&\"); // last: an entity may itself be &amp;-escaped\n\nconst collapse = (s) => String(s ?? \"\").replace(/\\s+/g, \" \").trim();\n\n/** Strip tags to plain text. Scripts and styles go first or their source leaks in. */\nfunction htmlToText(html) {\n  let t = String(html ?? \"\");\n  t = t.replace(/<(script|style)\\b[\\s\\S]*?<\\/\\1>/gi, \" \");\n  t = t.replace(/<!--[\\s\\S]*?-->/g, \" \");\n  t = t.replace(/<\\/(p|div|li|tr|h[1-6]|br)>/gi, \"\\n\");\n  t = t.replace(/<br\\s*\\/?>/gi, \"\\n\");\n  t = t.replace(/<[^>]+>/g, \" \");\n  t = decodeEntities(t);\n  return t\n    .split(\"\\n\")\n    .map((l) => collapse(l))\n    .filter(Boolean)\n    .join(\"\\n\");\n}\n\n/** `<meta property=\"og:x\" content=\"...\">` in either attribute order. */\nfunction metaContent(html, prop) {\n  const esc = prop.replace(/[.*+?^${}()|[\\]\\\\]/g, \"\\\\__EXTRACT_JS__\");\n  const a = new RegExp(\n    `<meta[^>]+(?:property|name)=[\"']${esc}[\"'][^>]+content=[\"']([^\"']*)[\"']`,\n    \"i\",\n  ).exec(html);\n  if (a) return decodeEntities(a[1]);\n  const b = new RegExp(\n    `<meta[^>]+content=[\"']([^\"']*)[\"'][^>]+(?:property|name)=[\"']${esc}[\"']`,\n    \"i\",\n  ).exec(html);\n  return b ? decodeEntities(b[1]) : null;\n}\n\n// MARK: - schema.org JobPosting (TheHub, and most ATS vendors)\n\n/**\n * Pull the first schema.org JobPosting out of a page's ld+json blocks.\n *\n * A block may be a bare object, an array, or a `@graph` wrapper — all three are\n * in the wild, and a parser that only handles the first silently returns null on\n * the other two, which looks exactly like \"this page has no JSON-LD\".\n */\nfunction extractJobPostingLd(html) {\n  const re = /<script[^>]*type=[\"']application\\/ld\\+json[\"'][^>]*>([\\s\\S]*?)<\\/script>/gi;\n  let m;\n  while ((m = re.exec(String(html ?? \"\"))) !== null) {\n    let parsed;\n    try {\n      parsed = JSON.parse(m[1].trim());\n    } catch {\n      continue; // one malformed block must not abort the others\n    }\n    const queue = Array.isArray(parsed) ? [...parsed] : [parsed];\n    while (queue.length) {\n      const node = queue.shift();\n      if (!node || typeof node !== \"object\") continue;\n      if (Array.isArray(node[\"@graph\"])) queue.push(...node[\"@graph\"]);\n      const t = node[\"@type\"];\n      const types = Array.isArray(t) ? t : [t];\n      if (types.includes(\"JobPosting\")) return node;\n    }\n  }\n  return null;\n}\n\nconst firstOf = (v) => (Array.isArray(v) ? v[0] : v);\n\n/** Flatten schema.org's nested address/organization shapes into flat strings. */\nfunction ldLocation(posting) {\n  const loc = firstOf(posting?.jobLocation);\n  const addr = loc?.address ?? loc;\n  if (!addr) {\n    // Fully-remote postings often carry applicantLocationRequirements instead.\n    const alr = firstOf(posting?.applicantLocationRequirements);\n    return alr?.name ?? null;\n  }\n  if (typeof addr === \"string\") return addr;\n  const parts = [addr.addressLocality, addr.addressRegion, addr.addressCountry]\n    .map((p) => (typeof p === \"object\" ? p?.name : p))\n    .filter(Boolean);\n  return parts.length ? parts.join(\", \") : null;\n}\n\nfunction normalizeLdJobPosting(posting, { url, sourceKind }) {\n  if (!posting) return null;\n  const org = firstOf(posting.hiringOrganization);\n  return {\n    source_kind: sourceKind,\n    url,\n    external_id: String(posting.identifier?.value ?? posting.identifier ?? \"\") || url,\n    title: collapse(posting.title),\n    company: collapse(typeof org === \"string\" ? org : org?.name) || null,\n    location: collapse(ldLocation(posting)) || null,\n    // `jobLocationType: \"TELECOMMUTE\"` is schema.org's only formal remote signal.\n    remote: posting.jobLocationType === \"TELECOMMUTE\" ? true : null,\n    employment_type: Array.isArray(posting.employmentType)\n      ? posting.employmentType.join(\",\")\n      : posting.employmentType ?? null,\n    posted_at: posting.datePosted ?? null,\n    valid_through: posting.validThrough ?? null,\n    description: htmlToText(posting.description ?? \"\"),\n    apply_channel: posting.directApply === true ? \"board\" : \"unknown\",\n    ld_json: posting,\n  };\n}\n\n// MARK: - Jobindex RSS\n\n/**\n * Parse a Jobindex RSS feed.\n *\n * The feed declares ISO-8859-1. Decode at the fetch boundary by the declared\n * charset — this function takes an already-decoded string and will happily store\n * mojibake if handed a UTF-8 read of latin-1 bytes.\n *\n * `<title>` is `\"<job title>, <company>\"`. Splitting on the LAST comma is\n * deliberate: \"Student Assistant, Component Sales, Semco Maritime A/S\" has two,\n * and the company is always the final segment.\n */\nfunction parseJobindexFeed(xml) {\n  const out = [];\n  const items = String(xml ?? \"\").match(/<item>[\\s\\S]*?<\\/item>/gi) ?? [];\n  for (const raw of items) {\n    const pick = (tag) => {\n      const m = new RegExp(`<${tag}>([\\\\s\\\\S]*?)</${tag}>`, \"i\").exec(raw);\n      return m ? decodeEntities(collapse(m[1])) : null;\n    };\n    const full = pick(\"title\");\n    if (!full) continue;\n    const link = pick(\"link\");\n    const idx = full.lastIndexOf(\",\");\n    const categories = [...raw.matchAll(/<category>([\\s\\S]*?)<\\/category>/gi)].map((m) =>\n      decodeEntities(collapse(m[1])),\n    );\n    out.push({\n      source_kind: \"jobindex_rss\",\n      url: link,\n      // /vis-job/h1691819 -> h1691819. Stable per ad and shorter than the URL.\n      external_id: link ? link.split(\"/\").filter(Boolean).pop() : null,\n      title: idx > 0 ? full.slice(0, idx).trim() : full,\n      company: idx > 0 ? full.slice(idx + 1).trim() : null,\n      posted_at: pick(\"pubDate\"),\n      categories,\n    });\n  }\n  return out;\n}\n\n// MARK: - Jobindex /vis-job/ stub\n\nconst NON_AD_HOSTS =\n  /(?:youtube\\.com|youtu\\.be|facebook\\.com|instagram\\.com|twitter\\.com|x\\.com|linkedin\\.com\\/(?:shar|company)|google\\.[a-z.]+\\/maps)/i;\n\n/**\n * Read a /vis-job/ stub: title, location, and the URL where the real ad lives.\n *\n * The target link comes from the `<h4>` heading, NOT from `data-click`. Jobindex\n * stamps `data-click` on every outbound link the employer pasted, so \"first\n * data-click link\" picks up the banner image link and — verified on a real ad —\n * a YouTube recruitment video. The <h4> is the ad's own title link.\n * `NON_AD_HOSTS` is a second belt on the same trousers.\n */\nfunction extractJobindexStub(html) {\n  const h = String(html ?? \"\");\n  let target = null;\n  const h4 = /<h4[^>]*>\\s*<a[^>]+href=[\"']([^\"']+)[\"']/i.exec(h);\n  if (h4) target = decodeEntities(h4[1]);\n  if (!target || NON_AD_HOSTS.test(target)) {\n    for (const m of h.matchAll(/<a[^>]+href=[\"'](https?:\\/\\/[^\"']+)[\"'][^>]*data-click=/gi)) {\n      const u = decodeEntities(m[1]);\n      if (!/jobindex\\.dk/i.test(u) && !NON_AD_HOSTS.test(u)) {\n        target = u;\n        break;\n      }\n    }\n  }\n  const area = /class=[\"'][^\"']*jix_robotjob--area[^\"']*[\"'][^>]*>([^<]*)</i.exec(h);\n  const areaText = area ? decodeEntities(collapse(area[1])) : null;\n  return {\n    title: metaContent(h, \"og:title\"),\n    // \"Bjerringbro, Hybrid position\" / \"Copenhagen (Hybrid)\" — one field, two facts.\n    location: areaText,\n    remote: areaText ? /hybrid|remote|hjemmearbejde|distance/i.test(areaText) : null,\n    lead: metaContent(h, \"og:description\"),\n    target_url: target && !NON_AD_HOSTS.test(target) ? target : null,\n  };\n}\n\n// MARK: - Readable text from an arbitrary ad page\n\n/** Cookie/consent boilerplate outweighs the ad on some pages. See below. */\nconst BOILERPLATE =\n  /(cookies og personoplysninger|vi og vores samarbejdspartnere|accepter alle|cookiepolitik|privacy policy|consent)/i;\n\n/**\n * Best-effort body text for a page with no JSON-LD.\n *\n * Tries Jobindex's own `jobcontent` container first, then falls back to the\n * largest plausible text block.\n *\n * The fallback filters `BOILERPLATE` for a concrete reason: on a Jobindex\n * `/jobannonce/` page the single largest <div> is the **cookie-consent banner**\n * (743 chars of it), which beat the real ad in a naive \"longest block wins\" pass.\n * A generic readability heuristic that skips this check silently fills the\n * database with GDPR notices, and every downstream score is then computed against\n * a cookie policy.\n */\nfunction extractReadableText(html) {\n  const h = String(html ?? \"\");\n  const named = /class=[\"'][^\"']*jobcontent[^\"']*[\"']/i.exec(h);\n  if (named) {\n    const text = htmlToText(h.slice(named.index, named.index + 30000));\n    if (text.length > 300) return text;\n  }\n  const stripped = h\n    .replace(/<(script|style|nav|header|footer|form)\\b[\\s\\S]*?<\\/\\1>/gi, \" \")\n    .replace(/<!--[\\s\\S]*?-->/g, \" \");\n  let best = \"\";\n  for (const m of stripped.matchAll(/<(?:div|section|article)\\b[^>]*>([\\s\\S]*?)<\\/(?:div|section|article)>/gi)) {\n    const text = htmlToText(m[1]);\n    if (text.length > best.length && !BOILERPLATE.test(text)) best = text;\n  }\n  return best.length > 200 ? best : htmlToText(stripped);\n}\n\n// MARK: - Dedup\n\n/**\n * Cross-source dedup key.\n *\n * The same ad reaches us from Jobindex, from TheHub and (later) from a LinkedIn\n * alert under three different URLs, so a URL-keyed dedup produces triplicates —\n * and three applications to one company, which is worse than a missed one.\n *\n * Company suffixes are stripped because sources disagree about them: \"Grundfos\n * A/S\" in a Jobindex feed is \"Grundfos\" in TheHub's hiringOrganization.\n */\nfunction dedupeKey(company, title) {\n  const norm = (s) =>\n    String(s ?? \"\")\n      .toLowerCase()\n      .normalize(\"NFKD\")\n      .replace(/[\\u0300-\\u036f]/g, \"\")\n      .replace(/\\b(a\\/s|aps|ivs|k\\/s|p\\/s|inc|ltd|llc|gmbh|ab|as|oy|bv|nv)\\b/g, \"\")\n      .replace(/[^a-z0-9]+/g, \" \")\n      .trim();\n  return `${norm(company)}::${norm(title)}`;\n}\n\n// MARK: - Keyword matching\n\n/**\n * Does `term` occur in `hay` as a whole token (or phrase)?\n *\n * ## Why this is not `hay.includes(term)`\n *\n * A live dry run over eight real ads passed a **chef** and a **Head of Legal** as\n * AI Engineering matches, and two Field Service Engineers as Game Dev. The cause\n * was substring matching: `\"ai\"` occurs inside *available*, *training* and\n * *maintenance*; `\"engine\"` occurs inside *Engineer*; `\"game\"` inside nothing\n * useful but `\"developer\"` and `\"c#\"` behaved just as loosely.\n *\n * Short keywords are the common case in a profile — `ai`, `ml`, `go`, `c#` — and\n * every one of them is a substring of ordinary English. A gate that admits\n * everything is worse than no gate: it hands the model a queue of chefs to score,\n * which costs seconds each and buries the real matches.\n *\n * `\\b` is not usable because it is defined in terms of word characters, so it\n * fails immediately after `+` or `#` — `/\\bc\\+\\+\\b/` never matches \"c++\". Hence\n * explicit lookarounds on the alphanumeric class, which handle `c++`, `c#`,\n * `.net` and multi-word phrases alike.\n *\n * The trailing class also excludes `+` and `#`, which is not cosmetic: without\n * it the keyword `c` matches \"c++\" and \"c#\", and those are three different\n * languages. `c++` as a keyword still matches \"c++ is required\" because what\n * follows the matched `++` is a space.\n */\nfunction termHit(hay, term) {\n  const t = String(term ?? \"\").toLowerCase().trim();\n  if (!t) return false;\n  const esc = t.replace(/[.*+?^${}()|[\\]\\\\]/g, \"\\\\__EXTRACT_JS__\");\n  return new RegExp(`(?<![a-z0-9])${esc}(?![a-z0-9+#])`, \"i\").test(hay);\n}\n\n/**\n * Pick the best of several description candidates: simply the longest.\n *\n * Following a Jobindex ad out to its \"apply\" link frequently lands on an\n * application *form* rather than the ad — `hr-manager.net/ApplicationInit.aspx`\n * is a live example — and the form's boilerplate is short. Taking the last\n * successful extraction therefore overwrote a decent `og:description` lead with\n * 34 characters of form furniture, which is what the dry run showed.\n *\n * Longest-wins is crude, but every candidate here is already a plausible\n * description, and the failure it prevents (silently storing a login form as the\n * job ad, then scoring against it) is much worse than occasionally keeping a\n * slightly longer one.\n */\nfunction pickDescription(...candidates) {\n  let best = \"\";\n  for (const c of candidates) {\n    const s = typeof c === \"string\" ? c.trim() : \"\";\n    if (s.length > best.length) best = s;\n  }\n  return best;\n}\n\n// MARK: - The cheap gate\n\n/**\n * Rule-only screening, run BEFORE the model is ever woken.\n *\n * Same posture as `mail_rules`: a 7B model on this Mac costs seconds per posting,\n * and most of a Jobindex feed is droppable on a regex. Every drop records a\n * reason — an unexplained drop is indistinguishable from a crawler bug.\n *\n * `now` is injected rather than read from the clock so the expiry branch is\n * testable without freezing time.\n */\nfunction cheapGate(posting, profile, now = new Date()) {\n  const hay = `${posting.title ?? \"\"} ${posting.description ?? \"\"}`.toLowerCase();\n\n  for (const term of profile.exclude_terms ?? []) {\n    if (term && termHit(hay, term))\n      return { verdict: \"dropped\", reason: `excluded term: ${term}` };\n  }\n\n  if (posting.valid_through) {\n    const vt = new Date(posting.valid_through);\n    // An unparseable date must NOT read as expired — that would silently drop\n    // every ad from a source with a date format we have not met yet.\n    if (!Number.isNaN(vt.getTime()) && vt < now)\n      return { verdict: \"dropped\", reason: `closed ${posting.valid_through}` };\n  }\n\n  const cats = profile.category_allow ?? [];\n  if (cats.length && Array.isArray(posting.categories) && posting.categories.length) {\n    if (!posting.categories.some((c) => cats.includes(c)))\n      return { verdict: \"dropped\", reason: `category ${posting.categories.join(\"/\")}` };\n  }\n\n  const locs = profile.locations ?? [];\n  if (locs.length && posting.location) {\n    const l = posting.location.toLowerCase();\n    const hit = locs.some((x) => l.includes(String(x).toLowerCase()));\n    // Remote overrides a location miss — a remote job in Aarhus is still viable.\n    if (!hit && posting.remote !== true)\n      return { verdict: \"dropped\", reason: `location ${posting.location}` };\n  }\n\n  const kw = profile.keywords ?? [];\n  if (kw.length && !kw.some((k) => termHit(hay, k)))\n    return { verdict: \"dropped\", reason: \"no profile keyword present\" };\n\n  return { verdict: \"pass\", reason: null };\n}\n\nconst __internal = { htmlToText, metaContent, decodeEntities, collapse };\n\n// --- node body ---\n// TheHub emits one schema.org JobPosting per job page. A page without one is\n// skipped rather than guessed at: a row with a title and no description would\n// score as a poor match for reasons that have nothing to do with the job.\nconst out = [];\nconst items = $input.all();\nfor (let i = 0; i < items.length; i++) {\n  const html = items[i].json.data ?? items[i].json.body ?? '';\n  const meta = $('Parse Sitemap').all()[i]?.json ?? {};\n  const ld = extractJobPostingLd(html);\n  if (!ld) continue;\n  const row = normalizeLdJobPosting(ld, { url: meta.url, sourceKind: 'thehub_sitemap' });\n  out.push({\n    json: {\n      ...row,\n      source_id: meta.source_id ?? null,\n      dedupe_key: dedupeKey(row.company, row.title),\n      apply_url: meta.url,\n      categories: [],\n    },\n  });\n}\nreturn out;"
+      }
+    },
+    {
+      "id": "merge",
+      "name": "Merge Sources",
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3,
+      "position": [
+        1600,
+        300
+      ],
+      "parameters": {
+        "mode": "append",
+        "numberInputs": 2
+      }
+    },
+    {
+      "id": "gate",
+      "name": "Gate",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1820,
+        300
+      ],
+      "parameters": {
+        "jsCode": "/**\n * Job-post extraction — the canonical implementation.\n *\n * Pure, dependency-free, and deliberately regex-based rather than DOM-based: this\n * file is inlined verbatim into an n8n Code node, which has no npm modules and no\n * DOM. `n8n/job-applier/README.md` describes the copy that must stay in sync.\n *\n * # Two sources, two paths — and the reason they cannot share one\n *\n * The original plan said \"one generic extractor\": Google Jobs requires schema.org\n * `JobPosting`, so most boards emit it and one parser handles everything. That is\n * true for TheHub and it is NOT true for Jobindex. Probed 2026-08-24:\n *\n *   - TheHub job page          -> one <script type=\"application/ld+json\"> JobPosting\n *   - Jobindex /vis-job/ page  -> ld+json is @type WebSite. No JobPosting anywhere.\n *   - The employer ATS behind it (HR-Manager, SuccessFactors) -> also no JSON-LD.\n *\n * So Jobindex is a genuine HTML scrape, and following the ad out to the employer's\n * ATS does not rescue it. Do not \"unify\" these two paths without re-probing.\n *\n * # What a Jobindex /vis-job/ page actually is\n *\n * A stub, not an ad: a banner image, an <h4> title link, a location span, and a\n * link out. The body text is NOT on the page — `og:description` carries only the\n * opening sentence (~160 chars). The full text is one fetch further on, at the\n * `<h4>` link, which is either the employer's own site or a `jobindex.dk/\n * jobannonce/...` page that Jobindex hosts itself. Both are handled by\n * `extractReadableText`.\n */\n\n// MARK: - Small helpers\n\nconst decodeEntities = (s) =>\n  String(s ?? \"\")\n    .replace(/&#x([0-9a-f]+);/gi, (_, h) => String.fromCodePoint(parseInt(h, 16)))\n    .replace(/&#(\\d+);/g, (_, d) => String.fromCodePoint(parseInt(d, 10)))\n    .replace(/&quot;/g, '\"')\n    .replace(/&apos;/g, \"'\")\n    .replace(/&nbsp;/g, \" \")\n    .replace(/&lt;/g, \"<\")\n    .replace(/&gt;/g, \">\")\n    .replace(/&amp;/g, \"&\"); // last: an entity may itself be &amp;-escaped\n\nconst collapse = (s) => String(s ?? \"\").replace(/\\s+/g, \" \").trim();\n\n/** Strip tags to plain text. Scripts and styles go first or their source leaks in. */\nfunction htmlToText(html) {\n  let t = String(html ?? \"\");\n  t = t.replace(/<(script|style)\\b[\\s\\S]*?<\\/\\1>/gi, \" \");\n  t = t.replace(/<!--[\\s\\S]*?-->/g, \" \");\n  t = t.replace(/<\\/(p|div|li|tr|h[1-6]|br)>/gi, \"\\n\");\n  t = t.replace(/<br\\s*\\/?>/gi, \"\\n\");\n  t = t.replace(/<[^>]+>/g, \" \");\n  t = decodeEntities(t);\n  return t\n    .split(\"\\n\")\n    .map((l) => collapse(l))\n    .filter(Boolean)\n    .join(\"\\n\");\n}\n\n/** `<meta property=\"og:x\" content=\"...\">` in either attribute order. */\nfunction metaContent(html, prop) {\n  const esc = prop.replace(/[.*+?^${}()|[\\]\\\\]/g, \"\\\\__EXTRACT_JS__\");\n  const a = new RegExp(\n    `<meta[^>]+(?:property|name)=[\"']${esc}[\"'][^>]+content=[\"']([^\"']*)[\"']`,\n    \"i\",\n  ).exec(html);\n  if (a) return decodeEntities(a[1]);\n  const b = new RegExp(\n    `<meta[^>]+content=[\"']([^\"']*)[\"'][^>]+(?:property|name)=[\"']${esc}[\"']`,\n    \"i\",\n  ).exec(html);\n  return b ? decodeEntities(b[1]) : null;\n}\n\n// MARK: - schema.org JobPosting (TheHub, and most ATS vendors)\n\n/**\n * Pull the first schema.org JobPosting out of a page's ld+json blocks.\n *\n * A block may be a bare object, an array, or a `@graph` wrapper — all three are\n * in the wild, and a parser that only handles the first silently returns null on\n * the other two, which looks exactly like \"this page has no JSON-LD\".\n */\nfunction extractJobPostingLd(html) {\n  const re = /<script[^>]*type=[\"']application\\/ld\\+json[\"'][^>]*>([\\s\\S]*?)<\\/script>/gi;\n  let m;\n  while ((m = re.exec(String(html ?? \"\"))) !== null) {\n    let parsed;\n    try {\n      parsed = JSON.parse(m[1].trim());\n    } catch {\n      continue; // one malformed block must not abort the others\n    }\n    const queue = Array.isArray(parsed) ? [...parsed] : [parsed];\n    while (queue.length) {\n      const node = queue.shift();\n      if (!node || typeof node !== \"object\") continue;\n      if (Array.isArray(node[\"@graph\"])) queue.push(...node[\"@graph\"]);\n      const t = node[\"@type\"];\n      const types = Array.isArray(t) ? t : [t];\n      if (types.includes(\"JobPosting\")) return node;\n    }\n  }\n  return null;\n}\n\nconst firstOf = (v) => (Array.isArray(v) ? v[0] : v);\n\n/** Flatten schema.org's nested address/organization shapes into flat strings. */\nfunction ldLocation(posting) {\n  const loc = firstOf(posting?.jobLocation);\n  const addr = loc?.address ?? loc;\n  if (!addr) {\n    // Fully-remote postings often carry applicantLocationRequirements instead.\n    const alr = firstOf(posting?.applicantLocationRequirements);\n    return alr?.name ?? null;\n  }\n  if (typeof addr === \"string\") return addr;\n  const parts = [addr.addressLocality, addr.addressRegion, addr.addressCountry]\n    .map((p) => (typeof p === \"object\" ? p?.name : p))\n    .filter(Boolean);\n  return parts.length ? parts.join(\", \") : null;\n}\n\nfunction normalizeLdJobPosting(posting, { url, sourceKind }) {\n  if (!posting) return null;\n  const org = firstOf(posting.hiringOrganization);\n  return {\n    source_kind: sourceKind,\n    url,\n    external_id: String(posting.identifier?.value ?? posting.identifier ?? \"\") || url,\n    title: collapse(posting.title),\n    company: collapse(typeof org === \"string\" ? org : org?.name) || null,\n    location: collapse(ldLocation(posting)) || null,\n    // `jobLocationType: \"TELECOMMUTE\"` is schema.org's only formal remote signal.\n    remote: posting.jobLocationType === \"TELECOMMUTE\" ? true : null,\n    employment_type: Array.isArray(posting.employmentType)\n      ? posting.employmentType.join(\",\")\n      : posting.employmentType ?? null,\n    posted_at: posting.datePosted ?? null,\n    valid_through: posting.validThrough ?? null,\n    description: htmlToText(posting.description ?? \"\"),\n    apply_channel: posting.directApply === true ? \"board\" : \"unknown\",\n    ld_json: posting,\n  };\n}\n\n// MARK: - Jobindex RSS\n\n/**\n * Parse a Jobindex RSS feed.\n *\n * The feed declares ISO-8859-1. Decode at the fetch boundary by the declared\n * charset — this function takes an already-decoded string and will happily store\n * mojibake if handed a UTF-8 read of latin-1 bytes.\n *\n * `<title>` is `\"<job title>, <company>\"`. Splitting on the LAST comma is\n * deliberate: \"Student Assistant, Component Sales, Semco Maritime A/S\" has two,\n * and the company is always the final segment.\n */\nfunction parseJobindexFeed(xml) {\n  const out = [];\n  const items = String(xml ?? \"\").match(/<item>[\\s\\S]*?<\\/item>/gi) ?? [];\n  for (const raw of items) {\n    const pick = (tag) => {\n      const m = new RegExp(`<${tag}>([\\\\s\\\\S]*?)</${tag}>`, \"i\").exec(raw);\n      return m ? decodeEntities(collapse(m[1])) : null;\n    };\n    const full = pick(\"title\");\n    if (!full) continue;\n    const link = pick(\"link\");\n    const idx = full.lastIndexOf(\",\");\n    const categories = [...raw.matchAll(/<category>([\\s\\S]*?)<\\/category>/gi)].map((m) =>\n      decodeEntities(collapse(m[1])),\n    );\n    out.push({\n      source_kind: \"jobindex_rss\",\n      url: link,\n      // /vis-job/h1691819 -> h1691819. Stable per ad and shorter than the URL.\n      external_id: link ? link.split(\"/\").filter(Boolean).pop() : null,\n      title: idx > 0 ? full.slice(0, idx).trim() : full,\n      company: idx > 0 ? full.slice(idx + 1).trim() : null,\n      posted_at: pick(\"pubDate\"),\n      categories,\n    });\n  }\n  return out;\n}\n\n// MARK: - Jobindex /vis-job/ stub\n\nconst NON_AD_HOSTS =\n  /(?:youtube\\.com|youtu\\.be|facebook\\.com|instagram\\.com|twitter\\.com|x\\.com|linkedin\\.com\\/(?:shar|company)|google\\.[a-z.]+\\/maps)/i;\n\n/**\n * Read a /vis-job/ stub: title, location, and the URL where the real ad lives.\n *\n * The target link comes from the `<h4>` heading, NOT from `data-click`. Jobindex\n * stamps `data-click` on every outbound link the employer pasted, so \"first\n * data-click link\" picks up the banner image link and — verified on a real ad —\n * a YouTube recruitment video. The <h4> is the ad's own title link.\n * `NON_AD_HOSTS` is a second belt on the same trousers.\n */\nfunction extractJobindexStub(html) {\n  const h = String(html ?? \"\");\n  let target = null;\n  const h4 = /<h4[^>]*>\\s*<a[^>]+href=[\"']([^\"']+)[\"']/i.exec(h);\n  if (h4) target = decodeEntities(h4[1]);\n  if (!target || NON_AD_HOSTS.test(target)) {\n    for (const m of h.matchAll(/<a[^>]+href=[\"'](https?:\\/\\/[^\"']+)[\"'][^>]*data-click=/gi)) {\n      const u = decodeEntities(m[1]);\n      if (!/jobindex\\.dk/i.test(u) && !NON_AD_HOSTS.test(u)) {\n        target = u;\n        break;\n      }\n    }\n  }\n  const area = /class=[\"'][^\"']*jix_robotjob--area[^\"']*[\"'][^>]*>([^<]*)</i.exec(h);\n  const areaText = area ? decodeEntities(collapse(area[1])) : null;\n  return {\n    title: metaContent(h, \"og:title\"),\n    // \"Bjerringbro, Hybrid position\" / \"Copenhagen (Hybrid)\" — one field, two facts.\n    location: areaText,\n    remote: areaText ? /hybrid|remote|hjemmearbejde|distance/i.test(areaText) : null,\n    lead: metaContent(h, \"og:description\"),\n    target_url: target && !NON_AD_HOSTS.test(target) ? target : null,\n  };\n}\n\n// MARK: - Readable text from an arbitrary ad page\n\n/** Cookie/consent boilerplate outweighs the ad on some pages. See below. */\nconst BOILERPLATE =\n  /(cookies og personoplysninger|vi og vores samarbejdspartnere|accepter alle|cookiepolitik|privacy policy|consent)/i;\n\n/**\n * Best-effort body text for a page with no JSON-LD.\n *\n * Tries Jobindex's own `jobcontent` container first, then falls back to the\n * largest plausible text block.\n *\n * The fallback filters `BOILERPLATE` for a concrete reason: on a Jobindex\n * `/jobannonce/` page the single largest <div> is the **cookie-consent banner**\n * (743 chars of it), which beat the real ad in a naive \"longest block wins\" pass.\n * A generic readability heuristic that skips this check silently fills the\n * database with GDPR notices, and every downstream score is then computed against\n * a cookie policy.\n */\nfunction extractReadableText(html) {\n  const h = String(html ?? \"\");\n  const named = /class=[\"'][^\"']*jobcontent[^\"']*[\"']/i.exec(h);\n  if (named) {\n    const text = htmlToText(h.slice(named.index, named.index + 30000));\n    if (text.length > 300) return text;\n  }\n  const stripped = h\n    .replace(/<(script|style|nav|header|footer|form)\\b[\\s\\S]*?<\\/\\1>/gi, \" \")\n    .replace(/<!--[\\s\\S]*?-->/g, \" \");\n  let best = \"\";\n  for (const m of stripped.matchAll(/<(?:div|section|article)\\b[^>]*>([\\s\\S]*?)<\\/(?:div|section|article)>/gi)) {\n    const text = htmlToText(m[1]);\n    if (text.length > best.length && !BOILERPLATE.test(text)) best = text;\n  }\n  return best.length > 200 ? best : htmlToText(stripped);\n}\n\n// MARK: - Dedup\n\n/**\n * Cross-source dedup key.\n *\n * The same ad reaches us from Jobindex, from TheHub and (later) from a LinkedIn\n * alert under three different URLs, so a URL-keyed dedup produces triplicates —\n * and three applications to one company, which is worse than a missed one.\n *\n * Company suffixes are stripped because sources disagree about them: \"Grundfos\n * A/S\" in a Jobindex feed is \"Grundfos\" in TheHub's hiringOrganization.\n */\nfunction dedupeKey(company, title) {\n  const norm = (s) =>\n    String(s ?? \"\")\n      .toLowerCase()\n      .normalize(\"NFKD\")\n      .replace(/[\\u0300-\\u036f]/g, \"\")\n      .replace(/\\b(a\\/s|aps|ivs|k\\/s|p\\/s|inc|ltd|llc|gmbh|ab|as|oy|bv|nv)\\b/g, \"\")\n      .replace(/[^a-z0-9]+/g, \" \")\n      .trim();\n  return `${norm(company)}::${norm(title)}`;\n}\n\n// MARK: - Keyword matching\n\n/**\n * Does `term` occur in `hay` as a whole token (or phrase)?\n *\n * ## Why this is not `hay.includes(term)`\n *\n * A live dry run over eight real ads passed a **chef** and a **Head of Legal** as\n * AI Engineering matches, and two Field Service Engineers as Game Dev. The cause\n * was substring matching: `\"ai\"` occurs inside *available*, *training* and\n * *maintenance*; `\"engine\"` occurs inside *Engineer*; `\"game\"` inside nothing\n * useful but `\"developer\"` and `\"c#\"` behaved just as loosely.\n *\n * Short keywords are the common case in a profile — `ai`, `ml`, `go`, `c#` — and\n * every one of them is a substring of ordinary English. A gate that admits\n * everything is worse than no gate: it hands the model a queue of chefs to score,\n * which costs seconds each and buries the real matches.\n *\n * `\\b` is not usable because it is defined in terms of word characters, so it\n * fails immediately after `+` or `#` — `/\\bc\\+\\+\\b/` never matches \"c++\". Hence\n * explicit lookarounds on the alphanumeric class, which handle `c++`, `c#`,\n * `.net` and multi-word phrases alike.\n *\n * The trailing class also excludes `+` and `#`, which is not cosmetic: without\n * it the keyword `c` matches \"c++\" and \"c#\", and those are three different\n * languages. `c++` as a keyword still matches \"c++ is required\" because what\n * follows the matched `++` is a space.\n */\nfunction termHit(hay, term) {\n  const t = String(term ?? \"\").toLowerCase().trim();\n  if (!t) return false;\n  const esc = t.replace(/[.*+?^${}()|[\\]\\\\]/g, \"\\\\__EXTRACT_JS__\");\n  return new RegExp(`(?<![a-z0-9])${esc}(?![a-z0-9+#])`, \"i\").test(hay);\n}\n\n/**\n * Pick the best of several description candidates: simply the longest.\n *\n * Following a Jobindex ad out to its \"apply\" link frequently lands on an\n * application *form* rather than the ad — `hr-manager.net/ApplicationInit.aspx`\n * is a live example — and the form's boilerplate is short. Taking the last\n * successful extraction therefore overwrote a decent `og:description` lead with\n * 34 characters of form furniture, which is what the dry run showed.\n *\n * Longest-wins is crude, but every candidate here is already a plausible\n * description, and the failure it prevents (silently storing a login form as the\n * job ad, then scoring against it) is much worse than occasionally keeping a\n * slightly longer one.\n */\nfunction pickDescription(...candidates) {\n  let best = \"\";\n  for (const c of candidates) {\n    const s = typeof c === \"string\" ? c.trim() : \"\";\n    if (s.length > best.length) best = s;\n  }\n  return best;\n}\n\n// MARK: - The cheap gate\n\n/**\n * Rule-only screening, run BEFORE the model is ever woken.\n *\n * Same posture as `mail_rules`: a 7B model on this Mac costs seconds per posting,\n * and most of a Jobindex feed is droppable on a regex. Every drop records a\n * reason — an unexplained drop is indistinguishable from a crawler bug.\n *\n * `now` is injected rather than read from the clock so the expiry branch is\n * testable without freezing time.\n */\nfunction cheapGate(posting, profile, now = new Date()) {\n  const hay = `${posting.title ?? \"\"} ${posting.description ?? \"\"}`.toLowerCase();\n\n  for (const term of profile.exclude_terms ?? []) {\n    if (term && termHit(hay, term))\n      return { verdict: \"dropped\", reason: `excluded term: ${term}` };\n  }\n\n  if (posting.valid_through) {\n    const vt = new Date(posting.valid_through);\n    // An unparseable date must NOT read as expired — that would silently drop\n    // every ad from a source with a date format we have not met yet.\n    if (!Number.isNaN(vt.getTime()) && vt < now)\n      return { verdict: \"dropped\", reason: `closed ${posting.valid_through}` };\n  }\n\n  const cats = profile.category_allow ?? [];\n  if (cats.length && Array.isArray(posting.categories) && posting.categories.length) {\n    if (!posting.categories.some((c) => cats.includes(c)))\n      return { verdict: \"dropped\", reason: `category ${posting.categories.join(\"/\")}` };\n  }\n\n  const locs = profile.locations ?? [];\n  if (locs.length && posting.location) {\n    const l = posting.location.toLowerCase();\n    const hit = locs.some((x) => l.includes(String(x).toLowerCase()));\n    // Remote overrides a location miss — a remote job in Aarhus is still viable.\n    if (!hit && posting.remote !== true)\n      return { verdict: \"dropped\", reason: `location ${posting.location}` };\n  }\n\n  const kw = profile.keywords ?? [];\n  if (kw.length && !kw.some((k) => termHit(hay, k)))\n    return { verdict: \"dropped\", reason: \"no profile keyword present\" };\n\n  return { verdict: \"pass\", reason: null };\n}\n\nconst __internal = { htmlToText, metaContent, decodeEntities, collapse };\n\n// --- node body ---\n// Rule-only screening, before any model runs. Most of a Jobindex feed is\n// droppable on a regex, and a 7B model on this Mac costs seconds per posting.\n//\n// A posting that fails the gate for EVERY profile is not posted at all — storing\n// universally-rejected ads would fill the table with the 95% of the Danish job\n// market that is not a software job. A posting that passes for at least one\n// profile is posted with a verdict per profile, so a drop stays auditable.\nconst ctx = $('Fan Out Sources').first().json;\nconst profiles = ctx.profiles || [];\nconst now = new Date();\nconst out = [];\n\nfor (const item of $input.all()) {\n  const p = item.json;\n  const matches = profiles.map((profile) => {\n    const g = cheapGate(p, profile, now);\n    return {\n      profile_id: profile.id,\n      gate_verdict: g.verdict,\n      gate_reason: g.reason,\n      score: null,\n    };\n  });\n  if (!matches.some((m) => m.gate_verdict === 'pass')) continue;\n  const { categories, ...row } = p;\n  out.push({ json: { ...row, matches } });\n}\nreturn out;"
+      }
+    },
+    {
+      "id": "post",
+      "name": "Post to job-ingest",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2040,
+        300
+      ],
+      "parameters": {
+        "jsCode": "// Batch every surviving posting into one request. job-ingest caps a batch at 200.\nconst postings = $input.all().map((i) => i.json);\nif (postings.length === 0) return [];\nreturn [{ json: { user_id: $env.NEXUS_USER_ID, postings } }];"
+      }
+    },
+    {
+      "id": "send",
+      "name": "Send",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2260,
+        300
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.NEXUS_SUPABASE_URL }}/functions/v1/job-ingest",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "X-Job-Key",
+              "value": "={{ $env.JOB_INGEST_KEY }}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json) }}",
+        "options": {}
+      }
+    }
+  ],
+  "connections": {
+    "Every 4 Hours": {
+      "main": [
+        [
+          {
+            "node": "Load Config",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Load Config": {
+      "main": [
+        [
+          {
+            "node": "Fan Out Sources",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fan Out Sources": {
+      "main": [
+        [
+          {
+            "node": "Route Source",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Route Source": {
+      "main": [
+        [
+          {
+            "node": "Fetch Jobindex Feed",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Fetch TheHub Sitemap",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch Jobindex Feed": {
+      "main": [
+        [
+          {
+            "node": "Parse Feed",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse Feed": {
+      "main": [
+        [
+          {
+            "node": "Fetch Ad Stub",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch Ad Stub": {
+      "main": [
+        [
+          {
+            "node": "Parse Stub",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse Stub": {
+      "main": [
+        [
+          {
+            "node": "Fetch Ad Body",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch Ad Body": {
+      "main": [
+        [
+          {
+            "node": "Build Jobindex Posting",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Jobindex Posting": {
+      "main": [
+        [
+          {
+            "node": "Merge Sources",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch TheHub Sitemap": {
+      "main": [
+        [
+          {
+            "node": "Parse Sitemap",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse Sitemap": {
+      "main": [
+        [
+          {
+            "node": "Fetch Hub Job",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch Hub Job": {
+      "main": [
+        [
+          {
+            "node": "Build Hub Posting",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Hub Posting": {
+      "main": [
+        [
+          {
+            "node": "Merge Sources",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "Merge Sources": {
+      "main": [
+        [
+          {
+            "node": "Gate",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Gate": {
+      "main": [
+        [
+          {
+            "node": "Post to job-ingest",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Post to job-ingest": {
+      "main": [
+        [
+          {
+            "node": "Send",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  }
+}

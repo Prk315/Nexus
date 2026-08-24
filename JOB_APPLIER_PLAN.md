@@ -59,14 +59,34 @@ Two things to do something about:
 
 ---
 
-## 2. The architecture decision: three discoverers, one extractor
+## 2. The architecture decision: three discoverers, two extractors
 
-The instinct is to write a scraper per site. Don't. Google Jobs requires
-schema.org `JobPosting` for a listing to be indexed, so essentially every modern
-board and ATS — TheHub, Teamtailor, HR-ON, Greenhouse, Lever, Workday — emits it.
-Verified on TheHub: one `<script type="application/ld+json">` per job page with
-`title`, `description`, `datePosted`, `validThrough`, `hiringOrganization`,
-`employmentType`, `jobLocation`, `directApply`.
+> ⚠️ **Corrected 2026-08-24 after building it.** This section originally claimed
+> *one* generic extractor, on the reasoning that Google Jobs requires schema.org
+> `JobPosting` so every board emits it. That is true for TheHub and **false for
+> Jobindex**, which is half the point of the project. What was actually found:
+>
+> | Page | JSON-LD |
+> |---|---|
+> | TheHub job page | ✅ one `JobPosting` block |
+> | Jobindex `/vis-job/` | ❌ `@type` is `WebSite` |
+> | The employer ATS behind a Jobindex ad (HR-Manager, SuccessFactors) | ❌ none |
+>
+> So following the ad out to the employer does not rescue it either. Jobindex is a
+> genuine HTML scrape and has its own path. The generic JSON-LD extractor is still
+> right for TheHub and will still pay off for Teamtailor/Greenhouse/Lever/Workday
+> when those are added — it is just not universal.
+
+The instinct is to write a scraper per site. Mostly resist it: Google Jobs requires
+schema.org `JobPosting` for a listing to be indexed, so most modern boards and ATS
+vendors emit it. Verified on TheHub: one `<script type="application/ld+json">` per
+job page with `title`, `description`, `datePosted`, `validThrough`,
+`hiringOrganization`, `employmentType`, `jobLocation`, `directApply`.
+
+**A Jobindex `/vis-job/` page is a stub, not an ad**: a banner image, an `<h4>`
+title link, a location span, and a link out. `og:description` carries only the
+opening sentence (~160 chars). The body is one fetch further on — at either the
+employer's site or a `jobindex.dk/jobannonce/` page Jobindex hosts itself.
 
 So the pipeline splits in two, and only the top half is source-specific:
 
@@ -192,6 +212,31 @@ Triggered two ways — a 4-hourly schedule, and a claim against `n8n_requests`
 10. **Complete the queue row** via `n8n-requests`.
 
 ---
+
+## 4b. What phase 1 shipped, and the two bugs the dry run caught
+
+Built 2026-08-24: `n8n/job-applier/` (extractor + 29 tests + workflow generator +
+live dry-run harness), `supabase/migrations/20260824120000_job_pipeline.sql`, and
+the `job-ingest` edge function. See that folder's README to set it up.
+
+Two bugs were invisible to the fixture tests and obvious the moment the pipeline
+ran against live listings. Both are worth remembering because both are the kind
+that produce *plausible* output rather than an error:
+
+1. **The gate matched substrings, not words.** A chef and a Head of Legal passed
+   as *AI Engineering*, because `ai` occurs inside "available", "training" and
+   "maintenance", and `engine` inside "Engineer". Short keywords — `ai`, `ml`,
+   `go`, `c#` — are the normal case in a profile and every one is a substring of
+   ordinary English. 7 of 8 postings passed. After the fix: 1 of 11. Note `\b` is
+   unusable here, since it fails immediately after `+` or `#`.
+2. **The "apply" link is often an application form, not the ad.**
+   `hr-manager.net/ApplicationInit.aspx` is a live example. Taking the last
+   successful extraction replaced a 161-char `og:description` lead with 34
+   characters of form furniture; descriptions came back at 34–65 chars. Picking
+   the longest candidate fixed it — they now range 108–9,492.
+
+The lesson generalizes: **fixtures test the parser, the dry run tests the
+pipeline.** Run `node harvest-dryrun.mjs` after any extractor change.
 
 ## 5. Traps
 
