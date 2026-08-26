@@ -74,6 +74,7 @@ export function mapPlan(r: any, taskCount = 0, doneCount = 0): Plan {
     purpose: r.purpose,
     problem: r.problem,
     solution: r.solution,
+    team_id: r.team_id ?? null,
   };
 }
 
@@ -140,6 +141,8 @@ export function mapTaskBase(r: any) {
     aggregate_estimate: r.aggregate_estimate ?? r.time_estimate ?? 0,
     kanban_status: r.kanban_status ?? "backlog",
     category: r.category ?? null,
+    team_id: r.team_id ?? null,
+    assigned_to: r.assigned_to ?? null,
   };
 }
 

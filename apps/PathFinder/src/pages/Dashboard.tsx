@@ -9,6 +9,8 @@ import { useEffect, useState, useCallback, useMemo } from "react";
 import { PanelRight, PanelRightClose } from "lucide-react";
 import { getGoals, getPlans, getAllTasks, getSystems, toggleTask, createTask, updateTask, deleteTask, toTaskWithContext, getTaskSessionsInRange, logTaskSession, unlogTaskOccurrence, getCalBlocks, createCalBlock, updateCalBlock, deleteCalBlock, getDailyGoals, setDailyPrimaryGoal, clearDailyPrimaryGoal, addDailySecondaryGoal, updateDailySecondaryGoal, deleteDailySecondaryGoal, getCourseAssignments, updateCourseAssignment, getScheduleEntriesForDate, getHabitsForDate, toggleHabitCompletion, getHabitStacks, getTrainingSessionsForDate } from "../lib/api";
 import { blockMinutes } from "../lib/taskTree";
+import { isTaskRelevantToMe } from "../lib/team";
+import { getUserId } from "../lib/supabase";
 import type { Goal, Plan, TaskWithContext, SystemEntry, CalBlock, DailyGoals, DailyPrimaryGoal, CourseAssignment, ScheduleEntry, HabitWithCompletion, HabitStack, TrainingSession, TaskSession } from "../types";
 import { DCBlockDraft, timeToMin, todayDate } from "../components/dashboard/_shared";
 import { DayCalendar } from "../components/dashboard/DayCalendar";
@@ -72,7 +74,8 @@ export function Dashboard() {
       getCourseAssignments(), getScheduleEntriesForDate(date), getHabitsForDate(date), getHabitStacks(),
       getTrainingSessionsForDate(date), getTaskSessionsInRange(date, date),
     ]);
-    setGoals(g); setPlans(p); setTasks(t); setSystems(s); setCalBlocks(cb);
+    const myUid = getUserId();
+    setGoals(g); setPlans(p); setTasks(t.filter((x) => isTaskRelevantToMe(x, myUid))); setSystems(s); setCalBlocks(cb);
     setDailyGoals(dg);
     setCourseAssignments(cas.filter((ca) => ca.due_date === date));
     setScheduleEntries(ses);
@@ -196,7 +199,7 @@ export function Dashboard() {
   const handleCreateTask = async (payload: { plan_id?: number | null; title: string; priority?: string; due_date?: string | null; category?: string | null }) => {
     await createTask(payload);
     const t = await getAllTasks();
-    setTasks(t);
+    setTasks(t.filter((x) => isTaskRelevantToMe(x, getUserId())));
   };
 
   const handleDeleteTask = async (id: number) => {
@@ -207,7 +210,7 @@ export function Dashboard() {
   const handleUpdateTask = async (id: number, payload: { title: string; priority: string; due_date?: string | null; category?: string | null }) => {
     await updateTask(id, payload);
     const t = await getAllTasks();
-    setTasks(t);
+    setTasks(t.filter((x) => isTaskRelevantToMe(x, getUserId())));
   };
 
   const handleSetPrimary = async (payload: DailyPrimaryGoal) => {

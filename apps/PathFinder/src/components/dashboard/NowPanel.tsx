@@ -7,11 +7,12 @@
 //
 // The ranking is in lib/nextUp.ts, pure and tested. This file only renders it.
 
-import { CalendarClock, Check, AlertTriangle, Target, Play } from "lucide-react";
+import { CalendarClock, Check, AlertTriangle, Target, Play, Users } from "lucide-react";
 import { cn } from "../../lib/utils";
 import { formatMinutes, planningOf, isFullTask } from "../../lib/taskTree";
 import { UrgencyMeter } from "../UrgencyMeter";
 import { PriorityDot } from "../PriorityDot";
+import { memberName } from "../../lib/api";
 import type { NextUpItem, NextUpKind } from "../../lib/nextUp";
 import type { TaskWithContext } from "../../types";
 
@@ -87,6 +88,16 @@ export function NowPanel({ items, blockedCount, onOpen, onLogSession, onSchedule
             >
               {task.title}
             </button>
+
+            {task.team_id != null && (
+              <span
+                className="shrink-0 inline-flex items-center text-muted-foreground/50"
+                title={task.assigned_to != null && task.assigned_to !== "all"
+                  ? `Team task · ${memberName(task.assigned_to)}` : "Team task · everyone"}
+              >
+                <Users className="h-2.5 w-2.5" />
+              </span>
+            )}
 
             {/* What it's for — only meaningful once a task points at a goal. */}
             {task.goal_title && (

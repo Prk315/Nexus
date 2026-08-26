@@ -3,6 +3,7 @@
 import {
   TASK_SELECT_CTX, expandScheduleEntries, mapCourseAssignment, mapDeadline, mapGoal, mapPlan, mapScheduleEntry, mapTaskWithContext, supabase, getUserId,
 } from "./_shared";
+import { getTeamOrFilter } from "./teams";
 import type {
   WeekItems,
 } from "../../types";
@@ -13,6 +14,18 @@ import { mapTrainingSession, expandTrainingSessions } from "./training";
 // ═══════════════════════════════════════════════════════════════════════════
 
 export const getWeekItems = async (startDate: string, endDate: string): Promise<WeekItems> => {
+  const orFilter = await getTeamOrFilter();
+
+  let tasksQ = supabase.from("pf_tasks")
+    .select(TASK_SELECT_CTX)
+    .gte("due_date", startDate).lte("due_date", endDate);
+  tasksQ = orFilter ? tasksQ.or(orFilter) : tasksQ.eq("user_id", getUserId());
+
+  let plansQ = supabase.from("pf_plans")
+    .select("*").eq("status", "active")
+    .not("deadline", "is", null).gte("deadline", startDate).lte("deadline", endDate);
+  plansQ = orFilter ? plansQ.or(orFilter) : plansQ.eq("user_id", getUserId());
+
   const [
     { data: tasks },
     { data: plans },
@@ -35,13 +48,8 @@ export const getWeekItems = async (startDate: string, endDate: string): Promise<
     // — the score could only ever read 0%. The consumers all filter for
     // themselves (the right rail even has a done-tasks section that had never
     // once been populated), so the fix belongs here rather than at each of them.
-    supabase.from("pf_tasks")
-      .select(TASK_SELECT_CTX)
-      .eq("user_id", getUserId())
-      .gte("due_date", startDate).lte("due_date", endDate),
-    supabase.from("pf_plans")
-      .select("*").eq("user_id", getUserId()).eq("status", "active")
-      .not("deadline", "is", null).gte("deadline", startDate).lte("deadline", endDate),
+    tasksQ,
+    plansQ,
     supabase.from("pf_goals")
       .select("*, pf_goal_groups(name, color)").eq("user_id", getUserId()).eq("status", "active"),
     supabase.from("pf_deadlines")

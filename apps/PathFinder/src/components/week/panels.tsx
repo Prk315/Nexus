@@ -1,8 +1,8 @@
 // The surrounding panels: systems bar, header completion strip, left plans rail, right task/deadline rail.
 
 import { useState } from "react";
-import { ChevronRight, ChevronDown, Plus, Check, Target, ListChecks, CheckSquare, RefreshCw, Flame, Flag, GraduationCap } from "lucide-react";
-import { getCaSubtasks, toggleCaSubtask } from "../../lib/api";
+import { ChevronRight, ChevronDown, Plus, Check, Target, ListChecks, CheckSquare, RefreshCw, Flame, Flag, GraduationCap, Users } from "lucide-react";
+import { getCaSubtasks, toggleCaSubtask, memberName } from "../../lib/api";
 import { cn } from "../../lib/utils";
 import { isDue } from "../../components/workspace/systemForms";
 import { PRIORITY_CHIP_CHECK } from "../task/taskVisual";
@@ -431,6 +431,12 @@ export function RightPanel({ tasks, deadlines, courseAssignments, today, interac
                   )}
                 />
                 <span className="flex-1 text-xs text-foreground leading-tight truncate">{t.title}</span>
+                {t.team_id != null && (
+                  <Users
+                    className="h-2.5 w-2.5 shrink-0 text-muted-foreground/50"
+                    aria-label={t.assigned_to != null && t.assigned_to !== "all" ? `Team task · ${memberName(t.assigned_to)}` : "Team task · everyone"}
+                  />
+                )}
                 {daysTag(t.due_date ?? null)}
               </div>
             );

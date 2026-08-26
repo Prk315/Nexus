@@ -20,6 +20,10 @@ export type Selection =
   | { kind: "goal"; id: number }
   | { kind: "plan"; id: number };
 
+/** Mirrors TaskBoardScope — personal shows goals+plans as before, team hides
+ *  goals (they're a personal concept) and scopes plans to the one team. */
+export type NavigatorScope = { kind: "personal" } | { kind: "team"; teamId: string };
+
 // ── Plan form ─────────────────────────────────────────────────────────────────
 interface PlanFormState { title: string; description: string; deadline: string; goal_id: number | null; tags: string; }
 
@@ -88,11 +92,14 @@ function RowButton({ title, onClick, children }: { title: string; onClick: () =>
   );
 }
 
-export function Navigator({ selection, onSelect, onDataChange }: {
+export function Navigator({ selection, onSelect, onDataChange, scope = { kind: "personal" } }: {
   selection: Selection;
   onSelect: (s: Selection) => void;
   onDataChange: () => void; // notify parent so the task board reloads
+  scope?: NavigatorScope;
 }) {
+  const isTeam = scope.kind === "team";
+  const teamId = scope.kind === "team" ? scope.teamId : null;
   const [goals, setGoals] = useState<Goal[]>([]);
   const [groups, setGroups] = useState<GoalGroup[]>([]);
   const [plans, setPlans] = useState<Plan[]>([]);
@@ -114,8 +121,12 @@ export function Navigator({ selection, onSelect, onDataChange }: {
 
   const refresh = async () => { await load(); onDataChange(); };
 
-  // Plans that hold tasks (exclude schedule/course containers).
-  const taskPlans = useMemo(() => plans.filter((p) => !p.is_schedule && !p.is_course), [plans]);
+  // Plans that hold tasks (exclude schedule/course containers), scoped to
+  // this team on the Team page — same split TaskBoard applies to tasks.
+  const taskPlans = useMemo(
+    () => plans.filter((p) => !p.is_schedule && !p.is_course && (teamId ? p.team_id === teamId : p.team_id == null)),
+    [plans, teamId],
+  );
   const plansByGoal = useMemo(() => {
     const m = new Map<number | null, Plan[]>();
     for (const p of taskPlans) {
@@ -164,11 +175,15 @@ export function Navigator({ selection, onSelect, onDataChange }: {
 
   const savePlan = async (f: PlanFormState) => {
     const tags = f.tags.trim() || null;
+    // Goals are personal (hidden entirely in team scope), so a team plan never
+    // carries one — f.goal_id is always null here anyway since PlanForm is
+    // handed an empty goals list, but pin it explicitly rather than trust that.
+    const goal_id = isTeam ? null : f.goal_id;
     if (planDialog?.mode === "edit") {
       const p = planDialog.plan;
-      await updatePlan(p.id, { goal_id: f.goal_id, title: f.title.trim(), description: f.description || null, deadline: f.deadline || null, status: p.status, tags });
+      await updatePlan(p.id, { goal_id, title: f.title.trim(), description: f.description || null, deadline: f.deadline || null, status: p.status, tags });
     } else {
-      await createPlan({ goal_id: f.goal_id, title: f.title.trim(), description: f.description || null, deadline: f.deadline || null, tags });
+      await createPlan({ goal_id, title: f.title.trim(), description: f.description || null, deadline: f.deadline || null, tags, team_id: teamId });
     }
     setPlanDialog(null); refresh();
   };
@@ -250,16 +265,20 @@ export function Navigator({ selection, onSelect, onDataChange }: {
         <ListTree className="h-4 w-4 text-violet-500" />
         <span className="text-sm font-semibold text-foreground">Navigator</span>
         <div className="flex-1" />
-        <button
-          onClick={() => setShowAll((v) => !v)}
-          title={showAll ? "Showing all goals" : "Showing active goals"}
-          className={cn("h-6 px-1.5 text-[10px] font-medium rounded border transition-colors",
-            showAll ? "border-primary/40 text-primary" : "border-border text-muted-foreground hover:text-foreground")}
-        >
-          {showAll ? "All" : "Active"}
-        </button>
-        <RowButton title="Manage groups" onClick={() => setGroupsOpen(true)}><FolderKanban className="h-3.5 w-3.5" /></RowButton>
-        <RowButton title="New goal" onClick={() => setCreateGoalOpen(true)}><Plus className="h-4 w-4" /></RowButton>
+        {!isTeam && (
+          <>
+            <button
+              onClick={() => setShowAll((v) => !v)}
+              title={showAll ? "Showing all goals" : "Showing active goals"}
+              className={cn("h-6 px-1.5 text-[10px] font-medium rounded border transition-colors",
+                showAll ? "border-primary/40 text-primary" : "border-border text-muted-foreground hover:text-foreground")}
+            >
+              {showAll ? "All" : "Active"}
+            </button>
+            <RowButton title="Manage groups" onClick={() => setGroupsOpen(true)}><FolderKanban className="h-3.5 w-3.5" /></RowButton>
+            <RowButton title="New goal" onClick={() => setCreateGoalOpen(true)}><Plus className="h-4 w-4" /></RowButton>
+          </>
+        )}
       </div>
 
       {/* Tree */}
@@ -277,42 +296,52 @@ export function Navigator({ selection, onSelect, onDataChange }: {
 
         <div className="h-px bg-border my-1" />
 
-        {/* Groups → goals → plans */}
-        {groups.map((grp) => {
-          const gs = goalsByGroup.get(grp.id) ?? [];
-          if (gs.length === 0) return null;
-          const key = `grp-${grp.id}`;
-          const expanded = !expandedGroups.has(key); // default expanded
-          const col = colorFor(grp.color);
-          return (
-            <div key={grp.id}>
-              <button
-                onClick={() => toggleGroup(key)}
-                className="w-full flex items-center gap-1 px-1 py-1 text-xs font-semibold uppercase tracking-wide text-muted-foreground hover:text-foreground"
-              >
-                {expanded ? <ChevronDown className="h-3 w-3" /> : <ChevronRight className="h-3 w-3" />}
-                <span className={cn("px-1.5 py-0.5 rounded-full", col.bg, col.text)}>{grp.name}</span>
-                <span className="opacity-50">{gs.length}</span>
-              </button>
-              {expanded && <div className="flex flex-col gap-0.5">{gs.map((g) => GoalNode(g))}</div>}
-            </div>
-          );
-        })}
-
-        {/* Ungrouped goals */}
-        {ungrouped.length > 0 && (
-          <div className="flex flex-col gap-0.5 mt-1">
-            {groups.length > 0 && <div className="px-1 py-1 text-xs font-semibold uppercase tracking-wide text-muted-foreground/60">Ungrouped</div>}
-            {ungrouped.map((g) => GoalNode(g))}
+        {isTeam ? (
+          // Team scope: no goals (they're a personal concept), just this
+          // team's plans as a flat list.
+          <div className="flex flex-col gap-0.5">
+            {taskPlans.map((p) => PlanNode(p))}
           </div>
-        )}
+        ) : (
+          <>
+            {/* Groups → goals → plans */}
+            {groups.map((grp) => {
+              const gs = goalsByGroup.get(grp.id) ?? [];
+              if (gs.length === 0) return null;
+              const key = `grp-${grp.id}`;
+              const expanded = !expandedGroups.has(key); // default expanded
+              const col = colorFor(grp.color);
+              return (
+                <div key={grp.id}>
+                  <button
+                    onClick={() => toggleGroup(key)}
+                    className="w-full flex items-center gap-1 px-1 py-1 text-xs font-semibold uppercase tracking-wide text-muted-foreground hover:text-foreground"
+                  >
+                    {expanded ? <ChevronDown className="h-3 w-3" /> : <ChevronRight className="h-3 w-3" />}
+                    <span className={cn("px-1.5 py-0.5 rounded-full", col.bg, col.text)}>{grp.name}</span>
+                    <span className="opacity-50">{gs.length}</span>
+                  </button>
+                  {expanded && <div className="flex flex-col gap-0.5">{gs.map((g) => GoalNode(g))}</div>}
+                </div>
+              );
+            })}
 
-        {/* Plans with no goal */}
-        {orphanPlans.length > 0 && (
-          <div className="flex flex-col gap-0.5 mt-2">
-            <div className="px-1 py-1 text-xs font-semibold uppercase tracking-wide text-muted-foreground/60">No goal</div>
-            {orphanPlans.map((p) => PlanNode(p))}
-          </div>
+            {/* Ungrouped goals */}
+            {ungrouped.length > 0 && (
+              <div className="flex flex-col gap-0.5 mt-1">
+                {groups.length > 0 && <div className="px-1 py-1 text-xs font-semibold uppercase tracking-wide text-muted-foreground/60">Ungrouped</div>}
+                {ungrouped.map((g) => GoalNode(g))}
+              </div>
+            )}
+
+            {/* Plans with no goal */}
+            {orphanPlans.length > 0 && (
+              <div className="flex flex-col gap-0.5 mt-2">
+                <div className="px-1 py-1 text-xs font-semibold uppercase tracking-wide text-muted-foreground/60">No goal</div>
+                {orphanPlans.map((p) => PlanNode(p))}
+              </div>
+            )}
+          </>
         )}
 
         <div className="pt-2">
@@ -350,7 +379,7 @@ export function Navigator({ selection, onSelect, onDataChange }: {
         <Dialog open onOpenChange={(o) => { if (!o) setPlanDialog(null); }}>
           <DialogContent title={planDialog.mode === "edit" ? "Edit plan" : "New plan"}>
             <PlanForm
-              goals={visibleGoals}
+              goals={isTeam ? [] : visibleGoals}
               submitLabel={planDialog.mode === "edit" ? "Save" : "Create"}
               onSubmit={savePlan}
               onClose={() => setPlanDialog(null)}

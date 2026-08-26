@@ -116,6 +116,8 @@ export interface Plan {
   purpose: string | null;
   problem: string | null;
   solution: string | null;
+  /** Owning team, or null for a plan that belongs to one person. */
+  team_id: string | null;
 }
 
 /**
@@ -159,6 +161,13 @@ export interface TaskBase {
   aggregate_estimate: number;
   kanban_status: string;
   category: TaskCategory | null;
+  /** Owning team, or null for a task that belongs to one person. */
+  team_id: string | null;
+  /**
+   * Who a team task is for: null = unassigned, `"all"` = every member, else a
+   * specific member's user id. Meaningless (and unused) when `team_id` is null.
+   */
+  assigned_to: string | null;
 }
 
 export interface Task extends TaskBase {

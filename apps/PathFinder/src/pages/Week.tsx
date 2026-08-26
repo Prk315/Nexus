@@ -11,6 +11,8 @@ import { loadActualWeek, loadSleepWeek } from "../lib/actual";
 import { Button } from "../components/ui/button";
 import { cn } from "../lib/utils";
 import { blockMinutes, subtreeNode, unscheduledMinutes } from "../lib/taskTree";
+import { isTaskRelevantToMe } from "../lib/team";
+import { getUserId } from "../lib/supabase";
 import type { Goal, Plan, TaskWithContext, SystemEntry, WeekItems, CalBlock, Deadline, CourseAssignment, TaskSession, TaskCoverage } from "../types";
 import { BLOCK_COLORS, DAY_NAMES, DEFAULT_SCROLL_HOUR, HOURS, HOUR_PX, HOUR_PX_STORAGE_KEY, HOUR_START, MONTHS, ModalState, addDays, clampChildSpan, clampHourPx, externalDragDurationMin, pxToMinutes, minutesToPx, timeToMinutes, toISO, todayISO, weekStart, zoomHourPx } from "../components/week/_shared";
 import { CalBlockModal, TaskModal, GoalModal, PlanModal, SystemModal, TypePickerModal } from "../components/week/modals";
@@ -135,8 +137,10 @@ export function Week() {
       getCalBlocks(queryStart, queryEnd), getDeadlines(), getAllTasks(),
       getTaskSessionsInRange(queryStart, queryEnd), getTaskScheduling(),
     ]);
-    setItems(wi); setAllGoals(gp); setAllPlans(pl); setSystems(sy); setCalBlocks(cb);
-    setAllDeadlines(dl); setAllTasks(at);
+    const myUid = getUserId();
+    setItems({ ...wi, tasks: wi.tasks.filter((x) => isTaskRelevantToMe(x, myUid)) });
+    setAllGoals(gp); setAllPlans(pl); setSystems(sy); setCalBlocks(cb);
+    setAllDeadlines(dl); setAllTasks(at.filter((x) => isTaskRelevantToMe(x, myUid)));
     setSessionsByBlock(new Map(
       ts.filter((x) => x.cal_block_id != null).map((x) => [x.cal_block_id!, x]),
     ));

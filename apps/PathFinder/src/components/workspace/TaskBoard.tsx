@@ -8,7 +8,7 @@ import { Plus, Search, ListChecks, AlertTriangle, ListTree } from "lucide-react"
 import {
   useTasks, usePlans, useToggleTask, useDeleteTask, useUpdateTask,
   useRescheduleTask, useMoveTask, useCreateTask, useReorderTasks,
-  useSetKanbanStatus, useSetPriority,
+  useSetKanbanStatus, useSetPriority, useSetAssignee,
 } from "../../hooks/useTasks";
 import { useTaskScheduling, useSetTaskMatrix, useSetTaskStage } from "../../hooks/useTaskPlanning";
 import { qk } from "../../lib/queryClient";
@@ -26,9 +26,16 @@ import { TaskRow, type RowPlanning } from "./TaskRow";
 import {
   AddTaskForm, EditTaskForm, ReschedulePopover, SubtypeFields, type TaskFormState,
 } from "./TaskDialogs";
-import { getTaskSubtype, saveTaskSubtype } from "../../lib/api";
+import { getTaskSubtype, saveTaskSubtype, getTeamMembers, type TeamMember } from "../../lib/api";
 import { TaskPlanner } from "./TaskPlanner";
 import { StudySection } from "./StudySection";
+
+/**
+ * What board this is. Personal is the default everywhere except the Team
+ * page — `pages/Workspace.tsx` never passes this, so it keeps seeing exactly
+ * the tasks/plans it always did (`team_id == null`).
+ */
+export type TaskBoardScope = { kind: "personal" } | { kind: "team"; teamId: string };
 
 type GroupMode = "time" | "matrix" | "stage" | "plan" | "goal" | "priority" | "status";
 
@@ -128,14 +135,26 @@ function byDueThenPriority(a: TaskWithContext, b: TaskWithContext) {
   return PRIORITY_RANK[a.priority] - PRIORITY_RANK[b.priority];
 }
 
-export function TaskBoard({ selectedPlanId, selectedGoalId, reloadSignal }: {
+export function TaskBoard({ selectedPlanId, selectedGoalId, reloadSignal, scope = { kind: "personal" } }: {
   selectedPlanId?: number | null;
   selectedGoalId?: number | null;
   reloadSignal?: number;
+  scope?: TaskBoardScope;
 }) {
   const { data: tasks = [] } = useTasks();
   const { data: plans = [] } = usePlans();
   const { data: coverage = new Map() } = useTaskScheduling();
+  const teamId = scope.kind === "team" ? scope.teamId : null;
+
+  // Team members, for the assignment control — fetched once per team, not
+  // per row. Empty on the personal board, where nothing renders it.
+  const [teamMembers, setTeamMembers] = useState<TeamMember[]>([]);
+  useEffect(() => {
+    if (!teamId) { setTeamMembers([]); return; }
+    let live = true;
+    getTeamMembers(teamId).then((m) => { if (live) setTeamMembers(m); }).catch(() => {});
+    return () => { live = false; };
+  }, [teamId]);
   const [group, setGroup] = useState<GroupMode>("time");
   const [search, setSearch] = useState("");
   const [showDone, setShowDone] = useState(false);
@@ -163,8 +182,13 @@ export function TaskBoard({ selectedPlanId, selectedGoalId, reloadSignal }: {
     qc.invalidateQueries({ queryKey: qk.plans });
   }, [reloadSignal, qc]);
 
-  // Plans that hold tasks (exclude schedule/course containers).
-  const taskPlans = useMemo(() => plans.filter((p) => !p.is_schedule && !p.is_course), [plans]);
+  // Plans that hold tasks (exclude schedule/course containers), scoped the
+  // same way tasks are — a personal board must not offer a team's plan in the
+  // "move to plan" / "new task" pickers, and vice versa.
+  const taskPlans = useMemo(
+    () => plans.filter((p) => !p.is_schedule && !p.is_course && (teamId ? p.team_id === teamId : p.team_id == null)),
+    [plans, teamId],
+  );
 
   // Mutation hooks — each optimistically patches the tasks cache (see useTasks.ts).
   const toggle = useToggleTask();
@@ -178,6 +202,7 @@ export function TaskBoard({ selectedPlanId, selectedGoalId, reloadSignal }: {
   const setPriority = useSetPriority();
   const setMatrix = useSetTaskMatrix();
   const setStage = useSetTaskStage();
+  const setAssignee = useSetAssignee();
 
   // ── Breakdown-aware facts, computed once per task list ──────────────────────
   // The forest is built from every task (not the filtered view) so a parent's
@@ -257,9 +282,10 @@ export function TaskBoard({ selectedPlanId, selectedGoalId, reloadSignal }: {
       if (selectedPlanId != null && t.plan_id !== selectedPlanId) return false;
       if (selectedGoalId != null && t.goal_id !== selectedGoalId) return false;
       if (planFilter && String(t.plan_id) !== planFilter) return false;
+      if (teamId ? t.team_id !== teamId : t.team_id != null) return false;
       return true;
     });
-  }, [tasks, search, showDone, showSteps, planFilter, selectedPlanId, selectedGoalId]);
+  }, [tasks, search, showDone, showSteps, planFilter, selectedPlanId, selectedGoalId, teamId]);
 
   const buckets = useMemo<Bucket[]>(() => {
     const open = filtered.filter((t) => !t.done);
@@ -374,6 +400,7 @@ export function TaskBoard({ selectedPlanId, selectedGoalId, reloadSignal }: {
       urgency: form.urgency,
       due_date: form.due_date || null,
       time_estimate: form.time_estimate ? Number(form.time_estimate) : null,
+      team_id: teamId,
     });
     setAdding(false);
   };
@@ -393,6 +420,11 @@ export function TaskBoard({ selectedPlanId, selectedGoalId, reloadSignal }: {
       showContext={group !== "plan"}
       planning={planningFor(t)}
       reorder={extra?.reorder}
+      assignment={teamId ? {
+        members: teamMembers,
+        value: t.assigned_to,
+        onChange: (assigned_to) => setAssignee.mutate({ id: t.id, assigned_to }),
+      } : undefined}
       onToggle={() => handleToggle(t.id)}
       onEdit={() => isFullTask(t) ? setPlanning(t.id) : setEditingSimple(t)}
       onDelete={() => handleDelete(t.id)}

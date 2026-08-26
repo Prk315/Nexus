@@ -1,7 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   getAllTasks, getPlans, createTask, updateTask, toggleTask, deleteTask,
-  moveTask, reorderTasks, setTaskKanbanStatus,
+  moveTask, reorderTasks, setTaskKanbanStatus, patchTask,
 } from "../lib/api";
 import { qk } from "../lib/queryClient";
 import type { TaskWithContext, Plan, Priority } from "../types";
@@ -124,6 +124,14 @@ export function useSetPriority() {
       }),
     (tasks, { task, priority }) =>
       tasks.map((t) => (t.id === task.id ? { ...t, priority } : t)),
+  );
+}
+
+/** Set who a team task is for — null = unassigned, "all" = everyone, else a member's uid. */
+export function useSetAssignee() {
+  return useTaskMutation<{ id: number; assigned_to: string | null }>(
+    ({ id, assigned_to }) => patchTask(id, { assigned_to }),
+    (tasks, { id, assigned_to }) => tasks.map((t) => (t.id === id ? { ...t, assigned_to } : t)),
   );
 }
 
