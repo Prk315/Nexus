@@ -104,7 +104,7 @@ export function parseStringArray(v: unknown, maxItems: number, maxLen: number): 
   return out;
 }
 
-function boundedJson(value: unknown): unknown {
+export function boundedJson(value: unknown): unknown {
   if (value === null || value === undefined) return null;
   let serialized: string;
   try {
@@ -789,4 +789,584 @@ export function parsePendingLimit(value: unknown): number {
   const n = typeof value === "number" ? value : typeof value === "string" ? Number(value) : NaN;
   if (!Number.isFinite(n)) return DEFAULT_PENDING;
   return Math.min(MAX_PENDING, Math.max(1, Math.floor(n)));
+}
+
+// ===========================================================================
+// MARK: - Phase 3: approval and submission
+// ===========================================================================
+//
+// # The invariant, stated once and enforced in four places
+//
+// **Nothing is ever sent without an explicit human approval.**
+//
+// The state machine is `draft -> needs_approval -> approved -> queued ->
+// submitted` (see 20260826120000_job_apply.sql for the full domain). Every
+// transition in this file is expressed as an UPDATE guarded on its predecessor
+// status, never as a plain write — a guard in the WHERE clause is the only kind
+// that survives two pollers running at once, and this pipeline has two by
+// construction (n8n polls every 30 minutes; a human clicks a link whenever).
+//
+// # Why `apply_queue` re-checks everything approval already implied
+//
+// A human approving a draft is approving *that letter, to that company, before
+// that deadline, with that CV attached*. Every one of those facts can change in
+// the hours or days between the click and the send: a module gets edited, the ad
+// expires, a second application to the same company goes out under a different
+// profile. So the guards below run at SEND time, against the state as it is then,
+// and approval buys permission rather than a verdict.
+//
+// The two kinds of guard failure are deliberately not the same shape:
+//
+//   SKIP    leaves the row `approved`. Used when a human can fix the blocker and
+//           the application becomes sendable again — a `[TODO` still sitting in
+//           the CV module, an ad that is not an email-apply channel. Failing
+//           these would force a re-approval for a problem that was never about
+//           the decision.
+//   TERMINAL flips the row to `expired` / `cancelled`. Used when nothing can make
+//           it sendable — the deadline passed, or the company already has an
+//           application from us.
+//
+// Getting that backwards in either direction is the bug to watch for. A terminal
+// state for a fixable problem silently drops good work; a skip for an unfixable
+// one re-scans the same dead row on every poll forever.
+
+/** Approval-notification batch size. Each item is one email a human must read. */
+export const MAX_NOTIFY = 10;
+export const DEFAULT_NOTIFY = 5;
+
+/** Send batch size. Deliberately tiny — each item is an email to a stranger. */
+export const MAX_APPLY = 5;
+export const DEFAULT_APPLY = 2;
+
+/**
+ * How many applications may be SUBMITTED in one UTC day.
+ *
+ * Three, and the number is small on purpose. This is the blast radius of every
+ * bug in this pipeline: a mis-scored batch, a duplicated queue, a workflow that
+ * loops. Three wrong emails is an embarrassment; thirty is a reputation.
+ *
+ * UTC rather than Europe/Copenhagen, and this is a real (small) wart: the day
+ * rolls over at 01:00 or 02:00 local time, so an application approved late on a
+ * summer evening counts against tomorrow. Accepted because the alternative —
+ * a timezone in an edge function that must agree with a timezone in a workflow —
+ * is the class of thing CLAUDE.md already records going wrong twice
+ * (`start_time` offsets, `startTimeLocal`). A cap that is occasionally one day
+ * early is strictly better than two components disagreeing about which day it is.
+ */
+export const DAILY_SUBMIT_CAP = 3;
+
+/**
+ * Rows examined per poll before the limit is applied.
+ *
+ * Both queues need to look at MORE rows than they return: `notify_queue` cannot
+ * rank by score until it has joined the matches, and `apply_queue` cannot know
+ * how many candidates the guards will reject. Bounded so a large backlog cannot
+ * turn one poll into an unbounded read.
+ */
+export const NOTIFY_SCAN = 200;
+export const APPLY_SCAN = 50;
+
+export const MAX_FAIL_REASON = 500;
+export const MAX_PROOF_FIELD = 256;
+
+/** Every status `job_applications.status` may legitimately hold. */
+export const APPLICATION_STATUSES = [
+  "draft",
+  "needs_approval",
+  "approved",
+  "queued",
+  "submitted",
+  "cancelled",
+  "expired",
+  "failed",
+  // Reserved: an employer replied. Named here so two workflows cannot invent two
+  // spellings for it later.
+  "response",
+] as const;
+
+function clampLimit(value: unknown, fallback: number, max: number): number {
+  const n = typeof value === "number" ? value : typeof value === "string" ? Number(value) : NaN;
+  if (!Number.isFinite(n)) return fallback;
+  return Math.min(max, Math.max(1, Math.floor(n)));
+}
+
+export const parseNotifyLimit = (v: unknown): number => clampLimit(v, DEFAULT_NOTIFY, MAX_NOTIFY);
+export const parseApplyLimit = (v: unknown): number => clampLimit(v, DEFAULT_APPLY, MAX_APPLY);
+
+// MARK: - Guard 1: unresolved gaps
+
+/**
+ * The literal markers that mean a document is not finished.
+ *
+ * `[GAP` is written by `assembleApplication` for a slot the catalog cannot fill.
+ * `[TODO` is what a half-written module row contains — the seeded `cv_link`
+ * module ships as a stub precisely so it is visibly incomplete rather than
+ * plausibly wrong.
+ *
+ * Case-sensitive substring scan, and both of those choices are load-bearing.
+ * Case-sensitive because this is matching a marker *we* emit in a fixed spelling,
+ * not guessing at prose — lowercasing first would let a company whose ad contains
+ * the English word "todo" block an application. Substring rather than a regex
+ * because `[` is a regex metacharacter and an escaping mistake here fails OPEN,
+ * which is the one direction this check must never fail.
+ */
+export const GAP_MARKERS = ["[GAP", "[TODO"] as const;
+
+export function bodyHasUnresolvedGaps(body: unknown): boolean {
+  if (typeof body !== "string") return true; // no body is not a finished document
+  return GAP_MARKERS.some((marker) => body.includes(marker));
+}
+
+// MARK: - Guard 4: the CV gate
+
+/**
+ * Is there a usable `cv_link` module?
+ *
+ * An application with no link to a CV is not an application, and the module that
+ * carries the link ships as a `[TODO` stub. Checking the module rather than the
+ * assembled body is deliberate: the body could carry a *different* module's CV
+ * mention and still leave the actual link unset.
+ *
+ * A missing or stubbed CV is a SKIP, never a failure. It unblocks for every
+ * pending application at once the moment the user fills one row in.
+ */
+export function cvGateReady(modules: ModuleRow[]): boolean {
+  return modules.some((m) => {
+    if (String(m?.slot ?? "").toLowerCase() !== "cv_link") return false;
+    const content = typeof m?.content === "string" ? m.content : "";
+    return content.trim().length > 0 && !content.includes("[TODO");
+  });
+}
+
+// MARK: - Guard 2: the deadline
+
+/**
+ * Has the ad's `valid_through` passed?
+ *
+ * NULL is not expired. Most Danish ads carry no deadline at all, and treating
+ * "unknown" as "over" would silently expire the majority of the pipeline — the
+ * same never-fold-unknown-into-a-value rule as `remote` (null, not false),
+ * `job_matches.score` and the never-seeded `blocking_state`.
+ *
+ * An unparseable timestamp is likewise not expired: `coerceTimestamp` returning
+ * null means we could not read it, which is not evidence about the deadline.
+ */
+export function deadlinePassed(validThrough: unknown, nowMs: number): boolean {
+  const iso = coerceTimestamp(validThrough);
+  if (!iso) return false;
+  const t = Date.parse(iso);
+  return Number.isFinite(t) && t < nowMs;
+}
+
+/** Start of the current UTC day, as an RFC3339 string. The daily-cap window. */
+export function utcDayStart(nowMs: number): string {
+  const d = new Date(nowMs);
+  return new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate())).toISOString();
+}
+
+// MARK: - notify_queue
+
+export interface NotifyPosting {
+  id?: string | null;
+  title?: string | null;
+  company?: string | null;
+  location?: string | null;
+  url?: string | null;
+  apply_channel?: string | null;
+  apply_email?: string | null;
+  valid_through?: string | null;
+}
+
+export interface NotifyProfile {
+  id?: string | null;
+  name?: string | null;
+  approval_threshold?: number | null;
+}
+
+export interface NotifyDraftRow {
+  id: string;
+  posting_id: string;
+  profile_id: string;
+  body: string | null;
+  missing_slots: string[] | null;
+  approval_token: string;
+  job_postings: NotifyPosting | null;
+  job_profiles: NotifyProfile | null;
+}
+
+export interface NotifyMatchRow {
+  posting_id: string;
+  profile_id: string;
+  score: number | null;
+  reasoning: string | null;
+  matched_skills: string[] | null;
+  missing_skills: string[] | null;
+}
+
+export interface NotifyItem {
+  application_id: string;
+  body: string | null;
+  missing_slots: string[];
+  score: number;
+  reasoning: string | null;
+  matched_skills: string[];
+  missing_skills: string[];
+  profile_name: string | null;
+  posting: {
+    title: string | null;
+    company: string | null;
+    location: string | null;
+    url: string | null;
+    apply_channel: string | null;
+    apply_email: string | null;
+    valid_through: string | null;
+  };
+  review_url: string;
+}
+
+/** The review link that goes in the decision email. Built here, never by n8n. */
+export function reviewUrl(supabaseUrl: string, token: string): string {
+  return `${supabaseUrl.replace(/\/+$/, "")}/functions/v1/job-approve?token=${encodeURIComponent(token)}`;
+}
+
+/**
+ * Join drafts to their match verdicts, keep the ones worth asking a human about,
+ * and rank them.
+ *
+ * ## Why the join happens here rather than in PostgREST
+ *
+ * `job_applications` has no foreign key to `job_matches` — both hang off
+ * `(posting_id, profile_id)` independently, which is the correct model (a match
+ * is a verdict, an application is a document; one can exist without the other)
+ * but leaves PostgREST with no relationship to embed through. Two queries and a
+ * Map, rather than inventing an FK to please a query builder.
+ *
+ * ## The threshold comparison, and the null that must not pass it
+ *
+ * `score >= profile.approval_threshold` AND `score !== null`. The null check is
+ * not redundant with the comparison: `null >= 75` is false in JS but
+ * `undefined >= 75` is also false while `null >= 0` is TRUE — a profile whose
+ * threshold someone set to 0 would start emailing every unscored draft. Testing
+ * the null explicitly costs nothing and removes the whole family.
+ *
+ * A draft with no match row at all is dropped for the same reason: it has no
+ * verdict, and an approval email for something nothing has judged asks the human
+ * to do the model's job.
+ */
+export function selectNotifyCandidates(
+  drafts: NotifyDraftRow[],
+  matches: NotifyMatchRow[],
+  opts: { limit: number; supabaseUrl: string },
+): NotifyItem[] {
+  const byKey = new Map<string, NotifyMatchRow>();
+  for (const m of matches) byKey.set(`${m.posting_id}|${m.profile_id}`, m);
+
+  const items: NotifyItem[] = [];
+  for (const d of drafts) {
+    const match = byKey.get(`${d.posting_id}|${d.profile_id}`);
+    if (!match) continue;
+    const score = match.score;
+    if (typeof score !== "number" || !Number.isFinite(score)) continue;
+
+    const profile = d.job_profiles ?? null;
+    const threshold =
+      typeof profile?.approval_threshold === "number" && Number.isFinite(profile.approval_threshold)
+        ? profile.approval_threshold
+        : 75; // the column default, for a row written before this migration landed
+    if (score < threshold) continue;
+
+    const posting = d.job_postings ?? null;
+    items.push({
+      application_id: d.id,
+      body: d.body ?? null,
+      missing_slots: Array.isArray(d.missing_slots) ? d.missing_slots : [],
+      score,
+      reasoning: match.reasoning ?? null,
+      matched_skills: Array.isArray(match.matched_skills) ? match.matched_skills : [],
+      missing_skills: Array.isArray(match.missing_skills) ? match.missing_skills : [],
+      profile_name: profile?.name ?? null,
+      posting: {
+        title: posting?.title ?? null,
+        company: posting?.company ?? null,
+        location: posting?.location ?? null,
+        url: posting?.url ?? null,
+        apply_channel: posting?.apply_channel ?? null,
+        apply_email: posting?.apply_email ?? null,
+        valid_through: posting?.valid_through ?? null,
+      },
+      review_url: reviewUrl(opts.supabaseUrl, d.approval_token),
+    });
+  }
+
+  // Best first: the human reads the top of the list with the most attention, so
+  // that is where the strongest match belongs. `application_id` breaks ties so
+  // two equal scores do not shuffle between polls.
+  items.sort((a, b) =>
+    b.score !== a.score ? b.score - a.score : a.application_id < b.application_id ? -1 : 1
+  );
+  return items.slice(0, Math.max(0, opts.limit));
+}
+
+// MARK: - apply_queue planning
+
+export interface ApplyPosting {
+  id?: string | null;
+  title?: string | null;
+  company?: string | null;
+  url?: string | null;
+  apply_channel?: string | null;
+  apply_email?: string | null;
+  valid_through?: string | null;
+  dedupe_key?: string | null;
+}
+
+export interface ApplyCandidate {
+  id: string;
+  body: string | null;
+  posting: ApplyPosting | null;
+  profile_name: string | null;
+}
+
+export interface ApplyContext {
+  /** Guard 4. False when no usable `cv_link` module exists. */
+  cvReady: boolean;
+  /** Guard 5. `dedupe_key`s of postings this user has ALREADY submitted to. */
+  submittedDedupeKeys: Set<string>;
+  /** Guard 6. `DAILY_SUBMIT_CAP` minus everything already committed today. */
+  budget: number;
+  /** Batch size the caller asked for. */
+  limit: number;
+  nowMs: number;
+}
+
+export interface ApplyQueueItem {
+  application_id: string;
+  body: string;
+  posting: {
+    title: string | null;
+    company: string | null;
+    apply_email: string;
+    url: string | null;
+  };
+  profile_name: string | null;
+}
+
+export interface ApplyPlan {
+  /** Flip to `queued` and hand to n8n. */
+  queue: ApplyQueueItem[];
+  /** Flip to `expired`, with `fail_reason`. */
+  expire: { application_id: string; reason: string }[];
+  /** Flip to `cancelled`, with `fail_reason`. */
+  cancel: { application_id: string; reason: string }[];
+  /** Left `approved`. Reported so a human can see WHY nothing was sent. */
+  skipped: { application_id: string; reason: string }[];
+}
+
+/**
+ * Run the six send-time guards over a batch of approved applications.
+ *
+ * Pure: no clock, no client, no I/O. Everything it needs — the CV verdict, the
+ * submitted dedupe keys, the remaining daily budget, the time — is passed in, so
+ * the whole guard matrix is unit-testable, which for a function whose job is
+ * "decide whether to email a stranger" is the minimum bar.
+ *
+ * ## Guard order is the contract order, and one consequence is worth naming
+ *
+ * The gap check runs BEFORE the deadline check, as specified. So an application
+ * that both still has `[GAP` markers and has run past its deadline is reported as
+ * `body_has_gaps` and stays `approved` rather than being flipped to `expired`. It
+ * is a stale row, not a wrong send, and re-ordering the guards to tidy it up
+ * would mean the reason reported for a blocked application depends on which of
+ * two problems a reader happens to consider more important.
+ *
+ * ## `body_has_gaps` is a SKIP, not a failure
+ *
+ * The contract numbers this guard first and does not name its outcome. It is a
+ * skip: an unfilled gap is exactly the fixable class — writing the missing module
+ * unblocks every application waiting on it — and failing the row would demand a
+ * fresh human approval for a problem the human's decision was never about. It is
+ * the same shape as `cv_missing`, which is the same defect one layer down.
+ */
+export function planApplyQueue(candidates: ApplyCandidate[], ctx: ApplyContext): ApplyPlan {
+  const plan: ApplyPlan = { queue: [], expire: [], cancel: [], skipped: [] };
+  const eligible: ApplyQueueItem[] = [];
+
+  for (const c of candidates) {
+    const posting = c.posting ?? null;
+    if (!posting) {
+      // The FK is `on delete cascade`, so this is not a deleted posting — it is a
+      // read that came back without its embed. Skipping keeps the row alive.
+      plan.skipped.push({ application_id: c.id, reason: "posting_missing" });
+      continue;
+    }
+
+    // 1. Unresolved gaps.
+    if (bodyHasUnresolvedGaps(c.body)) {
+      plan.skipped.push({ application_id: c.id, reason: "body_has_gaps" });
+      continue;
+    }
+
+    // 2. Deadline. Terminal: nothing makes a closed ad open again.
+    if (deadlinePassed(posting.valid_through, ctx.nowMs)) {
+      plan.expire.push({ application_id: c.id, reason: "valid_through_passed" });
+      continue;
+    }
+
+    // 3. Channel. A human can still apply by hand through an ATS, so this is a
+    // skip and the row stays visible as approved-but-unsent work.
+    const channel = String(posting.apply_channel ?? "").toLowerCase();
+    const email = typeof posting.apply_email === "string" ? posting.apply_email.trim() : "";
+    if (channel !== "email" || email.length === 0) {
+      plan.skipped.push({ application_id: c.id, reason: "not_email_channel" });
+      continue;
+    }
+
+    // 4. CV.
+    if (!ctx.cvReady) {
+      plan.skipped.push({ application_id: c.id, reason: "cv_missing" });
+      continue;
+    }
+
+    // 5. Cross-source dedup. Terminal, and the harshest guard here on purpose:
+    // two letters to one company is worse than a missed application, which is the
+    // same judgement `job_postings.dedupe_key` exists to encode one stage
+    // earlier. The caller must have excluded THIS application's own row when
+    // building the set, or a re-poll would cancel what it just submitted.
+    const key = typeof posting.dedupe_key === "string" ? posting.dedupe_key : "";
+    if (key && ctx.submittedDedupeKeys.has(key)) {
+      plan.cancel.push({ application_id: c.id, reason: "duplicate_company_application" });
+      continue;
+    }
+
+    eligible.push({
+      application_id: c.id,
+      body: String(c.body ?? ""),
+      posting: {
+        title: posting.title ?? null,
+        company: posting.company ?? null,
+        apply_email: email,
+        url: posting.url ?? null,
+      },
+      profile_name: c.profile_name ?? null,
+    });
+  }
+
+  // 6. Daily cap. Everything the cap itself excludes is reported, because "we
+  // stopped at three today" is information; everything the *batch limit* excludes
+  // is not, because it is simply the next poll's work and reporting it would make
+  // a healthy queue look like a wall of skips.
+  const room = Math.max(0, ctx.budget);
+  for (const item of eligible.slice(room)) {
+    plan.skipped.push({ application_id: item.application_id, reason: "daily_cap" });
+  }
+  plan.queue = eligible.slice(0, room).slice(0, Math.max(0, ctx.limit));
+
+  return plan;
+}
+
+// MARK: - notify_result / apply_result bodies
+
+export interface NotifyResultInput {
+  userId: string;
+  applicationId: string;
+  ok: boolean;
+  messageId: string | null;
+}
+
+export type NotifyResultParse =
+  | { ok: true; result: NotifyResultInput }
+  | { ok: false; error: string };
+
+/**
+ * `ok` must be a real boolean.
+ *
+ * Not truthy-coerced, and this is the whole check: n8n emits `""` for an
+ * expression that resolved to nothing, and `"false"` for a boolean rendered into
+ * a string field. `Boolean("false")` is `true`, which would mark an email that
+ * never sent as sent — and `notify_result ok:true` is the transition that makes
+ * an application eligible for approval. The string spellings are accepted
+ * explicitly; anything else is a 400 rather than a guess.
+ */
+export function parseStrictBool(value: unknown): boolean | null {
+  if (value === true || value === false) return value;
+  if (value === "true") return true;
+  if (value === "false") return false;
+  return null;
+}
+
+export function parseNotifyResult(body: unknown): NotifyResultParse {
+  if (!body || typeof body !== "object") return { ok: false, error: "invalid_body" };
+  const b = body as Record<string, unknown>;
+  if (!isUuid(b.user_id)) return { ok: false, error: "invalid_user_id" };
+  if (!isUuid(b.application_id)) return { ok: false, error: "invalid_application_id" };
+  const ok = parseStrictBool(b.ok);
+  if (ok === null) return { ok: false, error: "invalid_ok" };
+  return {
+    ok: true,
+    result: {
+      userId: b.user_id,
+      applicationId: b.application_id,
+      ok,
+      messageId: sanitizeText(b.message_id, MAX_PROOF_FIELD),
+    },
+  };
+}
+
+export interface ApplyResultInput {
+  userId: string;
+  applicationId: string;
+  ok: boolean;
+  proof: Record<string, string> | null;
+  error: string | null;
+}
+
+export type ApplyResultParse =
+  | { ok: true; result: ApplyResultInput }
+  | { ok: false; error: string };
+
+/**
+ * The audit payload: what n8n can name about what actually left the machine.
+ *
+ * Keys are kept as sent rather than allow-listed — a future channel will carry
+ * different evidence and a rejected field is evidence destroyed — but every
+ * VALUE is sanitized and bounded, and the whole object is bounded again by
+ * `boundedJson`. Nested structure is dropped: an audit record is a flat set of
+ * identifiers, and accepting arbitrary depth here is how an unbounded blob gets
+ * into a jsonb column that a panel renders.
+ */
+export function normalizeProof(raw: unknown): Record<string, string> | null {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
+  const out: Record<string, string> = {};
+  for (const [k, v] of Object.entries(raw as Record<string, unknown>)) {
+    const key = sanitizeText(k, 64);
+    if (!key) continue;
+    const value = typeof v === "number" || typeof v === "boolean" ? String(v) : v;
+    const clean = sanitizeText(value, MAX_PROOF_FIELD);
+    if (clean) out[key] = clean;
+    if (Object.keys(out).length >= 16) break;
+  }
+  if (Object.keys(out).length === 0) return null;
+  return boundedJson(out) as Record<string, string> | null;
+}
+
+export function parseApplyResult(body: unknown): ApplyResultParse {
+  if (!body || typeof body !== "object") return { ok: false, error: "invalid_body" };
+  const b = body as Record<string, unknown>;
+  if (!isUuid(b.user_id)) return { ok: false, error: "invalid_user_id" };
+  if (!isUuid(b.application_id)) return { ok: false, error: "invalid_application_id" };
+  const ok = parseStrictBool(b.ok);
+  if (ok === null) return { ok: false, error: "invalid_ok" };
+  return {
+    ok: true,
+    result: {
+      userId: b.user_id,
+      applicationId: b.application_id,
+      ok,
+      proof: normalizeProof(b.proof),
+      // Gmail's errors are long and occasionally quote the message. Bounded and
+      // stripped of control characters like every other stranger-authored string
+      // that reaches a column a panel will render.
+      error: sanitizeText(b.error, MAX_FAIL_REASON, { multiline: true }),
+    },
+  };
 }

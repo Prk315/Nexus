@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { NexusHeader, useNexusAuth, createMailLoader, createMailRulesApi } from "@nexus/core";
+import { NexusHeader, useNexusAuth, createMailLoader, createMailRulesApi, createJobsApi } from "@nexus/core";
 import { getSupabaseClient } from "../../lib/supabase";
 import NavTab from "./NavTab";
 import DashboardPage from "../../pages/DashboardPage";
@@ -12,6 +12,9 @@ import SettingsPage from "../../pages/SettingsPage";
 // Authenticated client, module scope — see packages/nexus-core/src/mail/loader.ts.
 const loadMail = createMailLoader(getSupabaseClient());
 const mailRulesApi = createMailRulesApi(getSupabaseClient());
+// Same client, same reason — the five `job_*` tables are owner-only with no
+// anon policy, so this must be the authenticated one.
+const jobsApi = createJobsApi(getSupabaseClient());
 
 const TABS = ["Dashboard", "Biomarkers", "Workouts", "Habits", "Meal Planner", "Settings"] as const;
 type Tab = (typeof TABS)[number];
@@ -47,6 +50,10 @@ export default function AppShell() {
         // loader so the button falls back rather than claiming "no mail".
         loadMail={user ? loadMail : undefined}
             mailRulesApi={user ? mailRulesApi : undefined}
+        // Withheld when signed out for the same reason, with one difference: the
+        // Jobs button still renders and says "sign in", having no legacy
+        // plain-button fallback to degrade to.
+        jobsApi={user ? jobsApi : undefined}
       />
       <div
         style={{

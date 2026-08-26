@@ -17,12 +17,17 @@ Gmail alerts ──┘
 |---|---|
 | `extract.js` | **the canonical extractor** — pure, dependency-free, 56 tests |
 | `extract.test.js` | `node --test extract.test.js` |
+| `evaluate.js` / `evaluate.test.js` | phase 2 — prompt, verdict parsing, module planning (see `EVALUATION.md`) |
+| `notify.js` / `notify.test.js` | phase 3 — the decision email, the Danish/English subject rule, and the recipient check (55 tests) |
 | `harvest-dryrun.mjs` | runs the whole chain against the live sources, writes nothing |
-| `build-workflow.mjs` | injects `extract.js` into the workflow template |
-| `patch-deploy.mjs` | copies the built workflow to `~/docker/n8n/workflows/`, re-applying the two deploy-only patches |
+| `evaluate-dryrun.mjs` | the same for scoring |
+| `build-workflow.mjs` | injects `extract.js` into the harvest template |
+| `build-evaluate.mjs` | injects `evaluate.js` into the evaluate template |
+| `build-apply.mjs` | injects `notify.js` into **both** phase-3 templates |
+| `patch-deploy.mjs` | copies all four built workflows to `~/docker/n8n/workflows/`, re-applying the two deploy-only patches |
 | `exec-forensics.mjs` | **item counts per node** for a past n8n run — start here when a run stores too few rows |
-| `workflows/job-harvest.template.json` | the workflow, with `__EXTRACT_JS__` placeholders |
-| `workflows/job-harvest.json` | **generated — do not hand-edit** |
+| `workflows/*.template.json` | the four workflows, with `__EXTRACT_JS__` / `__EVALUATE_JS__` / `__NOTIFY_JS__` placeholders |
+| `workflows/job-{harvest,evaluate,notify,apply}.json` | **generated — do not hand-edit** |
 | `fixtures/` | real pages (2026-08-24) and real alert emails (2026-08-25) |
 
 ⚠️ **The alert-email fixtures are redacted.** LinkedIn stamps a per-recipient
@@ -46,6 +51,10 @@ BIA constants.
 # edit extract.js or the template, then:
 node --test extract.test.js && node build-workflow.mjs && node patch-deploy.mjs
 docker exec n8n n8n import:workflow --input=/home/node/workflows/job-harvest.json
+
+# the same shape for the other two pure files:
+node --test evaluate.test.js && node build-evaluate.mjs   # -> job-evaluate.json
+node --test notify.test.js   && node build-apply.mjs      # -> job-notify.json + job-apply.json
 ```
 
 Commit `extract.js` and the regenerated `job-harvest.json` together.
@@ -253,6 +262,123 @@ the ingest's real verdict is in the `Send` node's response body
 does not fail the run**, so a green run can still have discarded a whole lane.
 `--node Send` is the second thing to look at, always.
 
+## Phase 3 — decision emails and sending
+
+Two more workflows. `job-notify` mails **you** a decision email per scored draft.
+`job-apply` mails **a company** an application you approved. They are deliberately
+two workflows with two schedules and two Gmail nodes, and the only thing that moves
+a row from the first to the second is a human pressing a button.
+
+```
+job_applications
+  draft ──(job-notify: decision email sent)──> needs_approval
+                                                   │  you open the email, press
+                                                   │  "Review & decide", approve
+                                                   ▼
+                                                approved
+                                                   │  job-apply claims it (guards
+                                                   │  server-side) → queued
+                                                   ▼
+                                       ┌── Gmail ok ──> sent  (+ gmail_message_id)
+                                       └── refused ───> failed (+ error)
+```
+
+### Build and deploy
+
+```bash
+node --test notify.test.js && node build-apply.mjs && node patch-deploy.mjs
+docker exec n8n n8n import:workflow --input=/home/node/workflows/job-notify.json
+docker exec n8n n8n import:workflow --input=/home/node/workflows/job-apply.json
+```
+
+**Import order for the whole pipeline: harvest → evaluate → notify → apply.** It is
+the order rows move. Importing `job-apply` first gets you a workflow that can send
+from a queue nothing has filled yet.
+
+`node patch-deploy.mjs --check` verifies all four deploy copies at once and exits
+nonzero if any is stale; `node patch-deploy.mjs job-apply` patches one by name.
+
+### Environment
+
+Same three variables as the rest (`NEXUS_SUPABASE_URL`, `NEXUS_USER_ID`,
+`JOB_INGEST_KEY`), plus one optional:
+
+| Var | Default | What |
+|---|---|---|
+| `JOB_NOTIFY_TO` | `bastianrthomsen@gmail.com` | where decision emails land |
+
+n8n reads `$env` at **process start** — set it and restart the container, or the
+expression resolves to empty and the Gmail node fails with an unhelpful error.
+
+### ⚠️ The CV gate — nothing may send until this is cleared
+
+`modules.seed.sql` seeds three modules with unresolved `[TODO: …]` markers:
+`education_stub`, `cv_link` and `portfolio_link`. The first two are seeded
+`enabled = false`, so `assembleApplication` never picks them and a draft that
+needed one shows a visible `[GAP: cv_link]` instead — which is exactly the design
+(a gap that is visibly a gap beats a paragraph that is invisibly a lie).
+
+**Do not enable `cv_link` until a real CV link replaces the stub.** Enabling it
+with the marker still in place puts the literal string `[TODO: add a link to or
+attachment reference for an actual CV…]` into an email to a company. The gap is
+the safe failure; the enabled stub is not.
+
+⚠️ **And check `closing_en` before the first send.** It is seeded
+`enabled = true` and its content *still contains* a `[TODO: portfolio/GitHub link
+— confirm which repositories are safe…]` marker. Unlike the disabled stubs,
+nothing stops that one shipping verbatim. Fix the text or disable the module
+before `job-apply` is ever activated.
+
+### The two workflows
+
+| | `job-notify` | `job-apply` |
+|---|---|---|
+| Schedule | every 15 min | every 10 min |
+| Asks for | `notify_queue`, limit 5 | `apply_queue`, limit 2 |
+| Sends to | your own inbox | `posting.apply_email` |
+| Body | HTML, built by `buildDecisionEmail` | the stored draft, **plain text, verbatim** |
+| On success | `notify_result` with the Gmail message id | `apply_result ok:true` with message + thread id |
+| On failure | logs, posts nothing — row stays `draft` and retries next pass | `apply_result ok:false` with the error |
+
+The asymmetry is the point. A decision email that fails to send is retried by
+simply not reporting it; an application that fails to send is *recorded as failed*,
+because a `queued` row that silently re-refuses every ten minutes looks exactly
+like one that is working.
+
+`limit 2` on the apply queue is small on purpose: a bad pass costs two emails, not
+twenty. The Gmail node walks its items in a sequential await loop, so two per pass
+is already one-at-a-time — which is why there is no `splitInBatches` loop. A
+loop-back edge in the workflow that mails strangers is a bigger risk than the
+determinism it would buy.
+
+### Activating, in the only order that is safe
+
+1. Import both. Leave **both inactive**.
+2. `docker exec n8n n8n execute --id nexus-job-notify` — that is what the `CLI
+   Trigger` node exists for. Read the email that arrives. Check the score, the
+   gaps, the draft, and that "Review & decide" goes where you expect.
+3. Activate `job-notify`.
+4. Clear the CV gate above. Approve **exactly one** application on the confirm page.
+5. `docker exec n8n n8n execute --id nexus-job-apply`. This sends for real,
+   immediately, with no further confirmation. Then open Gmail → Sent and read what
+   actually left.
+6. Only then activate `job-apply`.
+
+Step 5 is the one that cannot be undone. Everything before it is reversible.
+
+### When a decision email does not arrive
+
+- **Is `notify[]` actually empty?** An empty queue is the steady state, not a bug —
+  it means every scored application has already been mailed. `Split Notify Queue`
+  returns `[]` and the run ends green with no items. That is correct behaviour and
+  looks identical to "there is nothing to do", because there is.
+- **Row count is not a freshness signal.** Same trap as the mail panel: no decision
+  emails means "nothing scored above the bar" *or* "n8n has not run since Tuesday".
+  Check the newest execution, not the inbox.
+- **The Gmail credential.** `patch-deploy.mjs` writes id `7hzqrhh9QEyx6Lqp` into
+  every Gmail node; if that credential's OAuth has lapsed, both workflows fail at
+  the send with the same error and `job-apply` will keep marking rows `failed`.
+
 ## Traps
 
 - **`job_postings` / `job_matches` are `auth.uid()`-scoped with no anon policy.**
@@ -379,6 +505,5 @@ which are why the lookarounds exist.
 
 ## Not built yet
 
-Qwen scoring (`job_evaluate`), the `JobsPanel`, and everything about actually
-applying. Autonomy is deliberately undecided until there is a real scored queue
-to look at.
+The `JobsPanel` in `NexusHeader`. Harvesting (phase 1), scoring (phase 2) and the
+decision/send loop (phase 3) are in the tree; the panel that reads the rows is not.

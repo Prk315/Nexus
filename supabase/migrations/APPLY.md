@@ -15,6 +15,8 @@ query after each.
 | 4 | `20260805120300_unlock_rules_enabled_and_evaluator_indexes.sql` | `unlock_rules.enabled` + three evaluator indexes |
 | 5 | `20260823120000_n8n_mail_bus.sql` | `mail_messages`, `n8n_requests` — **apply before deploying `n8n-ingest` / `n8n-requests`, or both 500 on every call** |
 | 6 | `20260824120000_job_pipeline.sql` | `job_profiles`, `job_sources`, `job_postings`, `job_matches` — **apply before deploying `job-ingest`, or it 500s on every call** |
+| 7 | `20260825120000_job_evaluation.sql` | `job_app_modules`, `job_applications`, `job_matches.module_plan` — **apply before deploying `job-ingest` v4** |
+| 8 | `20260826120000_job_apply.sql` | `job_profiles.approval_threshold`, nine approval/submission columns on `job_applications`, `job_submission_attempts` — **apply before deploying `job-ingest` v5 / `job-approve`** |
 
 Files 1–3 are independent of each other and of file 4. File 4 has an **internal**
 ordering requirement (the `ALTER` must precede the index that uses the new
@@ -37,6 +39,20 @@ anon policy — verify it the same way, not with the "RLS, all new tables" secti
 It seeds **nothing**: `job_profiles` and `job_sources` are user-scoped and a
 migration has no session to attribute rows to, so the first profile is inserted by
 hand or by the panel.
+
+Files 7 and 8 are the job applier's later phases and **must follow file 6**, in
+order — 7 adds `job_applications`, and 8 adds columns to it. Both are additive, so
+the LIVE `job-ingest` keeps working unchanged between applying them and deploying
+the function that uses them; that window is deliberate and is why file 8's
+`approval_token` is `NOT NULL DEFAULT gen_random_uuid()` rather than backfilled
+(a draft written by the old code during the window is still reviewable).
+
+⚠️ **File 8 has an ordering requirement in the other direction too.** Apply it
+BEFORE deploying `job-ingest` v5 or `job-approve` — both query columns that do
+not exist until it lands, and PostgREST answers a missing column with an error,
+so every `notify_queue` and every review link fails. Nothing is at risk of being
+*sent* early: `apply_queue` reads `status = 'approved'`, and no row can reach that
+status until a human has clicked through `job-approve`.
 
 Every file is forward-only and re-runnable: `CREATE TABLE IF NOT EXISTS`,
 `CREATE INDEX IF NOT EXISTS`, `ADD COLUMN IF NOT EXISTS`, `INSERT … ON CONFLICT

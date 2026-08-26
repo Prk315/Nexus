@@ -2,18 +2,32 @@ import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { createClient } from "jsr:@supabase/supabase-js@2";
 
 import {
+  type ApplyCandidate,
   assembleApplication,
+  cvGateReady,
+  DAILY_SUBMIT_CAP,
   dedupeWithinBatch,
   MAX_POSTINGS,
   type MatchInput,
   type ModuleRow,
   normalizeModulePlan,
+  type NotifyDraftRow,
+  type NotifyMatchRow,
+  APPLY_SCAN,
+  NOTIFY_SCAN,
+  parseApplyLimit,
+  parseApplyResult,
   parseBody,
   parseEvaluateResult,
+  parseNotifyLimit,
+  parseNotifyResult,
   parsePendingLimit,
+  planApplyQueue,
   type PostingRow,
   secretIsUsable,
   secretMatches,
+  selectNotifyCandidates,
+  utcDayStart,
 } from "./logic.ts";
 
 /**
@@ -54,10 +68,21 @@ import {
  * | `config` | here -> n8n | enabled profiles, sources and the seen-set |
  * | `pending` | here -> n8n | gated-but-unscored matches + the module catalog |
  * | `evaluate_result` | n8n -> here | one Qwen verdict; assembles the draft |
+ * | `notify_queue` | here -> n8n | drafts scoring above the profile threshold |
+ * | `notify_result` | n8n -> here | the decision email went out (or did not) |
+ * | `apply_queue` | here -> n8n | APPROVED applications that re-passed every guard |
+ * | `apply_result` | n8n -> here | Gmail's verdict + the proof of what was sent |
  *
  * `pending` and `evaluate_result` are phase 2 (`n8n/job-applier/EVALUATION.md`).
  * The application body is assembled HERE and nowhere else — the module prose
  * never leaves this database, so n8n could not assemble it even if it tried.
+ *
+ * The last four are phase 3, and they implement one invariant: **nothing is ever
+ * sent without an explicit human approval.** `notify_queue` asks, `job-approve`
+ * records the answer, and `apply_queue` is the ONLY producer of sendable work —
+ * it reads `status = 'approved'` and nothing else, so there is no path from a
+ * high score to an outbound email that does not pass through a click. The guards
+ * it re-runs at send time are in `logic.ts`; the reasoning for each is there.
  */
 
 const json = (body: unknown, status = 200) =>
@@ -366,6 +391,395 @@ Deno.serve(async (req: Request) => {
       application_id: application?.id ?? null,
       module_ids: assembled.module_ids,
       missing_slots: assembled.missing_slots,
+    });
+  }
+
+  // MARK: - action: notify_queue
+  //
+  // Drafts good enough to be worth a human's attention. n8n turns each item into
+  // ONE decision email carrying the full letter and a review link.
+  //
+  // ## The queue predicate is `approval_requested_at IS NULL`, not the status
+  //
+  // Both are checked, but the timestamp is the one that matters. A status can be
+  // written by anything; a null timestamp is a claim about the world — no email
+  // has ever gone out for this application. If a bug or a hand-edit walked a row
+  // back to `draft` after its email had been sent, the status test alone would
+  // send a second one, and two review links for one application means two tokens
+  // that both still work. `notify_result` stamps the timestamp, and nothing
+  // clears it.
+  //
+  // Empty is `{ok: true, notify: []}`, never an error. Most polls find nothing:
+  // the threshold is set so a *rare* email is the healthy steady state, and a
+  // workflow that reported red on "nothing to ask about" would be red all week.
+  if (asRecord.action === "notify_queue") {
+    const uid = asRecord.user_id;
+    if (typeof uid !== "string") return json({ error: "invalid_user_id" }, 400);
+    const limit = parseNotifyLimit(asRecord.limit);
+
+    const { data: draftRows, error: draftError } = await supabaseEarly
+      .from("job_applications")
+      .select(
+        "id,posting_id,profile_id,body,missing_slots,approval_token," +
+          "job_postings(id,title,company,location,url,apply_channel,apply_email,valid_through)," +
+          "job_profiles(id,name,approval_threshold)",
+      )
+      .eq("user_id", uid)
+      .eq("status", "draft")
+      .is("approval_requested_at", null)
+      // Oldest first so a backlog drains in order rather than starving on the
+      // score sort, which is applied AFTER the join (see selectNotifyCandidates).
+      .order("created_at", { ascending: true })
+      .limit(NOTIFY_SCAN);
+
+    if (draftError) {
+      console.error("job-ingest: notify draft read failed —", draftError.message);
+      return json({ error: "notify_queue_failed", detail: draftError.message }, 500);
+    }
+
+    const drafts = (draftRows ?? []) as unknown as NotifyDraftRow[];
+    if (drafts.length === 0) return json({ ok: true, notify: [] });
+
+    // The verdicts. Separate query because `job_applications` has no FK to
+    // `job_matches` — they hang off `(posting_id, profile_id)` independently, and
+    // PostgREST has no relationship to embed through.
+    const { data: matchRowsData, error: matchesError } = await supabaseEarly
+      .from("job_matches")
+      .select("posting_id,profile_id,score,reasoning,matched_skills,missing_skills")
+      .eq("user_id", uid)
+      .in("posting_id", [...new Set(drafts.map((d) => d.posting_id))]);
+
+    if (matchesError) {
+      console.error("job-ingest: notify match read failed —", matchesError.message);
+      return json({ error: "notify_queue_failed", detail: matchesError.message }, 500);
+    }
+
+    return json({
+      ok: true,
+      notify: selectNotifyCandidates(drafts, (matchRowsData ?? []) as NotifyMatchRow[], {
+        limit,
+        // Built server-side. n8n never composes this URL: the token is the only
+        // credential the review page has, and a workflow assembling the link is a
+        // workflow that can get the origin wrong and mail a dead one.
+        supabaseUrl: url,
+      }),
+    });
+  }
+
+  // MARK: - action: notify_result
+  //
+  // The email went out (or did not). `ok: true` is the transition that makes an
+  // application eligible for a human decision at all.
+  //
+  // A FAILED send leaves the row completely untouched — same status, still a null
+  // `approval_requested_at` — so the next poll picks it up again. That is the
+  // whole retry mechanism, and it is why this reports rather than throws: an
+  // application nobody was asked about must stay in the queue, not become a
+  // silently stalled row that looks decided.
+  //
+  // The transition is guarded on `status = 'draft'` in the UPDATE itself. Without
+  // that, a slow notify workflow finishing after a human has already approved
+  // through an earlier email would drag `approved` back to `needs_approval` — a
+  // state machine that can run backwards is not one.
+  if (asRecord.action === "notify_result") {
+    const parsedNotify = parseNotifyResult(body);
+    if (!parsedNotify.ok) return json({ error: parsedNotify.error }, 400);
+    const n = parsedNotify.result;
+
+    if (!n.ok) {
+      // Nothing is written. Deliberately: see above.
+      console.error("job-ingest: notify send failed for", n.applicationId);
+      return json({ ok: true, application_id: n.applicationId, status: "draft", updated: false });
+    }
+
+    const { data: updated, error: notifyError } = await supabaseEarly
+      .from("job_applications")
+      .update({ status: "needs_approval", approval_requested_at: new Date().toISOString() })
+      .eq("id", n.applicationId)
+      // Invariant 5: service role bypasses RLS, so the owner check is this line.
+      .eq("user_id", n.userId)
+      .eq("status", "draft")
+      .select("id,status")
+      .maybeSingle();
+
+    if (notifyError) {
+      console.error("job-ingest: notify_result update failed —", notifyError.message);
+      return json({ error: "notify_result_failed", detail: notifyError.message }, 500);
+    }
+
+    // No row matched: either the id is not this user's, or the application has
+    // already moved on. Both are `updated: false` rather than an error — the
+    // email really was sent, and n8n has nothing useful to do with a 404.
+    return json({
+      ok: true,
+      application_id: n.applicationId,
+      status: updated?.status ?? null,
+      updated: Boolean(updated),
+    });
+  }
+
+  // MARK: - action: apply_queue
+  //
+  // The ONLY producer of sendable work in this system. It reads
+  // `status = 'approved'` and nothing else, which is what makes "nothing is sent
+  // without a human approval" a structural property rather than a promise.
+  //
+  // Every guard is re-run here, at send time, against the world as it is now —
+  // see `planApplyQueue` in `logic.ts` for what each one is and why a given
+  // failure is a skip rather than a terminal state. Approval buys permission, not
+  // a verdict: modules get edited, ads expire, and a second profile's application
+  // to the same company can go out in between.
+  if (asRecord.action === "apply_queue") {
+    const uid = asRecord.user_id;
+    if (typeof uid !== "string") return json({ error: "invalid_user_id" }, 400);
+    const limit = parseApplyLimit(asRecord.limit);
+    const nowMs = Date.now();
+    const nowIso = new Date(nowMs).toISOString();
+    const dayStart = utcDayStart(nowMs);
+
+    const [approved, cvModules, submittedToday, queuedToday, submittedEver] = await Promise.all([
+      supabaseEarly
+        .from("job_applications")
+        .select(
+          "id,body,posting_id," +
+            "job_postings(id,title,company,url,apply_channel,apply_email,valid_through,dedupe_key)," +
+            "job_profiles(id,name)",
+        )
+        .eq("user_id", uid)
+        .eq("status", "approved")
+        // Approved longest ago goes first: a decision a human made on Monday
+        // should not sit behind one they made this morning.
+        .order("approved_at", { ascending: true, nullsFirst: true })
+        .limit(APPLY_SCAN),
+      // `ilike` rather than `eq` — `slot` is free text and 'CV_link' is a typo,
+      // not a different slot. `cvGateReady` lowercases for the same reason.
+      supabaseEarly
+        .from("job_app_modules")
+        .select("id,slot,content")
+        .eq("user_id", uid)
+        .eq("enabled", true)
+        .ilike("slot", "cv_link"),
+      supabaseEarly
+        .from("job_applications")
+        .select("id", { count: "exact", head: true })
+        .eq("user_id", uid)
+        .eq("status", "submitted")
+        .gte("submitted_at", dayStart),
+      // In-flight work counts against the cap too. A row handed to n8n but not yet
+      // reported WILL be sent, and a cap that two polls can walk past is not a
+      // cap. Bounded to today so a permanently stranded `queued` row — an n8n run
+      // the Mac slept through — cannot consume budget forever.
+      supabaseEarly
+        .from("job_applications")
+        .select("id", { count: "exact", head: true })
+        .eq("user_id", uid)
+        .eq("status", "queued")
+        .gte("queued_at", dayStart),
+      // Guard 5's input. Statuses are disjoint (`submitted` vs `approved`), so no
+      // candidate can appear in its own dedup set.
+      supabaseEarly
+        .from("job_applications")
+        .select("id,job_postings(dedupe_key)")
+        .eq("user_id", uid)
+        .eq("status", "submitted")
+        .limit(2000),
+    ]);
+
+    const readFailed =
+      approved.error ?? cvModules.error ?? submittedToday.error ?? queuedToday.error ??
+        submittedEver.error;
+    if (readFailed) {
+      console.error("job-ingest: apply_queue read failed —", readFailed.message);
+      return json({ error: "apply_queue_failed", detail: readFailed.message }, 500);
+    }
+
+    type ApprovedRow = {
+      id: string;
+      body: string | null;
+      job_postings: ApplyCandidate["posting"];
+      job_profiles: { name?: string | null } | null;
+    };
+    const candidates: ApplyCandidate[] = ((approved.data ?? []) as unknown as ApprovedRow[]).map(
+      (r) => ({
+        id: r.id,
+        body: r.body ?? null,
+        posting: r.job_postings ?? null,
+        profile_name: r.job_profiles?.name ?? null,
+      }),
+    );
+
+    type SubmittedRow = { id: string; job_postings: { dedupe_key?: string | null } | null };
+    const submittedKeys = new Set<string>();
+    for (const s of (submittedEver.data ?? []) as unknown as SubmittedRow[]) {
+      const k = s.job_postings?.dedupe_key;
+      if (typeof k === "string" && k) submittedKeys.add(k);
+    }
+
+    const spentToday = (submittedToday.count ?? 0) + (queuedToday.count ?? 0);
+    const plan = planApplyQueue(candidates, {
+      cvReady: cvGateReady((cvModules.data ?? []) as ModuleRow[]),
+      submittedDedupeKeys: submittedKeys,
+      budget: DAILY_SUBMIT_CAP - spentToday,
+      limit,
+      nowMs,
+    });
+
+    // Terminal transitions first, and both guarded on `status = 'approved'` so a
+    // concurrent poll cannot expire something the other one already queued.
+    for (const [rows, next, reason] of [
+      [plan.expire, "expired", "valid_through_passed"],
+      [plan.cancel, "cancelled", "duplicate_company_application"],
+    ] as const) {
+      if (rows.length === 0) continue;
+      const { error } = await supabaseEarly
+        .from("job_applications")
+        .update({ status: next, fail_reason: reason })
+        .eq("user_id", uid)
+        .eq("status", "approved")
+        .in("id", rows.map((r) => r.application_id));
+      if (error) {
+        // Cosmetic relative to the queue: nothing was sent, and the next poll
+        // re-derives the same verdict. Do not fail the run over it.
+        console.error(`job-ingest: apply_queue ${next} update failed —`, error.message);
+      }
+    }
+
+    if (plan.queue.length === 0) {
+      return json({ ok: true, queue: [], skipped: plan.skipped });
+    }
+
+    // Claim the rows. `.select()` returns only what actually flipped, and only
+    // those are handed to n8n — if a second poller got there first, its rows are
+    // missing from this result and are therefore not sent twice.
+    const { data: claimed, error: claimError } = await supabaseEarly
+      .from("job_applications")
+      .update({ status: "queued", queued_at: nowIso })
+      .eq("user_id", uid)
+      .eq("status", "approved")
+      .in("id", plan.queue.map((q) => q.application_id))
+      .select("id");
+
+    if (claimError) {
+      console.error("job-ingest: apply_queue claim failed —", claimError.message);
+      return json({ error: "apply_queue_claim_failed", detail: claimError.message }, 500);
+    }
+
+    const claimedIds = new Set((claimed ?? []).map((r: { id: string }) => r.id));
+    return json({
+      ok: true,
+      queue: plan.queue.filter((q) => claimedIds.has(q.application_id)),
+      skipped: plan.skipped,
+    });
+  }
+
+  // MARK: - action: apply_result
+  //
+  // What Gmail said, and the proof of what left the machine.
+  //
+  // The attempt row is written FIRST and unconditionally. It is the audit trail,
+  // and an audit trail that only records outcomes the status column agrees with
+  // is not one — the question this table answers ("what exactly did we send this
+  // company, and when") is asked precisely when the status is in doubt.
+  //
+  // A partial write reports 207 rather than 500, the same pattern as
+  // `evaluate_result`: an attempt landed, and a 500 would make n8n resend an
+  // application that has already been emailed. Duplicating an outbound letter is
+  // worse than any error message.
+  if (asRecord.action === "apply_result") {
+    const parsedApply = parseApplyResult(body);
+    if (!parsedApply.ok) return json({ error: parsedApply.error }, 400);
+    const a = parsedApply.result;
+    const nowIso = new Date().toISOString();
+
+    // Invariant 5. Id AND user id, or anything holding the ingest secret could
+    // stamp 'submitted' onto another user's application.
+    const { data: application, error: lookupError } = await supabaseEarly
+      .from("job_applications")
+      .select("id,posting_id,status")
+      .eq("id", a.applicationId)
+      .eq("user_id", a.userId)
+      .maybeSingle();
+
+    if (lookupError) {
+      console.error("job-ingest: apply_result lookup failed —", lookupError.message);
+      return json({ error: "application_lookup_failed", detail: lookupError.message }, 500);
+    }
+    if (!application) return json({ error: "unknown_application" }, 404);
+
+    const { error: attemptError } = await supabaseEarly.from("job_submission_attempts").insert({
+      user_id: a.userId,
+      application_id: a.applicationId,
+      // One timestamp for both ends. n8n reports after the fact and does not tell
+      // us when it started; inventing a duration would be fiction in an audit log.
+      started_at: nowIso,
+      finished_at: nowIso,
+      ok: a.ok,
+      proof: a.proof,
+      error: a.error,
+    });
+
+    if (attemptError) {
+      // The status update is NOT attempted. An application marked 'submitted' with
+      // no attempt row behind it is exactly the unprovable claim this table exists
+      // to prevent, and n8n retrying is the better failure.
+      console.error("job-ingest: attempt insert failed —", attemptError.message);
+      return json({ error: "attempt_insert_failed", detail: attemptError.message }, 500);
+    }
+
+    const nextStatus = a.ok ? "submitted" : "failed";
+    const patch: Record<string, unknown> = a.ok
+      // `fail_reason` is cleared on success so a row that failed, was re-approved
+      // and then went out does not keep advertising a reason it no longer has.
+      ? { status: nextStatus, submitted_at: nowIso, submit_channel: "email", fail_reason: null }
+      : { status: nextStatus, fail_reason: a.error ?? "send_failed" };
+
+    const { data: moved, error: statusError } = await supabaseEarly
+      .from("job_applications")
+      .update(patch)
+      .eq("id", a.applicationId)
+      .eq("user_id", a.userId)
+      // Only from `queued`. A 'failed' row cannot be revived by a stray success
+      // report — it goes back through a human, which is the point.
+      .eq("status", "queued")
+      .select("id")
+      .maybeSingle();
+
+    if (statusError) {
+      console.error("job-ingest: apply_result status update failed —", statusError.message);
+      return json(
+        {
+          ok: false,
+          error: "application_status_failed",
+          detail: statusError.message,
+          application_id: a.applicationId,
+          attempt_recorded: true,
+        },
+        207,
+      );
+    }
+
+    // The posting follows the application. Guarded on the old value so a second
+    // profile's send cannot walk back a status a human has since moved on, the
+    // same rule as `evaluate_result`'s 'discovered' -> 'evaluated' flip.
+    if (a.ok && moved) {
+      const { error: postingError } = await supabaseEarly
+        .from("job_postings")
+        .update({ status: "applied" })
+        .eq("id", application.posting_id)
+        .eq("user_id", a.userId)
+        .in("status", ["evaluated", "discovered"]);
+      if (postingError) {
+        // Cosmetic. The application and its proof are both stored.
+        console.error("job-ingest: posting status update failed —", postingError.message);
+      }
+    }
+
+    return json({
+      ok: true,
+      application_id: a.applicationId,
+      status: moved ? nextStatus : application.status,
+      updated: Boolean(moved),
+      attempt_recorded: true,
     });
   }
 

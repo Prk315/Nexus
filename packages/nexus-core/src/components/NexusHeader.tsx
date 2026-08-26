@@ -5,6 +5,7 @@ import { cn } from "../utils";
 import type { ConnectedApp } from "../types";
 import { ClockDropdown, type ClockDropdownProps } from "./ClockDropdown";
 import { MailPanel, type MailPanelProps } from "./MailPanel";
+import { JobsPanel, type JobsPanelProps } from "./JobsPanel";
 
 // Deployed ecosystem web apps, from per-deployment env vars. Entries with no URL
 // are hidden. Used by the header's app switcher to jump between the web apps.
@@ -62,6 +63,23 @@ interface NexusHeaderProps {
    * owns the mail-field → task-field mapping.
    */
   onConvertMailToTask?: MailPanelProps["onConvertToTask"];
+  /**
+   * Reads and writes the job-applier tables (`job_postings`, `job_matches`,
+   * `job_applications`, `job_app_modules`). Build one with
+   * `createJobsApi(supabase)`.
+   *
+   * Injected for exactly the reason `loadMail` is, and with one extra
+   * consequence worth stating: all five tables are `auth.uid()`-scoped with no
+   * anon policy, so a signed-out read returns an **empty set, not an error**.
+   * Pass `undefined` when there is no session — the Jobs button still renders
+   * and says "sign in to see your job search", which is the one thing row count
+   * can never distinguish from "nothing matched".
+   *
+   * Unlike Mail there is no `onJobs` fallback: the button is new, so an app
+   * with no session gets the panel-with-a-sign-in-message rather than a
+   * different control.
+   */
+  jobsApi?: JobsPanelProps["api"];
 }
 
 // Small icon button — used for the right-side action row
@@ -108,6 +126,7 @@ export function NexusHeader({
   loadMail,
   mailRulesApi,
   onConvertMailToTask,
+  jobsApi,
 }: NexusHeaderProps) {
   const { apps, isNexusRunning } = useConnectedApps();
 
@@ -194,6 +213,9 @@ export function NexusHeader({
         {loadMail
           ? <MailPanel loadMail={loadMail} rulesApi={mailRulesApi} onConvertToTask={onConvertMailToTask} />
           : <IconBtn onClick={onMail} title="Mail"><Mail className="h-4 w-4" /></IconBtn>}
+        {/* Beside mail, because it is the same kind of thing: a queue somebody
+            else filled that occasionally needs a human. */}
+        <JobsPanel api={jobsApi} />
         <IconBtn onClick={onMessages} title="Messages"><MessageSquare className="h-4 w-4" /></IconBtn>
         {onClock
           ? <IconBtn onClick={onClock} title="Clock"><Clock className="h-4 w-4" /></IconBtn>
