@@ -248,10 +248,17 @@ export const EditorPane = forwardRef<EditorPaneHandle, EditorPaneProps>(
           persistedContent.set(selectedId, content);
           setSaveStatus("saved");
           setTimeout(() => setSaveStatus(""), 1500);
-        } catch {
-          // The queue gave up after backoff — say so instead of lying "Saved";
-          // the content stays pending and the next edit re-arms the save.
-          setSaveStatus("error");
+        } catch (e) {
+          if (e instanceof api.ContentConflictError) {
+            // Someone else's newer save is on the server — do NOT clear this
+            // status on a timer like "saved": it needs to stay until the note
+            // is reloaded, or the next autosave would just overwrite them.
+            setSaveStatus("conflict");
+          } else {
+            // The queue gave up after backoff — say so instead of lying "Saved";
+            // the content stays pending and the next edit re-arms the save.
+            setSaveStatus("error");
+          }
         }
       }, 400);
       return () => clearTimeout(timer);
@@ -495,10 +502,11 @@ export const EditorPane = forwardRef<EditorPaneHandle, EditorPaneProps>(
                 {saveStatus && (
                   <span
                     className="save-status"
-                    style={saveStatus === "error" ? { color: "#f87171" } : undefined}
+                    style={(saveStatus === "error" || saveStatus === "conflict") ? { color: "#f87171" } : undefined}
                   >
                     {saveStatus === "saving" ? "Saving…"
                       : saveStatus === "error" ? "Not saved — will retry on edit"
+                      : saveStatus === "conflict" ? "Changed by the other user — reload this note to see it"
                       : "Saved"}
                   </span>
                 )}

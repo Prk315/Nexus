@@ -85,5 +85,15 @@ export function useGraph() {
     setGraph(g);
   }
 
-  return { graph, graphData, savePositions, loadGraph, createNode, deleteNode, addEdge, removeEdge, addTag, removeTag, setTagColor, createTag, renameTag, deleteTagGlobal };
+  async function shareNode(id: string) {
+    const g = await api.shareNode(id, graph);
+    setGraph(g);
+  }
+
+  async function unshareNode(id: string) {
+    const g = await api.unshareNode(id, graph);
+    setGraph(g);
+  }
+
+  return { graph, graphData, savePositions, loadGraph, createNode, deleteNode, addEdge, removeEdge, addTag, removeTag, setTagColor, createTag, renameTag, deleteTagGlobal, shareNode, unshareNode };
 }

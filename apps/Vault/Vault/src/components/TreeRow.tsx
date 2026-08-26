@@ -15,9 +15,10 @@ interface TreeRowProps {
   onCreateChild: (parentId: string, name: string, kind: string) => void;
   onUnlink?: (parentId: string, childId: string) => void;
   onToggleFavorite?: (id: string, isFav: boolean) => void;
+  onToggleShare?: (id: string, isShared: boolean) => void;
 }
 
-export function TreeRow({ nodeId, graph, selectedId, expanded, depth, parentId, onSelect, onDelete, onToggle, onCreateChild, onUnlink, onToggleFavorite }: TreeRowProps) {
+export function TreeRow({ nodeId, graph, selectedId, expanded, depth, parentId, onSelect, onDelete, onToggle, onCreateChild, onUnlink, onToggleFavorite, onToggleShare }: TreeRowProps) {
   const node = graph.nodes[nodeId];
   const [menuOpen, setMenuOpen] = useState(false);
   const [childName, setChildName] = useState("");
@@ -32,6 +33,7 @@ export function TreeRow({ nodeId, graph, selectedId, expanded, depth, parentId, 
   const isExpanded = expanded.has(nodeId);
   const isFolder = node.kind.type === "Folder";
   const isFavorite = node.tags.includes("favorite");
+  const isShared = node.team_id != null;
 
   function openMenu(e: React.MouseEvent) {
     e.stopPropagation();
@@ -77,6 +79,15 @@ export function TreeRow({ nodeId, graph, selectedId, expanded, depth, parentId, 
           {nodeIcon(node.kind)} {node.name}
         </span>
         <button className="node-menu-btn" onClick={openMenu} title="Add child node">⋯</button>
+        {onToggleShare && (
+          <button
+            className={`share-btn${isShared ? " share-active" : ""}`}
+            title={isShared
+              ? (isFolder ? "Unshare this folder and everything in it" : "Unshare this note")
+              : (isFolder ? "Share this folder and everything in it" : "Share this note")}
+            onClick={(e) => { e.stopPropagation(); onToggleShare(nodeId, isShared); }}
+          >⇄</button>
+        )}
         {isFolder && onToggleFavorite && (
           <button
             className={`fav-btn${isFavorite ? " fav-active" : ""}`}
@@ -134,6 +145,7 @@ export function TreeRow({ nodeId, graph, selectedId, expanded, depth, parentId, 
           onCreateChild={onCreateChild}
           onUnlink={onUnlink}
           onToggleFavorite={onToggleFavorite}
+          onToggleShare={onToggleShare}
         />
       ))}
     </>
