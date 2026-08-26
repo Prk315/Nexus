@@ -981,6 +981,8 @@ export interface NotifyProfile {
   id?: string | null;
   name?: string | null;
   approval_threshold?: number | null;
+  /** `job_profiles.sort`. The first tie-break of the per-posting collapse below. */
+  sort?: number | null;
 }
 
 export interface NotifyDraftRow {
@@ -1029,6 +1031,78 @@ export function reviewUrl(supabaseUrl: string, token: string): string {
   return `${supabaseUrl.replace(/\/+$/, "")}/functions/v1/job-approve?token=${encodeURIComponent(token)}`;
 }
 
+/** The ranking inputs of the per-posting collapse. Not the wire shape. */
+export interface NotifyCollapseCandidate {
+  application_id: string;
+  posting_id: string;
+  score: number;
+  /** `job_profiles.sort`, already defaulted. Lower wins. */
+  profile_sort: number;
+  profile_name: string | null;
+}
+
+/**
+ * ONE decision email per posting, never one per (posting, profile).
+ *
+ * ## The bug this removes
+ *
+ * `job_applications` is keyed `(posting_id, profile_id)` — deliberately, because
+ * a Game Dev letter and a Data Science letter for the same ad are two different
+ * documents. But they are ONE JOB. A posting that clears the threshold against
+ * two profiles produced two decision emails, two review links and two live
+ * tokens for what a human experiences as a single yes/no, and approving both
+ * would send the same company two applications from the same person — the exact
+ * outcome `dedupe_key` exists to prevent one layer up.
+ *
+ * ## What the loser is, and what it is not
+ *
+ * It is NOT cancelled, and nothing is deleted. The sibling drafts stay `draft`
+ * with a null `approval_requested_at`, remain visible in the panel, and keep
+ * their bodies — they are alternative letters for a job that is being decided
+ * elsewhere. **Approving the emailed one is approving the job.** That is the
+ * whole contract; there is no second decision to make.
+ *
+ * Which is why the losers must also stop being *offered*. `notify_queue` filters
+ * out any draft whose posting already has a sibling with `approval_requested_at`
+ * set (see `opts.notifiedPostingIds`), so once the winner's email is out the
+ * siblings go inert instead of being re-collapsed and re-suppressed on every
+ * poll forever. The two halves are the same rule at two time scales: this
+ * function is "within one response", the filter is "across responses".
+ *
+ * ## The comparator is total, and that is the point
+ *
+ * score desc -> `job_profiles.sort` asc -> profile name asc -> application id
+ * asc. The last two steps look like decoration and are not: a comparator that
+ * can return "equal" leaves the winner to Map insertion order, which is row
+ * order, which is whatever Postgres felt like. The same posting would then win
+ * under a different profile between two polls, and since the suppression filter
+ * keys on *the posting*, the letter that actually got emailed would be a coin
+ * flip nobody could reproduce from the row data.
+ *
+ * A null profile name loses to any named one rather than sorting as `""` —
+ * absent is not "first alphabetically".
+ */
+export function collapseByPosting(candidates: NotifyCollapseCandidate[]): Set<string> {
+  const best = new Map<string, NotifyCollapseCandidate>();
+  for (const c of candidates) {
+    const held = best.get(c.posting_id);
+    if (!held || beatsForNotify(c, held)) best.set(c.posting_id, c);
+  }
+  return new Set([...best.values()].map((c) => c.application_id));
+}
+
+/** Strict "a should be the one we email instead of b". Never returns true both ways. */
+function beatsForNotify(a: NotifyCollapseCandidate, b: NotifyCollapseCandidate): boolean {
+  if (a.score !== b.score) return a.score > b.score;
+  if (a.profile_sort !== b.profile_sort) return a.profile_sort < b.profile_sort;
+  if (a.profile_name !== b.profile_name) {
+    if (a.profile_name === null) return false;
+    if (b.profile_name === null) return true;
+    return a.profile_name < b.profile_name;
+  }
+  return a.application_id < b.application_id;
+}
+
 /**
  * Join drafts to their match verdicts, keep the ones worth asking a human about,
  * and rank them.
@@ -1052,17 +1126,38 @@ export function reviewUrl(supabaseUrl: string, token: string): string {
  * A draft with no match row at all is dropped for the same reason: it has no
  * verdict, and an approval email for something nothing has judged asks the human
  * to do the model's job.
+ *
+ * ## One posting, one email
+ *
+ * Two filters stand between a set of drafts and a human's inbox, and they are
+ * different questions:
+ *
+ *   `opts.notifiedPostingIds` — has ANY application for this posting already had
+ *     its decision email sent? Then this draft is a sibling of something already
+ *     being decided, and asking again would be asking twice about one job.
+ *   `collapseByPosting`       — of what is left, which single profile's letter is
+ *     the one to send?
+ *
+ * The first is state read from the database; the second is a choice made here.
+ * Both are applied BEFORE `opts.limit`, so a posting with four profiles consumes
+ * one slot of the batch rather than four — a limit spent on duplicates is a
+ * backlog that never drains.
  */
 export function selectNotifyCandidates(
   drafts: NotifyDraftRow[],
   matches: NotifyMatchRow[],
-  opts: { limit: number; supabaseUrl: string },
+  opts: { limit: number; supabaseUrl: string; notifiedPostingIds?: ReadonlySet<string> },
 ): NotifyItem[] {
   const byKey = new Map<string, NotifyMatchRow>();
   for (const m of matches) byKey.set(`${m.posting_id}|${m.profile_id}`, m);
 
   const items: NotifyItem[] = [];
+  const ranking: NotifyCollapseCandidate[] = [];
   for (const d of drafts) {
+    // Suppressed: a sibling draft for this posting was already emailed. Skipped
+    // before the threshold test so the reason a row is absent stays one reason.
+    if (opts.notifiedPostingIds?.has(d.posting_id)) continue;
+
     const match = byKey.get(`${d.posting_id}|${d.profile_id}`);
     if (!match) continue;
     const score = match.score;
@@ -1076,6 +1171,18 @@ export function selectNotifyCandidates(
     if (score < threshold) continue;
 
     const posting = d.job_postings ?? null;
+    ranking.push({
+      application_id: d.id,
+      posting_id: d.posting_id,
+      score,
+      // The column is `not null default 0`, so a missing value here means the
+      // embed did not carry it, not that the profile has no sort. 0 is the same
+      // answer the database would give.
+      profile_sort: typeof profile?.sort === "number" && Number.isFinite(profile.sort)
+        ? profile.sort
+        : 0,
+      profile_name: profile?.name ?? null,
+    });
     items.push({
       application_id: d.id,
       body: d.body ?? null,
@@ -1098,13 +1205,19 @@ export function selectNotifyCandidates(
     });
   }
 
+  // One survivor per posting. Applied to the assembled items rather than to the
+  // drafts, because the collapse ranks on `score`, which only exists after the
+  // match join.
+  const winners = collapseByPosting(ranking);
+  const collapsed = items.filter((i) => winners.has(i.application_id));
+
   // Best first: the human reads the top of the list with the most attention, so
   // that is where the strongest match belongs. `application_id` breaks ties so
   // two equal scores do not shuffle between polls.
-  items.sort((a, b) =>
+  collapsed.sort((a, b) =>
     b.score !== a.score ? b.score - a.score : a.application_id < b.application_id ? -1 : 1
   );
-  return items.slice(0, Math.max(0, opts.limit));
+  return collapsed.slice(0, Math.max(0, opts.limit));
 }
 
 // MARK: - apply_queue planning

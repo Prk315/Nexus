@@ -83,6 +83,13 @@ import {
  * it reads `status = 'approved'` and nothing else, so there is no path from a
  * high score to an outbound email that does not pass through a click. The guards
  * it re-runs at send time are in `logic.ts`; the reasoning for each is there.
+ *
+ * There is no `reply` action, and there deliberately never will be. The last
+ * transition — `submitted` -> `response`, when an employer answers — happens in
+ * the DATABASE, on a trigger over `mail_messages`, because the mail pipeline
+ * already reads the inbox on its own schedule and a second poller asking Gmail
+ * the same question would be a second Gmail credential to keep alive. See
+ * `supabase/migrations/20260826150000_job_reply_loop.sql`.
  */
 
 const json = (body: unknown, status = 200) =>
@@ -412,6 +419,20 @@ Deno.serve(async (req: Request) => {
   // Empty is `{ok: true, notify: []}`, never an error. Most polls find nothing:
   // the threshold is set so a *rare* email is the healthy steady state, and a
   // workflow that reported red on "nothing to ask about" would be red all week.
+  //
+  // ## One posting, one decision email
+  //
+  // Applications are keyed `(posting_id, profile_id)`, so one ad matching two
+  // profiles is two drafts — correctly, they are two different letters. They are
+  // still ONE JOB, and two decision emails for one job means two live review
+  // tokens and, if the human says yes twice, two applications to the same company.
+  //
+  // So: `collapseByPosting` keeps the single best draft per posting within a
+  // response, and the `askedPostingIds` read below keeps the losers out of every
+  // LATER response — a posting with any sibling already carrying
+  // `approval_requested_at` is done being asked about. The losing drafts stay
+  // `draft` with a null timestamp: inert, intact, still visible in the panel.
+  // Approving the emailed one is approving the job.
   if (asRecord.action === "notify_queue") {
     const uid = asRecord.user_id;
     if (typeof uid !== "string") return json({ error: "invalid_user_id" }, 400);
@@ -422,7 +443,10 @@ Deno.serve(async (req: Request) => {
       .select(
         "id,posting_id,profile_id,body,missing_slots,approval_token," +
           "job_postings(id,title,company,location,url,apply_channel,apply_email,valid_through)," +
-          "job_profiles(id,name,approval_threshold)",
+          // `sort` is the collapse's first tie-break. Without it in the embed the
+          // pure function defaults every profile to 0 and the tie falls through to
+          // the name, which is a different (still deterministic) winner.
+          "job_profiles(id,name,approval_threshold,sort)",
       )
       .eq("user_id", uid)
       .eq("status", "draft")
@@ -440,28 +464,49 @@ Deno.serve(async (req: Request) => {
     const drafts = (draftRows ?? []) as unknown as NotifyDraftRow[];
     if (drafts.length === 0) return json({ ok: true, notify: [] });
 
-    // The verdicts. Separate query because `job_applications` has no FK to
-    // `job_matches` — they hang off `(posting_id, profile_id)` independently, and
-    // PostgREST has no relationship to embed through.
-    const { data: matchRowsData, error: matchesError } = await supabaseEarly
-      .from("job_matches")
-      .select("posting_id,profile_id,score,reasoning,matched_skills,missing_skills")
-      .eq("user_id", uid)
-      .in("posting_id", [...new Set(drafts.map((d) => d.posting_id))]);
+    const postingIds = [...new Set(drafts.map((d) => d.posting_id))];
 
-    if (matchesError) {
-      console.error("job-ingest: notify match read failed —", matchesError.message);
-      return json({ error: "notify_queue_failed", detail: matchesError.message }, 500);
+    const [matchRows, askedRows] = await Promise.all([
+      // The verdicts. Separate query because `job_applications` has no FK to
+      // `job_matches` — they hang off `(posting_id, profile_id)` independently, and
+      // PostgREST has no relationship to embed through.
+      supabaseEarly
+        .from("job_matches")
+        .select("posting_id,profile_id,score,reasoning,matched_skills,missing_skills")
+        .eq("user_id", uid)
+        .in("posting_id", postingIds),
+      // The suppression set: postings some profile's application has ALREADY been
+      // emailed about. Note this deliberately does not filter on status — the
+      // question is "has an email gone out about this job", and the answer stays
+      // yes whether that application is now approved, submitted or cancelled.
+      // `approval_requested_at` is the one column nothing clears.
+      supabaseEarly
+        .from("job_applications")
+        .select("posting_id")
+        .eq("user_id", uid)
+        .in("posting_id", postingIds)
+        .not("approval_requested_at", "is", null),
+    ]);
+
+    const notifyReadFailed = matchRows.error ?? askedRows.error;
+    if (notifyReadFailed) {
+      console.error("job-ingest: notify match read failed —", notifyReadFailed.message);
+      return json({ error: "notify_queue_failed", detail: notifyReadFailed.message }, 500);
     }
+
+    const askedPostingIds = new Set(
+      ((askedRows.data ?? []) as { posting_id: string }[]).map((r) => r.posting_id),
+    );
 
     return json({
       ok: true,
-      notify: selectNotifyCandidates(drafts, (matchRowsData ?? []) as NotifyMatchRow[], {
+      notify: selectNotifyCandidates(drafts, (matchRows.data ?? []) as NotifyMatchRow[], {
         limit,
         // Built server-side. n8n never composes this URL: the token is the only
         // credential the review page has, and a workflow assembling the link is a
         // workflow that can get the origin wrong and mail a dead one.
         supabaseUrl: url,
+        notifiedPostingIds: askedPostingIds,
       }),
     });
   }
@@ -715,6 +760,17 @@ Deno.serve(async (req: Request) => {
       finished_at: nowIso,
       ok: a.ok,
       proof: a.proof,
+      // Promoted out of `proof` into a real column, because it is the join key of
+      // the reply loop (20260826150000): an employer's answer lands in the SAME
+      // Gmail thread, and a trigger on `mail_messages` matches on this to move the
+      // application 'submitted' -> 'response'. A `proof->>'thread_id'` lookup on
+      // every ingested mail row would be a sequential scan of the audit log.
+      //
+      // The database derives the same value in a BEFORE INSERT trigger, so this
+      // line is belt-and-braces rather than load-bearing — the migration is
+      // applied before this function is deployed, and attempts written in that
+      // window must still be matchable.
+      thread_id: a.proof?.thread_id ?? null,
       error: a.error,
     });
 

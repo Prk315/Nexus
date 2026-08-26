@@ -21,11 +21,16 @@ import {
   JOB_APPLICATIONS_TABLE,
   JOB_APPLICATION_COLUMNS,
   JOB_APPLICATION_SELECT,
+  JOB_ATTEMPTS_TABLE,
+  JOB_ATTEMPT_COLUMNS,
   JOB_MATCHES_TABLE,
   JOB_MATCH_COLUMNS,
   JOB_MATCH_SELECT,
   JOB_MODULES_TABLE,
   JOB_MODULE_COLUMNS,
+  JOB_PROFILES_TABLE,
+  JOB_PROFILE_FULL_COLUMNS,
+  RESPONSE_STATUS,
   REVIEW_STATUS,
   SENT_STATUSES,
   type JobAppModule,
@@ -35,8 +40,11 @@ import {
   type JobMatchItem,
   type JobPosting,
   type JobProfile,
+  type JobProfileFull,
+  type JobSubmissionAttempt,
 } from "./types";
 import { compareMatches, matchKey } from "./score";
+import { clampThreshold } from "./format";
 
 /**
  * Row caps. A header is not an applicant-tracking system; these bound the read
@@ -48,30 +56,82 @@ export const REVIEW_LIMIT = 30;
 export const MATCH_LIMIT = 30;
 export const SENT_LIMIT = 30;
 export const MODULE_LIMIT = 200;
+/**
+ * Profiles are search *personas* — three or four of them, not a feed. The cap
+ * exists so the read is bounded like every other one here, not because anyone
+ * expects to hit it.
+ */
+export const PROFILE_LIMIT = 50;
+/** One application's whole attempt history. A retry loop that got past this is itself the story. */
+export const ATTEMPT_LIMIT = 20;
 
 export type JobsSnapshot = {
   /** `needs_approval`, newest request first. The decisions waiting on a human. */
   review: JobApplicationItem[];
   /** Gate-pass matches, `score desc nulls first`. */
   matches: JobMatchItem[];
-  /** Everything past the decision point, newest first. */
+  /** Everything past the decision point, newest first — replies included. */
   sent: JobApplicationItem[];
   /** The module catalog, grouped by slot in the panel. */
   modules: JobAppModule[];
+  /** The gate's inputs, editable in the Profiles tab. */
+  profiles: JobProfileFull[];
   /** True when a window came back full and older rows exist outside it. */
-  truncated: { review: boolean; matches: boolean; sent: boolean; modules: boolean };
+  truncated: {
+    review: boolean;
+    matches: boolean;
+    sent: boolean;
+    modules: boolean;
+    profiles: boolean;
+  };
+};
+
+/**
+ * The two numbers behind the header badge.
+ *
+ * Separate fields rather than a pre-summed integer because the Review tab's own
+ * count needs the first half on its own — and because "3 waiting, 1 replied"
+ * is a materially different sentence from "4".
+ */
+export type JobsAttention = {
+  needsApproval: number;
+  responses: number;
+};
+
+/**
+ * The subset of `job_profiles` this panel may write, spelled out rather than
+ * accepted as a partial row.
+ *
+ * The API builds its update object field by field from this — it never spreads
+ * a caller's object into `.update()`. Spreading would let any future call site
+ * write `user_id` (RLS's `with check` would reject it, but only after the panel
+ * had been written as though it were possible) or `locations`, which is
+ * read-only for a reason stated on the type.
+ */
+export type JobProfilePatch = {
+  enabled?: boolean;
+  approval_threshold?: number;
+  keywords?: string[];
+  exclude_terms?: string[];
 };
 
 export type JobsApi = {
   /** One open of the panel. Throws on failure; the panel degrades to stale. */
   load: () => Promise<JobsSnapshot>;
   /**
-   * Just the badge number — a `head: true` count, no rows. Separate from
-   * `load` because it runs on a timer while the panel is *closed*, and pulling
-   * 30 drafts plus their bodies every minute to render one integer would be
+   * The badge numbers — two `head: true` counts, no rows. Separate from `load`
+   * because it runs on a timer while the panel is *closed*, and pulling 30
+   * drafts plus their bodies every minute to render one integer would be
    * absurd.
    */
-  countNeedsApproval: () => Promise<number>;
+  countAttention: () => Promise<JobsAttention>;
+  /**
+   * One application's attempt history, newest first. Fetched **lazily**, per
+   * row, when a Sent row is expanded — the alternative is one query per
+   * application on every panel open to render something nobody has asked to
+   * see, which is an N+1 by any other name.
+   */
+  loadAttempts: (applicationId: string) => Promise<JobSubmissionAttempt[]>;
   /**
    * `needs_approval → approved`.
    *
@@ -83,6 +143,15 @@ export type JobsApi = {
   reject: (id: string) => Promise<JobApplication | null>;
   setModuleEnabled: (id: string, enabled: boolean) => Promise<JobAppModule>;
   setModuleContent: (id: string, content: string) => Promise<JobAppModule>;
+  /**
+   * Write one or more of the four editable gate fields.
+   *
+   * Returns the stored row, which is what the panel rolls forward to — an
+   * optimistic edit is a *guess* about what the server will hold, and adopting
+   * the response rather than the guess is what keeps a clamped threshold or a
+   * trigger-touched `updated_at` from being invisible until the next refetch.
+   */
+  updateProfile: (id: string, patch: JobProfilePatch) => Promise<JobProfileFull>;
 };
 
 // ── Embed normalisation ───────────────────────────────────────────────────
@@ -166,10 +235,10 @@ export function createJobsApi(client: SupabaseClient | null | undefined): JobsAp
     async load() {
       const c = requireClient();
 
-      // Four independent reads. None is scoped by `user_id` in the query: RLS is
+      // Five independent reads. None is scoped by `user_id` in the query: RLS is
       // the scoping mechanism, and a hardcoded id here would be a second,
       // drifting source of truth. (Same call `createMailLoader` makes.)
-      const [reviewRes, matchRes, sentRes, moduleRes] = await Promise.all([
+      const [reviewRes, matchRes, sentRes, moduleRes, profileRes] = await Promise.all([
         c
           .from(JOB_APPLICATIONS_TABLE)
           .select(JOB_APPLICATION_SELECT)
@@ -209,6 +278,16 @@ export function createJobsApi(client: SupabaseClient | null | undefined): JobsAp
           .order("sort", { ascending: true })
           .order("name", { ascending: true })
           .limit(MODULE_LIMIT),
+        c
+          .from(JOB_PROFILES_TABLE)
+          .select(JOB_PROFILE_FULL_COLUMNS)
+          // Disabled profiles are fetched for the same reason disabled modules
+          // are: `enabled` governs what the harvester runs, not what the
+          // catalog shows, and this tab exists so a profile can be switched
+          // back on without opening the Supabase dashboard.
+          .order("sort", { ascending: true })
+          .order("name", { ascending: true })
+          .limit(PROFILE_LIMIT),
       ]);
 
       // The two application reads are the panel's reason to exist; a failure in
@@ -228,6 +307,13 @@ export function createJobsApi(client: SupabaseClient | null | undefined): JobsAp
       const moduleRows = moduleRes.error
         ? []
         : ((moduleRes.data ?? []) as unknown as JobAppModule[]);
+      // Degrades to empty like modules do, and with the same visible
+      // consequence: the Profiles tab says it could not read them rather than
+      // rendering "you have no search profiles", which would be a lie that
+      // invites someone to create a duplicate.
+      const profileRows = profileRes.error
+        ? []
+        : ((profileRes.data ?? []) as unknown as JobProfileFull[]);
 
       const matches: JobMatchItem[] = matchRows
         .map((row) => {
@@ -263,22 +349,63 @@ export function createJobsApi(client: SupabaseClient | null | undefined): JobsAp
         matches,
         sent: stitch(sentRows, byKey),
         modules: moduleRows,
+        profiles: profileRows,
         truncated: {
           review: reviewRows.length >= REVIEW_LIMIT,
           matches: matchRows.length >= MATCH_LIMIT,
           sent: sentRows.length >= SENT_LIMIT,
           modules: moduleRows.length >= MODULE_LIMIT,
+          profiles: profileRows.length >= PROFILE_LIMIT,
         },
       };
     },
 
-    async countNeedsApproval() {
-      const { count, error } = await requireClient()
-        .from(JOB_APPLICATIONS_TABLE)
-        .select("id", { count: "exact", head: true })
-        .eq("status", REVIEW_STATUS);
-      if (error) throw new Error(error.message ?? "jobs: count failed");
-      return count ?? 0;
+    async countAttention() {
+      const c = requireClient();
+      const [reviewRes, responseRes] = await Promise.all([
+        c
+          .from(JOB_APPLICATIONS_TABLE)
+          .select("id", { count: "exact", head: true })
+          .eq("status", REVIEW_STATUS),
+        // Two counts rather than one `.in()`, because the panel needs them apart:
+        // the Review tab's own number is the first alone. Both are row-less, so
+        // the extra request costs a round trip and no payload.
+        //
+        // Against a database that has never written `'response'` this returns 0
+        // rather than erroring — `status` is free text, so an unmatched `.eq`
+        // is simply an empty count. That is what makes this safe to ship before
+        // the backend half lands.
+        c
+          .from(JOB_APPLICATIONS_TABLE)
+          .select("id", { count: "exact", head: true })
+          .eq("status", RESPONSE_STATUS),
+      ]);
+      // The approval queue is the badge's reason to exist; failing to read it is
+      // a real failure and the panel keeps its previous number rather than
+      // showing a fresh-looking zero. A reply count that fails degrades to 0 —
+      // it can only ever understate, never invent urgency.
+      if (reviewRes.error) throw new Error(reviewRes.error.message ?? "jobs: count failed");
+      return {
+        needsApproval: reviewRes.count ?? 0,
+        responses: responseRes.error ? 0 : (responseRes.count ?? 0),
+      };
+    },
+
+    async loadAttempts(applicationId) {
+      const { data, error } = await requireClient()
+        .from(JOB_ATTEMPTS_TABLE)
+        .select(JOB_ATTEMPT_COLUMNS)
+        .eq("application_id", applicationId)
+        // "What happened to this application, most recent first" — the index
+        // `job_submission_attempts_app_idx` is built for exactly this order.
+        .order("started_at", { ascending: false })
+        .limit(ATTEMPT_LIMIT);
+      // Throws rather than degrading to []. An empty attempt log is a *claim*
+      // ("nothing was ever sent") and it is the reassuring one; this is the one
+      // read in the whole panel where a silent empty result would actively
+      // mislead, so the caller renders "couldn't read the log" instead.
+      if (error) throw new Error(error.message ?? "jobs: attempts query failed");
+      return (data ?? []) as unknown as JobSubmissionAttempt[];
     },
 
     async approve(id) {
@@ -355,6 +482,43 @@ export function createJobsApi(client: SupabaseClient | null | undefined): JobsAp
         .single();
       if (error) throw new Error(error.message ?? "jobs: module save failed");
       return data as unknown as JobAppModule;
+    },
+
+    async updateProfile(id, patch) {
+      // Built field by field. Never `{ ...patch }` — see `JobProfilePatch`.
+      const update: Record<string, unknown> = {};
+      if (typeof patch.enabled === "boolean") update.enabled = patch.enabled;
+      if (patch.approval_threshold !== undefined) {
+        const t = clampThreshold(patch.approval_threshold);
+        // A patch that carried a threshold and produced nothing usable is a bug
+        // upstream, not something to paper over by writing 0 — which would set
+        // the profile to "ask me about every posting".
+        if (t === null) throw new Error("jobs: approval_threshold is not a number");
+        update.approval_threshold = t;
+      }
+      if (Array.isArray(patch.keywords)) {
+        update.keywords = patch.keywords.map((k) => String(k)).filter((k) => k.trim() !== "");
+      }
+      if (Array.isArray(patch.exclude_terms)) {
+        update.exclude_terms = patch.exclude_terms
+          .map((k) => String(k))
+          .filter((k) => k.trim() !== "");
+      }
+      if (Object.keys(update).length === 0) {
+        throw new Error("jobs: profile patch had nothing to write");
+      }
+      const { data, error } = await requireClient()
+        .from(JOB_PROFILES_TABLE)
+        .update(update)
+        .eq("id", id)
+        // No status guard, unlike approve/reject: nothing races a profile edit.
+        // The approval email can decide an application; only this panel and the
+        // Supabase dashboard touch a profile, and last-writer-wins between those
+        // two is the same posture the rest of this project takes.
+        .select(JOB_PROFILE_FULL_COLUMNS)
+        .single();
+      if (error) throw new Error(error.message ?? "jobs: profile save failed");
+      return data as unknown as JobProfileFull;
     },
   };
 }

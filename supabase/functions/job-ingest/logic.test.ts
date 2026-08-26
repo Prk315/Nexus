@@ -31,6 +31,7 @@ import {
   type ApplyCandidate,
   type ApplyContext,
   bodyHasUnresolvedGaps,
+  collapseByPosting,
   cvGateReady,
   DAILY_SUBMIT_CAP,
   deadlinePassed,
@@ -39,8 +40,10 @@ import {
   MAX_APPLY,
   MAX_NOTIFY,
   normalizeProof,
+  type NotifyCollapseCandidate,
   type NotifyDraftRow,
   type NotifyMatchRow,
+  type NotifyProfile,
   parseApplyLimit,
   parseApplyResult,
   parseNotifyLimit,
@@ -397,6 +400,206 @@ describe("selectNotifyCandidates", () => {
     assert.deepEqual(item.matched_skills, []);
     assert.deepEqual(item.missing_skills, []);
     assert.equal(item.body, null);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// One posting, one decision email.
+//
+// The bug: `job_applications` is keyed `(posting_id, profile_id)`, so an ad
+// matching two profiles is two drafts. Two drafts were two decision emails, two
+// review links and two live tokens for what a human reads as ONE job — and
+// approving both sends the same company two letters from the same person.
+//
+// Every case below is about a way that could silently come back: a
+// non-deterministic winner (the letter that got sent becomes a coin flip nobody
+// can reproduce), a limit spent on duplicates (a backlog that never drains), or
+// a suppressed sibling that keeps being re-offered forever.
+describe("collapseByPosting", () => {
+  const cand = (
+    over: Partial<NotifyCollapseCandidate> & { application_id: string },
+  ): NotifyCollapseCandidate => ({
+    posting_id: "p1",
+    score: 80,
+    profile_sort: 0,
+    profile_name: "AI Engineering",
+    ...over,
+  });
+
+  it("keeps the highest score per posting and leaves other postings alone", () => {
+    const winners = collapseByPosting([
+      cand({ application_id: "a", score: 80 }),
+      cand({ application_id: "b", score: 91 }),
+      cand({ application_id: "c", score: 77, posting_id: "p2" }),
+    ]);
+    assert.deepEqual([...winners].sort(), ["b", "c"]);
+  });
+
+  it("breaks a score tie on profile sort, lowest first", () => {
+    const winners = collapseByPosting([
+      cand({ application_id: "a", profile_sort: 3, profile_name: "Aaa" }),
+      cand({ application_id: "b", profile_sort: 1, profile_name: "Zzz" }),
+    ]);
+    // Sort beats name: the human's own ordering of their profiles is a stronger
+    // statement than the alphabet.
+    assert.deepEqual([...winners], ["b"]);
+  });
+
+  it("breaks a sort tie on profile name, then on application id", () => {
+    assert.deepEqual(
+      [...collapseByPosting([
+        cand({ application_id: "a", profile_name: "Zzz" }),
+        cand({ application_id: "b", profile_name: "Aaa" }),
+      ])],
+      ["b"],
+    );
+    assert.deepEqual(
+      [...collapseByPosting([
+        cand({ application_id: "b" }),
+        cand({ application_id: "a" }),
+      ])],
+      ["a"],
+    );
+  });
+
+  it("sorts a null profile name last rather than as an empty string", () => {
+    // Absent is not "first alphabetically". A named profile should win.
+    assert.deepEqual(
+      [...collapseByPosting([
+        cand({ application_id: "a", profile_name: null }),
+        cand({ application_id: "b", profile_name: "Zzz" }),
+      ])],
+      ["b"],
+    );
+  });
+
+  it("picks the same winner regardless of input order", () => {
+    // The whole reason the comparator is total. Row order out of Postgres is not
+    // stable, and the suppression filter keys on the POSTING — so an unstable
+    // winner means the letter that actually went out is a coin flip.
+    const rows = [
+      cand({ application_id: "a", score: 88, profile_sort: 2, profile_name: "B" }),
+      cand({ application_id: "b", score: 88, profile_sort: 2, profile_name: "A" }),
+      cand({ application_id: "c", score: 88, profile_sort: 2, profile_name: "A" }),
+    ];
+    const forward = [...collapseByPosting(rows)];
+    const reverse = [...collapseByPosting([...rows].reverse())];
+    assert.deepEqual(forward, ["c" < "b" ? "c" : "b"]);
+    assert.deepEqual(forward, reverse);
+  });
+
+  it("is a no-op on an empty batch", () => {
+    assert.equal(collapseByPosting([]).size, 0);
+  });
+});
+
+// ---------------------------------------------------------------------------
+describe("notify_queue: one email per posting", () => {
+  // Two profiles, ONE posting. The shape of the bug.
+  const sibling = (
+    n: number,
+    over: Partial<NotifyDraftRow> & { job_profiles?: NotifyProfile | null } = {},
+  ): NotifyDraftRow => ({
+    id: APP(n),
+    posting_id: "shared-posting",
+    profile_id: `f${n}`,
+    body: "letter",
+    missing_slots: [],
+    approval_token: `token-${n}`,
+    job_postings: { title: "One Job", company: "Acme", url: "https://x/1" },
+    job_profiles: { id: `f${n}`, name: `Profile ${n}`, approval_threshold: 75, sort: n },
+    ...over,
+  });
+
+  const verdict = (n: number, score: number): NotifyMatchRow => ({
+    posting_id: "shared-posting",
+    profile_id: `f${n}`,
+    score,
+    reasoning: "because",
+    matched_skills: [],
+    missing_skills: [],
+  });
+
+  const opts = { limit: 5, supabaseUrl: "https://ref.supabase.co" };
+
+  it("emails once about a posting that clears the threshold twice", () => {
+    const out = selectNotifyCandidates(
+      [sibling(1), sibling(2)],
+      [verdict(1, 82), verdict(2, 90)],
+      opts,
+    );
+    assert.equal(out.length, 1, "one job is one decision email");
+    assert.equal(out[0].application_id, APP(2), "the higher score is the one sent");
+    assert.equal(out[0].score, 90);
+  });
+
+  it("uses job_profiles.sort when two profiles score identically", () => {
+    const out = selectNotifyCandidates(
+      [sibling(1, { job_profiles: { name: "Second", approval_threshold: 75, sort: 5 } }),
+        sibling(2, { job_profiles: { name: "First", approval_threshold: 75, sort: 1 } })],
+      [verdict(1, 88), verdict(2, 88)],
+      opts,
+    );
+    assert.deepEqual(out.map((i) => i.application_id), [APP(2)]);
+    assert.equal(out[0].profile_name, "First");
+  });
+
+  it("collapses BEFORE the limit, so duplicates never eat the batch", () => {
+    // Four drafts, two postings, limit 2. Pre-fix this returned two letters for
+    // one job and never reached the second job at all.
+    const other = (n: number): NotifyDraftRow => ({
+      ...sibling(n),
+      posting_id: "other-posting",
+    });
+    const otherVerdict = (n: number, score: number): NotifyMatchRow => ({
+      ...verdict(n, score),
+      posting_id: "other-posting",
+    });
+    const out = selectNotifyCandidates(
+      [sibling(1), sibling(2), other(3), other(4)],
+      [verdict(1, 99), verdict(2, 98), otherVerdict(3, 97), otherVerdict(4, 96)],
+      { ...opts, limit: 2 },
+    );
+    assert.deepEqual(out.map((i) => i.application_id), [APP(1), APP(3)]);
+    assert.deepEqual([...new Set(out.map((i) => i.score))].sort(), [97, 99]);
+  });
+
+  it("suppresses every draft for a posting already asked about", () => {
+    // The across-polls half of the rule. Once the winner's email is out, the
+    // losing siblings must stop qualifying — otherwise every poll re-collapses
+    // them and the queue never empties.
+    const out = selectNotifyCandidates(
+      [sibling(1), sibling(2)],
+      [verdict(1, 82), verdict(2, 90)],
+      { ...opts, notifiedPostingIds: new Set(["shared-posting"]) },
+    );
+    assert.deepEqual(out, []);
+  });
+
+  it("suppresses only the named posting", () => {
+    const out = selectNotifyCandidates(
+      [sibling(1), { ...sibling(2), posting_id: "untouched" }],
+      [verdict(1, 82), { ...verdict(2, 90), posting_id: "untouched" }],
+      { ...opts, notifiedPostingIds: new Set(["shared-posting"]) },
+    );
+    assert.deepEqual(out.map((i) => i.application_id), [APP(2)]);
+  });
+
+  it("suppression outranks a high score", () => {
+    // Deliberate: a 99 on a job already being decided is still the same job.
+    const out = selectNotifyCandidates(
+      [sibling(1)],
+      [verdict(1, 99)],
+      { ...opts, notifiedPostingIds: new Set(["shared-posting"]) },
+    );
+    assert.deepEqual(out, []);
+  });
+
+  it("changes nothing when the set is absent", () => {
+    // Byte-compatibility with the deployed caller: an old payload that never
+    // passes `notifiedPostingIds` must behave exactly as before.
+    const out = selectNotifyCandidates([sibling(1)], [verdict(1, 99)], opts);
+    assert.equal(out.length, 1);
   });
 });
 

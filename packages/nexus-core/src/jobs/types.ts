@@ -27,6 +27,7 @@ export const JOB_PROFILES_TABLE = "job_profiles";
 export const JOB_MATCHES_TABLE = "job_matches";
 export const JOB_APPLICATIONS_TABLE = "job_applications";
 export const JOB_MODULES_TABLE = "job_app_modules";
+export const JOB_ATTEMPTS_TABLE = "job_submission_attempts";
 
 // ── Status domains ────────────────────────────────────────────────────────
 
@@ -49,10 +50,32 @@ export type JobApplicationStatus =
   | "submitted"
   | "failed"
   | "cancelled"
-  | "expired";
+  | "expired"
+  | "response";
 
 /** The one status the Review tab acts on. Also the guard on every write. */
 export const REVIEW_STATUS = "needs_approval";
+
+/**
+ * A human at the company replied.
+ *
+ * The terminal state this entire pipeline exists to produce, and the reason it
+ * is called out here rather than left as one more string in `SENT_STATUSES`:
+ * the panel promotes these rows to the top of Sent and counts them in the
+ * header badge alongside pending approvals.
+ *
+ * ⚠️ It is written by a **backend** change landing separately, so this client
+ * must tolerate a database that has never produced the value (a `.eq` count
+ * returns 0, harmlessly) *and* one that produces it before this code ships —
+ * which it already does, because `status` is free text and `statusChip`'s
+ * default branch renders an unknown value as itself rather than dropping the
+ * row. Neither direction is a deploy ordering problem. There is also no
+ * `responded_at` in any pinned column list on purpose: PostgREST rejects the
+ * **whole** query on an unknown column, so selecting a column a parallel
+ * migration has not yet added would empty the Sent tab entirely. Recency for a
+ * reply comes from `updated_at`, which has existed since day one.
+ */
+export const RESPONSE_STATUS = "response";
 
 /**
  * Everything past the decision point — the Sent tab.
@@ -72,6 +95,9 @@ export const SENT_STATUSES: readonly JobApplicationStatus[] = [
   "failed",
   "expired",
   "cancelled",
+  // Additive. An `.in()` listing a status no row has ever held costs nothing;
+  // omitting one that exists hides the single most important row in the table.
+  "response",
 ];
 
 /** `pass` survives the keyword gate; `dropped` was rejected before the model ran. */
@@ -103,7 +129,16 @@ export type JobPosting = {
   discovered_at: string;
 };
 
-/** One row of `job_profiles` — a search persona ("AI Engineer", "Game Dev"). */
+/**
+ * One row of `job_profiles` — a search persona ("AI Engineer", "Game Dev") — as
+ * it arrives **embedded** on a match or an application.
+ *
+ * Deliberately narrower than the table. This shape is joined onto every row of
+ * three windows, so it carries only what a card renders; `exclude_terms`,
+ * `locations`, `languages`, `category_allow` and `notes` would be four arrays
+ * and a prose blob repeated 30 times to render a profile *name*. The Profiles
+ * tab reads the wider shape below, once.
+ */
 export type JobProfile = {
   id: string;
   name: string;
@@ -112,6 +147,48 @@ export type JobProfile = {
   keywords: string[];
   /** Score at or above which a draft asks for approval. Default 75. */
   approval_threshold: number;
+};
+
+/**
+ * The same row as the Profiles tab edits it — the gate's inputs, in full.
+ *
+ * Two extra arrays rather than the whole table: `languages`, `category_allow`
+ * and `notes` are not editable here yet, and selecting a column nothing renders
+ * is how a column list quietly becomes a `select *`.
+ */
+export type JobProfileFull = JobProfile & {
+  /** Any of these appearing in title or description drops the posting before the model runs. */
+  exclude_terms: string[];
+  /**
+   * Allowed locations. **Read-only in the panel**, on purpose — see
+   * `filterLocation` in `extract.js`: an empty list means "anywhere", so
+   * removing the last entry silently widens the search rather than narrowing
+   * it, and a typo'd entry silently deletes a whole city's postings. That is a
+   * decision to make deliberately in the dashboard, not one to fat-finger in a
+   * dropdown.
+   */
+  locations: string[];
+};
+
+/**
+ * One row of `job_submission_attempts` — the append-only proof log.
+ *
+ * `ok` is nullable and the null means "we never heard back", not "it failed";
+ * `proof` is jsonb holding whatever n8n could name about what left the machine.
+ * Read it with the **authenticated** client: this table names which companies
+ * were actually applied to and when, and an empty log under a mismatched JWT
+ * looks exactly like the reassuring "nothing has been sent" it exists to be
+ * able to contradict.
+ */
+export type JobSubmissionAttempt = {
+  id: string;
+  application_id: string;
+  started_at: string;
+  finished_at: string | null;
+  ok: boolean | null;
+  proof: unknown;
+  error: string | null;
+  created_at: string;
 };
 
 /**
@@ -231,6 +308,12 @@ export const JOB_POSTING_COLUMNS =
   "id,title,company,location,url,source_kind,valid_through,status,discovered_at";
 
 export const JOB_PROFILE_COLUMNS = "id,name,enabled,sort,keywords,approval_threshold";
+
+/** The Profiles tab's read. One query, so the two extra arrays are free here. */
+export const JOB_PROFILE_FULL_COLUMNS = `${JOB_PROFILE_COLUMNS},exclude_terms,locations`;
+
+export const JOB_ATTEMPT_COLUMNS =
+  "id,application_id,started_at,finished_at,ok,proof,error,created_at";
 
 export const JOB_MATCH_COLUMNS =
   "id,posting_id,profile_id,gate_verdict,gate_reason,score,reasoning," +

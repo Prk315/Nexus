@@ -43,15 +43,21 @@ export {
   REVIEW_LIMIT,
   MATCH_LIMIT,
   SENT_LIMIT,
+  PROFILE_LIMIT,
+  ATTEMPT_LIMIT,
   type JobsApi,
+  type JobsAttention,
   type JobsSnapshot,
+  type JobProfilePatch,
 } from "./jobs/api";
 export {
   JOB_APPLICATIONS_TABLE,
+  JOB_ATTEMPTS_TABLE,
   JOB_MATCHES_TABLE,
   JOB_MODULES_TABLE,
   JOB_POSTINGS_TABLE,
   JOB_PROFILES_TABLE,
+  RESPONSE_STATUS,
   REVIEW_STATUS,
   SENT_STATUSES,
   type JobAppModule,
@@ -63,6 +69,8 @@ export {
   type JobMatchItem,
   type JobPosting,
   type JobProfile,
+  type JobProfileFull,
+  type JobSubmissionAttempt,
 } from "./jobs/types";
 export * from "./components/LifeBar";
 export * from "./components/AgentBar";

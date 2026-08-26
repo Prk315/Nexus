@@ -7,7 +7,11 @@ import {
   ChevronRight,
   ExternalLink,
   Loader2,
+  Lock,
+  Minus,
+  PartyPopper,
   Pencil,
+  Plus,
   Power,
   X,
 } from "lucide-react";
@@ -21,9 +25,12 @@ import { cn } from "../utils";
 import { plainLine, plainText } from "../mail/score";
 import {
   MATCH_LIMIT,
+  PROFILE_LIMIT,
   REVIEW_LIMIT,
   SENT_LIMIT,
+  type JobProfilePatch,
   type JobsApi,
+  type JobsAttention,
   type JobsSnapshot,
 } from "../jobs/api";
 import {
@@ -35,7 +42,25 @@ import {
   scoreBand,
   normalizeScore,
 } from "../jobs/score";
-import type { JobAppModule, JobApplicationItem, JobMatchItem } from "../jobs/types";
+import {
+  THRESHOLD_MAX,
+  THRESHOLD_MIN,
+  addChip,
+  ago,
+  attemptLine,
+  chipsEqual,
+  clampThreshold,
+  isResponseStatus,
+  jobsBadgeCount,
+  removeChip,
+} from "../jobs/format";
+import type {
+  JobAppModule,
+  JobApplicationItem,
+  JobMatchItem,
+  JobProfileFull,
+  JobSubmissionAttempt,
+} from "../jobs/types";
 
 /**
  * The Jobs dropdown: the harvest → gate → score → assemble pipeline's one human
@@ -68,33 +93,28 @@ export type JobsPanelProps = {
   api?: JobsApi;
 };
 
-type Tab = "review" | "matches" | "sent" | "modules";
+type Tab = "review" | "matches" | "sent" | "profiles" | "modules";
 
 const TABS: { id: Tab; label: string }[] = [
   { id: "review", label: "Review" },
   { id: "matches", label: "Matches" },
   { id: "sent", label: "Sent" },
+  { id: "profiles", label: "Profiles" },
   { id: "modules", label: "Modules" },
 ];
 
-// ── Small local helpers ──────────────────────────────────────────────────
+/**
+ * How long a decided Approve/Reject button stays visibly spent.
+ *
+ * The write is already idempotent — both are guarded on `status =
+ * needs_approval`, so a double-click's second call matches zero rows and
+ * resolves `null` — so this buys nothing at the database. It buys the *UI* not
+ * flickering between busy and idle fast enough to look like the click missed,
+ * which is exactly what makes someone click again.
+ */
+const PRESS_HOLD_MS = 2000;
 
-/** "2h ago" / "4d ago" / "21 Aug". Empty string for anything unparseable. */
-function ago(iso: string | null | undefined): string {
-  if (!iso) return "";
-  const t = Date.parse(iso);
-  if (!Number.isFinite(t)) return "";
-  const diff = Date.now() - t;
-  if (diff < 0) return "just now";
-  const min = Math.floor(diff / 60_000);
-  if (min < 1) return "just now";
-  if (min < 60) return `${min}m ago`;
-  const hours = Math.floor(min / 60);
-  if (hours < 24) return `${hours}h ago`;
-  const days = Math.floor(hours / 24);
-  if (days < 7) return `${days}d ago`;
-  return new Date(t).toLocaleDateString(undefined, { day: "numeric", month: "short" });
-}
+// ── Small local helpers ──────────────────────────────────────────────────
 
 /** A deadline as a short local date, plus whether it has already passed. */
 function deadline(iso: string | null): { text: string; past: boolean } | null {
@@ -334,6 +354,31 @@ function ReviewCard({
   onReject: () => void;
 }) {
   const [openDraft, setOpenDraft] = useState(false);
+  /**
+   * Which button was pressed, held for `PRESS_HOLD_MS`.
+   *
+   * `busy` alone is not enough: the write is one fast `.update()`, so the
+   * spinner can come and go inside a double-click's own interval and the card
+   * looks untouched right up until the refetch lands 400 ms later. Holding the
+   * pressed state past that window is what makes the click feel like it landed.
+   */
+  const [pressed, setPressed] = useState<"approve" | "reject" | null>(null);
+  const pressTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // The card unmounts the moment a decision receipt replaces it, which is well
+  // inside the hold — without this the timer fires into a dead component.
+  useEffect(() => () => {
+    if (pressTimer.current) clearTimeout(pressTimer.current);
+  }, []);
+
+  function press(kind: "approve" | "reject", run: () => void) {
+    if (pressed || busy) return;
+    setPressed(kind);
+    if (pressTimer.current) clearTimeout(pressTimer.current);
+    pressTimer.current = setTimeout(() => setPressed(null), PRESS_HOLD_MS);
+    run();
+  }
+
+  const held = pressed !== null || busy;
   const gaps = applicationGaps(item);
   const empty = !item.body || item.body.trim() === "";
   const title = plainLine(item.posting?.title, 90) || "(untitled posting)";
@@ -440,22 +485,30 @@ function ReviewCard({
 
       <div className="mt-2 flex items-center gap-1.5">
         <MenuButton
-          onClick={onApprove}
-          disabled={busy}
+          onClick={() => press("approve", onApprove)}
+          disabled={held}
           title="Approve — the sender picks it up on its next pass"
           className="h-7 flex-1 justify-center bg-emerald-600 px-2 text-[11px] font-semibold text-white hover:bg-emerald-500 focus:bg-emerald-500"
         >
-          {busy ? <Loader2 className="h-3 w-3 animate-spin" /> : <Check className="h-3 w-3" />}
-          Approve
+          {busy || pressed === "approve" ? (
+            <Loader2 className="h-3 w-3 animate-spin" />
+          ) : (
+            <Check className="h-3 w-3" />
+          )}
+          {pressed === "approve" ? "Approving…" : "Approve"}
         </MenuButton>
         <MenuButton
-          onClick={onReject}
-          disabled={busy}
+          onClick={() => press("reject", onReject)}
+          disabled={held}
           title="Reject — the draft is kept, cancelled"
           className="h-7 justify-center border border-border px-3 text-[11px] font-medium text-muted-foreground hover:border-destructive/60 hover:bg-destructive/10 hover:text-destructive focus:bg-destructive/10 focus:text-destructive"
         >
-          <X className="h-3 w-3" />
-          Reject
+          {pressed === "reject" ? (
+            <Loader2 className="h-3 w-3 animate-spin" />
+          ) : (
+            <X className="h-3 w-3" />
+          )}
+          {pressed === "reject" ? "Rejecting…" : "Reject"}
         </MenuButton>
       </div>
 
@@ -526,9 +579,13 @@ function MatchRow({ item }: { item: JobMatchItem }) {
 
 // ── Sent ─────────────────────────────────────────────────────────────────
 
-type StatusTone = "good" | "bad" | "neutral" | "muted";
+type StatusTone = "reply" | "good" | "bad" | "neutral" | "muted";
 
 const TONE_CLASS: Record<StatusTone, string> = {
+  // Filled, not tinted. Every other chip here is a 15%-opacity wash on the
+  // popover background; this one is the only solid block in the tab, because a
+  // reply is the only row in it that is asking for something back.
+  reply: "bg-fuchsia-600 text-white border-fuchsia-600",
   good: "bg-emerald-500/15 text-emerald-700 dark:text-emerald-300 border-emerald-500/40",
   bad: "bg-rose-500/15 text-rose-700 dark:text-rose-300 border-rose-500/40",
   neutral: "bg-sky-500/15 text-sky-700 dark:text-sky-300 border-sky-500/40",
@@ -545,6 +602,16 @@ const TONE_CLASS: Record<StatusTone, string> = {
  */
 function statusChip(item: JobApplicationItem): { tone: StatusTone; label: string; detail: string } {
   switch (item.status) {
+    case "response":
+      // ⚠️ Recency here is `updated_at`, deliberately, and NOT `responded_at`.
+      // The column that would be more precise is arriving in a migration this
+      // code does not own, and PostgREST rejects the **whole** query on an
+      // unknown column — so naming it in `JOB_APPLICATION_COLUMNS` would not
+      // degrade the Sent tab, it would empty it, on every branch pointed at a
+      // database where the migration has not been applied yet. `updated_at` has
+      // existed since the first job migration and moves when the status does,
+      // which is close enough for "3h ago".
+      return { tone: "reply", label: "Replied", detail: ago(item.updated_at) };
     case "submitted":
       return { tone: "good", label: "Sent", detail: ago(item.submitted_at) };
     case "failed":
@@ -566,40 +633,494 @@ function statusChip(item: JobApplicationItem): { tone: StatusTone; label: string
   }
 }
 
-function SentRow({ item }: { item: JobApplicationItem }) {
-  const chip = statusChip(item);
-  const title = plainLine(item.posting?.title, 80) || "(untitled posting)";
-  const company = plainLine(item.posting?.company, 44);
-  const profile = plainLine(item.profile?.name, 24);
+/** One attempt, as one line. All of the deciding happens in `attemptLine`. */
+function AttemptLineRow({ attempt }: { attempt: JobSubmissionAttempt }) {
+  const line = attemptLine(attempt);
   return (
-    <li className="flex items-start gap-2 rounded-md px-1.5 py-1.5 transition-colors hover:bg-accent/50">
+    <li className="flex items-start gap-1.5 text-[9px] leading-snug">
       <span
+        title={line.label}
         className={cn(
-          "mt-px inline-flex shrink-0 items-center rounded-md border px-1.5 py-px text-[9px] font-bold uppercase tracking-wide",
-          TONE_CLASS[chip.tone],
+          "mt-px w-3 shrink-0 text-center font-bold tabular-nums",
+          line.outcome === "ok" && "text-emerald-600 dark:text-emerald-400",
+          line.outcome === "failed" && "text-rose-600 dark:text-rose-400",
+          // Violet, matching the pending score band — same meaning, same colour
+          // family: "no verdict", never "a bad verdict".
+          line.outcome === "pending" && "text-violet-600 dark:text-violet-400",
         )}
       >
-        {chip.label}
+        {line.mark}
       </span>
       <div className="min-w-0 flex-1">
-        <p className="truncate text-[11px] font-medium text-foreground">{title}</p>
-        <p className="truncate text-[10px] text-muted-foreground">
-          {[company, profile].filter(Boolean).join(" · ") || "—"}
-        </p>
-        {chip.detail && (
-          <p
-            className={cn(
-              "mt-0.5 text-[9px]",
-              chip.tone === "bad" ? "text-rose-600 dark:text-rose-400" : "text-muted-foreground/60",
-            )}
+        <span className="text-muted-foreground/70">{line.when || "time unknown"}</span>
+        {line.outcome === "pending" && (
+          <span className="ml-1 text-violet-600 dark:text-violet-400">{line.label}</span>
+        )}
+        {line.proofId && (
+          <span
+            className="ml-1 font-mono text-muted-foreground/50"
+            title="Gmail message id — the proof of what left the machine"
           >
-            {chip.detail}
+            {line.proofId}
+          </span>
+        )}
+        {line.error && (
+          <p className="truncate text-rose-600 dark:text-rose-400" title={plainLine(line.error, 400)}>
+            {plainLine(line.error, 120)}
           </p>
         )}
       </div>
-      <div className="shrink-0">
-        <PostingLink url={item.posting?.url} label="" />
+    </li>
+  );
+}
+
+/**
+ * One decided application.
+ *
+ * Two things beyond a chip and a title: the attempt log, fetched **only when
+ * expanded**, and the reply treatment. The lazy fetch is the point — a Sent tab
+ * that queried `job_submission_attempts` per row on open would fire thirty
+ * queries to render nothing anybody asked to see.
+ */
+function SentRow({
+  item,
+  loadAttempts,
+}: {
+  item: JobApplicationItem;
+  loadAttempts: (id: string) => Promise<JobSubmissionAttempt[]>;
+}) {
+  const [open, setOpen] = useState(false);
+  const [attempts, setAttempts] = useState<JobSubmissionAttempt[] | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const chip = statusChip(item);
+  const replied = isResponseStatus(item.status);
+  const title = plainLine(item.posting?.title, 80) || "(untitled posting)";
+  const company = plainLine(item.posting?.company, 44);
+  const profile = plainLine(item.profile?.name, 24);
+
+  function toggle() {
+    const next = !open;
+    setOpen(next);
+    // Fetched once per row per panel session. Re-opening a row shows what was
+    // fetched rather than re-querying: the log is append-only and a retry lands
+    // minutes apart at best, so a refetch on every chevron buys nothing.
+    if (!next || attempts !== null || loading) return;
+    setLoading(true);
+    setError(null);
+    loadAttempts(item.id)
+      .then(setAttempts)
+      // Never `setAttempts([])` on failure. An empty log reads as "nothing was
+      // ever sent to this company", which is the single most misleading thing
+      // this panel could say — so a failed read says it failed.
+      .catch((e) => setError(e instanceof Error ? e.message : "couldn't read the attempt log"))
+      .finally(() => setLoading(false));
+  }
+
+  return (
+    <li
+      className={cn(
+        "rounded-md px-1.5 py-1.5 transition-colors",
+        replied
+          ? "border border-fuchsia-500/50 bg-fuchsia-500/10 hover:bg-fuchsia-500/15"
+          : "hover:bg-accent/50",
+      )}
+    >
+      {replied && (
+        <div className="mb-1 flex items-center gap-1.5">
+          <PartyPopper className="h-3.5 w-3.5 shrink-0 text-fuchsia-600 dark:text-fuchsia-400" />
+          <p className="text-[11px] font-bold uppercase tracking-wide text-fuchsia-700 dark:text-fuchsia-300">
+            They replied!
+          </p>
+        </div>
+      )}
+      <div className="flex items-start gap-2">
+        <span
+          className={cn(
+            "mt-px inline-flex shrink-0 items-center rounded-md border px-1.5 py-px text-[9px] font-bold uppercase tracking-wide",
+            TONE_CLASS[chip.tone],
+          )}
+        >
+          {chip.label}
+        </span>
+        <div className="min-w-0 flex-1">
+          <p
+            className={cn(
+              "truncate text-[11px] text-foreground",
+              replied ? "font-bold" : "font-medium",
+            )}
+          >
+            {title}
+          </p>
+          <p className="truncate text-[10px] text-muted-foreground">
+            {[company, profile].filter(Boolean).join(" · ") || "—"}
+          </p>
+          {chip.detail && (
+            <p
+              className={cn(
+                "mt-0.5 text-[9px]",
+                chip.tone === "bad"
+                  ? "text-rose-600 dark:text-rose-400"
+                  : "text-muted-foreground/60",
+              )}
+            >
+              {chip.detail}
+            </p>
+          )}
+          {replied && (
+            <p className="mt-0.5 text-[9px] leading-snug text-fuchsia-700/90 dark:text-fuchsia-300/80">
+              A human at this company answered. Check your inbox — nothing in this
+              pipeline replies for you.
+            </p>
+          )}
+          <div className="mt-1 flex flex-wrap items-center gap-1.5">
+            <Disclosure
+              open={open}
+              onToggle={toggle}
+              label={open ? "Hide attempts" : "Attempts"}
+            />
+            <PostingLink url={item.posting?.url} />
+          </div>
+          {open && (
+            <div className="mt-1 rounded-md border border-border bg-muted/30 px-1.5 py-1">
+              {loading && (
+                <p className="text-[9px] italic text-muted-foreground/60">Reading the log…</p>
+              )}
+              {error && (
+                <p className="text-[9px] italic text-destructive">
+                  {plainLine(error, 120)} — this is not "nothing was sent".
+                </p>
+              )}
+              {!loading && !error && attempts !== null && attempts.length === 0 && (
+                <p className="text-[9px] italic text-muted-foreground/60">
+                  No send has been attempted yet.
+                </p>
+              )}
+              {attempts !== null && attempts.length > 0 && (
+                <ul className="flex flex-col gap-0.5">
+                  {attempts.map((a) => (
+                    <AttemptLineRow key={a.id} attempt={a} />
+                  ))}
+                </ul>
+              )}
+            </div>
+          )}
+        </div>
       </div>
+    </li>
+  );
+}
+
+// ── Profiles ─────────────────────────────────────────────────────────────
+
+/**
+ * A `text[]` as add/remove chips.
+ *
+ * Writes the **whole array** every time, because that is what a Postgres array
+ * column is — there is no "append one element" through PostgREST, and
+ * pretending otherwise is how two chips added in quick succession end with the
+ * second overwriting the first. The list handed in is always the stored one (or
+ * the optimistic overlay of it), never a local accumulation.
+ */
+function ChipEditor({
+  label,
+  hint,
+  values,
+  tone,
+  disabled,
+  onCommit,
+}: {
+  label: string;
+  hint: string;
+  values: string[];
+  tone: "keyword" | "exclude";
+  disabled: boolean;
+  onCommit: (next: string[]) => void;
+}) {
+  const [draft, setDraft] = useState("");
+
+  function add() {
+    const next = addChip(values, draft);
+    setDraft("");
+    // `addChip` returns the same contents for an empty or duplicate entry, so
+    // this skips a round trip that would only bump `updated_at`.
+    if (chipsEqual(next, values)) return;
+    onCommit(next);
+  }
+
+  return (
+    <div className="mt-1">
+      <p className="text-[9px] font-semibold uppercase tracking-wider text-muted-foreground/70">
+        {label}
+        <span className="ml-1 font-normal normal-case tracking-normal text-muted-foreground/50">
+          {hint}
+        </span>
+      </p>
+      <div className="mt-0.5 flex flex-wrap items-center gap-1">
+        {values.length === 0 && (
+          <span className="text-[9px] italic text-muted-foreground/50">
+            {tone === "keyword"
+              ? "none — this profile matches nothing"
+              : "none — nothing is excluded"}
+          </span>
+        )}
+        {values.map((v) => (
+          <span
+            key={v}
+            className={cn(
+              "inline-flex items-center gap-0.5 rounded-sm px-1.5 py-px text-[9px] font-medium",
+              tone === "keyword"
+                ? "bg-sky-500/15 text-sky-700 dark:text-sky-300"
+                : "bg-rose-500/15 text-rose-700 dark:text-rose-300",
+            )}
+          >
+            {plainLine(v, 26)}
+            <MenuButton
+              onClick={() => onCommit(removeChip(values, v))}
+              disabled={disabled}
+              title={`Remove ‘${plainLine(v, 26)}’`}
+              className="ml-0.5 opacity-60 hover:opacity-100"
+            >
+              <X className="h-2.5 w-2.5" />
+            </MenuButton>
+          </span>
+        ))}
+        <input
+          value={draft}
+          onChange={(e) => setDraft(e.target.value)}
+          disabled={disabled}
+          placeholder="add…"
+          // ⚠️ Same Radix typeahead trap as the module textarea: `DropdownMenu.
+          // Content`'s onKeyDown fires for any single-character keydown that
+          // bubbles to it and would jump focus out of this field on the first
+          // letter. Enter is handled here rather than by a form, because there
+          // is no form — the menu is the container.
+          onKeyDown={(e) => {
+            e.stopPropagation();
+            if (e.key === "Enter") {
+              e.preventDefault();
+              add();
+            }
+          }}
+          onBlur={add}
+          className="h-5 w-[76px] rounded-sm border border-dashed border-border bg-transparent px-1 text-[9px] text-foreground outline-none placeholder:text-muted-foreground/40 focus:border-ring disabled:opacity-50"
+        />
+      </div>
+    </div>
+  );
+}
+
+/**
+ * The approval threshold, as a stepper.
+ *
+ * Committed on blur and on Enter, never on keystroke: typing "8" on the way to
+ * "85" would otherwise store 8 for a moment, and with the harvester running on
+ * its own schedule that moment is enough to queue a pile of drafts nobody
+ * wanted. `clampThreshold` returning `null` for an empty field is what makes
+ * backspacing safe — it restores the stored value rather than writing 0.
+ */
+function ThresholdStepper({
+  value,
+  disabled,
+  onCommit,
+}: {
+  value: number;
+  disabled: boolean;
+  onCommit: (next: number) => void;
+}) {
+  const [draft, setDraft] = useState(String(value));
+  const serverRef = useRef(value);
+
+  // Adopt a changed stored value only when the field is untouched — same rule,
+  // and the same reason, as `ModuleRow`'s draft adoption.
+  useEffect(() => {
+    if (value === serverRef.current) return;
+    const untouched = draft === String(serverRef.current);
+    serverRef.current = value;
+    if (untouched) setDraft(String(value));
+  }, [value, draft]);
+
+  function commit(raw: string) {
+    const next = clampThreshold(raw);
+    if (next === null) {
+      setDraft(String(value));
+      return;
+    }
+    setDraft(String(next));
+    if (next === value) return;
+    onCommit(next);
+  }
+
+  function step(delta: number) {
+    const next = clampThreshold(value + delta);
+    if (next === null || next === value) return;
+    setDraft(String(next));
+    onCommit(next);
+  }
+
+  return (
+    <div className="flex items-center gap-0.5">
+      <MenuButton
+        onClick={() => step(-5)}
+        disabled={disabled || value <= THRESHOLD_MIN}
+        title="Lower the bar — more drafts ask for approval"
+        className="h-5 w-5 justify-center border border-border text-muted-foreground hover:bg-accent hover:text-foreground"
+      >
+        <Minus className="h-2.5 w-2.5" />
+      </MenuButton>
+      <input
+        value={draft}
+        onChange={(e) => setDraft(e.target.value)}
+        disabled={disabled}
+        inputMode="numeric"
+        onKeyDown={(e) => {
+          e.stopPropagation();
+          if (e.key === "Enter") {
+            e.preventDefault();
+            commit(draft);
+          }
+        }}
+        onBlur={() => commit(draft)}
+        className="h-5 w-9 rounded-sm border border-border bg-background text-center text-[10px] font-semibold tabular-nums text-foreground outline-none focus:border-ring disabled:opacity-50"
+      />
+      <MenuButton
+        onClick={() => step(5)}
+        disabled={disabled || value >= THRESHOLD_MAX}
+        title="Raise the bar — only stronger matches ask"
+        className="h-5 w-5 justify-center border border-border text-muted-foreground hover:bg-accent hover:text-foreground"
+      >
+        <Plus className="h-2.5 w-2.5" />
+      </MenuButton>
+    </div>
+  );
+}
+
+function ProfileRow({
+  profile: p,
+  busy,
+  error,
+  onPatch,
+}: {
+  profile: JobProfileFull;
+  busy: boolean;
+  error: string | null;
+  onPatch: (patch: JobProfilePatch) => void;
+}) {
+  const keywords = (p.keywords ?? []).filter(Boolean);
+  const excludes = (p.exclude_terms ?? []).filter(Boolean);
+  const locations = (p.locations ?? []).filter(Boolean);
+  // The one state this panel can produce that silently harvests nothing at all.
+  const inert = p.enabled && keywords.length === 0;
+
+  return (
+    <li
+      className={cn(
+        "rounded-md border px-2 py-1.5 transition-colors",
+        inert
+          ? "border-amber-500/60 bg-amber-500/10"
+          : p.enabled
+            ? "border-border bg-card/30"
+            : "border-dashed border-border bg-transparent",
+      )}
+    >
+      <div className="flex items-center gap-2">
+        <span
+          className={cn(
+            "min-w-0 flex-1 truncate text-[11px] font-semibold",
+            p.enabled ? "text-foreground" : "text-muted-foreground line-through",
+          )}
+        >
+          {plainLine(p.name, 46)}
+        </span>
+        {busy && <Loader2 className="h-2.5 w-2.5 shrink-0 animate-spin text-muted-foreground/60" />}
+        <MenuButton
+          onClick={() => onPatch({ enabled: !p.enabled })}
+          disabled={busy}
+          title={p.enabled ? "Disable — the harvester stops running it" : "Enable"}
+          className={cn(
+            "h-5 shrink-0 px-1.5 text-[9px] font-medium",
+            p.enabled
+              ? "bg-emerald-500/20 text-emerald-700 hover:bg-emerald-500/30 dark:text-emerald-300"
+              : "bg-muted text-muted-foreground hover:bg-accent",
+          )}
+        >
+          <Power className="h-2.5 w-2.5" />
+          {p.enabled ? "on" : "off"}
+        </MenuButton>
+      </div>
+
+      {inert && (
+        <p className="mt-0.5 text-[9px] font-medium text-amber-700 dark:text-amber-300">
+          Enabled with no keywords — the gate matches nothing, so this profile
+          harvests silently and forever.
+        </p>
+      )}
+
+      <div className="mt-1 flex items-center gap-1.5">
+        <span className="text-[9px] font-semibold uppercase tracking-wider text-muted-foreground/70">
+          Ask me at
+        </span>
+        <ThresholdStepper
+          value={p.approval_threshold}
+          disabled={busy}
+          onCommit={(next) => onPatch({ approval_threshold: next })}
+        />
+        <span className="text-[9px] text-muted-foreground/50">
+          and above — below it the draft is never raised.
+        </span>
+      </div>
+
+      <ChipEditor
+        label="Keywords"
+        hint="any one of these must appear"
+        values={keywords}
+        tone="keyword"
+        disabled={busy}
+        onCommit={(next) => onPatch({ keywords: next })}
+      />
+      <ChipEditor
+        label="Exclude"
+        hint="any one of these drops the posting"
+        values={excludes}
+        tone="exclude"
+        disabled={busy}
+        onCommit={(next) => onPatch({ exclude_terms: next })}
+      />
+
+      {/*
+        Read-only, and labelled as such rather than merely absent.
+        An empty `locations` means "anywhere" in `filterLocation`, so removing
+        the last entry silently WIDENS the search — the opposite of what
+        deleting a chip looks like it does. That is a decision to make on
+        purpose, not one to discover afterwards.
+      */}
+      <div className="mt-1">
+        <p className="flex items-center gap-1 text-[9px] font-semibold uppercase tracking-wider text-muted-foreground/70">
+          <Lock className="h-2.5 w-2.5" />
+          Locations
+          <span className="font-normal normal-case tracking-normal text-muted-foreground/50">
+            edit in Supabase — an empty list means anywhere
+          </span>
+        </p>
+        <div className="mt-0.5 flex flex-wrap items-center gap-1">
+          {locations.length === 0 ? (
+            <span className="text-[9px] italic text-muted-foreground/50">
+              anywhere (no location filter)
+            </span>
+          ) : (
+            locations.map((l) => (
+              <span
+                key={l}
+                className="rounded-sm bg-muted px-1.5 py-px text-[9px] text-muted-foreground"
+              >
+                {plainLine(l, 26)}
+              </span>
+            ))
+          )}
+        </div>
+      </div>
+
+      {error && <p className="mt-1 text-[9px] italic text-destructive">{plainLine(error, 140)}</p>}
     </li>
   );
 }
@@ -766,10 +1287,21 @@ export function JobsPanel({ api }: JobsPanelProps) {
   const [failed, setFailed] = useState(false);
   const [loading, setLoading] = useState(false);
   const [tab, setTab] = useState<Tab>("review");
-  const [badge, setBadge] = useState<number | null>(null);
+  const [attention, setAttention] = useState<JobsAttention | null>(null);
   const [decisions, setDecisions] = useState<Record<string, Decision>>({});
   const [busyIds, setBusyIds] = useState<Record<string, true>>({});
   const [errors, setErrors] = useState<Record<string, string>>({});
+  /**
+   * The optimistic overlay for profile edits, by profile id.
+   *
+   * Applied over the snapshot's rows on render. A commit writes the guess here
+   * immediately, replaces it with the **server's** row on success, and deletes
+   * it on failure — which is the rollback. Deleting rather than restoring an
+   * old copy is what makes the rollback correct even if the snapshot refetched
+   * underneath: the truth is whatever the snapshot holds, and the overlay only
+   * ever exists to sit on top of it briefly.
+   */
+  const [profileEdits, setProfileEdits] = useState<Record<string, JobProfileFull>>({});
   const lastFetchRef = useRef(0);
 
   const fetchSnapshot = useCallback(
@@ -790,10 +1322,23 @@ export function JobsPanel({ api }: JobsPanelProps) {
           setSnapshot(result);
           setFailed(false);
           // A landed refetch is the authority on what happened; the optimistic
-          // receipts have served their purpose and would otherwise linger over
-          // rows the server has already moved on.
+          // receipts and profile overlays have served their purpose and would
+          // otherwise linger over rows the server has already moved on.
           setDecisions({});
-          setBadge(result.review.length);
+          setProfileEdits({});
+          // Derived from the fetched windows — but a **truncated** window is a
+          // floor, not a count, so in that case the polled number (a real
+          // `head: true` count with no cap) is kept instead of being replaced
+          // by a smaller one. A badge that shrinks when you open the panel is
+          // the wrong kind of surprise.
+          setAttention((prev) => ({
+            needsApproval: result.truncated.review
+              ? (prev?.needsApproval ?? result.review.length)
+              : result.review.length,
+            responses: result.truncated.sent
+              ? (prev?.responses ?? 0)
+              : result.sent.filter((a) => isResponseStatus(a.status)).length,
+          }));
         })
         // Degrade silently, like every other fetch in the header. Crucially this
         // is NOT "no jobs": the last good snapshot is deliberately *kept* rather
@@ -819,15 +1364,15 @@ export function JobsPanel({ api }: JobsPanelProps) {
    */
   useEffect(() => {
     if (!api) {
-      setBadge(null);
+      setAttention(null);
       return;
     }
     let active = true;
     const tick = () => {
       api
-        .countNeedsApproval()
+        .countAttention()
         .then((n) => {
-          if (active) setBadge(n);
+          if (active) setAttention(n);
         })
         .catch(() => {});
     };
@@ -858,7 +1403,9 @@ export function JobsPanel({ api }: JobsPanelProps) {
         ...d,
         [id]: row === null ? "raced" : kind === "approve" ? "approved" : "cancelled",
       }));
-      setBadge((n) => (typeof n === "number" && n > 0 ? n - 1 : n));
+      setAttention((a) =>
+        a ? { ...a, needsApproval: a.needsApproval > 0 ? a.needsApproval - 1 : 0 } : a,
+      );
       // Refetch so the row lands in Sent with whatever the server actually did.
       lastFetchRef.current = 0;
       setTimeout(() => fetchSnapshot(true), 400);
@@ -868,6 +1415,58 @@ export function JobsPanel({ api }: JobsPanelProps) {
       setBusyIds(({ [id]: _drop, ...rest }) => rest);
     }
   }
+
+  /**
+   * A profile edit: optimistic, then reconciled, then rolled back on failure.
+   *
+   * Same shape as `decide` above and as `mail/api`'s row actions — apply the
+   * guess, let the server's answer overwrite it, and on an error remove the
+   * guess so the row snaps back to what is actually stored. The `busyIds` /
+   * `errors` maps are shared with the review cards; ids are uuids from
+   * different tables and cannot collide.
+   */
+  async function patchProfile(current: JobProfileFull, patch: JobProfilePatch) {
+    if (!api || busyIds[current.id]) return;
+    const optimistic: JobProfileFull = { ...current, ...patch };
+    setProfileEdits((e) => ({ ...e, [current.id]: optimistic }));
+    setBusyIds((b) => ({ ...b, [current.id]: true }));
+    setErrors(({ [current.id]: _drop, ...rest }) => rest);
+    try {
+      const row = await api.updateProfile(current.id, patch);
+      // Adopt the stored row, not the guess. A threshold the API clamped, or a
+      // trigger-touched field, is otherwise invisible until the next refetch.
+      setProfileEdits((e) => ({ ...e, [current.id]: row }));
+    } catch (e) {
+      // The rollback.
+      setProfileEdits(({ [current.id]: _drop, ...rest }) => rest);
+      setErrors((x) => ({
+        ...x,
+        [current.id]: e instanceof Error ? e.message : "couldn't save",
+      }));
+    } finally {
+      setBusyIds(({ [current.id]: _drop, ...rest }) => rest);
+    }
+  }
+
+  /** The snapshot's profiles with any in-flight or just-saved edit laid over them. */
+  const profiles = useMemo(
+    () => (snapshot?.profiles ?? []).map((p) => profileEdits[p.id] ?? p),
+    [snapshot?.profiles, profileEdits],
+  );
+
+  /**
+   * Replies first, then everything else in the order the server sent.
+   *
+   * A stable partition rather than a re-sort: within each group the loader's
+   * `updated_at desc` still holds, so nothing reshuffles — the only claim being
+   * made is that a reply outranks a rejection from the same afternoon.
+   */
+  const sentOrdered = useMemo(() => {
+    const rows = snapshot?.sent ?? [];
+    const replies = rows.filter((r) => isResponseStatus(r.status));
+    if (replies.length === 0) return rows;
+    return [...replies, ...rows.filter((r) => !isResponseStatus(r.status))];
+  }, [snapshot?.sent]);
 
   const modulesBySlot = useMemo(() => {
     const groups = new Map<string, JobAppModule[]>();
@@ -885,20 +1484,49 @@ export function JobsPanel({ api }: JobsPanelProps) {
     [snapshot?.modules],
   );
 
+  /** Enabled, but with an empty keyword list — a search that quietly finds nothing. */
+  const profileWarnings = useMemo(
+    () => profiles.filter((p) => p.enabled && (p.keywords ?? []).filter(Boolean).length === 0).length,
+    [profiles],
+  );
+
   const counts: Record<Tab, number | null> = {
-    review: snapshot ? snapshot.review.length : badge,
+    review: snapshot ? snapshot.review.length : (attention?.needsApproval ?? null),
     matches: snapshot ? snapshot.matches.length : null,
     sent: snapshot ? snapshot.sent.length : null,
+    profiles: snapshot ? snapshot.profiles.length : null,
     modules: snapshot ? snapshot.modules.length : null,
   };
 
-  const pending = badge ?? snapshot?.review.length ?? 0;
+  /**
+   * The badge: **decisions waiting + replies received.**
+   *
+   * The arithmetic lives in `jobsBadgeCount` rather than inline, because the
+   * interesting part is what it does with unknowns — a failed count must not
+   * become a zero, and a known half must not be suppressed by an unknown one.
+   */
+  const replies = attention?.responses ?? 0;
+  const pending = jobsBadgeCount(
+    attention?.needsApproval ?? snapshot?.review.length ?? null,
+    attention?.responses ?? null,
+  ) ?? 0;
 
   return (
     <DropdownMenu.Root onOpenChange={handleOpenChange}>
       <DropdownMenu.Trigger asChild>
         <button
-          title={pending > 0 ? `${pending} application${pending === 1 ? "" : "s"} to review` : "Jobs"}
+          title={
+            pending === 0
+              ? "Jobs"
+              : [
+                  (attention?.needsApproval ?? 0) > 0
+                    ? `${attention?.needsApproval} to review`
+                    : "",
+                  replies > 0 ? `${replies} repl${replies === 1 ? "y" : "ies"}` : "",
+                ]
+                  .filter(Boolean)
+                  .join(" · ")
+          }
           className="relative h-8 w-8 inline-flex items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
         >
           <Briefcase className="h-4 w-4" />
@@ -906,7 +1534,18 @@ export function JobsPanel({ api }: JobsPanelProps) {
             // Amber, not mail's red: this is "a decision is waiting on you",
             // which is a different feeling from "unread". A number rather than a
             // dot, because the useful question is how big the queue is.
-            <span className="absolute -right-0.5 -top-0.5 inline-flex h-[15px] min-w-[15px] items-center justify-center rounded-full bg-amber-500 px-1 text-[9px] font-bold leading-none text-black tabular-nums">
+            //
+            // Fuchsia the moment a reply is in the count, matching the Sent
+            // tab's chip: the badge changing colour is the only signal that
+            // reaches someone who is not going to open the panel, and "a
+            // company answered you" deserves to look different from "three more
+            // drafts piled up".
+            <span
+              className={cn(
+                "absolute -right-0.5 -top-0.5 inline-flex h-[15px] min-w-[15px] items-center justify-center rounded-full px-1 text-[9px] font-bold leading-none tabular-nums",
+                replies > 0 ? "bg-fuchsia-600 text-white" : "bg-amber-500 text-black",
+              )}
+            >
               {pending > 99 ? "99+" : pending}
             </span>
           )}
@@ -947,7 +1586,9 @@ export function JobsPanel({ api }: JobsPanelProps) {
                 {TABS.map((t) => {
                   const active = t.id === tab;
                   const n = counts[t.id];
-                  const warn = t.id === "modules" && moduleWarnings > 0;
+                  const warn =
+                    (t.id === "modules" && moduleWarnings > 0) ||
+                    (t.id === "profiles" && profileWarnings > 0);
                   return (
                     <DropdownMenu.Item asChild key={t.id} onSelect={(e) => e.preventDefault()}>
                       <button
@@ -1061,13 +1702,54 @@ export function JobsPanel({ api }: JobsPanelProps) {
                   />
                 ) : (
                   <>
-                    <ul className="flex flex-col">
-                      {snapshot.sent.map((item) => (
-                        <SentRow key={item.id} item={item} />
+                    <ul className="flex flex-col gap-1">
+                      {sentOrdered.map((item) => (
+                        <SentRow key={item.id} item={item} loadAttempts={api.loadAttempts} />
                       ))}
                     </ul>
                     <WindowNotice truncated={snapshot.truncated.sent} cap={SENT_LIMIT} noun="applications" />
                   </>
+                )
+              )}
+
+              {snapshot && tab === "profiles" && (
+                profiles.length === 0 ? (
+                  <EmptyState
+                    title="No search profiles."
+                    detail="A profile is the search persona the harvester runs — its keywords are the gate, and its threshold decides which drafts ask for your approval. Create one in Supabase; this panel edits them but deliberately does not add or remove them."
+                  />
+                ) : (
+                  <div className="flex flex-col gap-1.5">
+                    <ul className="flex flex-col gap-1.5">
+                      {profiles.map((p) => (
+                        <ProfileRow
+                          key={p.id}
+                          profile={p}
+                          busy={!!busyIds[p.id]}
+                          error={errors[p.id] ?? null}
+                          onPatch={(patch) => void patchProfile(p, patch)}
+                        />
+                      ))}
+                    </ul>
+                    <WindowNotice
+                      truncated={snapshot.truncated.profiles}
+                      cap={PROFILE_LIMIT}
+                      noun="profiles"
+                    />
+                    {/*
+                      Stated, not merely absent. Both omissions are deliberate
+                      and both are sharp: an inserted profile with no keywords
+                      matches nothing and looks like a working search forever,
+                      and deleting one cascades to every match and application
+                      that hangs off it. Neither belongs behind a button in a
+                      dropdown.
+                    */}
+                    <p className="px-1 text-[9px] leading-snug text-muted-foreground/50">
+                      Adding and deleting profiles is Supabase-only on purpose — a new
+                      profile with no keywords matches nothing silently, and deleting
+                      one cascades to its matches and applications.
+                    </p>
+                  </div>
                 )
               )}
 
@@ -1080,12 +1762,29 @@ export function JobsPanel({ api }: JobsPanelProps) {
                 ) : (
                   <div className="flex flex-col gap-2">
                     {moduleWarnings > 0 && (
-                      <div className="flex items-center gap-1.5 rounded-md border border-amber-500/60 bg-amber-500/15 px-2 py-1">
-                        <AlertTriangle className="h-3 w-3 shrink-0 text-amber-600 dark:text-amber-400" />
-                        <p className="text-[10px] font-medium text-amber-700 dark:text-amber-300">
-                          {moduleWarnings} module{moduleWarnings === 1 ? "" : "s"} still hold a
-                          placeholder. Every draft that wants one comes out with a gap.
-                        </p>
+                      <div className="flex items-start gap-1.5 rounded-md border border-amber-500/60 bg-amber-500/15 px-2 py-1">
+                        <AlertTriangle className="mt-px h-3 w-3 shrink-0 text-amber-600 dark:text-amber-400" />
+                        <div className="min-w-0">
+                          <p className="text-[10px] font-medium text-amber-700 dark:text-amber-300">
+                            {moduleWarnings} module{moduleWarnings === 1 ? "" : "s"} still hold a
+                            placeholder. Every draft that wants one comes out with a gap.
+                          </p>
+                          {/*
+                            Names the three seeded stubs outright. "N modules
+                            hold a placeholder" is true and useless — the seed
+                            ships exactly these three deliberately empty,
+                            because none of them is something this system may
+                            invent on a person's behalf, and knowing *which*
+                            three is the difference between a warning and an
+                            instruction.
+                          */}
+                          <p className="mt-0.5 text-[9px] leading-snug text-amber-800/80 dark:text-amber-200/70">
+                            <span className="font-mono">education_stub</span> ·{" "}
+                            <span className="font-mono">cv_link</span> ·{" "}
+                            <span className="font-mono">portfolio_link</span> ship empty on purpose —
+                            write and enable them to unlock sending.
+                          </p>
+                        </div>
                       </div>
                     )}
                     {modulesBySlot.map(([slot, list]) => (
