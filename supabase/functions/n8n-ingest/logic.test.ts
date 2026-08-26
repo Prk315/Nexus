@@ -44,6 +44,10 @@ import {
   senderDomain,
   truncateSafe,
   withRules,
+  isPendingRequest,
+  parsePendingRequest,
+  PENDING_DEFAULT_LIMIT,
+  PENDING_MAX_LIMIT
 } from "./logic.ts";
 
 const KEY = "x".repeat(32);
@@ -118,7 +122,7 @@ Deno.test("clampScore holds a present score inside the range", () => {
 });
 
 Deno.test("clampScore rounds to an integer", () => {
-  // `priority` is an int column; a float would be silently truncated by
+  // `score` is an int column; a float would be silently truncated by
   // Postgres in a direction nobody chose.
   assertEquals(clampScore(72.4), 72);
   assertEquals(clampScore(72.5), 73);
@@ -1158,7 +1162,10 @@ Deno.test("parseDueDate returns a calendar date, read as UTC", () => {
 });
 
 Deno.test("the model's `priority` spelling is still accepted for `score`", () => {
-  // Unit 5's workflow currently emits `priority`; the column is now `score`.
+  // A compatibility alias. The workflow now emits `score` (it was updated in the
+  // same round the column was renamed), so this no longer fires in practice —
+  // it is kept because the two ship separately and an older workflow JSON, or a
+  // hand-run of one, would otherwise write every message unscored in silence.
   // Accepting both is what keeps the chain working across the two merges,
   // rather than every message arriving unscored for however long they differ.
   assertEquals(rowOf({ priority: 80 }).score, 80);
@@ -1587,3 +1594,59 @@ Deno.test("parsePayload carries a rule subject per message", () => {
   // raw is truncated past MAX_RAW_CHARS.
 });
 
+
+// ───────────────────────────────────────────────────────────────────────────
+// The `pending` action
+// ───────────────────────────────────────────────────────────────────────────
+
+Deno.test("isPendingRequest only fires on an explicit action", () => {
+  assertEquals(isPendingRequest({ action: "pending" }), true);
+  // A normal delivery must never be mistaken for a queue read — that would
+  // silently drop a batch of mail and answer 200.
+  assertEquals(isPendingRequest({ messages: [] }), false);
+  assertEquals(isPendingRequest({ action: "ingest" }), false);
+  assertEquals(isPendingRequest({}), false);
+  assertEquals(isPendingRequest(null), false);
+  assertEquals(isPendingRequest("pending"), false);
+  // Near-misses stay writes. Case matters: there is one spelling.
+  assertEquals(isPendingRequest({ action: "PENDING" }), false);
+  assertEquals(isPendingRequest({ action: " pending" }), false);
+});
+
+Deno.test("pending: an absent limit is the default, not an error", () => {
+  assertEquals(parsePendingRequest({ action: "pending" }), {
+    ok: true,
+    limit: PENDING_DEFAULT_LIMIT,
+  });
+  assertEquals(parsePendingRequest({ action: "pending", limit: null }), {
+    ok: true,
+    limit: PENDING_DEFAULT_LIMIT,
+  });
+});
+
+Deno.test("pending: a limit is capped, never allowed to run unbounded", () => {
+  assertEquals(parsePendingRequest({ action: "pending", limit: 10 }), { ok: true, limit: 10 });
+  assertEquals(parsePendingRequest({ action: "pending", limit: PENDING_MAX_LIMIT }), {
+    ok: true,
+    limit: PENDING_MAX_LIMIT,
+  });
+  // At ~24s per message locally, an uncapped page would simply overlap the next
+  // scheduled drain rather than finishing sooner.
+  assertEquals(parsePendingRequest({ action: "pending", limit: 100000 }), {
+    ok: true,
+    limit: PENDING_MAX_LIMIT,
+  });
+  // A numeric string is what an n8n expression yields when it stringifies.
+  assertEquals(parsePendingRequest({ action: "pending", limit: "10" }), { ok: true, limit: 10 });
+});
+
+Deno.test("pending: nonsense is refused rather than silently defaulted", () => {
+  // Clamping these would let a caller keep a false belief about the endpoint.
+  for (const bad of ["all", "", "  ", 0, -1, 2.5, NaN, Infinity, true, {}, []]) {
+    assertEquals(
+      parsePendingRequest({ action: "pending", limit: bad }),
+      { ok: false, error: "invalid_limit" },
+      `limit=${JSON.stringify(bad)} should be refused`,
+    );
+  }
+});

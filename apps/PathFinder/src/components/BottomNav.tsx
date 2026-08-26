@@ -10,6 +10,7 @@ const PRIMARY_TABS: { page: Page; label: string; icon: ReactNode }[] = [
 ];
 
 const MORE_PAGES: { page: Page; label: string }[] = [
+  { page: "team",      label: "Team" },
   { page: "projects",  label: "Projects" },
   { page: "courses",   label: "Courses" },
   { page: "schedules", label: "Schedules" },

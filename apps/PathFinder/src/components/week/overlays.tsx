@@ -7,12 +7,12 @@ import type { Span } from "@nexus/core/coverage";
 import type { ActualDay } from "../../lib/actual";
 
 /** Background layer behind the timed events — same time grid, low opacity, non-interactive. */
-export function ActualOverlay({ actual, iso }: { actual: ActualDay; iso: string }) {
+export function ActualOverlay({ actual, iso, hourPx }: { actual: ActualDay; iso: string; hourPx?: number }) {
   return (
     <div className="absolute inset-0 pointer-events-none">
       {ACTUAL_TRACKS.flatMap(({ key, colorCls }) =>
         actual[key].map((span, i) => {
-          const rect = actualSpanPx(span, iso);
+          const rect = actualSpanPx(span, iso, hourPx);
           if (!rect) return null;
           return (
             <div
@@ -36,11 +36,11 @@ export function ActualOverlay({ actual, iso }: { actual: ActualDay; iso: string 
  * when it's tall enough to hold them; that labelling (not just the tint) is
  * the actual feature request.
  */
-export function SleepBand({ spans, iso }: { spans: Span[]; iso: string }) {
+export function SleepBand({ spans, iso, hourPx }: { spans: Span[]; iso: string; hourPx?: number }) {
   return (
     <div className="absolute inset-0 pointer-events-none">
       {spans.map((span, i) => {
-        const rect = actualSpanPx(span, iso);
+        const rect = actualSpanPx(span, iso, hourPx);
         if (!rect) return null;
         const showLabels = rect.height >= 28;
         return (

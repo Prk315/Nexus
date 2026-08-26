@@ -928,6 +928,80 @@ rescues or the keys read as a freeze. Containment is schema-enforced: `column`
 and the toggle parts are deliberately **not** in `group: "block"`, which is what
 makes them unplaceable anywhere else.
 
+**Nesting was never a schema limit — the UI was refusing it.** `columnBlock` is
+`column{2,}` and `column` is `block+`, so a row inside a column, or a callout
+inside a column inside a row, has always been legal. What blocked it was an
+`isAvailable` guard in `blockRegistry.ts` and a `return false` in the resize
+plugin's `descendants` walk, both written on the belief that a row cannot
+contain a row — true only because nothing could make one. Both are gone; nesting
+is now offered and every nested row gets its own resize gutters.
+
+**Three things are stored on nodes rather than as structure, and the reason is
+always the same one.** The per-note width lives on the DOC node (`noteDocument.ts`),
+a heading's fold state lives on the HEADING (`headingFold.ts`), and a sketch's
+strokes live on the block (`SketchBlock.ts`). An attribute an older client
+doesn't know is **dropped silently** — `Node.fromJSON` builds attrs by iterating
+the *type's* declared attributes and never looks for extras — whereas an unknown
+NODE type blanks the whole note. So an attribute can ship ahead of the Mac and
+iPad builds; a node type cannot. `sketchBlock` IS a node type, so it must be
+deployed everywhere (including a fresh `npm run ios:vault`) before any note
+containing one is created.
+
+Two consequences worth knowing:
+- **ProseMirror never renders the TOP node**, so a doc attribute reaches no DOM
+  and CSS cannot see it. `NoteDocument` runs a plugin whose `props.attributes`
+  projects `data-note-width` onto the editable. Without it the setting silently
+  does nothing.
+- **`setContent` replaces the content RANGE, not the doc node**, so doc-level
+  attributes survive it untouched. Loading a `wide` note into an editor showing
+  `full` keeps `full`. The mount path is fine (`useEditor` builds the doc from
+  the JSON); NoteEditor's `[content]` effect dispatches the width explicitly.
+
+**Folding a heading hides its siblings; it does not contain them.** The document
+stays flat and the fold is decorations — a class on each block the heading owns,
+plus a widget for the arrow. Wrapping the section in a `toggleBlock` would make
+every fold and unfold a structural edit (lose one and you have lost the section,
+not its fold state), and would reshuffle the outline, which walks siblings.
+Ownership is scoped to the heading's PARENT, so a heading in a column folds that
+column and cannot reach across the row — that falls out of the recursion rather
+than being special-cased.
+
+Two traps it hit:
+- **`display: none` on a folded block needs `!important`.** `.columns-row` is
+  `display: flex` at equal specificity and declared later in App.css, so a folded
+  row stayed fully visible while correctly carrying `is-folded`. Folding must beat
+  every block type's own layout, including types added later.
+- **Hiding the block the caret is in does not move the caret**, so typing edits
+  invisible text. Collapsing parks the selection at the end of the heading.
+
+**The inline sketch keeps its strokes in the document, unlike every other ink
+surface in Vault.** PDF annotations (`{id}_annot`) and book margins
+(`{id}_margins`) get their own `vault_content` row; a sketch cannot, because
+`NoteEditor`'s `nodeId` is optional (WorkbookEditor passes none) and one note may
+hold many sketches. In the document, copy-paste clones the drawing, Cmd-Z undoes
+a stroke, and deleting the block deletes the ink. The cost is size, capped at
+`SKETCH_MAX_CHARS` (400 kB) — a sketch shares the note's 2 MB `saveContent`
+budget, so an unbounded one would stop the note's *text* saving too.
+
+Two rules it depends on:
+- **Coordinates are a 1000-unit logical space, not CSS pixels**, and `height` is
+  in those units — an aspect ratio. Note width now spans 720 px to full-bleed and
+  the same note opens on an iPad, so pixel coordinates would put a third of a
+  drawing outside its box with nothing to suggest it was ever wider.
+- **The eraser hit-tests SEGMENTS, not stored points.** `simplify` (RDP) exists
+  to delete interior points from straight runs, so a ruled line or a box edge is
+  stored as exactly two points — a point-wise eraser can only rub out its ends,
+  and in a diagram that is most of the ink.
+
+**BubbleMenu's props must be referentially stable.** `@tiptap/react`'s BubbleMenu
+has an effect that DISPATCHES A TRANSACTION when any prop changes identity, and
+NoteEditor's `onTransaction` calls `forceUpdate` so the toolbar refreshes. An
+inline `options={{ placement: "top" }}` therefore closed the circle: render → new
+identity → dispatch → forceUpdate → render, at ~130 transactions a second, with
+React's "Maximum update depth exceeded" filling the console and every keystroke
+competing with it. `BUBBLE_OPTIONS` and `bubbleShouldShow` are module-level
+constants so there is no dependency array to get wrong.
+
 **Costly drags dispatch nothing until pointerup.** Column resize writes
 `flexGrow` straight to the DOM while the pointer moves and commits one
 transaction on release; a transaction per `pointermove` would be ~60 document
@@ -1010,10 +1084,31 @@ The pieces:
 
 | Piece | Where | Does |
 |---|---|---|
-| Workflows | `~/docker/n8n/workflows/*.json` (separate repo, bind-mounted read-only at `/home/node/workflows`) | fetch Gmail, prompt Qwen, POST the result |
-| `n8n-ingest` | `supabase/functions/n8n-ingest/` | n8n → `mail_messages` (upsert on `user_id,external_id`) |
+| `mail-triage` | `integrations/n8n/workflows/` | Gmail trigger → persist untriaged → classify → POST verdicts |
+| `mail-drain` | `integrations/n8n/workflows/` | every 5 min: classify anything still untriaged |
+| `mail-heartbeat` | `integrations/n8n/workflows/` | every 15 min: calls Gmail, records "we looked" |
+| `n8n-ingest` | `supabase/functions/n8n-ingest/` | n8n → `mail_messages` (upsert on `user_id,external_id`), applies `mail_rules`, and answers `{"action":"pending"}` with the untriaged ids |
 | `n8n-requests` | `supabase/functions/n8n-requests/` | n8n claims/completes rows in `n8n_requests` |
-| `mail_messages`, `n8n_requests` | `supabase/migrations/20260822120000_n8n_mail_bus.sql` | the bus |
+| `mail_messages`, `mail_rules`, `mail_categories`, `n8n_requests` | `supabase/migrations/20260823120000_n8n_mail_bus.sql` | the bus |
+
+The workflows live **in this repo**, not in `~/docker/n8n`. That directory is a
+separate, unrelated local repo holding older experiments; nothing here reads it.
+
+### The queue: fetch and classify are separate
+
+`mail-triage` persists every fetched message **before** the model sees it, with no
+verdict, on a branch that runs in parallel with classification. Classification used to
+happen first, so a slow Ollama or a lid closing mid-batch lost the whole batch —
+irrecoverably, because the Gmail trigger's watermark had already moved past it.
+
+**`score IS NULL` is the queue**, and that is not a new state: it is what the column has
+always meant, and `MailPanel` already sorts those rows to the top under their own
+`untriaged` bucket. `mail-drain` empties it on a schedule, re-fetching each body **from
+Gmail by id** — bodies are never stored, which is the whole reason the model is local.
+
+A failed classification leaves the row untriaged for the next pass. Nothing is marked
+done that was not done; the cost is that a permanently unparseable message retries
+forever, visible as a row that never leaves the top of the panel.
 
 `n8n_requests` is the other direction: the UI cannot reach n8n either, so an action
 ("sync now", "send this reply", "archive") is a **row n8n polls for**, not a webhook.
@@ -1045,21 +1140,33 @@ worth making for a header panel.
 
 The accepted cost, stated plainly so nobody "fixes" it: **nothing is triaged
 overnight.** Mail that arrives while the Mac sleeps sits un-triaged until it wakes.
-`mail_messages.priority` / `triaged_at` are nullable for exactly this reason, and the
-panel sorts `priority desc nulls first` so un-triaged mail lands at the *top* of a
+`mail_messages.score` / `triaged_at` are nullable for exactly this reason, and the
+panel sorts `score desc nulls first` so un-triaged mail lands at the *top* of a
 triage list rather than being buried at the bottom where `default 0` would put it.
+
+⚠️ **The column is `score`, not `priority`.** It was renamed because
+`pf_tasks.priority` means *importance* on a `high|medium|low` domain, so a 0–100
+`priority` in the same database would be the same word with the opposite meaning. One
+`.order("priority")` survived that rename in the panel's loader and took the whole
+feature down: PostgREST rejects an unknown column outright (`42703`), so the query
+threw, and the panel showed "Mail is unavailable" with correctly triaged mail sitting
+in the table. A column name inside a string is invisible to `tsc` — `MAIL_COLUMNS` is
+a pinned constant for this reason, and `loader.test.ts` now pins the query shape too.
 
 ### Traps
 
 - **Inside the container, `localhost` is the container.** An HTTP node pointing at
   `http://localhost:11434` reaches n8n's own loopback, not the Mac's. Use
   `http://host.docker.internal:11434`.
-- **…and then Ollama still refuses the connection.** This is the one that bites
-  *after* you have solved the first one, so it reads like the fix didn't work. Ollama
-  binds `127.0.0.1` by default, which excludes the Docker bridge. It needs
-  `OLLAMA_HOST=0.0.0.0` (`launchctl setenv OLLAMA_HOST 0.0.0.0`, then restart it) —
-  and note that then exposes it on the LAN, so it belongs behind the firewall, not on
-  café wifi.
+- **`OLLAMA_HOST=0.0.0.0` is NOT needed on this machine**, and this entry used to say
+  it was. Measured: Ollama listening on `127.0.0.1:11434` only, `OLLAMA_HOST` unset,
+  and the container reaching it through `host.docker.internal` regardless — Docker
+  Desktop for macOS proxies that name through its own network stack, so the connection
+  originates on the host side and arrives on loopback like any other local client. The
+  advice is correct for **Docker on Linux**, where the container arrives over a bridge
+  IP and a loopback-bound service genuinely is unreachable. Following it here buys
+  nothing and publishes an unauthenticated model server to the LAN, which sits badly
+  with a design whose entire justification is that mail bodies never leave the machine.
 - **`mail_messages` / `n8n_requests` are `auth.uid()`-scoped with no anon policy** —
   unlike the 13 permissive productivity tables (see `SECURITY_RLS_MIGRATION.md`; they
   are a defect being migrated away from, not a convention to copy). Read them with the
@@ -1080,16 +1187,29 @@ triage list rather than being buried at the bottom where `default 0` would put i
   database.** Both edge functions 500 against a project where the tables do not
   exist, and a deploy does not create them. See `supabase/migrations/APPLY.md`.
 
-### Two preconditions the user owns
+### Status, and the one thing with a clock on it
 
-Neither is a code problem and neither can be fixed from this repo:
+The pipeline is live and verified end to end: a real Gmail message triaged and written
+to `mail_messages`, and a row reset to `score IS NULL` picked up by `mail-drain` within
+four minutes and re-scored. Ollama 0.31.1 is installed with `qwen2.5:latest`; the Gmail
+credential works; all three workflows are active.
 
-1. **n8n has no working Google credential.** The Gmail OAuth connection needs
-   re-authing in the n8n UI (`http://localhost:5678` → Credentials). Until then the
-   Gmail node fails and no message is ever fetched.
-2. **Ollama is not installed.** No Ollama, no triage — the ingest half still writes
-   rows, they just stay `triaged_at is null` forever, which the panel will correctly
-   show as un-triaged rather than as low priority.
+⚠️ **The Google OAuth consent screen is still in *Testing*.** Google expires refresh
+tokens for unpublished apps on a ~7-day cycle, so the Gmail credential will stop working
+and the only symptom will be triage quietly ceasing. Fix once, permanently: Google Auth
+Platform → **Audience** → **Publish app**.
+
+### A workflow with `active = 1` is not necessarily running
+
+n8n 2.x versions workflows. A workflow is only live when **`activeVersionId` is set**,
+and `n8n import:workflow` clears it — so re-importing a running workflow silently
+retires it, and setting `active = 1` by hand does not bring it back. Worse, an active
+trigger runs that *published snapshot*, while a manual run uses the live nodes: wiring
+credentials with a raw `UPDATE` creates no version, so the trigger keeps running a copy
+where the credential id is still `null` and reports `uses invalid credential` while
+manual execution works perfectly. Check n8n's startup log (`Currently active
+workflows:`), never the `active` column. Full write-up in
+`integrations/n8n/README.md`.
 
 ## Environment gotchas on this machine
 

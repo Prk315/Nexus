@@ -1346,3 +1346,72 @@ export function chunk<T>(items: T[], size: number): T[][] {
   for (let i = 0; i < items.length; i += size) out.push(items.slice(i, i + size));
   return out;
 }
+
+// ───────────────────────────────────────────────────────────────────────────
+// The `pending` action — the drain queue
+// ───────────────────────────────────────────────────────────────────────────
+//
+// Classification used to happen *before* anything was persisted, so a slow or
+// unavailable Ollama, or a lid closing mid-batch, lost the whole batch. The
+// pipeline is now split: the trigger writes rows with no verdict, and a
+// scheduled drain asks this action which rows still need one.
+//
+// `score IS NULL` is the queue. That is not a new concept bolted on — it is
+// what the column already meant ("nothing has decided this yet", as distinct
+// from "decided, and the answer was low"), and `MailPanel` already sorts those
+// rows to the top under their own `untriaged` bucket. The queue was implicit in
+// the schema from the start; this only makes it readable.
+//
+// # Why this returns ids and nothing else
+//
+// A read path in a function whose whole posture is "accepts no table name, no
+// user id and no filter" is a widening, so it is kept as narrow as the write
+// path: the caller names nothing, and the response carries **external ids
+// only** — no sender, no subject, no snippet. A leaked key still cannot read a
+// single word of anyone's mail, which is the property that mattered when this
+// function was written and still matters now.
+//
+// The drain re-fetches the body from Gmail by that id. That is not a
+// workaround, it is the same rule as everywhere else here: bodies stay on the
+// Mac. `raw` deliberately carries no message text, so there is nothing to read
+// back even with the service role.
+
+/** Rows returned when the caller asks for no particular number. */
+export const PENDING_DEFAULT_LIMIT = 25;
+
+/**
+ * Hard ceiling on one drain pass.
+ *
+ * Not arbitrary: at roughly 24 s per message on the local 7B, 100 rows is ~40
+ * minutes of continuous inference. A larger page would simply overlap the next
+ * scheduled drain rather than finish sooner.
+ */
+export const PENDING_MAX_LIMIT = 100;
+
+export type ParsedPending =
+  | { ok: true; limit: number }
+  | { ok: false; error: "invalid_limit" };
+
+/** True when the body is asking for the queue rather than delivering a batch. */
+export function isPendingRequest(body: unknown): boolean {
+  return typeof body === "object" && body !== null &&
+    (body as { action?: unknown }).action === "pending";
+}
+
+/**
+ * Validate a `pending` request.
+ *
+ * An absent limit is the default, not an error. A present-but-nonsense one *is*
+ * an error rather than being silently clamped: `limit: "all"` means the caller
+ * believes something about this endpoint that is not true, and quietly handing
+ * back 25 rows would let that belief survive.
+ */
+export function parsePendingRequest(body: unknown): ParsedPending {
+  const raw = (body as { limit?: unknown } | null)?.limit;
+  if (raw === undefined || raw === null) return { ok: true, limit: PENDING_DEFAULT_LIMIT };
+
+  const n = typeof raw === "number" ? raw : typeof raw === "string" ? Number(raw) : NaN;
+  if (!Number.isFinite(n) || !Number.isInteger(n) || n < 1) return { ok: false, error: "invalid_limit" };
+
+  return { ok: true, limit: Math.min(n, PENDING_MAX_LIMIT) };
+}

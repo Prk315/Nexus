@@ -35,11 +35,11 @@ export function deadlineVariant(days: number): DeadlineVariant {
   return "outline";
 }
 
-export const PRIORITY_DOT: Record<Priority, string> = {
-  high: "bg-red-500",
-  medium: "bg-yellow-400",
-  low: "bg-muted-foreground/40",
-};
+// Canonical definition moved to components/task/taskVisual.ts (spec U3 Part
+// B — the shared task-visual vocabulary). Re-exported here so every existing
+// `import { PRIORITY_DOT } from "../lib/utils"` (or "./lib/utils") keeps
+// resolving unchanged.
+export { PRIORITY_DOT } from "../components/task/taskVisual";
 
 export const PRIORITY_LABEL: Record<Priority, string> = {
   high: "High",

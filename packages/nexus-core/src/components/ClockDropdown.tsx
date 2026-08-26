@@ -159,7 +159,7 @@ async function fetchAll(loadScreenSpans?: () => Promise<ScreenSpan[]>): Promise<
     // that no anon read path existed, which had also silently broken Nexus
     // Local's calendar logging since Phase A. See migration
     // 20260821220000_pf_cal_blocks_anon_access.sql.
-    anon.from("pf_cal_blocks").select("title,start_time,end_time,category,color").eq("user_id", OWNER_UID).eq("date", today),
+    anon.from("pf_cal_blocks").select("id,title,start_time,end_time,category,color,parent_block_id").eq("user_id", OWNER_UID).eq("date", today),
     anon.from("protocol_workout_sessions").select("name,started_at,duration_min").eq("user_id", OWNER_UID).not("started_at", "is", null).gte("started_at", startIso).lt("started_at", endIso),
     anon.from("protocol_running_sessions").select("notes,started_at,avg_pace_s_per_km,actual_km").eq("user_id", OWNER_UID).not("started_at", "is", null).gte("started_at", startIso).lt("started_at", endIso),
     anon.from("protocol_sleep").select("date,bedtime_start,bedtime_end").gte("date", today).lte("date", tomorrow).eq("user_id", OWNER_UID),
@@ -201,12 +201,36 @@ async function fetchAll(loadScreenSpans?: () => Promise<ScreenSpan[]>): Promise<
   const plannedBlocks: PlannedBlock[] = [];
   const plannedBands: StripBand[] = [];
   if (blocksRes.status === "fulfilled") {
-    for (const b of (blocksRes.value.data ?? []) as { title: string; start_time: string; end_time: string; category: string | null; color: string | null }[]) {
+    type PlannedRow = {
+      id: number | string; title: string; start_time: string; end_time: string;
+      category: string | null; color: string | null; parent_block_id: number | string | null;
+    };
+    const rows = (blocksRes.value.data ?? []) as PlannedRow[];
+    // Phase U1 (nested blocks): the mini strip has no inset container like
+    // Week's TimeColumn — it draws every band flat, at the same width. The
+    // ONLY way a nested child stays visible at all is paint order, so rows
+    // are sorted parent-before-child (by depth, walking `parent_block_id`
+    // within today's own fetched set) before the loop below pushes bands in
+    // that order — later pushes paint on top.
+    const byId = new Map(rows.map((r) => [String(r.id), r]));
+    function depthOf(r: PlannedRow, seen: Set<string> = new Set()): number {
+      if (r.parent_block_id == null) return 0;
+      const pid = String(r.parent_block_id);
+      if (seen.has(pid)) return 0; // defensive: never hang on a stale cycle
+      const parent = byId.get(pid);
+      if (!parent) return 0; // parent not in today's set — orphan, treat as top-level
+      return 1 + depthOf(parent, new Set(seen).add(pid));
+    }
+    const ordered = [...rows].sort((a, b) => depthOf(a) - depthOf(b));
+    for (const b of ordered) {
       const s = hmOn(today, b.start_time);
       let e = hmOn(today, b.end_time);
       if (s === null || e === null) continue;
       if (e <= s) e = winEnd; // crosses midnight — count the part on today
-      plannedBlocks.push({ category: b.category, title: b.title, span: { start: s, end: e } });
+      plannedBlocks.push({
+        category: b.category, title: b.title, span: { start: s, end: e },
+        id: String(b.id), parentId: b.parent_block_id != null ? String(b.parent_block_id) : null,
+      });
       plannedBands.push({ start: s, end: e, color: colorHex(b.color, FALLBACK_PLANNED_HEX) });
     }
   }

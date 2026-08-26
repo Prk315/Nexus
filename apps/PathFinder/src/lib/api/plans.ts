@@ -3,6 +3,7 @@
 import {
   err, mapPlan, num, supabase, getUserId,
 } from "./_shared";
+import { getTeamOrFilter } from "./teams";
 import type {
   Plan, ProjectGoal,
 } from "../../types";
@@ -14,11 +15,10 @@ import type {
 export const getPlans = async (): Promise<Plan[]> => {
   // Counts aggregated server-side by pf_plans_with_counts — one round-trip, and
   // no longer ships every task row just to tally it.
-  const { data: plans, error } = await supabase
-    .from("pf_plans_with_counts")
-    .select("*")
-    .eq("user_id", getUserId())
-    .order("created_at", { ascending: false });
+  const orFilter = await getTeamOrFilter();
+  let q = supabase.from("pf_plans_with_counts").select("*");
+  q = orFilter ? q.or(orFilter) : q.eq("user_id", getUserId());
+  const { data: plans, error } = await q.order("created_at", { ascending: false });
   if (error) err(error);
   return (plans ?? []).map((p) => mapPlan(p, num(p.task_count), num(p.done_count)));
 };
@@ -28,6 +28,7 @@ export const createPlan = async (payload: {
   deadline?: string | null; tags?: string | null; is_course?: boolean;
   is_lifestyle?: boolean; is_schedule?: boolean; lifestyle_area_id?: number | null;
   purpose?: string | null; problem?: string | null; solution?: string | null;
+  team_id?: string | null;
 }): Promise<Plan> => {
   const { data, error } = await supabase
     .from("pf_plans")

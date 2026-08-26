@@ -1,4 +1,5 @@
-import { cn, PRIORITY_DOT } from "../lib/utils";
+import { cn } from "../lib/utils";
+import { PRIORITY_DOT } from "./task/taskVisual";
 import type { Priority } from "../types";
 
 export function PriorityDot({ priority, className }: { priority: Priority; className?: string }) {

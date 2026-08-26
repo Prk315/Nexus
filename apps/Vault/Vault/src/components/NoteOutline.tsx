@@ -15,6 +15,7 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } fr
 import type { Editor } from "@tiptap/core";
 import type { Node as PMNode } from "@tiptap/pm/model";
 import { useResizableWidth } from "../hooks/useResizableWidth";
+import { foldsCovering } from "../extensions/headingFold";
 
 export interface OutlineItem {
   /** ProseMirror position of the heading node. This is the identity. */
@@ -298,10 +299,16 @@ function openCollapsedAncestors(editor: Editor, pos: number): boolean {
       toOpen.push($pos.before(d));
     }
   }
-  if (!toOpen.length) return false;
+  // A collapsed HEADING hides its siblings rather than containing them, so it
+  // is never an ancestor of the target and the depth walk above cannot see it.
+  // It hides the target just as thoroughly — display:none, zero rect, a scroll
+  // that lands nowhere — so unfold those too.
+  const toUnfold = foldsCovering(state.doc, pos);
+  if (!toOpen.length && !toUnfold.length) return false;
 
   const tr = state.tr;
   for (const at of toOpen) tr.setNodeAttribute(at, "open", true);
+  for (const at of toUnfold) tr.setNodeAttribute(at, "collapsed", false);
   // Same reasoning as a manual collapse: this is a view concern, not an edit,
   // and Cmd-Z should not undo "the outline expanded a section for me".
   tr.setMeta("addToHistory", false);

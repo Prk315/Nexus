@@ -15,6 +15,9 @@ import {
   secretIsUsable,
   secretMatches,
   withRules,
+  isPendingRequest,
+  parsePendingRequest,
+  PENDING_MAX_LIMIT
 } from "./logic.ts";
 
 /**
@@ -23,7 +26,7 @@ import {
  * # Why this function exists at all
  *
  * The Gmail triage pipeline runs entirely on the Mac: n8n pulls messages, hands
- * them to a local Qwen via Ollama for a priority score and a suggested reply,
+ * them to a local Qwen via Ollama for a score and a suggested reply,
  * and the result has to reach a UI that is served from Vercel and read on an
  * iPhone. Those clients cannot reach `http://localhost:5678` — an HTTPS page
  * cannot fetch plaintext localhost, and the phone is not on the Mac's loopback
@@ -67,11 +70,22 @@ import {
  *
  * # An untriaged row says so
  *
- * `priority` is nullable and NULL means "triage produced no verdict", which is
+ * `score` is nullable and NULL means "triage produced no verdict", which is
  * a different fact from "triage scored it medium". `triaged_at` and
- * `triage_model` are NULL exactly when `priority` is. The panel reads
- * `priority desc nulls first`, so a message the model failed on surfaces at the
+ * `triage_model` are NULL exactly when `score` is. The panel reads
+ * `score desc nulls first`, so a message the model failed on surfaces at the
  * top where a human notices it, rather than sitting mid-list looking scored.
+ *
+ * The column is `score`, NOT `priority` — renamed because `pf_tasks.priority`
+ * means *importance* on a high|medium|low domain, and the same word with the
+ * opposite meaning in one database is a bug waiting for whoever writes the
+ * conversion. One `.order("priority")` survived that rename in the panel's
+ * loader and took the whole feature down with a `42703`.
+ *
+ * NULL is also the queue. `mail-triage` persists every fetched message before
+ * the model sees it, and `mail-drain` asks this function (`{"action":"pending"}`)
+ * which rows still lack a verdict. So an unscored row is not a failure state —
+ * it is work that has not happened yet, and something is coming for it.
  * This is `blocking_state`'s invariant in a different table: a missing verdict
  * must never be indistinguishable from a computed one.
  *
@@ -149,6 +163,42 @@ Deno.serve(async (req: Request) => {
     body = await req.json();
   } catch {
     return json({ error: "invalid_json" }, 400);
+  }
+
+  // ── the `pending` action: read the drain queue ──────────────────────────
+  //
+  // Answered before anything else, and it shares nothing with the write path
+  // below — no run marker, no rules, no upsert. A drain pass asking "what still
+  // needs a verdict?" must not be able to touch a row by asking.
+  //
+  // `score IS NULL` is the queue. Ordered by `received_at` ascending so a
+  // backlog drains oldest-first: after a night asleep the morning's mail is
+  // classified in the order it arrived, not newest-first, which would leave the
+  // oldest — and most likely to be waited on — until last.
+  if (isPendingRequest(body)) {
+    const pending = parsePendingRequest(body);
+    if (!pending.ok) return json({ error: pending.error, max: PENDING_MAX_LIMIT }, 400);
+
+    const supabase = createClient(url, serviceKey);
+    const { data, error } = await supabase
+      .from("mail_messages")
+      .select("external_id")
+      // Owner stamped here, never taken from the caller — same rule as the
+      // write path. The service role bypasses RLS, so this is the only thing
+      // scoping the read.
+      .eq("user_id", OWNER_UID)
+      .is("score", null)
+      .order("received_at", { ascending: true })
+      .limit(pending.limit);
+
+    // Fail loudly. An empty list means "nothing to do", and a drain that
+    // treated a failed query as an empty queue would report itself healthy
+    // while the backlog grew — the same missing-versus-empty conflation the
+    // freshness marker exists to prevent.
+    if (error) return json({ error: "pending_query_failed", detail: error.message }, 500);
+
+    const ids = (data ?? []).map((r) => (r as { external_id: string }).external_id);
+    return json({ ids, count: ids.length, limit: pending.limit });
   }
 
   // Sampled exactly once and threaded through, so every row in a batch shares

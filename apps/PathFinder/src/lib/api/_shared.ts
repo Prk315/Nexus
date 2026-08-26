@@ -74,6 +74,7 @@ export function mapPlan(r: any, taskCount = 0, doneCount = 0): Plan {
     purpose: r.purpose,
     problem: r.problem,
     solution: r.solution,
+    team_id: r.team_id ?? null,
   };
 }
 
@@ -140,6 +141,8 @@ export function mapTaskBase(r: any) {
     aggregate_estimate: r.aggregate_estimate ?? r.time_estimate ?? 0,
     kanban_status: r.kanban_status ?? "backlog",
     category: r.category ?? null,
+    team_id: r.team_id ?? null,
+    assigned_to: r.assigned_to ?? null,
   };
 }
 
@@ -425,6 +428,11 @@ export function expandRecurring(block: any, startDate: string, endDate: string):
         // commitment counts once per occurrence in the coverage roll-up.
         task_id: block.task_id != null ? num(block.task_id) : null,
         category: block.category ?? null,
+        // Recurring series never nest — a virtual (negative-id) occurrence
+        // has no real row for a child to reference, and `pf_recurring_cal_blocks`
+        // itself carries no `parent_block_id` column. Always null here,
+        // unconditionally, regardless of anything on `block`.
+        parent_block_id: null,
       });
     }
     cursor.setUTCDate(cursor.getUTCDate() + 1);

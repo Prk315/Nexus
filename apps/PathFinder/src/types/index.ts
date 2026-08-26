@@ -116,6 +116,8 @@ export interface Plan {
   purpose: string | null;
   problem: string | null;
   solution: string | null;
+  /** Owning team, or null for a plan that belongs to one person. */
+  team_id: string | null;
 }
 
 /**
@@ -159,6 +161,13 @@ export interface TaskBase {
   aggregate_estimate: number;
   kanban_status: string;
   category: TaskCategory | null;
+  /** Owning team, or null for a task that belongs to one person. */
+  team_id: string | null;
+  /**
+   * Who a team task is for: null = unassigned, `"all"` = every member, else a
+   * specific member's user id. Meaningless (and unused) when `team_id` is null.
+   */
+  assigned_to: string | null;
 }
 
 export interface Task extends TaskBase {
@@ -442,6 +451,15 @@ export interface CalBlock {
   task_id: number | null;
   /** Name of a `coverage_categories` row, matched by name (no FK). Null = uncategorized. */
   category: string | null;
+  /**
+   * Nested-block support: set when this block is a segment scheduled inside
+   * another `pf_cal_blocks` row on the same date (Week view renders it as an
+   * inset card inside its parent). `null` = top-level. `number`, not
+   * `string` — matches `id`, since `pf_cal_blocks.id` is `bigint`, not
+   * `uuid`. Always `null` on a virtual recurring occurrence (negative `id`):
+   * recurring series never nest, see `expandRecurring`.
+   */
+  parent_block_id: number | null;
 }
 
 export interface PipelineStep {

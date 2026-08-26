@@ -14,6 +14,7 @@ const task = (o: Partial<TaskWithContext> = {}): TaskWithContext => ({
   plan_title: null, goal_title: null, title: "t", done: false, sort_order: 0,
   priority: "medium", due_date: null, created_at: "", time_estimate: null,
   aggregate_estimate: 0, kanban_status: "backlog", category: null,
+  team_id: null, assigned_to: null,
   planning: planning(), ...o,
 });
 
@@ -21,7 +22,8 @@ const block = (o: Partial<CalBlock> = {}): CalBlock => ({
   id: 1, date: TODAY, title: "b", start_time: "09:00", end_time: "10:00",
   color: "blue", description: null, location: null, created_at: "",
   is_recurring: false, recurring_id: null, recurrence: null, days_of_week: null,
-  series_start_date: null, series_end_date: null, task_id: null, category: null, ...o,
+  series_start_date: null, series_end_date: null, task_id: null, category: null,
+  parent_block_id: null, ...o,
 });
 
 const run = (tasks: TaskWithContext[], blocks: [number, CalBlock[]][] = [], worked: number[] = [], nowMinutes = NOON) =>

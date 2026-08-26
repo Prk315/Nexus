@@ -222,6 +222,49 @@
           "name": "Nexus n8n-ingest key"
         }
       }
+    },
+    {
+      "id": "build-untriaged",
+      "name": "Build untriaged batch",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        840,
+        240
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "// Persist every fetched message BEFORE the model sees it, with no verdict.\n//\n// Classification used to happen first, so nothing was written until Qwen\n// answered — and a slow model, a stopped Ollama or a lid closing mid-batch\n// lost the entire batch silently. The trigger had already advanced past\n// those messages, so they were never fetched again.\n//\n// Writing first makes `score IS NULL` the durable queue. It is not a new\n// state: it is what the column always meant, and MailPanel already sorts\n// those rows to the top under their own `untriaged` bucket. The drain\n// workflow picks them up on a schedule and keeps trying until they have a\n// verdict.\n//\n// This branch runs in PARALLEL with classification, not before it. The\n// happy path is unchanged and no slower; this only guarantees that a\n// message which was fetched is a message that exists.\n//\n// No `run` object here on purpose. The freshness marker means 'a sync\n// completed', and this branch has not completed one — the verdict POST at\n// the end of the pipeline is what earns that claim.\n\nconst messages = items.map((i) => ({\n  external_id: i.json.external_id,\n  thread_id:   i.json.thread_id,\n  sender:      i.json.sender,\n  subject:     i.json.subject,\n  snippet:     i.json.snippet,\n  received_at: i.json.received_at,\n  raw:         i.json.raw,\n}));\n\n// Nothing fetched means nothing to persist. Posting an empty batch would\n// be harmless but pointless.\nreturn messages.length ? [{ json: { messages } }] : [];"
+      }
+    },
+    {
+      "id": "post-untriaged",
+      "name": "Persist untriaged",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1340,
+        240
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "https://efxmzsdisaymtpebaxlp.supabase.co/functions/v1/n8n-ingest",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ messages: $json.messages }) }}",
+        "options": {
+          "timeout": 60000
+        }
+      },
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": null,
+          "name": "Nexus n8n-ingest key"
+        }
+      },
+      "onError": "continueRegularOutput"
     }
   ],
   "connections": {
@@ -254,6 +297,11 @@
             "node": "Classify with local Qwen (Ollama)",
             "type": "main",
             "index": 0
+          },
+          {
+            "node": "Build untriaged batch",
+            "type": "main",
+            "index": 0
           }
         ]
       ]
@@ -274,6 +322,17 @@
         [
           {
             "node": "POST n8n-ingest",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build untriaged batch": {
+      "main": [
+        [
+          {
+            "node": "Persist untriaged",
             "type": "main",
             "index": 0
           }

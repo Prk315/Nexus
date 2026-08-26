@@ -3,6 +3,7 @@
 import {
   TASK_SELECT, TASK_SELECT_CTX, err, expandRecurring, mapPlanning, mapTask, mapTaskSession, mapTaskWithContext, num, supabase, getUserId,
 } from "./_shared";
+import { getTeamOrFilter } from "./teams";
 import type {
   CalBlock, CompletionMode, Priority, SystemEntry, Task, TaskCoverage, TaskPlanning, TaskSession, TaskStage, TaskType, TaskWithContext, Urgency,
 } from "../../types";
@@ -24,11 +25,12 @@ export const getTasks = async (planId: number): Promise<Task[]> => {
 };
 
 export const getAllTasks = async (): Promise<TaskWithContext[]> => {
-  const { data, error } = await supabase
-    .from("pf_tasks")
-    .select(TASK_SELECT_CTX)
-    .eq("user_id", getUserId())
-    .order("created_at", { ascending: false });
+  // Broadened to personal + team tasks: one cache backs every board, which
+  // filters client-side (see lib/team.ts's isTaskRelevantToMe).
+  const orFilter = await getTeamOrFilter();
+  let q = supabase.from("pf_tasks").select(TASK_SELECT_CTX);
+  q = orFilter ? q.or(orFilter) : q.eq("user_id", getUserId());
+  const { data, error } = await q.order("created_at", { ascending: false });
   if (error) err(error);
   return (data ?? []).map((r) => mapTaskWithContext(r));
 };
@@ -39,7 +41,7 @@ export const getAllTasks = async (): Promise<TaskWithContext[]> => {
  */
 const BASE_COLUMNS = new Set([
   "plan_id", "parent_id", "goal_id", "title", "done", "sort_order", "priority",
-  "due_date", "time_estimate", "kanban_status", "category",
+  "due_date", "time_estimate", "kanban_status", "category", "team_id", "assigned_to",
 ]);
 
 /**
@@ -68,6 +70,7 @@ export const createTask = async (payload: {
   parent_id?: number | null; goal_id?: number | null; urgency?: Urgency; stage?: TaskStage;
   completion_mode?: CompletionMode; target_count?: number | null;
   notes?: string | null; sort_order?: number;
+  team_id?: string | null; assigned_to?: string | null;
 }): Promise<Task> => {
   const { base, planning } = splitPatch(payload);
 
@@ -178,12 +181,10 @@ export const setTaskMatrix = async (
  * callers group by `category` themselves.
  */
 export const getQuickTasks = async (): Promise<Task[]> => {
-  const { data, error } = await supabase
-    .from("pf_tasks")
-    .select(TASK_SELECT)
-    .eq("user_id", getUserId())
-    .not("category", "is", null)
-    .order("created_at", { ascending: false });
+  const orFilter = await getTeamOrFilter();
+  let q = supabase.from("pf_tasks").select(TASK_SELECT).not("category", "is", null);
+  q = orFilter ? q.or(orFilter) : q.eq("user_id", getUserId());
+  const { data, error } = await q.order("created_at", { ascending: false });
   if (error) err(error);
   return (data ?? []).map(mapTask);
 };
@@ -278,8 +279,10 @@ export const promoteChoreToSystem = async (
 export const getSubtree = async (rootId: number): Promise<Task[]> => {
   // Recursive CTEs need an RPC; at PathFinder's scale (hundreds of tasks) it is
   // cheaper and far simpler to pull the user's tasks once and walk them here.
+  // No user_id filter: RLS already scopes rows to mine + my teams', and a
+  // team task's subtree must include the rows other members created under it.
   const { data, error } = await supabase
-    .from("pf_tasks").select(TASK_SELECT).eq("user_id", getUserId());
+    .from("pf_tasks").select(TASK_SELECT);
   if (error) err(error);
   const rows = (data ?? []).map(mapTask);
 
@@ -317,7 +320,7 @@ export const addSubtask = async (
 ): Promise<Task> => {
   const { data: parent, error: e1 } = await supabase
     .from("pf_tasks")
-    .select("plan_id, goal_id, priority, due_date, category, pf_task_planning(urgency)")
+    .select("plan_id, goal_id, priority, due_date, category, team_id, pf_task_planning(urgency)")
     .eq("id", parentId).single();
   if (e1) err(e1);
 
@@ -347,6 +350,11 @@ export const addSubtask = async (
     time_estimate: opts?.time_estimate ?? null,
     sort_order: nextOrder,
     stage: "refine",
+    // A step of a team task is itself a team task — otherwise it silently
+    // drops out of the team board the moment it's broken down. `assigned_to`
+    // is deliberately not inherited: a step starts unassigned/visible-to-all
+    // even if its parent is narrowed to one member.
+    team_id: (parent!.team_id as string | null) ?? null,
   });
 };
 
@@ -411,11 +419,15 @@ export const getTaskScheduling = async (
   const horizon = new Date(Date.now() + RECURRING_HORIZON_DAYS * 86_400_000)
     .toISOString().slice(0, 10);
 
+  // No user_id filter on either query: RLS already scopes rows to mine + my
+  // teams' (teammates' blocks on team tasks are readable), and the whole point
+  // of the combined-minutes gate is that a team task's coverage counts every
+  // member's blocks against it, not just the caller's own.
   let oneOff = supabase.from("pf_cal_blocks")
     .select("id, date, start_time, end_time, task_id")
-    .eq("user_id", getUserId()).not("task_id", "is", null);
+    .not("task_id", "is", null);
   let series = supabase.from("pf_recurring_cal_blocks")
-    .select("*").eq("user_id", getUserId()).not("task_id", "is", null);
+    .select("*").not("task_id", "is", null);
   if (taskIds) {
     oneOff = oneOff.in("task_id", taskIds);
     series = series.in("task_id", taskIds);
@@ -456,6 +468,7 @@ export const getTaskBlocks = async (taskIds: number[]): Promise<CalBlock[]> => {
     days_of_week: null, series_start_date: null, series_end_date: null,
     task_id: b.task_id ? num(b.task_id) : null,
     category: b.category ?? null,
+    parent_block_id: b.parent_block_id != null ? num(b.parent_block_id) : null,
   }));
 
   // Series are returned as a single representative entry (dated at the series
@@ -469,6 +482,7 @@ export const getTaskBlocks = async (taskIds: number[]): Promise<CalBlock[]> => {
     days_of_week: r.days_of_week, series_start_date: r.start_date,
     series_end_date: r.end_date, task_id: r.task_id ? num(r.task_id) : null,
     category: r.category ?? null,
+    parent_block_id: null, // recurring series never nest
   }));
 
   return [...oneOff, ...seriesRows].sort(

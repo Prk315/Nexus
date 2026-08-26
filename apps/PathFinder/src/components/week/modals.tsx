@@ -1,11 +1,12 @@
 // Every week-view modal: the block editor plus the task/goal/plan/system editors.
 
 import { useState } from "react";
-import { X, Target, ListChecks, CheckSquare, Trash2, Repeat2, MapPin } from "lucide-react";
+import { X, Target, ListChecks, CheckSquare, Trash2, Repeat2, MapPin, CornerDownRight } from "lucide-react";
 import { Button } from "../../components/ui/button";
 import { cn } from "../../lib/utils";
-import type { Goal, Plan, TaskWithContext, SystemEntry, CalBlock } from "../../types";
-import { BLOCK_COLORS, addHour } from "./_shared";
+import { addMinutesToTime } from "../../lib/taskTree";
+import type { Goal, Plan, TaskWithContext, SystemEntry, CalBlock, TaskCoverage } from "../../types";
+import { BLOCK_COLORS, addHour, firstFreeSubSpan } from "./_shared";
 import type { BlockDraft } from "./_shared";
 import type { CoverageCategoryOption } from "../../lib/api";
 
@@ -62,16 +63,54 @@ function parseDaysOfWeek(s: string | null | undefined): number[] {
   return s.split(",").map(Number).filter((n) => !isNaN(n));
 }
 
-export function CalBlockModal({ initial, date, startTime, tasks, categories, onSave, onDelete, onClose }: {
+export function CalBlockModal({
+  initial, date, startTime, tasks, categories, onSave, onDelete, onClose,
+  taskCoverage, dayBlocks, parentBlock, presetTitle, presetTaskId, onAddSegment,
+}: {
   initial?: CalBlock; date: string; startTime: string;
   tasks: TaskWithContext[];
   categories: CoverageCategoryOption[];
   onSave: (d: BlockDraft) => void; onDelete?: () => void; onClose: () => void;
+  /** Committed calendar minutes per task — used to find a linked parent
+   * task's UNSCHEDULED steps for the one-tap chip row. Omit to skip chips
+   * entirely (e.g. call sites that predate nesting). */
+  taskCoverage?: Map<number, TaskCoverage>;
+  /** The day's other blocks — read here only to find this block's existing
+   * children (first-free-sub-span math, and the delete-confirm copy). Never
+   * written back through this modal — moving blocks between parents is
+   * phase-2 drag work. */
+  dayBlocks?: CalBlock[];
+  /** Set only in the "Add segment" creation flow: this create-mode instance
+   * is minting a CHILD of `parentBlock`. */
+  parentBlock?: CalBlock;
+  presetTitle?: string;
+  presetTaskId?: number | null;
+  /** Present only when editing an existing non-recurring, non-virtual block
+   * — renders the "+ Add segment" affordance that opens a new create-mode
+   * modal preset with `parentBlock` = this block. */
+  onAddSegment?: () => void;
 }) {
+  // Existing children of the block being edited/created-into — used both for
+  // the free-sub-span prefill below and for the delete-confirm copy.
+  const parentForFreeSpan = parentBlock ?? initial;
+  const existingChildren = parentForFreeSpan && dayBlocks
+    ? dayBlocks.filter((b) => b.parent_block_id === parentForFreeSpan.id)
+    : [];
+  // Only computed in the create-a-child flow — editing an existing block's
+  // OWN span has nothing to do with where ITS children happen to sit.
+  const freeSpan = !initial && parentBlock ? firstFreeSubSpan(parentBlock, existingChildren) : null;
+  const presetStep = presetTaskId != null ? tasks.find((t) => t.id === presetTaskId) : undefined;
+
   const [form, setForm] = useState<BlockDraft>({
-    title:           initial?.title       ?? "",
-    start_time:      initial?.start_time  ?? startTime,
-    end_time:        initial?.end_time    ?? addHour(startTime, 1),
+    title:           initial?.title       ?? presetTitle ?? "",
+    start_time:      initial?.start_time  ?? freeSpan?.start ?? startTime,
+    end_time:        initial?.end_time    ?? (
+                       freeSpan
+                         ? (presetStep
+                             ? addMinutesToTime(freeSpan.start, presetStep.time_estimate ?? 30)
+                             : freeSpan.end)
+                         : addHour(startTime, 1)
+                     ),
     color:           initial?.color       ?? "blue",
     description:     initial?.description ?? "",
     location:        initial?.location    ?? "",
@@ -81,9 +120,30 @@ export function CalBlockModal({ initial, date, startTime, tasks, categories, onS
                        ? parseDaysOfWeek(initial.days_of_week)
                        : defaultDaysOfWeek(date),
     series_end_date: initial?.series_end_date ?? "",
-    task_id:         initial?.task_id ?? null,
+    task_id:         initial?.task_id ?? presetTaskId ?? null,
     category:        initial?.category ?? null,
   });
+
+  // Unscheduled steps of the parent's linked task — the one-tap chip row.
+  // Only offered when creating a fresh child (not editing one) and the
+  // parent itself is linked to a task that has steps.
+  const stepChips = !initial && parentBlock?.task_id != null
+    ? tasks.filter((t) =>
+        t.parent_id === parentBlock.task_id &&
+        (taskCoverage?.get(t.id)?.scheduledMin ?? 0) === 0,
+      )
+    : [];
+
+  function tapStepChip(step: TaskWithContext) {
+    const start = freeSpan?.start ?? form.start_time;
+    setForm((f) => ({
+      ...f,
+      title: step.title,
+      task_id: step.id,
+      start_time: start,
+      end_time: addMinutesToTime(start, step.time_estimate ?? 30),
+    }));
+  }
   // True once the user has clicked a color swatch directly in this modal
   // session — after that, picking a category no longer overrides the color.
   // Not persisted: re-opening an old block treats its stored color as the
@@ -134,6 +194,36 @@ export function CalBlockModal({ initial, date, startTime, tasks, categories, onS
       initial            ? "Edit block" :
                            `New block — ${date}`
     } onClose={onClose}>
+      {/* Read-only context for the "Add segment" creation flow — not a
+          picker; moving a block between parents is phase-2 drag work. */}
+      {!initial && parentBlock && (
+        <p className="flex items-center gap-1.5 text-xs text-muted-foreground rounded-md border border-border/60 bg-secondary/30 px-2.5 py-1.5">
+          <CornerDownRight className="h-3.5 w-3.5 shrink-0 opacity-60" />
+          Inside: <span className="font-medium text-foreground truncate">{parentBlock.title}</span>
+        </p>
+      )}
+      {stepChips.length > 0 && (
+        <div className="flex flex-col gap-1">
+          <p className="text-xs font-medium text-muted-foreground">Unscheduled steps</p>
+          <div className="flex flex-wrap gap-1.5">
+            {stepChips.map((step) => (
+              <button
+                key={step.id}
+                type="button"
+                onClick={() => tapStepChip(step)}
+                className={cn(
+                  "px-2 py-1 rounded-md border text-xs transition-colors",
+                  form.task_id === step.id
+                    ? "bg-primary/10 border-primary/40 text-primary"
+                    : "border-border text-muted-foreground hover:text-foreground hover:border-foreground",
+                )}
+              >
+                {step.title}{step.time_estimate ? ` · ${step.time_estimate}min` : ""}
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
       <Field label="Link task (optional)">
         <select
           className={inputCls}
@@ -206,8 +296,10 @@ export function CalBlockModal({ initial, date, startTime, tasks, categories, onS
           value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })} />
       </Field>
 
-      {/* Recurrence — only show toggle when creating; always show options when editing recurring */}
-      {!isEditingRecurring && (
+      {/* Recurrence — only show toggle when creating; always show options when
+          editing recurring; never for a segment (recurring blocks never nest,
+          and a nested child can't become a recurring series root either). */}
+      {!isEditingRecurring && !parentBlock && (
         <div className="flex items-center gap-2">
           <button
             type="button"
@@ -258,6 +350,26 @@ export function CalBlockModal({ initial, date, startTime, tasks, categories, onS
               onChange={(e) => setForm({ ...form, series_end_date: e.target.value })} />
           </Field>
         </div>
+      )}
+
+      {/* "Add segment" — only for an existing, saved, non-recurring, real
+          (non-virtual) block. A virtual recurring occurrence carries a
+          negative id and is never itself save-able as a parent. */}
+      {initial && !initial.is_recurring && initial.id > 0 && onAddSegment && (
+        <button
+          type="button"
+          onClick={onAddSegment}
+          className="flex items-center gap-1.5 self-start text-xs font-medium text-primary hover:text-primary/80 transition-colors"
+        >
+          <CornerDownRight className="h-3.5 w-3.5" />
+          Add segment
+        </button>
+      )}
+
+      {onDelete && existingChildren.length > 0 && (
+        <p className="text-[11px] text-amber-500">
+          Deleting also deletes {existingChildren.length} nested segment{existingChildren.length === 1 ? "" : "s"} inside it.
+        </p>
       )}
 
       <div className="flex gap-2 pt-1">

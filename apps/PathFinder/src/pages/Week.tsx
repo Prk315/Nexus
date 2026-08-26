@@ -10,16 +10,20 @@ import { getWeekItems, getAllTasks, getGoals, getPlans, getSystems, createTask, 
 import { loadActualWeek, loadSleepWeek } from "../lib/actual";
 import { Button } from "../components/ui/button";
 import { cn } from "../lib/utils";
-import { blockMinutes } from "../lib/taskTree";
+import { blockMinutes, subtreeNode, unscheduledMinutes } from "../lib/taskTree";
+import { isTaskRelevantToMe } from "../lib/team";
+import { getUserId } from "../lib/supabase";
 import type { Goal, Plan, TaskWithContext, SystemEntry, WeekItems, CalBlock, Deadline, CourseAssignment, TaskSession, TaskCoverage } from "../types";
-import { BLOCK_COLORS, DAY_NAMES, DEFAULT_SCROLL_HOUR, HOURS, HOUR_PX, HOUR_START, MONTHS, ModalState, addDays, timeToMinutes, toISO, todayISO, weekStart } from "../components/week/_shared";
+import { BLOCK_COLORS, DAY_NAMES, DEFAULT_SCROLL_HOUR, HOURS, HOUR_PX, HOUR_PX_STORAGE_KEY, HOUR_START, MONTHS, ModalState, addDays, clampChildSpan, clampHourPx, externalDragDurationMin, pxToMinutes, minutesToPx, timeToMinutes, toISO, todayISO, weekStart, zoomHourPx } from "../components/week/_shared";
 import { CalBlockModal, TaskModal, GoalModal, PlanModal, SystemModal, TypePickerModal } from "../components/week/modals";
 import { TaskPopupChip, TimeColumn } from "../components/week/TimeColumn";
 import { SystemsBar, HeaderPanel, LeftPanel, RightPanel } from "../components/week/panels";
 import { WeekTimeStrip } from "../components/week/WeekTimeStrip";
 import { MonthView } from "../components/week/MonthView";
+import { DragGhostLayer, ExternalDragGhostLayer, useWeekInteractions } from "../components/week/useWeekInteractions";
 import type { TaskDraft, GoalDraft, PlanDraft, SystemDraft } from "../components/week/modals";
 import type { BlockDraft } from "../components/week/_shared";
+import type { DragCommitPatch, ExternalDragPayload, ExternalDropDest } from "../components/week/useWeekInteractions";
 import type { Span } from "@nexus/core/coverage";
 import type { ActualDay } from "../lib/actual";
 import type { CoverageCategoryOption } from "../lib/api";
@@ -60,6 +64,22 @@ export function Week() {
   const [taskCoverage, setTaskCoverage] = useState<Map<number, TaskCoverage>>(new Map());
   const [modal,        setModal]       = useState<ModalState | null>(null);
   const gridRef = useRef<HTMLDivElement>(null);
+
+  // Vertical zoom (U2 §1) — desktop only; mobile always renders at the fixed
+  // HOUR_PX default (see the mobile TimeColumn call below) and never reads
+  // this state at all. Read once on mount, written back debounced.
+  const [hourPx, setHourPxRaw] = useState<number>(() => {
+    const saved = Number(localStorage.getItem(HOUR_PX_STORAGE_KEY));
+    return clampHourPx(saved > 0 ? saved : HOUR_PX);
+  });
+  const setHourPx = useCallback((v: number) => setHourPxRaw((prev) => {
+    const next = clampHourPx(v);
+    return next === prev ? prev : next;
+  }), []);
+  useEffect(() => {
+    const t = setTimeout(() => localStorage.setItem(HOUR_PX_STORAGE_KEY, String(hourPx)), 300);
+    return () => clearTimeout(t);
+  }, [hourPx]);
 
   // Panel visibility — persisted in localStorage
   const [showLeft,   setShowLeft]   = useState(() => localStorage.getItem("week_panel_left")   === "1");
@@ -117,8 +137,10 @@ export function Week() {
       getCalBlocks(queryStart, queryEnd), getDeadlines(), getAllTasks(),
       getTaskSessionsInRange(queryStart, queryEnd), getTaskScheduling(),
     ]);
-    setItems(wi); setAllGoals(gp); setAllPlans(pl); setSystems(sy); setCalBlocks(cb);
-    setAllDeadlines(dl); setAllTasks(at);
+    const myUid = getUserId();
+    setItems({ ...wi, tasks: wi.tasks.filter((x) => isTaskRelevantToMe(x, myUid)) });
+    setAllGoals(gp); setAllPlans(pl); setSystems(sy); setCalBlocks(cb);
+    setAllDeadlines(dl); setAllTasks(at.filter((x) => isTaskRelevantToMe(x, myUid)));
     setSessionsByBlock(new Map(
       ts.filter((x) => x.cal_block_id != null).map((x) => [x.cal_block_id!, x]),
     ));
@@ -140,8 +162,12 @@ export function Week() {
   // midnight (week view only).
   useEffect(() => {
     if (view === "week" && gridRef.current) {
-      gridRef.current.scrollTop = (DEFAULT_SCROLL_HOUR - HOUR_START) * HOUR_PX;
+      gridRef.current.scrollTop = (DEFAULT_SCROLL_HOUR - HOUR_START) * hourPx;
     }
+    // Intentionally NOT depending on hourPx — this only resets the scroll
+    // position on a week/view change, same as before U2; zooming must not
+    // yank the view back to the default scroll target.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [start, view]);
 
   // Actual-day data (screen/training) — loads once per visible week while
@@ -217,10 +243,29 @@ export function Week() {
   }, [allTasks]);
 
   const chipProps = (t: TaskWithContext) => ({
+    today,
     parentTitle: t.parent_id != null ? taskTitleById.get(t.parent_id) ?? null : null,
     scheduledMin: taskCoverage.get(t.id)?.scheduledMin ?? 0,
     hasSteps: (stepCountByParent.get(t.id) ?? 0) > 0,
   });
+
+  /**
+   * What dragging `task` onto the grid would create (U3 Part A). Runs the
+   * exact same rollup the board's scheduling gate reads — `subtreeNode` +
+   * `taskTree.unscheduledMinutes` against the live `allTasks` tree and
+   * `taskCoverage` map — rather than a hand-rolled duplicate, so the
+   * duration this proposes can never quietly disagree with "Xh booked"
+   * elsewhere on this same page.
+   */
+  const computeDragPayload = (task: TaskWithContext): ExternalDragPayload => {
+    const node = subtreeNode(allTasks, task.id);
+    const unscheduled = node ? unscheduledMinutes(node, taskCoverage) : 0;
+    return {
+      taskId: task.id,
+      title: task.title,
+      durationMin: externalDragDurationMin(unscheduled, task.time_estimate),
+    };
+  };
   const goalsFor             = (iso: string) => items.goals.filter((g) => g.deadline  === iso);
   const deadlinesFor         = (iso: string) => items.deadlines.filter((d) => d.due_date === iso);
   const courseAssignmentsFor = (iso: string) => items.course_assignments.filter((a) => a.due_date === iso);
@@ -324,7 +369,18 @@ export function Week() {
         taskId = newTask.id;
         setAllTasks((prev) => [toTaskWithContext(newTask), ...prev]);
       }
-      const b = await createCalBlock(modal.date, d.title, d.start_time, d.end_time, d.color, desc, loc, taskId, d.category);
+      // A block created inside a parent (the "Add segment" flow) is silently
+      // clamped into the parent's own span before it's saved — matching the
+      // app's existing forgiving style (never blocking a save over a
+      // slightly-out-of-range time).
+      const parent = modal.parentBlock;
+      const { start: st, end: et } = parent
+        ? clampChildSpan(d.start_time, d.end_time, parent)
+        : { start: d.start_time, end: d.end_time };
+      const b = await createCalBlock(
+        modal.date, d.title, st, et, d.color, desc, loc, taskId, d.category,
+        parent?.id ?? null, blocksFor(modal.date),
+      );
       setCalBlocks((prev) => [...prev, b]);
     }
     setModal(null);
@@ -338,7 +394,19 @@ export function Week() {
       await updateRecurringCalBlock(block.recurring_id, d.title, d.start_time, d.end_time, d.color, d.recurrence, dow, d.series_end_date || null, desc, loc, d.category);
       load();
     } else {
-      const b = await updateCalBlock(block.id, d.title, d.start_time, d.end_time, d.color, desc, loc, d.task_id, d.category);
+      // Editing never changes WHO a block's parent is (moving blocks between
+      // parents is phase-2 drag work) — parentBlockId is simply never passed
+      // to updateCalBlock here, so the omit-means-untouched rule leaves any
+      // existing parent_block_id exactly as it was. If this block IS itself
+      // someone's child, its own times still get the same silent clamp a
+      // freshly-created segment gets.
+      const parent = block.parent_block_id != null
+        ? calBlocks.find((x) => x.id === block.parent_block_id) ?? null
+        : null;
+      const { start: st, end: et } = parent
+        ? clampChildSpan(d.start_time, d.end_time, parent)
+        : { start: d.start_time, end: d.end_time };
+      const b = await updateCalBlock(block.id, d.title, st, et, d.color, desc, loc, d.task_id, d.category);
       setCalBlocks((prev) => prev.map((x) => x.id === block.id ? b : x));
     }
     setModal(null);
@@ -394,10 +462,159 @@ export function Week() {
       load();
     } else {
       await deleteCalBlock(block.id);
-      setCalBlocks((prev) => prev.filter((b) => b.id !== block.id));
+      // The DB cascades the delete to every descendant (parent_block_id ON
+      // DELETE CASCADE) — mirror that locally so a deleted parent's children
+      // don't sit around as stale orphans (rendered top-level, per the
+      // never-lose-a-block rule) until the next load().
+      setCalBlocks((prev) => {
+        const removed = new Set<number>([block.id]);
+        let grew = true;
+        while (grew) {
+          grew = false;
+          for (const b of prev) {
+            if (b.parent_block_id != null && removed.has(b.parent_block_id) && !removed.has(b.id)) {
+              removed.add(b.id);
+              grew = true;
+            }
+          }
+        }
+        return prev.filter((b) => !removed.has(b.id));
+      });
     }
     setModal(null);
   };
+
+  /**
+   * Commits a drag-resolved patch (move/resize/nest/unnest — U2 §2) exactly
+   * the way every other handler above does: optimistic local update first,
+   * then the API call, reverting via a full `load()` on failure (same
+   * pattern `handleToggleWorked` uses) rather than hand-tracking a snapshot.
+   * The interactions hook has already done all the geometry/clamp work by
+   * the time this runs — this is purely the data layer.
+   */
+  const handleDragCommit = useCallback((block: CalBlock, patch: DragCommitPatch) => {
+    setCalBlocks((prev) => prev.map((b) => (b.id === block.id ? { ...b, ...patch } : b)));
+    updateCalBlock(
+      block.id, block.title,
+      patch.start_time ?? block.start_time,
+      patch.end_time ?? block.end_time,
+      block.color, block.description, block.location, block.task_id, block.category,
+      patch.parent_block_id !== undefined ? patch.parent_block_id : undefined,
+      calBlocks,
+      patch.date,
+    ).catch((e) => { console.error("drag commit failed, reloading", e); load(); });
+  }, [calBlocks, load]);
+
+  const handleDragClickSlot = useCallback(
+    (date: string, time: string) => setModal({ kind: "create-block", date, startTime: time }),
+    [],
+  );
+
+  /**
+   * Commits an external drag-to-schedule drop (U3 Part A) — dragging a task
+   * from RightPanel or an all-day TaskPopupChip onto the grid. Same
+   * optimistic-insert-then-reload-on-error shape as `handleDragCommit`
+   * above, with one addition: it reloads on SUCCESS too (not only on
+   * failure), because unlike a move/resize this creates a new commitment
+   * against a task — `taskCoverage` (the map behind "Xh booked" on every
+   * chip/popup, and the board's own scheduling gate) has no local optimistic
+   * update path, so it's stale until the next `load()` regardless of outcome.
+   *
+   * The optimistic block uses a large negative temp id — distinct from both
+   * real rows (positive) and virtual recurring occurrences (bounded negative
+   * ids derived from `recurring_id × 100000 + dayOffset`) — purely for the
+   * brief window before `load()` replaces it with the server's row.
+   */
+  const handleExternalDrop = (payload: ExternalDragPayload, dest: ExternalDropDest) => {
+    const tempId = -Date.now();
+    const temp: CalBlock = {
+      id: tempId, date: dest.date, title: payload.title, start_time: dest.startTime, end_time: dest.endTime,
+      color: "blue", description: null, location: null, created_at: new Date().toISOString(),
+      is_recurring: false, recurring_id: null, recurrence: null, days_of_week: null,
+      series_start_date: null, series_end_date: null, task_id: payload.taskId, category: null,
+      parent_block_id: dest.parentBlockId,
+    };
+    setCalBlocks((prev) => [...prev, temp]);
+    createCalBlock(
+      dest.date, payload.title, dest.startTime, dest.endTime, "blue", null, null,
+      payload.taskId, null, dest.parentBlockId, blocksFor(dest.date),
+    )
+      .then(() => load())
+      .catch((e) => {
+        console.error("external drag drop failed, reloading", e);
+        setCalBlocks((prev) => prev.filter((b) => b.id !== tempId));
+        load();
+      });
+  };
+
+  const { interactions } = useWeekInteractions({
+    hourPx,
+    calBlocks,
+    scrollContainerRef: gridRef,
+    onClickSlot: handleDragClickSlot,
+    onCommitBlock: handleDragCommit,
+    onExternalDrop: handleExternalDrop,
+  });
+
+  // ── Zoom + horizontal week-nav wheel handling (U2 §1, §3) ──────────────────
+  //
+  // ctrl/meta-wheel (also how browsers deliver trackpad pinch) zooms,
+  // anchoring the minute currently under the cursor so the grid doesn't jump.
+  // A dominant horizontal wheel (trackpad two-finger horizontal swipe)
+  // navigates prev/next week, debounced so one gesture moves exactly one
+  // week — everything else (plain vertical wheel) is left to fall through to
+  // native scrolling, untouched.
+  const hDeltaAccum = useRef(0);
+  const hNavCooldownUntil = useRef(0);
+  // A plain `onWheel` JSX prop is a React SYNTHETIC handler, and React 17+
+  // registers its delegated wheel listener as PASSIVE by default (matching
+  // the browser's own default for wheel/touch) — `e.preventDefault()` inside
+  // one is silently a no-op. Verified live: dispatching a ctrl-wheel through
+  // the normal event path updated hourPx correctly but left
+  // `event.defaultPrevented === false`. Without a real preventDefault, ctrl/
+  // meta-wheel would zoom the grid AND the browser's native page zoom at the
+  // same time. A native listener registered with `{ passive: false }`
+  // (below) is the only way to actually cancel it.
+  const handleGridWheel = useCallback((e: WheelEvent) => {
+    if (e.ctrlKey || e.metaKey) {
+      e.preventDefault();
+      const container = gridRef.current;
+      if (!container) return;
+      const rect = container.getBoundingClientRect();
+      const cursorYInGrid = e.clientY - rect.top + container.scrollTop;
+      const minuteUnderCursor = pxToMinutes(cursorYInGrid, hourPx);
+      const next = zoomHourPx(hourPx, e.deltaY);
+      if (next === hourPx) return;
+      const distFromTop = e.clientY - rect.top;
+      setHourPx(next);
+      requestAnimationFrame(() => {
+        if (!gridRef.current) return;
+        gridRef.current.scrollTop = minutesToPx(minuteUnderCursor, next) - distFromTop;
+      });
+      return;
+    }
+    if (Math.abs(e.deltaX) > Math.abs(e.deltaY)) {
+      e.preventDefault();
+      hDeltaAccum.current += e.deltaX;
+      const now = performance.now();
+      if (now < hNavCooldownUntil.current) return;
+      if (Math.abs(hDeltaAccum.current) > 120) {
+        const dir = hDeltaAccum.current > 0 ? 1 : -1;
+        hDeltaAccum.current = 0;
+        hNavCooldownUntil.current = now + 400;
+        if (dir > 0) nextWeek(); else prevWeek();
+      }
+    } else {
+      hDeltaAccum.current = 0;
+    }
+  }, [hourPx, setHourPx]);
+
+  useEffect(() => {
+    const el = gridRef.current;
+    if (!el || view !== "week" || isMobile) return;
+    el.addEventListener("wheel", handleGridWheel, { passive: false });
+    return () => el.removeEventListener("wheel", handleGridWheel);
+  }, [handleGridWheel, view, isMobile]);
 
   // ── Header label ─────────────────────────────────────────────────────────────
 
@@ -435,13 +652,26 @@ export function Week() {
         )}
         {modal?.kind === "create-block" && (
           <CalBlockModal date={modal.date} startTime={modal.startTime} tasks={allTasks} categories={categories}
+            taskCoverage={taskCoverage} dayBlocks={blocksFor(modal.date)}
+            parentBlock={modal.parentBlock} presetTitle={modal.presetTitle} presetTaskId={modal.presetTaskId}
             onSave={handleCreateBlock} onClose={() => setModal(null)} />
         )}
         {modal?.kind === "edit-block" && (
           <CalBlockModal initial={modal.block} date={modal.block.date} startTime={modal.block.start_time} tasks={allTasks} categories={categories}
+            taskCoverage={taskCoverage} dayBlocks={blocksFor(modal.block.date)}
             onSave={(d) => handleEditBlock(modal.block, d)}
             onDelete={() => handleDeleteBlock(modal.block)}
-            onClose={() => setModal(null)} />
+            onClose={() => setModal(null)}
+            // Nesting is never offered on a recurring block or a virtual
+            // (negative-id) occurrence — see the header-zone rule that
+            // recurring blocks never nest.
+            onAddSegment={!modal.block.is_recurring && modal.block.id > 0
+              ? () => setModal({
+                  kind: "create-block", date: modal.block.date, startTime: modal.block.start_time,
+                  parentBlock: modal.block,
+                })
+              : undefined}
+          />
         )}
         {modal?.kind === "create-task" && (
           <TaskModal date={modal.date} plans={allPlans} onSave={handleCreateTask} onClose={() => setModal(null)} />
@@ -592,6 +822,7 @@ export function Week() {
               sleepSpans={sleepByDate.get(selectedDay)}
               categories={categories}
               sessionsByBlock={sessionsByBlock}
+              hourPx={HOUR_PX}
               onClickSlot={(date, time) => setModal({ kind: "create-block", date, startTime: time })}
               onClickBlock={(b) => setModal({ kind: "edit-block", block: b })}
               onToggleWorked={handleToggleWorked}
@@ -646,6 +877,17 @@ export function Week() {
               </button>
             ))}
           </div>
+          {/* Zoom reset — only visible once the grid has actually been
+              zoomed away from the default scale (U2 §1). */}
+          {view === "week" && hourPx !== HOUR_PX && (
+            <button
+              onClick={() => setHourPx(HOUR_PX)}
+              title="Reset zoom to the default scale"
+              className="rounded-md border border-border px-2 py-1 text-xs font-medium text-muted-foreground hover:text-foreground hover:bg-secondary transition-colors"
+            >
+              1×
+            </button>
+          )}
           <Button size="sm" variant="outline" className="h-7 text-xs" onClick={goToday}>Today</Button>
           <div className="w-px h-4 bg-border" />
           {/* Actual-day overlay toggle */}
@@ -774,6 +1016,8 @@ export function Week() {
                         key={`t-${t.id}`}
                         t={t}
                         {...chipProps(t)}
+                        interactions={interactions}
+                        dragPayload={computeDragPayload(t)}
                         onToggle={() => handleToggleTask(t.id)}
                         onEdit={() => setModal({ kind: "edit-task", task: t })}
                       />
@@ -828,13 +1072,13 @@ export function Week() {
 
             {/* Scrollable time area */}
             <div ref={gridRef} className="flex-1 overflow-y-auto">
-              <div className="flex" style={{ height: HOURS.length * HOUR_PX + 1 }}>
+              <div className="flex" style={{ height: HOURS.length * hourPx + 1 }}>
 
                 {/* Time labels */}
                 <div className="w-12 shrink-0 relative select-none">
                   {HOURS.map((h, i) => (
                     <div key={h} className="absolute right-2 text-[10px] text-muted-foreground/60 tabular-nums"
-                      style={{ top: i * HOUR_PX - 6 }}>
+                      style={{ top: i * hourPx - 6 }}>
                       {h}:00
                     </div>
                   ))}
@@ -856,6 +1100,8 @@ export function Week() {
                       sleepSpans={sleepByDate.get(iso)}
                       categories={categories}
                       sessionsByBlock={sessionsByBlock}
+                      hourPx={hourPx}
+                      interactions={interactions}
                       onClickSlot={(date, time) => setModal({ kind: "create-block", date, startTime: time })}
                       onClickBlock={(b) => setModal({ kind: "edit-block", block: b })}
                       onToggleWorked={handleToggleWorked}
@@ -875,6 +1121,8 @@ export function Week() {
             deadlines={allDeadlines}
             courseAssignments={items.course_assignments}
             today={today}
+            interactions={interactions}
+            getDragPayload={computeDragPayload}
             onToggleTask={handleToggleTask}
             onToggleDeadline={handleToggleDeadline}
             onToggleAssignment={handleToggleAssignment}
@@ -891,6 +1139,13 @@ export function Week() {
           onAdd={() => setModal({ kind: "create-system" })}
           onEdit={(s) => setModal({ kind: "edit-system", system: s })}
         />
+      )}
+
+      {view === "week" && (
+        <>
+          <DragGhostLayer subscribe={interactions.subscribeGhost} getSnapshot={interactions.getGhostSnapshot} />
+          <ExternalDragGhostLayer subscribe={interactions.subscribeExternalGhost} getSnapshot={interactions.getExternalGhostSnapshot} />
+        </>
       )}
 
       {renderModals()}

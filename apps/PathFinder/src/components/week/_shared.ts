@@ -44,8 +44,41 @@ export const MONTHS    = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep",
 export const HOUR_START = 0;
 export const HOUR_END   = 23;
 export const HOURS      = Array.from({ length: HOUR_END - HOUR_START + 1 }, (_, i) => HOUR_START + i);
-export const HOUR_PX    = 56; // pixels per hour — unchanged, so a 24h day scrolls instead of compressing rows
+export const HOUR_PX    = 56; // pixels per hour — the DEFAULT/unzoomed scale, and what the
+                               // always-fixed mobile grid still renders at (U2 is desktop-only).
 export const GRID_END_MIN = (HOUR_END + 1) * 60;
+
+// ── Zoom (U2) ─────────────────────────────────────────────────────────────────
+//
+// Desktop's `hourPx` is state in Week.tsx (default HOUR_PX, persisted in
+// localStorage), threaded down to every grid-geometry consumer below.
+// Mobile never reads this state — it always renders at the fixed HOUR_PX
+// default, unaffected by desktop zoom/pan/drag (see spec U2 §"desktop-only").
+export const HOUR_PX_MIN = 28;
+export const HOUR_PX_MAX = 160;
+export const HOUR_PX_STORAGE_KEY = "pf-week-hour-px";
+
+/** Clamps a candidate pixels-per-hour value into the zoomable range, falling
+ *  back to the default for anything non-finite (a corrupt/cleared localStorage
+ *  value, for instance). */
+export function clampHourPx(px: number): number {
+  if (!Number.isFinite(px)) return HOUR_PX;
+  return Math.min(HOUR_PX_MAX, Math.max(HOUR_PX_MIN, px));
+}
+
+/** One multiplicative wheel-zoom step, already clamped. `deltaY` is the raw
+ *  wheel event value (ctrl/meta-wheel, which is how trackpad pinch arrives). */
+export function zoomHourPx(hourPx: number, deltaY: number): number {
+  return clampHourPx(hourPx * (1 - deltaY * 0.002));
+}
+
+/** Rounds a minute-of-day value to the nearest `step` minutes (default 5 —
+ *  the drag/resize snap increment; pxToTime's own 30-minute click-to-create
+ *  snap is unrelated and untouched). Pure and unclamped — callers that need
+ *  the result inside the grid's bounds clamp separately. */
+export function snapMinutes(min: number, step = 5): number {
+  return Math.round(min / step) * step;
+}
 
 /** The previous bounded window's start, kept as the initial scroll position
  *  now that the grid always renders the full day — see the mount-scroll
@@ -56,12 +89,18 @@ export function timeToMinutes(t: string): number {
   const [h, m] = t.split(":").map(Number);
   return h * 60 + (m || 0);
 }
-export function minutesToPx(min: number): number {
-  return ((min - HOUR_START * 60) / 60) * HOUR_PX;
+export function minutesToPx(min: number, hourPx: number = HOUR_PX): number {
+  return ((min - HOUR_START * 60) / 60) * hourPx;
 }
-export function pxToTime(px: number, containerHeight: number): string {
+/** Inverse of `minutesToPx`, unsnapped and unclamped into the grid's own
+ *  bounds — used by the zoom-anchor and drag-geometry math, which each apply
+ *  their own snap/clamp afterward. */
+export function pxToMinutes(px: number, hourPx: number = HOUR_PX): number {
+  return HOUR_START * 60 + (px / hourPx) * 60;
+}
+export function pxToTime(px: number, containerHeight: number, hourPx: number = HOUR_PX): string {
   const clamped = Math.max(0, Math.min(px, containerHeight));
-  const totalMin = HOUR_START * 60 + (clamped / HOUR_PX) * 60;
+  const totalMin = pxToMinutes(clamped, hourPx);
   // Clamp to the grid's actual last selectable half-hour slot (23:30), not
   // `HOUR_END * 60` (23:00) — the old formula capped `h` at HOUR_END *after*
   // rounding, which mapped every click in the grid's final hour to :00 and
@@ -72,6 +111,101 @@ export function pxToTime(px: number, containerHeight: number): string {
   const m = rounded % 60;
   return `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}`;
 }
+/** Binds `pxToTime` to one zoom scale — "close over hourPx" per spec §1,
+ *  for a call site that wants a plain `(px, containerHeight) => string`
+ *  without repeating the scale at every call. */
+export function makePxToTime(hourPx: number): (px: number, containerHeight: number) => string {
+  return (px, containerHeight) => pxToTime(px, containerHeight, hourPx);
+}
+/** "HH:MM" for a minute-of-day count, clamped into [0, 23:59]. */
+export function minToHHMM(min: number): string {
+  const clamped = Math.max(0, Math.min(23 * 60 + 59, Math.round(min)));
+  const h = Math.floor(clamped / 60);
+  const m = clamped % 60;
+  return `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}`;
+}
+
+/**
+ * The first free stretch of time inside `parent`'s span, after subtracting
+ * its existing `children` (already-placed segments) — used to prefill a new
+ * segment's start/end so "Add segment" lands somewhere useful instead of on
+ * top of another child.
+ *
+ * Returns the FULL extent of the first gap found (not a fixed duration): if
+ * the parent opens with 20 free minutes before its first child, that whole
+ * 20-minute window is offered. Falls back to 30 minutes from the parent's own
+ * start when there is no free time left at all (fully booked) — the modal's
+ * save-time clamp brings an over-long segment back inside the parent's range.
+ */
+export function firstFreeSubSpan(parent: CalBlock, children: CalBlock[]): { start: string; end: string } {
+  const pStart = timeToMinutes(parent.start_time);
+  const pEnd   = timeToMinutes(parent.end_time);
+
+  const busy = children
+    .map((c): [number, number] => [
+      Math.max(pStart, timeToMinutes(c.start_time)),
+      Math.min(pEnd,   timeToMinutes(c.end_time)),
+    ])
+    .filter(([s, e]) => e > s)
+    .sort((a, b) => a[0] - b[0]);
+
+  let cursor = pStart;
+  for (const [s, e] of busy) {
+    if (s > cursor) return { start: minToHHMM(cursor), end: minToHHMM(s) };
+    cursor = Math.max(cursor, e);
+  }
+  if (cursor < pEnd) return { start: minToHHMM(cursor), end: minToHHMM(pEnd) };
+
+  // Fully booked — 30 minutes from the parent's start; may run past the
+  // parent's own end, which the modal clamps at save time.
+  return { start: minToHHMM(pStart), end: minToHHMM(pStart + 30) };
+}
+
+/**
+ * Clamps a [startTime, endTime) span into `parent`'s own range, preserving
+ * the original duration where it fits. Used on save (create or edit) for any
+ * block that carries a `parent_block_id` — "silent clamp", matching the
+ * app's existing forgiving style elsewhere (addHour/pxToTime never block a
+ * save over an out-of-range time, they just bring it back in range).
+ *
+ * Always returns start < end when `parent`'s own span is non-empty (true for
+ * every real block — `start_time < end_time` is enforced by the modal's own
+ * `ok` check before either side is ever saved).
+ */
+export function clampChildSpan(startTime: string, endTime: string, parent: CalBlock): { start: string; end: string } {
+  const pStart = timeToMinutes(parent.start_time);
+  const pEnd   = timeToMinutes(parent.end_time);
+  const dur    = Math.max(1, timeToMinutes(endTime) - timeToMinutes(startTime));
+
+  let s = Math.min(Math.max(timeToMinutes(startTime), pStart), Math.max(pStart, pEnd - 1));
+  let e = Math.min(pEnd, s + dur);
+  if (e <= s) e = Math.min(pEnd, s + 1);
+  return { start: minToHHMM(s), end: minToHHMM(e) };
+}
+
+// ── External drag-to-schedule (U3 Part A) ───────────────────────────────────
+
+export const EXTERNAL_DRAG_MIN_DURATION_MIN = 15;
+export const EXTERNAL_DRAG_MAX_DURATION_MIN = 240;
+export const EXTERNAL_DRAG_DEFAULT_DURATION_MIN = 30;
+
+/**
+ * Duration (minutes) for a calendar block created by dragging a task onto
+ * the Week grid: the task's own unscheduled time if it has any, else its own
+ * estimate, else a flat default — always clamped into a sane block length so
+ * a huge, zero, or missing estimate can never produce an unusable block.
+ *
+ * Pure on purpose: the caller (Week.tsx) resolves `unscheduledMin` via
+ * `subtreeNode` + `taskTree.unscheduledMinutes` against the live task tree
+ * and coverage map — the same rollup the board's own scheduling gate reads —
+ * and passes the two plain numbers in here rather than this function taking
+ * a task and reaching for that state itself.
+ */
+export function externalDragDurationMin(unscheduledMin: number, timeEstimateMin: number | null): number {
+  const raw = unscheduledMin || timeEstimateMin || EXTERNAL_DRAG_DEFAULT_DURATION_MIN;
+  return Math.min(EXTERNAL_DRAG_MAX_DURATION_MIN, Math.max(EXTERNAL_DRAG_MIN_DURATION_MIN, raw));
+}
+
 export function addHour(t: string, h: number): string {
   // Cap at 23:59, not `HOUR_END * 60` (23:00) — a block starting at 23:30
   // plus a 1h default duration must still end *after* its own start, or the
@@ -91,13 +225,13 @@ export function addHour(t: string, h: number): string {
  * (23:00) and would truncate anything in the final hour, which is exactly
  * where a bed-time band tends to land.
  */
-export function actualSpanPx(span: Span, iso: string): { top: number; height: number } | null {
+export function actualSpanPx(span: Span, iso: string, hourPx: number = HOUR_PX): { top: number; height: number } | null {
   const dayStart = dayStartMs(iso);
   const startMin = Math.max(HOUR_START * 60, (span.start - dayStart) / 60_000);
   const endMin   = Math.min(GRID_END_MIN,    (span.end   - dayStart) / 60_000);
   if (endMin <= startMin) return null;
-  const top = minutesToPx(startMin);
-  return { top, height: Math.max(1, minutesToPx(endMin) - top) };
+  const top = minutesToPx(startMin, hourPx);
+  return { top, height: Math.max(1, minutesToPx(endMin, hourPx) - top) };
 }
 
 // Sleep is no longer a track here — it renders as its own always-on
@@ -159,5 +293,17 @@ export type ModalState =
   | { kind: "edit-plan";     plan: Plan }
   | { kind: "create-system" }
   | { kind: "edit-system";   system: SystemEntry }
-  | { kind: "create-block";  date: string; startTime: string }
+  | {
+      kind: "create-block"; date: string; startTime: string;
+      /**
+       * Set when this creation is the "Add segment" flow from a parent's
+       * edit view: the date is locked to the parent's, `parent_block_id` is
+       * preset on save, and the modal shows a read-only "Inside: <title>"
+       * line instead of the normal free-form date context.
+       */
+      parentBlock?: CalBlock;
+      /** One-tap step chip prefill — title/task_id straight from an unscheduled step. */
+      presetTitle?: string;
+      presetTaskId?: number | null;
+    }
   | { kind: "edit-block";    block: CalBlock };

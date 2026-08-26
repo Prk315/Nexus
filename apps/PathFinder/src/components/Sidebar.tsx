@@ -1,14 +1,15 @@
-import { LayoutDashboard, ChevronLeft, ChevronRight, CalendarDays, BookOpen, Download, FolderKanban, Gamepad2, CalendarRange, Kanban } from "lucide-react";
+import { LayoutDashboard, ChevronLeft, ChevronRight, CalendarDays, BookOpen, Download, FolderKanban, Gamepad2, CalendarRange, Kanban, Users } from "lucide-react";
 import { cn } from "../lib/utils";
 import { exportData } from "../lib/api";
 import { useQuickPanels } from "./QuickPanels";
 
-export type Page = "dashboard" | "workspace" | "week" | "projects" | "courses" | "schedules" | "games";
+export type Page = "dashboard" | "workspace" | "week" | "team" | "projects" | "courses" | "schedules" | "games";
 
 const NAV: { id: Page; label: string; icon: React.ComponentType<{ className?: string }> }[] = [
   { id: "dashboard", label: "Dashboard",  icon: LayoutDashboard },
   { id: "workspace", label: "Workspace",  icon: Kanban },
   { id: "week",      label: "Week",       icon: CalendarDays },
+  { id: "team",      label: "Team",       icon: Users },
   { id: "projects",  label: "Projects",   icon: FolderKanban },
   { id: "courses",   label: "Study",      icon: BookOpen },
   { id: "schedules", label: "Schedules",  icon: CalendarRange },

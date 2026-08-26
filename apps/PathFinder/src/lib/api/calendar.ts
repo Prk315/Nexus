@@ -29,6 +29,7 @@ export const getCalBlocks = async (startDate: string, endDate: string): Promise<
     days_of_week: null, series_start_date: null, series_end_date: null,
     task_id: b.task_id ? num(b.task_id) : null,
     category: b.category ?? null,
+    parent_block_id: b.parent_block_id != null ? num(b.parent_block_id) : null,
   }));
 
   const virtual = (recurring ?? []).flatMap((r) => expandRecurring(r, startDate, endDate));
@@ -60,35 +61,81 @@ export const getCoverageCategories = async (): Promise<CoverageCategoryOption[]>
   }
 };
 
+/**
+ * True when setting `blockId`'s parent to `newParentId` would create a cycle
+ * — i.e. `newParentId`'s own parent chain, walked through `dayBlocks` (the
+ * day's already-loaded blocks — cheap, no extra round trip), already
+ * contains `blockId`. `blockId === null` means "a brand-new block", which
+ * can never be its own ancestor, so only the chain-containment check applies.
+ *
+ * This is a client-side backstop for chains deeper than one hop. The DB's
+ * `pf_cal_blocks_no_self_parent` CHECK already refuses the trivial
+ * `newParentId === blockId` case on its own.
+ */
+export function wouldCreateCalBlockCycle(
+  dayBlocks: CalBlock[], blockId: number | null, newParentId: number | null,
+): boolean {
+  if (newParentId == null) return false;
+  if (blockId != null && newParentId === blockId) return true;
+  const byId = new Map(dayBlocks.map((b) => [b.id, b]));
+  const seen = new Set<number>();
+  let cur: number | null = newParentId;
+  while (cur != null) {
+    if (blockId != null && cur === blockId) return true;
+    if (seen.has(cur)) return true; // pre-existing cycle in the loaded data — refuse to extend it
+    seen.add(cur);
+    cur = byId.get(cur)?.parent_block_id ?? null;
+  }
+  return false;
+}
+
 export const createCalBlock = async (
   date: string, title: string, startTime: string, endTime: string,
   color: string, description: string | null, location: string | null,
   taskId?: number | null, category?: string | null,
+  parentBlockId?: number | null, dayBlocks?: CalBlock[],
 ): Promise<CalBlock> => {
+  if (parentBlockId != null && dayBlocks && wouldCreateCalBlockCycle(dayBlocks, null, parentBlockId)) {
+    throw new Error("Cannot nest a block under itself or one of its own descendants.");
+  }
   const { data, error } = await supabase
     .from("pf_cal_blocks")
-    .insert({ user_id: getUserId(), date, title, start_time: startTime, end_time: endTime, color, description, location, task_id: taskId ?? null, category: category ?? null })
+    .insert({ user_id: getUserId(), date, title, start_time: startTime, end_time: endTime, color, description, location, task_id: taskId ?? null, category: category ?? null, parent_block_id: parentBlockId ?? null })
     .select().single();
   if (error) err(error);
-  return { id: num(data!.id), date: data!.date, title: data!.title, start_time: data!.start_time, end_time: data!.end_time, color: data!.color, description: data!.description, location: data!.location, created_at: data!.created_at, is_recurring: false, recurring_id: null, recurrence: null, days_of_week: null, series_start_date: null, series_end_date: null, task_id: data!.task_id ? num(data!.task_id) : null, category: data!.category ?? null };
+  return { id: num(data!.id), date: data!.date, title: data!.title, start_time: data!.start_time, end_time: data!.end_time, color: data!.color, description: data!.description, location: data!.location, created_at: data!.created_at, is_recurring: false, recurring_id: null, recurrence: null, days_of_week: null, series_start_date: null, series_end_date: null, task_id: data!.task_id ? num(data!.task_id) : null, category: data!.category ?? null, parent_block_id: data!.parent_block_id != null ? num(data!.parent_block_id) : null };
 };
 
 export const updateCalBlock = async (
   id: number, title: string, startTime: string, endTime: string,
   color: string, description: string | null, location: string | null,
   taskId?: number | null, category?: string | null,
+  parentBlockId?: number | null, dayBlocks?: CalBlock[], date?: string,
 ): Promise<CalBlock> => {
   // `category` is only written when the caller actually passes it — omitting
   // the argument (older call sites, e.g. Dashboard's block editor) must leave
   // an existing category untouched rather than silently clearing it.
+  // `parent_block_id` follows the SAME discipline: only written when
+  // `parentBlockId !== undefined`, so a caller that doesn't know about
+  // nesting can never wipe an existing block's parent out from under it.
+  // `date` follows suit too (added for U2's drag-across-days move) — every
+  // pre-existing caller omits it and leaves the block's date untouched.
+  if (
+    parentBlockId !== undefined && parentBlockId != null && dayBlocks &&
+    wouldCreateCalBlockCycle(dayBlocks, id, parentBlockId)
+  ) {
+    throw new Error("Cannot nest a block under itself or one of its own descendants.");
+  }
   const patch: Record<string, unknown> = { title, start_time: startTime, end_time: endTime, color, description, location, task_id: taskId ?? null };
   if (category !== undefined) patch.category = category;
+  if (parentBlockId !== undefined) patch.parent_block_id = parentBlockId;
+  if (date !== undefined) patch.date = date;
   const { data, error } = await supabase
     .from("pf_cal_blocks")
     .update(patch)
     .eq("id", id).select().single();
   if (error) err(error);
-  return { id: num(data!.id), date: data!.date, title: data!.title, start_time: data!.start_time, end_time: data!.end_time, color: data!.color, description: data!.description, location: data!.location, created_at: data!.created_at, is_recurring: false, recurring_id: null, recurrence: null, days_of_week: null, series_start_date: null, series_end_date: null, task_id: data!.task_id ? num(data!.task_id) : null, category: data!.category ?? null };
+  return { id: num(data!.id), date: data!.date, title: data!.title, start_time: data!.start_time, end_time: data!.end_time, color: data!.color, description: data!.description, location: data!.location, created_at: data!.created_at, is_recurring: false, recurring_id: null, recurrence: null, days_of_week: null, series_start_date: null, series_end_date: null, task_id: data!.task_id ? num(data!.task_id) : null, category: data!.category ?? null, parent_block_id: data!.parent_block_id != null ? num(data!.parent_block_id) : null };
 };
 
 export const deleteCalBlock = async (id: number): Promise<void> => {

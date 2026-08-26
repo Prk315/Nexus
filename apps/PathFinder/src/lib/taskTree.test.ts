@@ -22,6 +22,7 @@ function task(over: Partial<TaskWithContext> = {}): TaskWithContext {
     title: "t", done: false, sort_order: 0, priority: "medium",
     due_date: null, created_at: "", time_estimate: null, aggregate_estimate: 0,
     kanban_status: "backlog", category: null, planning: planning(),
+    team_id: null, assigned_to: null,
     ...over,
   };
 }
@@ -30,7 +31,8 @@ const block = (over: Partial<CalBlock> = {}): CalBlock => ({
   id: 1, date: "2026-08-21", title: "b", start_time: "09:00", end_time: "10:00",
   color: "blue", description: null, location: null, created_at: "",
   is_recurring: false, recurring_id: null, recurrence: null, days_of_week: null,
-  series_start_date: null, series_end_date: null, task_id: null, category: null, ...over,
+  series_start_date: null, series_end_date: null, task_id: null, category: null,
+  parent_block_id: null, ...over,
 });
 
 const session = (over: Partial<TaskSession> = {}): TaskSession => ({

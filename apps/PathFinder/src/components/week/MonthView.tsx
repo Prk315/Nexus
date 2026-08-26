@@ -3,6 +3,7 @@
 import { useMemo } from "react";
 import { Check, Target, Repeat2, Flag, GraduationCap, CalendarRange } from "lucide-react";
 import { cn } from "../../lib/utils";
+import { chipBgClasses, chipCheckClasses } from "../task/taskVisual";
 import type { Goal, WeekItems, CalBlock } from "../../types";
 import { BLOCK_COLORS, DAY_NAMES, MAX_CELL_ITEMS, addDays, toISO } from "./_shared";
 
@@ -119,16 +120,8 @@ export function MonthView({ monthStart, calBlocks, items, today, onClickDay, onC
                 {tasks.map((t) => {
                   if (shown >= MAX_CELL_ITEMS) return null;
                   shown++;
-                  const chip = t.done
-                    ? "bg-emerald-500/15 border-emerald-400/40"
-                    : t.priority === "high"   ? "bg-red-500/10 border-red-400/30"
-                    : t.priority === "medium"  ? "bg-amber-500/10 border-amber-400/30"
-                    : "bg-blue-500/10 border-blue-400/30";
-                  const check = t.done
-                    ? "bg-emerald-500 border-emerald-500"
-                    : t.priority === "high"   ? "border-red-400"
-                    : t.priority === "medium"  ? "border-amber-400"
-                    : "border-blue-400";
+                  const chip = chipBgClasses(t.priority, t.done);
+                  const check = chipCheckClasses(t.priority, t.done);
                   return (
                     <div key={`t-${t.id}`}
                       className={cn("flex items-center gap-0.5 rounded px-1 py-px text-[10px] leading-tight border shrink-0", chip)}

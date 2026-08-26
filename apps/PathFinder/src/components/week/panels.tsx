@@ -1,12 +1,14 @@
 // The surrounding panels: systems bar, header completion strip, left plans rail, right task/deadline rail.
 
 import { useState } from "react";
-import { ChevronRight, ChevronDown, Plus, Check, Target, ListChecks, CheckSquare, RefreshCw, Flame, Flag, GraduationCap } from "lucide-react";
-import { getCaSubtasks, toggleCaSubtask } from "../../lib/api";
+import { ChevronRight, ChevronDown, Plus, Check, Target, ListChecks, CheckSquare, RefreshCw, Flame, Flag, GraduationCap, Users } from "lucide-react";
+import { getCaSubtasks, toggleCaSubtask, memberName } from "../../lib/api";
 import { cn } from "../../lib/utils";
 import { isDue } from "../../components/workspace/systemForms";
+import { PRIORITY_CHIP_CHECK } from "../task/taskVisual";
 import type { Goal, Plan, TaskWithContext, SystemEntry, WeekItems, Deadline, CourseAssignment, CaSubtask } from "../../types";
 import { DAY_NAMES, toISO } from "./_shared";
+import type { WeekInteractions, ExternalDragPayload } from "./useWeekInteractions";
 
 // ── Systems bar ───────────────────────────────────────────────────────────────
 
@@ -359,9 +361,16 @@ export function AssignmentSection({ assignments, onToggle, daysTag }: {
 
 // ── Right panel ───────────────────────────────────────────────────────────────
 
-export function RightPanel({ tasks, deadlines, courseAssignments, today, onToggleTask, onToggleDeadline, onToggleAssignment }: {
+export function RightPanel({ tasks, deadlines, courseAssignments, today, interactions, getDragPayload, onToggleTask, onToggleDeadline, onToggleAssignment }: {
   tasks: TaskWithContext[]; deadlines: Deadline[]; courseAssignments: CourseAssignment[];
-  today: string; onToggleTask: (id: number) => void; onToggleDeadline: (id: number) => void; onToggleAssignment: (a: CourseAssignment) => void;
+  today: string;
+  /** U3 Part A — desktop only (RightPanel is never rendered on mobile, so
+   *  this is required rather than optional, unlike TaskPopupChip's). */
+  interactions: WeekInteractions;
+  /** Computed by the caller (Week.tsx): needs the full task tree + coverage
+   *  map to run the duration heuristic, neither of which RightPanel has. */
+  getDragPayload: (task: TaskWithContext) => ExternalDragPayload;
+  onToggleTask: (id: number) => void; onToggleDeadline: (id: number) => void; onToggleAssignment: (a: CourseAssignment) => void;
 }) {
   const upcomingDL = deadlines.filter((d) => !d.done).sort((a, b) => a.due_date.localeCompare(b.due_date));
   const doneDL     = deadlines.filter((d) => d.done);
@@ -395,21 +404,43 @@ export function RightPanel({ tasks, deadlines, courseAssignments, today, onToggl
           {pendingTasks.length === 0 && doneTasks.length === 0 && (
             <p className="text-xs text-muted-foreground italic">No tasks this week.</p>
           )}
-          {pendingTasks.map((t) => (
-            <div key={t.id} className="flex items-center gap-2 min-w-0">
-              <button
-                onClick={() => onToggleTask(t.id)}
+          {pendingTasks.map((t) => {
+            const isDraggingThis = interactions.externalDraggingTaskId === t.id;
+            return (
+              <div
+                key={t.id}
+                // U3 Part A drag source — root tasks and steps alike, whatever
+                // this panel already lists. The 4px threshold lives in the
+                // hook itself, so a plain click on the checkbox below still
+                // just toggles it (the pointerdown here arms the gesture, but
+                // under-threshold it's a no-op and the browser's native click
+                // still reaches the checkbox unmolested — same contract as
+                // U2's block drag).
+                onPointerDown={(e) => interactions.onExternalDragPointerDown(e, getDragPayload(t))}
                 className={cn(
-                  "h-3.5 w-3.5 shrink-0 rounded-sm border flex items-center justify-center transition-colors",
-                  t.priority === "high"   ? "border-red-400 hover:bg-red-400/20"
-                  : t.priority === "medium" ? "border-amber-400 hover:bg-amber-400/20"
-                  :                          "border-blue-400 hover:bg-blue-400/20"
+                  "flex items-center gap-2 min-w-0 cursor-grab transition-opacity",
+                  isDraggingThis && "opacity-30",
                 )}
-              />
-              <span className="flex-1 text-xs text-foreground leading-tight truncate">{t.title}</span>
-              {daysTag(t.due_date ?? null)}
-            </div>
-          ))}
+              >
+                <button
+                  onPointerDown={(e) => e.stopPropagation()}
+                  onClick={() => onToggleTask(t.id)}
+                  className={cn(
+                    "h-3.5 w-3.5 shrink-0 rounded-sm border flex items-center justify-center transition-colors",
+                    PRIORITY_CHIP_CHECK[t.priority] ?? PRIORITY_CHIP_CHECK.low,
+                  )}
+                />
+                <span className="flex-1 text-xs text-foreground leading-tight truncate">{t.title}</span>
+                {t.team_id != null && (
+                  <Users
+                    className="h-2.5 w-2.5 shrink-0 text-muted-foreground/50"
+                    aria-label={t.assigned_to != null && t.assigned_to !== "all" ? `Team task · ${memberName(t.assigned_to)}` : "Team task · everyone"}
+                  />
+                )}
+                {daysTag(t.due_date ?? null)}
+              </div>
+            );
+          })}
           {doneTasks.map((t) => (
             <div key={t.id} className="flex items-center gap-2 min-w-0 opacity-40">
               <button

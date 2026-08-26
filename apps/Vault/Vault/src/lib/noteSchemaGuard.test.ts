@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { generateHTML, generateJSON, getSchema } from "@tiptap/core";
 import { buildNoteExtensions, noteSchema, NoopNoteExtension } from "../extensions/noteExtensions";
+import { stripDefaults } from "../test/roundTrip";
 import {
   parseNoteContent,
   auditNoteContent,
@@ -194,32 +195,7 @@ describe("note schema", () => {
 describe("HTML round-trip", () => {
   const exts = buildNoteExtensions();
 
-  /**
-   * Drop attributes that are null.
-   *
-   * Registering an extension like TextAlign adds an attribute to EVERY
-   * paragraph and heading, so a round trip legitimately returns
-   * `attrs: { textAlign: null }` for a fixture that didn't mention it. Pinning
-   * fixtures against the full attribute set would mean editing a dozen of them
-   * every time an extension is added, and would fail for a reason that has
-   * nothing to do with content surviving. Attributes that MATTER are asserted
-   * explicitly below (callout variant, toggle open, highlight category).
-   */
-  const strip = (v: any): any => {
-    if (Array.isArray(v)) return v.map(strip);
-    if (!v || typeof v !== "object") return v;
-    const out: any = {};
-    for (const [k, val] of Object.entries(v)) {
-      if (k === "attrs") {
-        const attrs = Object.fromEntries(Object.entries(val as any).filter(([, a]) => a !== null));
-        if (Object.keys(attrs).length) out.attrs = attrs;
-      } else {
-        out[k] = strip(val);
-      }
-    }
-    return out;
-  };
-
+  const strip = (v: any) => stripDefaults(v, schema);
   const roundTrip = (json: any) => strip(generateJSON(generateHTML(json, exts), exts));
 
   const cases: Array<[string, any]> = [
