@@ -261,6 +261,17 @@ export const FoldableHeading = Heading.extend({
         parseHTML: (el) => el.getAttribute("data-collapsed") === "true",
         renderHTML: (attrs) => (attrs.collapsed ? { "data-collapsed": "true" } : {}),
       },
+      // A distinct display style — bigger, its own typeface — for a document's
+      // own title, layered on top of whatever level (1-4) the heading already
+      // is rather than a fifth level: it needs no outline/fold changes, and an
+      // older client that doesn't know the attribute just renders a plain
+      // heading of that level instead of blanking the note.
+      title: {
+        default: false,
+        keepOnSplit: false,
+        parseHTML: (el) => el.getAttribute("data-title") === "true",
+        renderHTML: (attrs) => (attrs.title ? { "data-title": "true" } : {}),
+      },
     };
   },
 

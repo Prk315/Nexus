@@ -16,6 +16,7 @@ import type { ChainedCommands } from "@tiptap/core";
 import type { HighlighterCategory } from "../types";
 import { CALLOUT_VARIANTS, CALLOUT_LABELS, CALLOUT_ICONS } from "./structural/Callout";
 import { CONTAINER_STYLES, CONTAINER_LABELS } from "./structural/Container";
+import { CARD_COLORS } from "./structural/cardColor";
 import { unwrapNearestContainer } from "./structural/containerCommands";
 import { insertToggle } from "./structural/toggleCommands";
 import { insertColumns, addColumn, deleteColumn } from "./structural/columnCommands";
@@ -35,6 +36,7 @@ export type BlockGroup =
   | "structure"  // quote, code, divider
   | "callout"    // admonition boxes
   | "container"  // generic grouping panels
+  | "cardColor"  // background tint for a callout/container
   | "math"
   | "table"       // insert a table
   | "tableOps"    // row/column editing, inline, only inside a table
@@ -193,6 +195,27 @@ export function buildBlockRegistry(opts: BlockRegistryOptions = {}): BlockAction
           : e.chain().focus().toggleHeading({ level }).run(),
       isActive: (e) => e.isActive("heading", { level }),
     })),
+    // A document title, not a fifth heading rank: a `title`-flagged level-1
+    // heading (see headingFold.ts) rather than a new node, so it folds and
+    // outlines exactly like any other heading — only its CSS differs.
+    {
+      id: "title",
+      title: "Title",
+      icon: "Tt",
+      short: "Tt",
+      group: "text",
+      surfaces: ["slash", "toolbar"],
+      keywords: ["title", "display", "big", "cover"],
+      run: (editor, ctx) => {
+        if (ctx?.range) editor.chain().focus().deleteRange(ctx.range).run();
+        if (editor.isActive("heading", { title: true })) {
+          editor.chain().focus().setParagraph().run();
+        } else {
+          editor.chain().focus().setNode("heading", { level: 1, title: true }).run();
+        }
+      },
+      isActive: (e) => e.isActive("heading", { title: true }),
+    },
 
     // ── Lists ───────────────────────────────────────────────────────────────
     {
@@ -291,6 +314,29 @@ export function buildBlockRegistry(opts: BlockRegistryOptions = {}): BlockAction
         }
       },
       isActive: (editor) => editor.isActive("containerBlock", { style }),
+    })),
+
+    // ── Card colour ─────────────────────────────────────────────────────────
+    // Applies to whichever of the two structural "card" types is active — a
+    // callout's variant already implies a tint, this overrides it; a
+    // container has none, so this is the only way it gets one.
+    ...CARD_COLORS.map((c): BlockAction => ({
+      id: `cardColor:${c.id}`,
+      title: c.label,
+      icon: "●",
+      group: "cardColor",
+      surfaces: ["toolbar"],
+      isAvailable: (e) => e.isActive("containerBlock") || e.isActive("calloutBlock"),
+      isActive: (e) => {
+        const want = c.id === "default" ? null : c.id;
+        return e.isActive("containerBlock", { color: want }) || e.isActive("calloutBlock", { color: want });
+      },
+      run: (e) => {
+        e.commands.focus();
+        const color = c.id === "default" ? null : c.id;
+        const type = e.isActive("containerBlock") ? "containerBlock" : "calloutBlock";
+        e.chain().focus().updateAttributes(type, { color }).run();
+      },
     })),
 
     // ── Columns ─────────────────────────────────────────────────────────────
@@ -636,6 +682,7 @@ export const GROUP_LABELS: Record<BlockGroup, string> = {
   structure: "Blocks",
   callout: "Callout",
   container: "Group",
+  cardColor: "Card colour",
   math: "Math",
   media: "Media",
   align: "Align",
