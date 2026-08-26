@@ -5,6 +5,7 @@
 // grouping had to borrow a semantic it didn't mean.
 
 import { createContainerNode } from "./createContainerNode";
+import { isCardColorId, cardColorStyle } from "./cardColor";
 
 export const CONTAINER_STYLES = ["plain", "card", "outline", "muted"] as const;
 export type ContainerStyle = (typeof CONTAINER_STYLES)[number];
@@ -29,6 +30,15 @@ export const Container = createContainerNode({
       },
       renderHTML: (attrs) => ({ "data-style": attrs.style }),
     },
+    color: {
+      default: null as string | null,
+      parseHTML: (el) => {
+        const v = el.getAttribute("data-color");
+        return isCardColorId(v) ? v : null;
+      },
+      renderHTML: (attrs) => (attrs.color ? { "data-color": attrs.color } : {}),
+    },
   },
   className: (attrs) => `container-block container-${attrs.style}`,
+  extraHTML: (attrs) => cardColorStyle(attrs.color),
 });

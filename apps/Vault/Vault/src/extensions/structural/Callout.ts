@@ -7,6 +7,7 @@
 // remount on every keystroke that touches the block.
 
 import { createContainerNode } from "./createContainerNode";
+import { isCardColorId, cardColorStyle } from "./cardColor";
 
 export const CALLOUT_VARIANTS = ["note", "info", "warn", "success", "danger"] as const;
 export type CalloutVariant = (typeof CALLOUT_VARIANTS)[number];
@@ -44,6 +45,15 @@ export const Callout = createContainerNode({
       },
       renderHTML: (attrs) => ({ "data-variant": attrs.variant }),
     },
+    color: {
+      default: null as string | null,
+      parseHTML: (el) => {
+        const v = el.getAttribute("data-color");
+        return isCardColorId(v) ? v : null;
+      },
+      renderHTML: (attrs) => (attrs.color ? { "data-color": attrs.color } : {}),
+    },
   },
   className: (attrs) => `callout callout-${attrs.variant}`,
+  extraHTML: (attrs) => cardColorStyle(attrs.color),
 });
