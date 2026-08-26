@@ -1028,6 +1028,106 @@ root, hence the setup file). The HTML round-trip cases are the highest-value
 ones: a `renderHTML`/`parseHTML` mismatch is invisible to `tsc`, survives every
 manual click-through, and only shows up as content quietly vanishing on paste.
 
+## Vault: sharing, and live co-editing
+
+A node carries `team_id` (→ `pf_teams`, the same seeded two-person team
+PathFinder's Team tab uses) and additive `team_shared_*` RLS sits alongside each
+`vault_*` table's `owner_all`. Sharing a **folder** is the same operation applied
+to its whole reachable subtree — a folder is just a node with children, so
+`shareNode` walks `graph.edges` and there is nothing folder-specific in it.
+`addEdge` propagates `team_id` from parent to child, or a node dropped into a
+shared folder would be invisible to the other person: `team_id` is what RLS
+checks, not the edge.
+
+**DELETE is governed only by USING, never WITH CHECK.** That is why "a teammate
+may edit but not delete" is spelled as separate FOR SELECT/INSERT/UPDATE
+policies, and why no `vault_*` table has a team DELETE policy. And
+`vault_content` / `vault_journals` policies must strip suffix keys with
+`split_part(node_id, '_', 1)`, because `<id>_hl` / `_annot` / `_textannot` /
+`_bookmarks` / `_margins` share those tables — getting that wrong makes a shared
+PDF's annotations invisible to the teammate, as an empty set rather than an
+error.
+
+### Live co-editing is Notes only, shared only, and behind a flag
+
+`VITE_VAULT_COLLAB=1` turns on a Yjs CRDT for shared **Tiptap notes**. Everything
+else — Canvas, PDF ink, Journal, Workbook, Bookshelf, and every private note —
+keeps the sync-on-save path, where `assertContentNotConflicted` compares
+`updated_at` and raises a conflict the user resolves with the Reload button.
+
+```
+vault_ydoc.state   ← base64 Y.encodeStateAsUpdate. THE TRUTH while co-editing.
+vault_content.data ← JSON projection. What noteSchemaGuard audits, PDF export
+                     and WorkbookEditor read, and an old client still sees.
+```
+
+Sync is a **private Supabase Realtime broadcast channel** per note
+(`vault:doc:<nodeId>`) — no collaboration server, so nothing hangs on the Mac
+being awake. Awareness (the carets) rides the same channel under its own event
+rather than using Supabase Presence, which has a 5× smaller quota and would need
+its own RLS branch; y-protocols already expires a stale caret after 30 s.
+
+**Five traps, all of which are silent:**
+
+- **RLS on `realtime.messages` does NOT make a channel private.** Broadcast
+  routes by topic and `private` is a per-client *join flag*, so a client that
+  omits it never has the policies evaluated and receives every delta. The anon
+  key is committed and this repo is public. The actual enforcement is a
+  project-wide dashboard setting — Realtime → Settings → **Allow public access
+  off** — and it is not expressible in a migration. See `APPLY.md` §9.
+- **Two clients seeding a Y.Doc from the same JSON duplicates the note.**
+  `prosemirrorJSONToYDoc` mints *new* operations each call, so two "identical"
+  seeds merge into two copies. Hence the election in `collab/seed.ts`: upsert
+  with `ignoreDuplicates`, then re-read **unconditionally** — winner and loser
+  take the same path, so there is no rarely-taken branch to rot. A client with
+  empty content never enters the election. `seed.test.ts` asserts the *bug* on
+  purpose; if that test ever goes green, read the header before touching
+  anything.
+- **Yjs drops doc-level attributes.** ySync rebuilds the root as
+  `topNodeType.create(null, …)`, so `NoteDocument`'s per-note `width` resets on
+  open. Which means the projection must come from `editor.getJSON()` — never
+  `yDocToProsemirrorJSON`, which would write the default back and lose the
+  layout for good. NoteEditor re-applies the seed width after first render.
+- **An editor cannot gain Collaboration after mount.** `useEditor` builds its
+  extension list once, so EditorPane renders a placeholder until the session
+  resolves, and keys the editor on whether there is one. Mounting early gives a
+  non-collab editor on a co-edited note that happily saves over the other person.
+- **The fragment name is `"default"`.** `Collaboration`'s `field` defaults to
+  `"default"` but `prosemirrorJSONToYDoc`'s third argument defaults to
+  `"prosemirror"`. Mixing them raises nothing — the note just opens blank, and
+  the first keystroke's projection erases it.
+
+`saveContentProjection` is a **separate exported function**, not a flag on
+`saveContent`: a boolean is the kind of thing a refactor drops, and dropping it
+would disable the conflict guard for every private note with no symptom until two
+devices quietly overwrite each other. `forgetContentVersion` is its necessary
+other half — a note unshared mid-session otherwise inherits a stale timestamp and
+shows a permanent, unclearable conflict.
+
+An out-of-date client is a real data-loss vector (it reads a healthy-looking
+projection, edits, and saves the whole document over the CRDT), so `saveContent`
+throws `CollabOnlyError` for any note that has a `vault_ydoc` row. Ship that
+guard a release **before** the writer, iOS first — the iPad installs over a cable
+on ~7-day certs and is the client most likely to be stale. Enable the writer in
+the reverse order, web first, because web rolls back fastest.
+
+**Yjs state grows forever** and there is no safe automatic compaction: rebuilding
+a document mints fresh client ids and re-collides with any live peer, i.e. it
+reintroduces the duplication bug as a scheduled job. Recovery is manual and is
+what `owner_all`'s DELETE exists for — with nobody editing, the owner deletes the
+`vault_ydoc` row and the next open re-seeds from the projection.
+
+Bundle discipline: the entire stack sits behind one dynamic import
+(`collab/loadCollab.ts`), and everything outside `src/collab/` uses `import type`
+only — a single value import of `isChangeOrigin` would pull ~126 kB into the
+eager note bundle for every private-note user and onto the iPad, which is why
+`CollabSession` carries `isRemoteTransaction` as a function instead. `yjs` **must**
+stay in `resolve.dedupe`: two copies make Yjs's internal `instanceof` checks fail
+and `applyUpdate` silently no-ops, so the session looks connected and simply
+never converges. (The `BlockHandle.ts` comment about "an app with no
+collaboration" is now out of date, but its conclusion still holds — the stack is
+lazy, and `@tiptap/extension-drag-handle` would import it eagerly.)
+
 ## Scheduled server-side work (pg_cron)
 
 Four jobs run in the database, and this is the pattern for anything that must happen

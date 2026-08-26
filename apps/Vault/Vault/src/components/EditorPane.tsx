@@ -14,6 +14,7 @@ import { HomePage } from "./HomePage";
 import { nodeIcon } from "../nodeUtils";
 import type { VaultGraph } from "../types";
 import { lazyWithReload } from "../lib/lazyLoad";
+import { useCollabSession } from "../collab/useCollabSession";
 
 // Every editor below pulls a heavy transitive dependency (TipTap, pdfjs-dist,
 // katex, sql.js, smiles-drawer, react-force-graph-2d, …) that has no business
@@ -44,6 +45,34 @@ const globalContentCache = new Map<string, string>();
 // "edited". A missing entry means "unknown", which must fall through to
 // saving — never assume clean.
 const persistedContent = new Map<string, string>();
+
+/**
+ * Forget both cached copies of a node's content.
+ *
+ * Neither map was ever invalidated, which was survivable while every note had
+ * exactly one author. It is not survivable for a shared note: closing a tab and
+ * reopening it served your own stale copy back, and on a co-edited note that
+ * copy is also the SEED for the CRDT if you happen to be the first one in.
+ */
+export function invalidateContentCache(id: string): void {
+  globalContentCache.delete(id);
+  persistedContent.delete(id);
+}
+
+/**
+ * Live co-editing is opt-in per build so each of the three targets (Vercel web,
+ * the Tauri Mac app, the iPad) can be switched on independently and rolled back
+ * by redeploying rather than by shipping code. Off unless explicitly enabled.
+ */
+const COLLAB_ENABLED = import.meta.env.VITE_VAULT_COLLAB === "1";
+
+// Which node kinds fall through the render chain below to NoteEditor AND are
+// worth co-editing. Deliberately narrower than "everything that falls through":
+// CodeFile and Table also land on NoteEditor and could be added here in one
+// line later, but keeping v1 to plain notes keeps the surface small.
+function isCoeditableKind(kind: VaultGraph["nodes"][string]["kind"] | undefined): boolean {
+  return kind?.type === "Note";
+}
 
 class EditorErrorBoundary extends Component<
   { label: string; children: React.ReactNode },
@@ -87,6 +116,8 @@ export interface EditorPaneHandle {
   selectNextTab: () => void;
   selectPrevTab: () => void;
   closeCurrentTab: () => void;
+  /** Discard both caches and re-read this node from the server. */
+  reloadCurrent: () => Promise<void>;
 }
 
 interface EditorPaneProps {
@@ -165,6 +196,25 @@ export const EditorPane = forwardRef<EditorPaneHandle, EditorPaneProps>(
       : false;
 
     const selectedNode = selectedId ? graph.nodes[selectedId] : null;
+
+    // Live co-editing applies to a shared note and nothing else. `team_id` is
+    // what RLS actually checks, so it is what decides here too.
+    const collabEligible =
+      COLLAB_ENABLED && !!selectedId && selectedNode?.team_id != null && isCoeditableKind(selectedNode?.kind);
+    const collab = useCollabSession(collabEligible ? selectedId : null, collabEligible, content);
+    const collabSession = collab.session;
+
+    // Set by handleNoteChange just before setContent, and read by the autosave
+    // effect after the state commit — so it describes the change that produced
+    // the content being saved. If a local and a remote change batch into one
+    // render it reads "remote" and we skip; the projection is then one debounce
+    // late and the next local keystroke re-arms it. Benign.
+    const lastChangeRemoteRef = useRef(false);
+
+    function handleNoteChange(next: string, meta?: { remote?: boolean }) {
+      lastChangeRemoteRef.current = !!meta?.remote;
+      setContent(next);
+    }
     const edgeChildren = selectedId
       ? (graph.edges[selectedId] ?? []).filter((id) => graph.nodes[id])
       : [];
@@ -239,17 +289,38 @@ export const EditorPane = forwardRef<EditorPaneHandle, EditorPaneProps>(
       // round-trip per node open and, worse, makes a genuinely blocked/blank
       // editor look like a legitimate save.
       if (persistedContent.get(selectedId) === content) return;
+      // A co-editor's keystroke is not ours to persist. Both clients write the
+      // projection, but only for their own changes — otherwise every character
+      // typed by either person would be written twice, and the 2s debounce
+      // would never settle while the other person was mid-sentence.
+      if (collabSession && lastChangeRemoteRef.current) return;
       setSaveStatus("saving");
+      // Under collaboration vault_content is a derived projection, not the
+      // truth (vault_ydoc is), and it is re-derived on every keystroke from
+      // either side — so it can afford to be lazier than the 400ms an
+      // authoritative save needs.
+      const delay = collabSession ? 2000 : 400;
       const timer = setTimeout(async () => {
         try {
           // Queued in api.ts: single-flight per node, coalescing, backoff.
           // Resolves once this content (or something newer) is persisted.
-          await api.saveContent(selectedId, content);
+          //
+          // saveContentProjection skips the updated_at conflict check, which
+          // would otherwise fire constantly: on a co-edited note the row
+          // legitimately changes under us several times a minute. The CRDT is
+          // the merge authority there, so there is nothing to protect.
+          await (collabSession ? api.saveContentProjection : api.saveContent)(selectedId, content);
           persistedContent.set(selectedId, content);
           setSaveStatus("saved");
           setTimeout(() => setSaveStatus(""), 1500);
         } catch (e) {
-          if (e instanceof api.ContentConflictError) {
+          if (e instanceof api.CollabOnlyError) {
+            // This note has live co-editing state but this build isn't
+            // participating — either it predates the feature or the flag is
+            // off. Saving would discard whatever the CRDT holds, so don't, and
+            // say why. Like "conflict", this must never clear on a timer.
+            setSaveStatus("collab-only");
+          } else if (e instanceof api.ContentConflictError) {
             // Someone else's newer save is on the server — do NOT clear this
             // status on a timer like "saved": it needs to stay until the note
             // is reloaded, or the next autosave would just overwrite them.
@@ -260,9 +331,9 @@ export const EditorPane = forwardRef<EditorPaneHandle, EditorPaneProps>(
             setSaveStatus("error");
           }
         }
-      }, 400);
+      }, delay);
       return () => clearTimeout(timer);
-    }, [content, selectedId]);
+    }, [content, selectedId, collabSession]);
 
     // Keep global cache in sync with in-memory edits so other panes benefit.
     useEffect(() => {
@@ -344,9 +415,15 @@ export const EditorPane = forwardRef<EditorPaneHandle, EditorPaneProps>(
       }
 
       let text: string;
+      // A shared node always re-reads. The cache is never invalidated, so on a
+      // note somebody else may have edited it serves a stale copy — and on the
+      // co-editing path that stale copy is also the seed the CRDT would be
+      // built from if we are the first one in. One row is cheap; being wrong
+      // about the seed is not. Private notes keep the cache as-is.
+      const mustRefetch = graph.nodes[id]?.team_id != null;
       if (isFolder || isJournal) {
         text = "";
-      } else if (globalContentCache.has(id)) {
+      } else if (globalContentCache.has(id) && !mustRefetch) {
         text = globalContentCache.get(id)!;
       } else {
         setIsLoading(true);
@@ -362,6 +439,29 @@ export const EditorPane = forwardRef<EditorPaneHandle, EditorPaneProps>(
       setSelectedId(id);
       setContent(text);
       setShowHomeState(false);
+    }
+
+    // The exit from a "conflict". Before this existed the status told the user
+    // to reload the note and then offered no way to do it — the pane stayed
+    // stuck until the tab was closed, because the status deliberately never
+    // clears on a timer (clearing it would let the next autosave overwrite the
+    // other person's edit, which is the whole thing it is there to prevent).
+    //
+    // forgetContentVersion matters as much as the re-read: leaving the stale
+    // timestamp cached means the very next save throws the same conflict, and
+    // the button looks broken.
+    async function reloadCurrent() {
+      const id = selectedId;
+      if (!id) return;
+      invalidateContentCache(id);
+      api.forgetContentVersion(id);
+      const text = await api.readContent(id);
+      globalContentCache.set(id, text);
+      persistedContent.set(id, text);
+      // NoteEditor's [content] effect performs the actual setContent, because
+      // the server value differs from what it last emitted.
+      setContent(text);
+      setSaveStatus("");
     }
 
     function closeTab(id: string) {
@@ -401,6 +501,12 @@ export const EditorPane = forwardRef<EditorPaneHandle, EditorPaneProps>(
       closeTabIfOpen(id: string) {
         closeTab(id);
       },
+      // The exit from a "conflict". Before this existed the status told the
+      // user to reload a note and then offered no way to do it — the pane
+      // stayed stuck until the tab was closed, because the status deliberately
+      // never clears on a timer.
+      //
+      reloadCurrent,
       showHome() {
         setShowHomeState(true);
         setSelectedId(null);
@@ -499,14 +605,41 @@ export const EditorPane = forwardRef<EditorPaneHandle, EditorPaneProps>(
                 {nodeIcon(selectedNode.kind)} {selectedNode.name}
               </span>
               <div className="toolbar-actions">
+                {collabEligible && collabSession && (
+                  <span
+                    className="collab-status"
+                    title={
+                      collab.status === "live"
+                        ? "Edits are syncing live with your teammate"
+                        : "Not connected — your changes are still being saved"
+                    }
+                  >
+                    {collab.status === "live" ? "Live" : "Offline"}
+                  </span>
+                )}
                 {saveStatus && (
                   <span
                     className="save-status"
-                    style={(saveStatus === "error" || saveStatus === "conflict") ? { color: "#f87171" } : undefined}
+                    style={(saveStatus === "error" || saveStatus === "conflict" || saveStatus === "collab-only")
+                      ? { color: "#f87171" } : undefined}
                   >
                     {saveStatus === "saving" ? "Saving…"
                       : saveStatus === "error" ? "Not saved — will retry on edit"
-                      : saveStatus === "conflict" ? "Changed by the other user — reload this note to see it"
+                      : saveStatus === "collab-only" ? "Not saved — this note is being co-edited; update Vault to edit it"
+                      : saveStatus === "conflict" ? (
+                        <>
+                          Changed by the other user —{" "}
+                          {/* The status used to end at "reload this note to see
+                              it" with nothing anywhere that could reload it. */}
+                          <button
+                            type="button"
+                            className="save-status-action"
+                            onClick={() => { void reloadCurrent(); }}
+                          >
+                            Reload
+                          </button>
+                        </>
+                      )
                       : "Saved"}
                   </span>
                 )}
@@ -635,17 +768,30 @@ export const EditorPane = forwardRef<EditorPaneHandle, EditorPaneProps>(
                   onOpenNode={selectNode}
                 />
               </EditorErrorBoundary>
+            ) : collabEligible && collab.loading ? (
+              // Do NOT mount the editor yet. useEditor is called with the
+              // default deps: [], so it builds its extension list exactly once
+              // — an editor mounted before the session resolves can never gain
+              // Collaboration afterwards, and would sit there for the life of
+              // the tab looking fine while silently saving over the other
+              // person. Waiting is the only correct option.
+              <div className="loading-state">Connecting…</div>
             ) : (
               // key + boundary match every other editor in this switch. The key
               // matters for more than symmetry: without it the editor instance
               // outlives the node, so undo history bleeds across notes and a
               // Cmd-Z after a tab switch rewrites the *previous* note.
-              <EditorErrorBoundary key={selectedId} label="NoteEditor">
+              //
+              // The collab suffix extends that: a note unshared (or shared)
+              // mid-session must rebuild the editor, for the same reason —
+              // the extension list is fixed at mount.
+              <EditorErrorBoundary key={`${selectedId}:${collabSession ? "c" : "-"}`} label="NoteEditor">
                 <NoteEditor
                   content={content}
-                  onChange={setContent}
+                  onChange={handleNoteChange}
                   nodeId={selectedId ?? undefined}
                   graph={graph}
+                  collab={collabSession}
                 />
               </EditorErrorBoundary>
             )}

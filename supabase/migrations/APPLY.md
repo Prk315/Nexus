@@ -17,6 +17,7 @@ query after each.
 | 6 | `20260824120000_job_pipeline.sql` | `job_profiles`, `job_sources`, `job_postings`, `job_matches` — **apply before deploying `job-ingest`, or it 500s on every call** |
 | 7 | `20260825120000_job_evaluation.sql` | `job_app_modules`, `job_applications`, `job_matches.module_plan` — **apply before deploying `job-ingest` v4** |
 | 8 | `20260826120000_job_apply.sql` | `job_profiles.approval_threshold`, nine approval/submission columns on `job_applications`, `job_submission_attempts` — **apply before deploying `job-ingest` v5 / `job-approve`** |
+| 9 | `20260827120000_vault_live_coedit.sql` | `vault_ydoc`, `vault_can_coedit()`, two `realtime.messages` policies — **apply before deploying any Vault build that reads `vault_ydoc`, and see §9 for the two manual steps that are not SQL** |
 
 Files 1–3 are independent of each other and of file 4. File 4 has an **internal**
 ordering requirement (the `ALTER` must precede the index that uses the new
@@ -331,4 +332,101 @@ drop index if exists public.unlock_rules_user_id_enabled_idx;
 alter table public.unlock_rules drop column if exists enabled;
 drop index if exists public.focus_blocks_user_id_enabled_idx;
 drop index if exists public.time_entries_user_id_start_time_idx;
+```
+
+
+## §9 — Vault live co-editing (`20260827120000_vault_live_coedit.sql`)
+
+File 9 adds live collaborative editing for **shared Vault notes**: a Yjs CRDT
+document per note (`vault_ydoc`), synced peer-to-peer over a private Supabase
+Realtime broadcast channel. It builds on `20260826150000_vault_teams.sql` and
+depends on nothing in files 1–8.
+
+**Two of the four steps are not SQL, and skipping either one is silent.**
+
+### 1. Apply the migration
+
+Before any Vault build that reads `vault_ydoc` ships. PostgREST answers a missing
+table with an error rather than an empty result, so an un-migrated database turns
+every shared-note open into a hard failure — the same ordering trap as
+`job-ingest` v5 above.
+
+### 2. ⚠️ Turn OFF "Allow public access"
+
+Dashboard → Project Settings → **Realtime → Settings** → *Allow public access* → **off**.
+
+**The RLS policies in section 3 of the migration do nothing until this is done.**
+Realtime routes broadcast by *topic*, and `private: true` is a per-client join
+flag — a client that joins `vault:doc:<uuid>` without it never has those policies
+evaluated and receives every document delta anyway. The anon key is committed in
+this repo and the repo is public, so that is not a theoretical attacker.
+
+Verified 2026-08-27: there is not one `.channel(` call site anywhere else in this
+monorepo and no `supabase_realtime` publication, so turning it off project-wide
+breaks nothing.
+
+### 3. Verify
+
+```sql
+-- Expect exactly 4 policies, and no team DELETE policy: only owner_all (ALL)
+-- may delete. A team DELETE policy here is a bug, not a convenience — deleting
+-- the row while a teammate is editing resets the note to whatever
+-- vault_content last projected.
+select policyname, roles::text, cmd from pg_policies
+where schemaname = 'public' and tablename = 'vault_ydoc' order by policyname;
+
+-- Expect exactly 2, both {authenticated}. Zero means every private channel
+-- denies and co-editing silently never connects.
+select policyname, roles::text, cmd from pg_policies
+where schemaname = 'realtime' and tablename = 'messages' order by policyname;
+
+-- Must be 0 before the writer is enabled anywhere (step 4). Non-zero means a
+-- client is already writing CRDT state, and the guard rollout below is moot.
+select count(*) from public.vault_ydoc;
+
+-- Fail-closed on nonsense input rather than erroring.
+select public.vault_can_coedit('does-not-exist');   -- false
+```
+
+### 4. Roll the clients out in two phases, in opposite orders
+
+The vector this guards against: a Vault build that does not know about
+`vault_ydoc` opens a co-edited note, reads the `vault_content` projection (which
+the co-editing clients keep freshly written, so it looks perfectly healthy),
+edits it and saves the whole document. The CRDT never sees the edit, the next
+projection flush overwrites it, and `vault_content` keeps no history.
+
+**Phase 0 — the guard.** `saveContent` refuses to write a note that has a
+`vault_ydoc` row, showing *"this note is being co-edited; update Vault to edit
+it"*. Ship it with `VITE_VAULT_COLLAB` **unset**, so nothing writes CRDT state
+yet. Order: **iOS → Mac → web.** Counter-intuitive, but the iPad installs over a
+cable on ~7-day certificates and is the client most likely to still be old, so it
+needs the guard earliest; Vercel is instant and can always catch up.
+
+**Phase 1 — the writer.** Set `VITE_VAULT_COLLAB=1` and redeploy. Order:
+**web → Mac → iOS** — the reverse — because web is the one that rolls back in a
+minute.
+
+Do not start Phase 1 until steps 1–3 are done and Phase 0 is confirmed live on
+all three targets.
+
+**Rollback:** unset `VITE_VAULT_COLLAB` and redeploy. Clients revert to the
+guarded save path, and existing `vault_ydoc` rows make those notes read-only —
+loud and safe rather than silently lossy. A full revert is
+`delete from public.vault_ydoc` with nobody editing; `vault_content` is current
+to within about two seconds and becomes the truth again.
+
+### Rolling back the schema
+
+`vault_ydoc` holds the live document for any note being co-edited. Dropping it
+while `VITE_VAULT_COLLAB` is on loses every edit made since the last projection
+write (up to ~2 s), and re-seeds from `vault_content` on the next open. Turn the
+flag off first.
+
+```sql
+-- destructive; only with intent, and only with the writer disabled
+drop policy if exists vault_doc_broadcast_read on realtime.messages;
+drop policy if exists vault_doc_broadcast_write on realtime.messages;
+drop table if exists public.vault_ydoc;
+drop function if exists public.vault_can_coedit(text);
 ```

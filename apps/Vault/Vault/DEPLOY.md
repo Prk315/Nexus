@@ -56,3 +56,52 @@ per-user scoping described above.
 The `vault-assets` storage bucket is currently public; asset URLs are
 unguessable (UUID paths) but not access-controlled. Tighten to signed URLs when
 moving to a fully locked-down setup.
+
+## Live co-editing (shared notes)
+
+Two people can edit the same **shared note** at the same time, with each other's
+carets and selections visible. It is off unless the build sets
+`VITE_VAULT_COLLAB=1`, and it applies only to Tiptap notes whose `team_id` is
+set — Canvas, PDF ink, Journal, Workbook, Bookshelf and every private note keep
+the ordinary save-and-warn-on-conflict path untouched.
+
+How it fits together:
+
+- `vault_ydoc.state` is a Yjs CRDT document and is the **truth** while a note is
+  being co-edited. `vault_content.data` keeps being written as a JSON
+  **projection** — that is what the schema guard audits, what PDF export and
+  WorkbookEditor read, and what a client without this build still sees.
+- Sync is a **private** Supabase Realtime broadcast channel per note
+  (`vault:doc:<nodeId>`). No collaboration server, so nothing depends on the Mac
+  being awake.
+- The whole stack (yjs, y-protocols, both Tiptap collaboration packages) sits
+  behind one dynamic import, so a build with no shared notes never downloads it.
+
+### Before enabling it
+
+Four things, in order, and two of them are not code. They are written out with
+their verification queries in `supabase/migrations/APPLY.md` §9:
+
+1. Apply `20260827120000_vault_live_coedit.sql`.
+2. ⚠️ Turn **off** "Allow public access" in Project Settings → Realtime →
+   Settings. The migration's RLS policies do nothing until you do — Realtime
+   routes broadcast by topic and `private` is a per-client join flag, so a client
+   that omits it reads every delta without the policies ever being consulted. The
+   anon key is committed and this repo is public.
+3. Ship the guard build (`VITE_VAULT_COLLAB` unset) to **iOS, then Mac, then
+   web**. It refuses to save a note that already has CRDT state, which is what
+   stops an out-of-date client silently overwriting a co-edited note.
+4. Only then set `VITE_VAULT_COLLAB=1`, **web first, then Mac, then iOS** — the
+   reverse, because web rolls back in a minute.
+
+### Known limits
+
+- Yjs state grows monotonically. There is no safe automatic compaction (rebuilding
+  the document mints fresh client ids and would collide with a live peer, which is
+  the duplication bug the seed election exists to prevent). Recovery is manual:
+  with nobody editing, the note's owner deletes its `vault_ydoc` row and the next
+  open re-seeds from the projection.
+- A note's `width` is restored on open but does not sync between the two of you —
+  Yjs syncs the document's content, not the doc node's attributes.
+- If both clients close hard within ~1.5 s of the last keystroke, that last
+  moment of typing can be lost. There is no `keepalive` path through PostgREST.
