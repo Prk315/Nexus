@@ -1,12 +1,13 @@
 // One day's timed column, and the all-day task chip with its popup card.
 
 import { useEffect, useState, useCallback, useRef } from "react";
-import { Check, RefreshCw, Repeat2, MapPin, GraduationCap, CalendarOff, CalendarRange, Eye, EyeOff } from "lucide-react";
+import { Check, RefreshCw, Repeat2, MapPin, GraduationCap, CalendarOff, CalendarRange, Eye, EyeOff, Users } from "lucide-react";
 import { cn, layoutCalItems, PRIORITY_LABEL, URGENCY_LABEL, STAGE_LABEL, STAGE_CLASSES } from "../../lib/utils";
 import { planningOf, isFullTask } from "../../lib/taskTree";
 import { isSystemScheduledOn } from "../../lib/systems";
 import { chipBgClasses, chipCheckClasses, PRIORITY_TEXT } from "../task/taskVisual";
 import { DueChip } from "../task/DueChip";
+import { memberName } from "../../lib/api";
 import type { TaskWithContext, SystemEntry, CalBlock, CourseAssignment, ScheduleEntry, TaskSession } from "../../types";
 import { BLOCK_COLORS, GRID_END_MIN, HOURS, HOUR_START, fmtWeekMinutes, minutesToPx, pxToTime, timeToMinutes, toISO } from "./_shared";
 import type { Span } from "@nexus/core/coverage";
@@ -114,6 +115,14 @@ export function TaskPopupChip({ t, today, parentTitle, scheduledMin, hasSteps, i
           predicate the board's stage gate uses — so the two views agree.
           Stays first-glance (Part C): it's actionable, not decoration.
         */}
+        {t.team_id != null && (
+          <span
+            className="shrink-0 inline-flex items-center text-muted-foreground/50"
+            title={t.assigned_to != null && t.assigned_to !== "all" ? `Team task · ${memberName(t.assigned_to)}` : "Team task · everyone"}
+          >
+            <Users className="h-2.5 w-2.5" />
+          </span>
+        )}
         {!t.done && isFullTask(t) && scheduledMin === 0 && (
           <CalendarOff className="h-2.5 w-2.5 shrink-0 text-amber-500" />
         )}
@@ -127,8 +136,14 @@ export function TaskPopupChip({ t, today, parentTitle, scheduledMin, hasSteps, i
           onClick={(e) => e.stopPropagation()}
         >
           <div className="flex items-start justify-between gap-2">
-            <p className={cn("text-xs font-semibold leading-snug", t.done ? "line-through text-muted-foreground" : "text-foreground")}>
+            <p className={cn("text-xs font-semibold leading-snug flex items-center gap-1", t.done ? "line-through text-muted-foreground" : "text-foreground")}>
               {t.title}
+              {t.team_id != null && (
+                <Users
+                  className="h-2.5 w-2.5 shrink-0 text-muted-foreground/50"
+                  aria-label={t.assigned_to != null && t.assigned_to !== "all" ? `Team task · ${memberName(t.assigned_to)}` : "Team task · everyone"}
+                />
+              )}
             </p>
             {/* "Everything else" the collapsed chip demoted (Part C) — the
                 due date lands here, same encoding as every other surface. */}

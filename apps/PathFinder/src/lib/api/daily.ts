@@ -3,6 +3,7 @@
 import {
   TASK_SELECT, err, mapSystem, mapTaskWithContext, num, supabase, getUserId,
 } from "./_shared";
+import { getTeamOrFilter } from "./teams";
 import type {
   DailyGoals, DailyHabit, DailyItemWithStatus, DailyPlan, DailyPrimaryGoal, DailySecGoal, DailySection, HabitStack, HabitSubtask, HabitWithCompletion, RoutineItem, Routines, TodayFocus,
 } from "../../types";
@@ -14,11 +15,15 @@ import { isSystemDue } from "../systems";
 
 export const getTodayFocus = async (): Promise<TodayFocus> => {
   const today = new Date().toISOString().split("T")[0];
+  const orFilter = await getTeamOrFilter();
+
+  let tasksQ = supabase.from("pf_tasks").select(TASK_SELECT).eq("done", false)
+    .not("due_date", "is", null).lte("due_date", today);
+  tasksQ = orFilter ? tasksQ.or(orFilter) : tasksQ.eq("user_id", getUserId());
 
   const [{ data: plans }, { data: tasks }, { data: systems }] = await Promise.all([
     supabase.from("pf_plans").select("id, title, goal_id, pf_goals(id, title)").eq("user_id", getUserId()),
-    supabase.from("pf_tasks").select(TASK_SELECT).eq("user_id", getUserId()).eq("done", false)
-      .not("due_date", "is", null).lte("due_date", today),
+    tasksQ,
     supabase.from("pf_systems").select("*").eq("user_id", getUserId()),
   ]);
 

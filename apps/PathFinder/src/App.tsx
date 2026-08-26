@@ -14,6 +14,7 @@ import { Projects } from "./pages/Projects";
 import { Games } from "./pages/Games";
 import { Schedules } from "./pages/Schedules";
 import { Workspace } from "./pages/Workspace";
+import { Team } from "./pages/Team";
 import { CommandPalette } from "./components/CommandPalette";
 import { QuickPanelsProvider } from "./components/QuickPanels";
 import { convertMailToTask } from "./lib/api";
@@ -94,6 +95,7 @@ function App() {
           {page === "dashboard" && <Dashboard />}
           {page === "workspace" && <Workspace />}
           {page === "week"      && <Week />}
+          {page === "team"      && <Team />}
           {page === "projects"  && <Projects />}
           {page === "courses"   && <Courses />}
           {page === "schedules" && <Schedules />}

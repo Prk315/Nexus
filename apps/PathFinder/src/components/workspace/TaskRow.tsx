@@ -7,6 +7,7 @@ import { PriorityDot } from "../PriorityDot";
 import { UrgencyMeter } from "../UrgencyMeter";
 import { cn, daysUntil, deadlineLabel, deadlineVariant } from "../../lib/utils";
 import { formatMinutes, isFullTask, planningOf } from "../../lib/taskTree";
+import { memberName, type TeamMember } from "../../lib/api";
 import type { TaskWithContext } from "../../types";
 
 export interface ReorderControls {
@@ -14,6 +15,13 @@ export interface ReorderControls {
   canDown: boolean;
   onUp: () => void;
   onDown: () => void;
+}
+
+/** Who a team task is for, and how to change it — only meaningful when `task.team_id` is set. */
+export interface AssignmentControl {
+  members: TeamMember[];
+  value: string | null; // null = unassigned, "all" = everyone, else a member's uid
+  onChange: (value: string | null) => void;
 }
 
 /**
@@ -33,12 +41,13 @@ export interface RowPlanning {
 }
 
 export function TaskRow({
-  task, showContext = true, planning, reorder, onToggle, onEdit, onDelete, onReschedule,
+  task, showContext = true, planning, reorder, assignment, onToggle, onEdit, onDelete, onReschedule,
 }: {
   task: TaskWithContext;
   showContext?: boolean;
   planning?: RowPlanning;
   reorder?: ReorderControls;
+  assignment?: AssignmentControl;
   onToggle: () => void;
   onEdit: () => void;
   onDelete: () => void;
@@ -89,6 +98,33 @@ export function TaskRow({
         >
           <ListTree className="h-2.5 w-2.5" />
           {planning!.doneSubtasks}/{planning!.subtaskCount}
+        </span>
+      )}
+
+      {/* Assignment — only a team task has anyone to assign, so the select
+          itself is the "is this a team task" tell. Native <select> to match
+          every other inline picker on this row/board rather than inventing a
+          bespoke dropdown for one field. */}
+      {task.team_id != null && assignment && (
+        <select
+          value={assignment.value ?? ""}
+          onChange={(e) => assignment.onChange(e.target.value === "" ? null : e.target.value)}
+          onClick={(e) => e.stopPropagation()}
+          title="Assigned to"
+          className="h-5 shrink-0 rounded border border-border/60 bg-transparent px-1 text-[10px] text-muted-foreground hover:border-border hover:text-foreground focus-visible:outline-none"
+        >
+          <option value="">Unassigned</option>
+          <option value="all">All</option>
+          {assignment.members.map((m) => (
+            <option key={m.userId} value={m.userId}>{m.displayName}</option>
+          ))}
+        </select>
+      )}
+      {/* Read-only fallback — a plain indicator when nothing wired up an
+          onChange (e.g. the drag overlay's bare row). */}
+      {task.team_id != null && !assignment && (
+        <span className="text-[10px] text-muted-foreground/70 shrink-0">
+          {task.assigned_to == null ? "Unassigned" : task.assigned_to === "all" ? "All" : memberName(task.assigned_to)}
         </span>
       )}
 

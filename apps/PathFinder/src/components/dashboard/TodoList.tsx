@@ -1,15 +1,32 @@
 // The dashboard's task list: grouped cards, the row, and the today-centred unfold.
 
 import { useState, useMemo } from "react";
-import { CalendarClock, CheckCircle, CheckSquare, Check, ChevronDown, ChevronRight, Plus, X, BookOpen } from "lucide-react";
+import { CalendarClock, CheckCircle, CheckSquare, Check, ChevronDown, ChevronRight, Plus, X, BookOpen, Users } from "lucide-react";
 import { cn } from "../../lib/utils";
 import { blockMinutes, planningOf, isFullTask } from "../../lib/taskTree";
 import { UrgencyMeter } from "../UrgencyMeter";
 import { PRIORITY_BAR } from "../task/taskVisual";
 import { DueChip } from "../task/DueChip";
 import { TimeEstimateBadge } from "../task/TimeEstimateBadge";
+import { memberName } from "../../lib/api";
 import type { Plan, TaskWithContext, CalBlock, CourseAssignment } from "../../types";
 import { formatMinutes, todayDate } from "./_shared";
+
+// A quiet marker for team tasks — a tiny Users glyph, plus who it's for once
+// it's narrowed to a specific member. Unassigned/"all" reads as "the whole
+// team", so it gets no name suffix.
+function TeamMark({ task }: { task: Pick<TaskWithContext, "team_id" | "assigned_to"> }) {
+  if (task.team_id == null) return null;
+  const named = task.assigned_to != null && task.assigned_to !== "all";
+  return (
+    <span
+      className="shrink-0 inline-flex items-center gap-0.5 text-muted-foreground/50"
+      title={named ? `Team task · ${memberName(task.assigned_to!)}` : "Team task · everyone"}
+    >
+      <Users className="h-2.5 w-2.5" />
+    </span>
+  );
+}
 
 // Re-exported so WelcomeBox's `import { TimeEstimateBadge } from "./TodoList"`
 // keeps resolving after the component moved to components/task/ (spec U3
@@ -133,6 +150,7 @@ function DashTaskRow({
           )}
 
           {effort > 0 && <TimeEstimateBadge min={effort} />}
+          <TeamMark task={task} />
         </div>
 
         {task.due_date && <DueChip due={task.due_date} today={today} />}
@@ -216,6 +234,7 @@ function StepOverview({
         <span className={cn("flex-1 min-w-0 truncate text-xs", c.done && "line-through text-muted-foreground")}>
           {c.title}
         </span>
+        <TeamMark task={c} />
         {blocks.map((b) => (
           <span
             key={b.id}

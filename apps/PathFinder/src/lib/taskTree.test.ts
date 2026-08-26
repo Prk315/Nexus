@@ -22,6 +22,7 @@ function task(over: Partial<TaskWithContext> = {}): TaskWithContext {
     title: "t", done: false, sort_order: 0, priority: "medium",
     due_date: null, created_at: "", time_estimate: null, aggregate_estimate: 0,
     kanban_status: "backlog", category: null, planning: planning(),
+    team_id: null, assigned_to: null,
     ...over,
   };
 }
