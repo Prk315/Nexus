@@ -8,6 +8,7 @@ import { isSystemScheduledOn } from "../../lib/systems";
 import { chipBgClasses, chipCheckClasses, PRIORITY_TEXT } from "../task/taskVisual";
 import { DueChip } from "../task/DueChip";
 import { memberName } from "../../lib/api";
+import { TaskActionMenu, InlineEditText } from "../common";
 import type { TaskWithContext, SystemEntry, CalBlock, CourseAssignment, ScheduleEntry, TaskSession } from "../../types";
 import { BLOCK_COLORS, GRID_END_MIN, HOURS, HOUR_START, fmtWeekMinutes, minutesToPx, pxToTime, timeToMinutes, toISO } from "./_shared";
 import type { Span } from "@nexus/core/coverage";
@@ -21,7 +22,7 @@ import type { WeekInteractions, ExternalDragPayload } from "./useWeekInteraction
 const RESIZE_HANDLE_PX = 6;
 const RESIZE_MIN_CARD_PX = 24;
 
-export function TaskPopupChip({ t, today, parentTitle, scheduledMin, hasSteps, interactions, dragPayload, onToggle, onEdit }: {
+export function TaskPopupChip({ t, today, parentTitle, scheduledMin, hasSteps, interactions, dragPayload, onToggle, onEdit, onRename }: {
   t: TaskWithContext;
   /** Today's ISO date, for the popup's due chip (overdue/today/plain). */
   today: string;
@@ -40,10 +41,14 @@ export function TaskPopupChip({ t, today, parentTitle, scheduledMin, hasSteps, i
   dragPayload?: ExternalDragPayload;
   onToggle: () => void;
   onEdit: () => void;
+  /** Present → a compact kebab (hover-reveal) offers Rename + Open. Omit to keep the chip read-only. */
+  onRename?: (title: string) => void;
 }) {
   const chipRef = useRef<HTMLDivElement>(null);
   const cardRef = useRef<HTMLDivElement>(null);
   const [pos, setPos] = useState<{ top: number; left: number } | null>(null);
+  const [renaming, setRenaming] = useState(false);
+  const [menuOpen, setMenuOpen] = useState(false);
 
   // Priority tint + done state (spec U3 Part B — the shared task-visual
   // vocabulary) — the SAME hue set and emerald-done rule as every other
@@ -81,7 +86,7 @@ export function TaskPopupChip({ t, today, parentTitle, scheduledMin, hasSteps, i
         onClick={toggle}
         onPointerDown={interactions && dragPayload ? (e) => interactions.onExternalDragPointerDown(e, dragPayload) : undefined}
         className={cn(
-          "flex items-center gap-1 px-1.5 py-0.5 rounded border cursor-pointer transition-colors select-none",
+          "group/chip flex items-center gap-1 px-1.5 py-0.5 rounded border cursor-pointer transition-colors select-none",
           chip,
           interactions && dragPayload && "cursor-grab",
           isDraggingThis && "opacity-30",
@@ -105,10 +110,29 @@ export function TaskPopupChip({ t, today, parentTitle, scheduledMin, hasSteps, i
           + done state. Urgency used to render here too — it still shows in
           the click popup below, which is where "everything else" belongs.
         */}
-        <span className={cn("text-[11px] truncate flex-1", t.done ? "line-through text-muted-foreground" : "text-foreground")}>
-          {parentTitle && <span className="opacity-50">{parentTitle} › </span>}
-          {t.title}
-        </span>
+        {onRename ? (
+          <span
+            onClick={(e) => e.stopPropagation()}
+            onPointerDown={(e) => e.stopPropagation()}
+            className="min-w-0 flex-1"
+          >
+            <InlineEditText
+              value={t.title}
+              onCommit={onRename}
+              editing={renaming}
+              onEditingChange={setRenaming}
+              className={cn("text-[11px] truncate", t.done ? "line-through text-muted-foreground" : "text-foreground")}
+            >
+              {parentTitle && <span className="opacity-50">{parentTitle} › </span>}
+              {t.title}
+            </InlineEditText>
+          </span>
+        ) : (
+          <span className={cn("text-[11px] truncate flex-1", t.done ? "line-through text-muted-foreground" : "text-foreground")}>
+            {parentTitle && <span className="opacity-50">{parentTitle} › </span>}
+            {t.title}
+          </span>
+        )}
         {/*
           Due here, but no time committed anywhere. This is the one fact a weekly
           overview can tell you that a task list can't, and it is the same
@@ -125,6 +149,21 @@ export function TaskPopupChip({ t, today, parentTitle, scheduledMin, hasSteps, i
         )}
         {!t.done && isFullTask(t) && scheduledMin === 0 && (
           <CalendarOff className="h-2.5 w-2.5 shrink-0 text-amber-500" />
+        )}
+        {onRename && (
+          <div
+            onClick={(e) => e.stopPropagation()}
+            onPointerDown={(e) => e.stopPropagation()}
+            className="shrink-0 opacity-0 group-hover/chip:opacity-100 transition-opacity"
+          >
+            <TaskActionMenu
+              task={t}
+              open={menuOpen}
+              onOpenChange={setMenuOpen}
+              className="h-4 w-4"
+              callbacks={{ onRename: () => setRenaming(true), onOpen: onEdit }}
+            />
+          </div>
         )}
       </div>
 

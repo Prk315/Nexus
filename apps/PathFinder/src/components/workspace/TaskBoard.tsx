@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import {
   DndContext, DragOverlay, PointerSensor, useSensor, useSensors,
@@ -8,7 +8,8 @@ import { Plus, Search, ListChecks, AlertTriangle, ListTree } from "lucide-react"
 import {
   useTasks, usePlans, useToggleTask, useDeleteTask, useUpdateTask,
   useRescheduleTask, useMoveTask, useCreateTask, useReorderTasks,
-  useSetKanbanStatus, useSetPriority, useSetAssignee,
+  useSetKanbanStatus, useSetPriority, useSetAssignee, useRenameTask,
+  invalidateTaskCaches,
 } from "../../hooks/useTasks";
 import { useTaskScheduling, useSetTaskMatrix, useSetTaskStage } from "../../hooks/useTaskPlanning";
 import { qk } from "../../lib/queryClient";
@@ -22,11 +23,12 @@ import {
   type TaskNode,
 } from "../../lib/taskTree";
 import type { TaskWithContext, Priority, Urgency, TaskStage } from "../../types";
-import { TaskRow, type RowPlanning } from "./TaskRow";
+import { TaskRow, type RowPlanning, type RowQuickActions } from "./TaskRow";
 import {
   AddTaskForm, EditTaskForm, ReschedulePopover, SubtypeFields, type TaskFormState,
 } from "./TaskDialogs";
 import { getTaskSubtype, saveTaskSubtype, getTeamMembers, type TeamMember } from "../../lib/api";
+import { useRowReorder, ReorderIndicator } from "../common";
 import { TaskPlanner } from "./TaskPlanner";
 import { StudySection } from "./StudySection";
 
@@ -203,6 +205,30 @@ export function TaskBoard({ selectedPlanId, selectedGoalId, reloadSignal, scope 
   const setMatrix = useSetTaskMatrix();
   const setStage = useSetTaskStage();
   const setAssignee = useSetAssignee();
+  const rename = useRenameTask();
+
+  // Board-local expand/collapse state for inline subtasks (a Set, not per-task
+  // booleans, so collapsing everything is just clearing it). Deliberately NOT
+  // the same thing as `showSteps` above — that flattens steps into the board
+  // as siblings; this nests them under their parent without touching it.
+  const [expandedIds, setExpandedIds] = useState<Set<number>>(new Set());
+  const toggleExpanded = (id: number) => setExpandedIds((prev) => {
+    const next = new Set(prev);
+    next.has(id) ? next.delete(id) : next.add(id);
+    return next;
+  });
+
+  // TaskActionMenu's schedule/due items write via their own orchestrator
+  // (scheduleTaskOn/setTaskDue), not a useTaskMutation — so the only thing
+  // every row's kebab needs on success is a cache invalidate, and on failure
+  // the same banner the drag-and-drop stage gate already uses.
+  const quickActions: RowQuickActions = {
+    onScheduleToday: () => invalidateTaskCaches(qc),
+    onScheduleTomorrow: () => invalidateTaskCaches(qc),
+    onDueToday: () => invalidateTaskCaches(qc),
+    onDueTomorrow: () => invalidateTaskCaches(qc),
+    onError: (msg) => setGateError(msg),
+  };
 
   // ── Breakdown-aware facts, computed once per task list ──────────────────────
   // The forest is built from every task (not the filtered view) so a parent's
@@ -414,21 +440,53 @@ export function TaskBoard({ selectedPlanId, selectedGoalId, reloadSignal, scope 
     reorder.mutate(ids);
   };
 
-  const renderRow = (t: TaskWithContext, extra?: { reorder?: Parameters<typeof TaskRow>[0]["reorder"] }) => (
-    <TaskRow
-      task={t}
-      showContext={group !== "plan"}
-      planning={planningFor(t)}
-      reorder={extra?.reorder}
-      assignment={teamId ? {
-        members: teamMembers,
-        value: t.assigned_to,
-        onChange: (assigned_to) => setAssignee.mutate({ id: t.id, assigned_to }),
-      } : undefined}
-      onToggle={() => handleToggle(t.id)}
-      onEdit={() => isFullTask(t) ? setPlanning(t.id) : setEditingSimple(t)}
-      onDelete={() => handleDelete(t.id)}
-      onReschedule={() => setRescheduling(t)}
+  // Props every row shares regardless of where it sits (board root or a
+  // nested child) — factored out so renderRow and renderChildRows can't drift
+  // on what "open"/"rename"/"delete" mean for a task.
+  const commonRowProps = (t: TaskWithContext) => ({
+    planning: planningFor(t),
+    assignment: teamId ? {
+      members: teamMembers,
+      value: t.assigned_to,
+      onChange: (assigned_to: string | null) => setAssignee.mutate({ id: t.id, assigned_to }),
+    } : undefined,
+    onToggle: () => handleToggle(t.id),
+    onEdit: () => isFullTask(t) ? setPlanning(t.id) : setEditingSimple(t),
+    onDelete: () => handleDelete(t.id),
+    onReschedule: () => setRescheduling(t),
+    onRename: (title: string) => rename.mutate({ id: t.id, title }),
+    quickActions,
+  });
+
+  const renderRow = (t: TaskWithContext, extra?: { reorder?: Parameters<typeof TaskRow>[0]["reorder"]; expandableChevron?: boolean }) => {
+    const node = nodesById.get(t.id);
+    const showChevron = extra?.expandableChevron ?? true;
+    const hasKids = showChevron && (node?.children.length ?? 0) > 0;
+    return (
+      <TaskRow
+        task={t}
+        showContext={group !== "plan"}
+        reorder={extra?.reorder}
+        expandable={hasKids ? { expanded: expandedIds.has(t.id), onToggle: () => toggleExpanded(t.id) } : undefined}
+        {...commonRowProps(t)}
+      />
+    );
+  };
+
+  // Inline children of an expanded board row — recursive, indented, never
+  // bucket-draggable (dnd-kit stays on the root row; see the bucket loop
+  // below). ChildRows adds its own handle-scoped drag-to-reorder per sibling
+  // group, deliberately hand-rolled so it can't fight the board's DndContext.
+  const childRows = (node: TaskNode) => (
+    <ChildRows
+      node={node}
+      depth={1}
+      expandedIds={expandedIds}
+      onToggleExpanded={toggleExpanded}
+      rowPropsFor={commonRowProps}
+      // useReorderTasks fits as-is: it takes the complete ordered sibling id
+      // list and optimistically rewrites sort_order in the tasks cache.
+      onReorder={(ids) => reorder.mutate(ids)}
     />
   );
 
@@ -536,7 +594,10 @@ export function TaskBoard({ selectedPlanId, selectedGoalId, reloadSignal, scope 
             <MatrixGrid
               buckets={buckets}
               draggingTask={draggingTask}
-              renderRow={renderRow}
+              // No expand chevron in the 3x3 grid — a recursive subtree
+              // doesn't fit a 104px cell, and full tasks are the only thing
+              // shown here anyway (see the matrix bucket filter above).
+              renderRow={(t) => renderRow(t, { expandableChevron: false })}
               dndOn={dndOn}
             />
           ) : (
@@ -568,9 +629,20 @@ export function TaskBoard({ selectedPlanId, selectedGoalId, reloadSignal, scope 
                             onDown: () => reorderWithin(bkt.tasks, i, 1),
                           } : undefined,
                         });
-                        return dndOn && !t.done
+                        const wrapped = dndOn && !t.done
                           ? <DraggableRow key={t.id} id={t.id}>{row}</DraggableRow>
                           : <div key={t.id}>{row}</div>;
+                        // Expanded children render as a sibling block, never
+                        // inside the DraggableRow wrapper — dragging must
+                        // only ever pick up the root task.
+                        const node = nodesById.get(t.id);
+                        const expanded = expandedIds.has(t.id);
+                        return (
+                          <div key={t.id} className="flex flex-col gap-0.5">
+                            {wrapped}
+                            {node && expanded && childRows(node)}
+                          </div>
+                        );
                       })}
                     </div>
                   </section>
@@ -635,6 +707,74 @@ export function TaskBoard({ selectedPlanId, selectedGoalId, reloadSignal, scope 
         <ReschedulePopover onReschedule={handleReschedule} onClose={() => setRescheduling(null)} />
       )}
     </div>
+  );
+}
+
+/**
+ * One expanded parent's direct children, recursing into their own expanded
+ * subtrees. Module-level (NOT declared inside TaskBoard — an inner component
+ * type would be recreated per render, remounting the rows and dropping any
+ * in-flight gesture), with a `useRowReorder` instance per sibling group so
+ * reordering is inherently within-parent only.
+ *
+ * The drag is a hand-rolled pointer gesture scoped to each row's grip
+ * handle, NOT a nested DndContext: these rows already render outside
+ * `DraggableRow` so the board's bucket-drop dnd-kit layer never sees them,
+ * and the grip's pointerdown stops propagation so nothing above it is ever
+ * armed. Each registered rect is the row plus its expanded subtree, so the
+ * insertion line lands after everything a row visually owns.
+ */
+function ChildRows({ node, depth, expandedIds, onToggleExpanded, rowPropsFor, onReorder }: {
+  node: TaskNode;
+  depth: number;
+  expandedIds: Set<number>;
+  onToggleExpanded: (id: number) => void;
+  /** The board's shared per-row props (toggle/edit/delete/rename/kebab…). */
+  rowPropsFor: (t: TaskWithContext) => Omit<
+    React.ComponentProps<typeof TaskRow>,
+    "task" | "depth" | "showContext" | "expandable" | "dragHandle" | "reorder"
+  >;
+  /** Commits the complete new ordered id list of THIS node's children. */
+  onReorder: (orderedSiblingIds: number[]) => void;
+}) {
+  const rowReorder = useRowReorder(node.children.map((c) => c.task.id), onReorder);
+
+  return (
+    <>
+      {node.children.map((child, i) => {
+        const hasKids = child.children.length > 0;
+        const expanded = expandedIds.has(child.task.id);
+        return (
+          <Fragment key={child.task.id}>
+            {rowReorder.insertion === i && <ReorderIndicator />}
+            <div
+              ref={rowReorder.registerRow(child.task.id)}
+              className={cn("flex flex-col gap-0.5", rowReorder.draggingId === child.task.id && "opacity-40")}
+            >
+              <TaskRow
+                task={child.task}
+                depth={depth}
+                showContext={false}
+                dragHandle={rowReorder.handlePointerDown(child.task.id)}
+                expandable={hasKids ? { expanded, onToggle: () => onToggleExpanded(child.task.id) } : undefined}
+                {...rowPropsFor(child.task)}
+              />
+              {hasKids && expanded && (
+                <ChildRows
+                  node={child}
+                  depth={depth + 1}
+                  expandedIds={expandedIds}
+                  onToggleExpanded={onToggleExpanded}
+                  rowPropsFor={rowPropsFor}
+                  onReorder={onReorder}
+                />
+              )}
+            </div>
+          </Fragment>
+        );
+      })}
+      {rowReorder.insertion === node.children.length && <ReorderIndicator />}
+    </>
   );
 }
 

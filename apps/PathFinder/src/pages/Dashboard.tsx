@@ -5,14 +5,16 @@
 // lines with all five of them inline, which meant every change to the task list
 // and every change to the day calendar edited the same file.
 
-import { useEffect, useState, useCallback, useMemo } from "react";
+import { useEffect, useState, useCallback, useMemo, useSyncExternalStore } from "react";
 import { PanelRight, PanelRightClose } from "lucide-react";
-import { getGoals, getPlans, getAllTasks, getSystems, toggleTask, createTask, updateTask, deleteTask, toTaskWithContext, getTaskSessionsInRange, logTaskSession, unlogTaskOccurrence, getCalBlocks, createCalBlock, updateCalBlock, deleteCalBlock, getDailyGoals, setDailyPrimaryGoal, clearDailyPrimaryGoal, addDailySecondaryGoal, updateDailySecondaryGoal, deleteDailySecondaryGoal, getCourseAssignments, updateCourseAssignment, getScheduleEntriesForDate, getHabitsForDate, toggleHabitCompletion, getHabitStacks, getTrainingSessionsForDate } from "../lib/api";
+import { getGoals, getPlans, getAllTasks, getSystems, toggleTask, createTask, patchTask, addSubtask, deleteTask, toTaskWithContext, getTaskSessionsInRange, logTaskSession, unlogTaskOccurrence, getCalBlocks, createCalBlock, updateCalBlock, deleteCalBlock, getDailyGoals, setDailyPrimaryGoal, clearDailyPrimaryGoal, addDailySecondaryGoal, updateDailySecondaryGoal, deleteDailySecondaryGoal, getCourseAssignments, updateCourseAssignment, getScheduleEntriesForDate, getHabitsForDate, toggleHabitCompletion, getHabitStacks, getTrainingSessionsForDate } from "../lib/api";
 import { blockMinutes } from "../lib/taskTree";
 import { isTaskRelevantToMe } from "../lib/team";
 import { getUserId } from "../lib/supabase";
 import type { Goal, Plan, TaskWithContext, SystemEntry, CalBlock, DailyGoals, DailyPrimaryGoal, CourseAssignment, ScheduleEntry, HabitWithCompletion, HabitStack, TrainingSession, TaskSession } from "../types";
 import { DCBlockDraft, timeToMin, todayDate } from "../components/dashboard/_shared";
+import { todayDateStr } from "../lib/quickSchedule";
+import { useDashDrag, DashDragGhostLayer } from "../components/dashboard/useDashDrag";
 import { DayCalendar } from "../components/dashboard/DayCalendar";
 import { HabitsStrip } from "../components/dashboard/HabitsStrip";
 import { WelcomeBox } from "../components/dashboard/WelcomeBox";
@@ -20,8 +22,14 @@ import { TodoList } from "../components/dashboard/TodoList";
 import { NowPanel } from "../components/dashboard/NowPanel";
 import { TaskPlanner } from "../components/workspace/TaskPlanner";
 import { nextUp, needsScheduling } from "../lib/nextUp";
+import { getDashBlockVisibility, subscribeDashBlocks } from "../lib/dashBlocks";
 
 export function Dashboard() {
+  // Settings → Dashboard blocks. Read live via useSyncExternalStore so
+  // toggling a checkbox in the dialog repaints this page immediately, without
+  // a reload — same mechanism the appearance settings use.
+  const dashBlocks = useSyncExternalStore(subscribeDashBlocks, getDashBlockVisibility);
+
   const [goals,      setGoals]      = useState<Goal[]>([]);
   const [plans,      setPlans]      = useState<Plan[]>([]);
   const [tasks,      setTasks]      = useState<TaskWithContext[]>([]);
@@ -184,12 +192,25 @@ export function Dashboard() {
   // none of it was getting used.
   const [plannerId, setPlannerId] = useState<number | null>(null);
 
+  // A dismissible error surfaced from any row's TaskActionMenu (e.g. a
+  // schedule action finding no free slot) — rendered at the top of TodoList,
+  // fed from both TodoList's own rows and NowPanel's.
+  const [taskNotice, setTaskNotice] = useState<string | null>(null);
+
   // Quick tasks (reminders / chores / shopping) are standing lists — they show
   // regardless of due date, unlike project tasks which only surface on their day.
   const todayTasks   = useMemo(
     () => tasks.filter((t) => t.due_date === date || t.category != null),
     [tasks, date],
   );
+
+  // Shared by every mutation whose effect on `tasks` isn't a simple local
+  // patch (create, rename, add-subtask) — a full refetch is the only way to
+  // pick up a new row or a trigger-maintained column like aggregate_estimate.
+  const refreshTasks = async () => {
+    const t = await getAllTasks();
+    setTasks(t.filter((x) => isTaskRelevantToMe(x, getUserId())));
+  };
 
   const handleToggleTask = async (id: number) => {
     await toggleTask(id);
@@ -198,8 +219,7 @@ export function Dashboard() {
 
   const handleCreateTask = async (payload: { plan_id?: number | null; title: string; priority?: string; due_date?: string | null; category?: string | null }) => {
     await createTask(payload);
-    const t = await getAllTasks();
-    setTasks(t.filter((x) => isTaskRelevantToMe(x, getUserId())));
+    await refreshTasks();
   };
 
   const handleDeleteTask = async (id: number) => {
@@ -207,10 +227,14 @@ export function Dashboard() {
     setTasks((prev) => prev.filter((t) => t.id !== id));
   };
 
-  const handleUpdateTask = async (id: number, payload: { title: string; priority: string; due_date?: string | null; category?: string | null }) => {
-    await updateTask(id, payload);
-    const t = await getAllTasks();
-    setTasks(t.filter((x) => isTaskRelevantToMe(x, getUserId())));
+  const handleRenameTask = async (id: number, title: string) => {
+    await patchTask(id, { title });
+    await refreshTasks();
+  };
+
+  const handleAddSubtask = async (parentId: number, title: string) => {
+    await addSubtask(parentId, title);
+    await refreshTasks();
   };
 
   const handleSetPrimary = async (payload: DailyPrimaryGoal) => {
@@ -294,6 +318,19 @@ export function Dashboard() {
     }
   };
 
+  // ── Drag a task row onto the day calendar to schedule it ─────────────────
+  // The gesture (threshold, ghost, snap preview, cancel paths) lives in
+  // useDashDrag; this owns only the commit: create the linked block at the
+  // drop time, then reload — the same shape as Week's handleExternalDrop,
+  // minus the optimistic temp block (one day's load is cheap here).
+  const dashDrag = useDashDrag({
+    onDrop: async (payload, dest) => {
+      // "blue": the create-modal's default color for a new block.
+      await createCalBlock(todayDateStr(), payload.title, dest.start, dest.end, "blue", null, null, payload.taskId);
+      load();
+    },
+  });
+
   const handleCreateCalBlock = async (d: DCBlockDraft) => {
     let taskId = d.task_id;
     if (taskId === null) {
@@ -318,16 +355,29 @@ export function Dashboard() {
     setCalBlocks((prev) => prev.filter((x) => x.id !== b.id));
   };
 
+  // Settings → Dashboard blocks: what's collapsed onto the page.
+  //
+  // TodoList has no showTasks/showStudy props (it's not this file's to add —
+  // components/dashboard/ isn't owned here), so Study is hidden via the
+  // existing `courseAssignments` prop (its Study section only renders when
+  // that array is non-empty), and Tasks has no equivalent lever: turning it
+  // off alone still leaves the "Tasks" header + empty-state line, and only
+  // turning BOTH off unmounts the component entirely.
+  const showTodoList = dashBlocks.tasks || dashBlocks.study;
+  const railBlocksEnabled = dashBlocks.habits || dashBlocks.calendar;
+
   return (
     <div className="flex flex-col h-[calc(100dvh-2.75rem-5.5rem)] md:h-[calc(100vh-2.5rem)] overflow-hidden">
 
-      <WelcomeBox goals={goals} plans={plans} tasks={tasks} systems={systems}
-        dailyGoals={dailyGoals} courseAssignments={courseAssignments} date={date}
-        goalPrimaryDone={goalPrimaryDone} goalSecDone={goalSecDone} todaySessions={todaySessions}
-        onTogglePrimaryDone={handleTogglePrimaryDone} onToggleSecDone={handleToggleSecDone}
-        onSetPrimary={handleSetPrimary} onClearPrimary={handleClearPrimary}
-        onAddSecondary={handleAddSecondary} onUpdateSecondaryEstimate={handleUpdateSecondaryEstimate}
-        onDeleteSecondary={handleDeleteSecondary} />
+      {dashBlocks.welcome && (
+        <WelcomeBox goals={goals} plans={plans} tasks={tasks} systems={systems}
+          dailyGoals={dailyGoals} courseAssignments={courseAssignments} date={date}
+          goalPrimaryDone={goalPrimaryDone} goalSecDone={goalSecDone} todaySessions={todaySessions}
+          onTogglePrimaryDone={handleTogglePrimaryDone} onToggleSecDone={handleToggleSecDone}
+          onSetPrimary={handleSetPrimary} onClearPrimary={handleClearPrimary}
+          onAddSecondary={handleAddSecondary} onUpdateSecondaryEstimate={handleUpdateSecondaryEstimate}
+          onDeleteSecondary={handleDeleteSecondary} />
+      )}
 
       <div className="flex-1 min-h-0 flex flex-col md:flex-row overflow-hidden relative">
 
@@ -335,29 +385,47 @@ export function Dashboard() {
         <div className="flex-1 min-w-0 overflow-y-auto border-r border-border px-3 py-2 md:px-4 md:py-3 flex flex-col gap-3 md:gap-4">
 
           {/* To-Do List */}
-          <NowPanel
-            items={nowItems}
-            blockedCount={blocked.length}
-            onOpen={(t) => setPlannerId(t.id)}
-            onLogSession={(item) => { if (item.block) handleToggleWorked(item.block); }}
-            // Turns the count into an action: open the planner on the first
-            // thing the gate is holding back, where it can be scheduled.
-            onScheduleHint={() => { if (blocked[0]) setPlannerId(blocked[0].id); }}
-          />
+          {dashBlocks.now && (
+            <NowPanel
+              items={nowItems}
+              blockedCount={blocked.length}
+              onOpen={(t) => setPlannerId(t.id)}
+              onLogSession={(item) => { if (item.block) handleToggleWorked(item.block); }}
+              // Turns the count into an action: open the planner on the first
+              // thing the gate is holding back, where it can be scheduled.
+              onScheduleHint={() => { if (blocked[0]) setPlannerId(blocked[0].id); }}
+              actions={{
+                onRenameTask: handleRenameTask,
+                onDeleteTask: handleDeleteTask,
+                onReload: load,
+                onError: setTaskNotice,
+              }}
+              drag={dashDrag.source}
+            />
+          )}
 
-          <TodoList
-            tasks={todayTasks}
-            allTasks={tasks}
-            plans={plans}
-            courseAssignments={courseAssignments}
-            blocksByTask={blocksByTask}
-            workedBlockIds={workedBlockIds}
-            onToggleTask={handleToggleTask}
-            onCreateTask={handleCreateTask}
-            onDeleteTask={handleDeleteTask}
-            onUpdateTask={handleUpdateTask}
-            onToggleAssignment={handleToggleAssignment}
-          />
+          {showTodoList && (
+            <TodoList
+              tasks={dashBlocks.tasks ? todayTasks : []}
+              allTasks={tasks}
+              plans={plans}
+              courseAssignments={dashBlocks.study ? courseAssignments : []}
+              blocksByTask={blocksByTask}
+              workedBlockIds={workedBlockIds}
+              onToggleTask={handleToggleTask}
+              onCreateTask={handleCreateTask}
+              onDeleteTask={handleDeleteTask}
+              onRenameTask={handleRenameTask}
+              onAddSubtask={handleAddSubtask}
+              onOpenPlanner={(id) => setPlannerId(id)}
+              onReload={load}
+              onToggleAssignment={handleToggleAssignment}
+              notice={taskNotice}
+              onDismissNotice={() => setTaskNotice(null)}
+              onError={setTaskNotice}
+              drag={dashDrag.source}
+            />
+          )}
 
         </div>
 
@@ -368,8 +436,12 @@ export function Dashboard() {
           looks like — a wall of blocks wants width, an empty Sunday wants none.
           Both the width and the open/closed state persist, because a layout you
           have to re-adjust on every visit is worse than a fixed one.
+
+          The whole rail (collapse toggle, resize handle, content) additionally
+          disappears when Settings has turned off both Habits and Day calendar —
+          there's nothing left in it to show or resize.
         */}
-        {!railOpen && (
+        {railBlocksEnabled && !railOpen && (
           <button
             onClick={() => setRailOpen(true)}
             title="Show day calendar"
@@ -383,7 +455,7 @@ export function Dashboard() {
             *look* but a terrible target; separating the two means the handle is
             easy to grab without drawing a thick bar down the page.
             touch-none stops the browser claiming the gesture for scrolling. */}
-        {railOpen && (
+        {railBlocksEnabled && railOpen && (
         <div
           onPointerDown={startResize}
           title="Drag to resize"
@@ -393,7 +465,7 @@ export function Dashboard() {
         </div>
         )}
 
-        {railOpen && (
+        {railBlocksEnabled && railOpen && (
         <div
           style={{ width: railWidth }}
           className="hidden md:flex shrink-0 flex-col overflow-hidden px-3 py-3 gap-3 relative">
@@ -404,20 +476,25 @@ export function Dashboard() {
           >
             <PanelRightClose className="h-3.5 w-3.5" />
           </button>
-          <HabitsStrip habits={habits} stacks={habitStacks} onToggle={handleToggleHabit} today={date} />
-          <DayCalendar
-            date={date}
-            calBlocks={calBlocks}
-            systems={systems}
-            courseAssignments={courseAssignments}
-            scheduleEntries={scheduleEntries}
-            tasks={tasks}
-            sessionsByBlock={sessionsByBlock}
-            onToggleWorked={handleToggleWorked}
-            onCreateBlock={handleCreateCalBlock}
-            onUpdateBlock={handleUpdateCalBlock}
-            onDeleteBlock={handleDeleteCalBlock}
-          />
+          {dashBlocks.habits && (
+            <HabitsStrip habits={habits} stacks={habitStacks} onToggle={handleToggleHabit} today={date} />
+          )}
+          {dashBlocks.calendar && (
+            <DayCalendar
+              date={date}
+              calBlocks={calBlocks}
+              systems={systems}
+              courseAssignments={courseAssignments}
+              scheduleEntries={scheduleEntries}
+              tasks={tasks}
+              sessionsByBlock={sessionsByBlock}
+              onToggleWorked={handleToggleWorked}
+              onCreateBlock={handleCreateCalBlock}
+              onUpdateBlock={handleUpdateCalBlock}
+              onDeleteBlock={handleDeleteCalBlock}
+              dropTarget={dashDrag.target}
+            />
+          )}
         </div>
         )}
 
@@ -427,6 +504,10 @@ export function Dashboard() {
       {plannerId != null && (
         <TaskPlanner rootId={plannerId} onClose={() => { setPlannerId(null); load(); }} />
       )}
+
+      {/* Drag-to-schedule ghost — subscribes to the gesture's micro-store,
+          so pointer moves re-render only this leaf. */}
+      <DashDragGhostLayer subscribe={dashDrag.subscribeGhost} getSnapshot={dashDrag.getGhostSnapshot} />
 </div>
   );
 }

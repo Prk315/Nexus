@@ -23,6 +23,9 @@ interface NexusHeaderProps {
   /** When provided, the account menu shows this address and an enabled Sign Out. */
   userEmail?: string;
   onSignOut?: () => void;
+  /** When provided, the account menu's Settings item becomes enabled and opens
+   *  the shared `SettingsDialog`. Absent apps keep the disabled placeholder. */
+  onSettings?: () => void;
   onHome?: () => void;
   onAppSelect?: (app: ConnectedApp) => void;
   onHub?: () => void;
@@ -96,6 +99,7 @@ export function NexusHeader({
   center,
   userEmail,
   onSignOut,
+  onSettings,
   onHome,
   onAppSelect,
   onHub,
@@ -148,8 +152,9 @@ export function NexusHeader({
               </DropdownMenu.Label>
               <DropdownMenu.Separator className="my-1 h-px bg-border" />
               <DropdownMenu.Item
-                disabled
-                className="relative flex cursor-default select-none items-center rounded-md px-2 py-1.5 text-sm gap-2 text-muted-foreground data-[disabled]:opacity-50 hover:bg-accent hover:text-accent-foreground focus:bg-accent focus:text-accent-foreground outline-none"
+                disabled={!onSettings}
+                onSelect={onSettings}
+                className="relative flex cursor-pointer select-none items-center rounded-md px-2 py-1.5 text-sm gap-2 text-muted-foreground data-[disabled]:opacity-50 data-[disabled]:cursor-default hover:bg-accent hover:text-accent-foreground focus:bg-accent focus:text-accent-foreground outline-none"
               >
                 <Settings className="h-3.5 w-3.5" />
                 Settings

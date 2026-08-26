@@ -31,6 +31,30 @@ export function dcPxToTime(px: number) {
   const m = clamped % 60;
   return `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}`;
 }
+/**
+ * Where a dragged task's block would START, given the pointer's offset into
+ * the day column (px from the column's top) and the block's fixed duration.
+ * Snaps to 5-minute slots (the Week grid's external-drag contract — finer
+ * than click-to-create's 30-minute snap because a drag is aimed, a click is
+ * coarse) and clamps so the whole block stays inside 05:00–24:00. Pure:
+ * tested in _shared.test.ts.
+ */
+export function dcSnapDropStartMin(relYpx: number, durationMin: number): number {
+  const raw     = DC_HOUR_START * 60 + (relYpx / DC_HOUR_PX) * 60;
+  const snapped = Math.round(raw / 5) * 5;
+  const maxStart = (DC_HOUR_END + 1) * 60 - durationMin;
+  return Math.max(DC_HOUR_START * 60, Math.min(maxStart, snapped));
+}
+
+/** Minutes → "HH:MM". Unlike `addMinutes` this never wraps at midnight, so a
+ * block ending exactly at the grid's bottom renders "24:00" (the same
+ * convention week/_shared's minToHHMM uses), keeping start < end true. */
+export function dcMinToTime(min: number): string {
+  const h = Math.floor(min / 60);
+  const m = min % 60;
+  return `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}`;
+}
+
 export function dcAddHour(t: string) {
   const [h, m] = t.split(":").map(Number);
   const total  = Math.min((DC_HOUR_END + 1) * 60, h * 60 + m + 60);
