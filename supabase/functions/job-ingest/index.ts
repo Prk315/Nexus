@@ -2,10 +2,15 @@ import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { createClient } from "jsr:@supabase/supabase-js@2";
 
 import {
+  assembleApplication,
   dedupeWithinBatch,
   MAX_POSTINGS,
   type MatchInput,
+  type ModuleRow,
+  normalizeModulePlan,
   parseBody,
+  parseEvaluateResult,
+  parsePendingLimit,
   type PostingRow,
   secretIsUsable,
   secretMatches,
@@ -37,6 +42,22 @@ import {
  * The header is `X-Job-Key`; the secret is `JOB_INGEST_KEY`. `Headers.get()` is
  * case-insensitive per spec, so the lowercase lookup accepts any casing n8n's
  * credential happens to be saved with.
+ *
+ * # Actions
+ *
+ * One endpoint, dispatched on `action`, because every one of them needs the same
+ * secret and the same owner check and n8n gets exactly one credential.
+ *
+ * | action | direction | does |
+ * |---|---|---|
+ * | *(none)* | n8n -> here | the harvest batch: upsert postings + gate verdicts |
+ * | `config` | here -> n8n | enabled profiles, sources and the seen-set |
+ * | `pending` | here -> n8n | gated-but-unscored matches + the module catalog |
+ * | `evaluate_result` | n8n -> here | one Qwen verdict; assembles the draft |
+ *
+ * `pending` and `evaluate_result` are phase 2 (`n8n/job-applier/EVALUATION.md`).
+ * The application body is assembled HERE and nowhere else — the module prose
+ * never leaves this database, so n8n could not assemble it even if it tried.
  */
 
 const json = (body: unknown, status = 200) =>
@@ -114,6 +135,237 @@ Deno.serve(async (req: Request) => {
       sources: sources.data ?? [],
       seen: seenRows.map((r) => `${r.source_kind} ${r.external_id}`),
       seen_urls: seenRows.map((r) => r.url),
+    });
+  }
+
+  // MARK: - action: pending
+  //
+  // The evaluation queue. Everything that passed the rule-only gate and has
+  // never been scored, oldest first, with everything one inference needs
+  // attached: the ad, the profile it is being judged against, and the module
+  // catalog to choose from.
+  //
+  // ## Three things this returns deliberately
+  //
+  // **Modules WITHOUT `content`.** The prompt matches on `tags`, not prose, so
+  // the prose has no reason to travel. It keeps the context small — a dozen
+  // modules is easily more text than the ad — and keeps a person's writing about
+  // their own career inside Postgres, which is the same instinct that gives
+  // `usage_intervals` no anon policy.
+  //
+  // **`score IS NULL` AND `evaluated_at IS NULL` both.** Either alone is a
+  // different question. A row with a timestamp and no score is one the model
+  // failed on; re-queuing it forever would make one unparseable response into an
+  // infinite loop against a 7B model that will fail it again.
+  //
+  // **An empty list is `{ok: true, pending: []}`, not an error.** "Nothing to
+  // evaluate" is the normal steady state, and a workflow that treats it as a
+  // failure would report a red run every 30 minutes.
+  if (asRecord.action === "pending") {
+    const uid = asRecord.user_id;
+    if (typeof uid !== "string") return json({ error: "invalid_user_id" }, 400);
+    const limit = parsePendingLimit(asRecord.limit);
+
+    const [matches, modules] = await Promise.all([
+      supabaseEarly
+        .from("job_matches")
+        .select(
+          "id,posting_id,profile_id,gate_verdict," +
+            "job_postings(id,title,company,location,description,url,lang)," +
+            "job_profiles(id,name,keywords,notes)",
+        )
+        .eq("user_id", uid)
+        .eq("gate_verdict", "pass")
+        .is("score", null)
+        .is("evaluated_at", null)
+        .order("created_at", { ascending: true })
+        .limit(limit),
+      supabaseEarly
+        // `tags` and `lang` are not decoration: they are what picks the intro and
+        // the closing (see FRAMING in logic.ts). Without `lang` the two closings
+        // are indistinguishable; without `tags` all five intros tie on sort = 0
+        // and the choice collapses to alphabetical. Still no `content`.
+        .from("job_app_modules")
+        .select("id,name,slot,tags,lang,sort")
+        .eq("user_id", uid)
+        .eq("enabled", true)
+        .order("sort", { ascending: true })
+        .order("name", { ascending: true }),
+    ]);
+
+    const failed = matches.error ?? modules.error;
+    if (failed) {
+      console.error("job-ingest: pending read failed —", failed.message);
+      return json({ error: "pending_failed", detail: failed.message }, 500);
+    }
+
+    type PendingRow = {
+      id: string;
+      posting_id: string;
+      profile_id: string;
+      job_postings: unknown;
+      job_profiles: unknown;
+    };
+    const catalog = modules.data ?? [];
+    const pending = ((matches.data ?? []) as unknown as PendingRow[]).map((m) => ({
+      match_id: m.id,
+      posting_id: m.posting_id,
+      profile_id: m.profile_id,
+      posting: m.job_postings ?? null,
+      profile: m.job_profiles ?? null,
+      // Repeated per item on purpose: n8n splits `pending` into one item per
+      // posting, and an item that cannot see the catalog cannot build a prompt.
+      modules: catalog,
+    }));
+
+    return json({ ok: true, pending, modules: catalog });
+  }
+
+  // MARK: - action: evaluate_result
+  //
+  // One posting's verdict, coming back from the local Qwen via n8n. Writes the
+  // score onto `job_matches` and ASSEMBLES the application here, server-side —
+  // see the block comment in `logic.ts` for why this is the canonical assembler
+  // and `evaluate.js`'s is a dry-run preview.
+  if (asRecord.action === "evaluate_result") {
+    const parsedResult = parseEvaluateResult(body);
+    if (!parsedResult.ok) return json({ error: parsedResult.error }, 400);
+    const v = parsedResult.result;
+
+    // Invariant 5, and the only place it can be enforced: the service-role client
+    // bypasses RLS, so a caller holding `JOB_INGEST_KEY` could otherwise stamp a
+    // score onto any match in the database. Match id AND user id together.
+    const { data: match, error: matchError } = await supabaseEarly
+      .from("job_matches")
+      .select("id,posting_id,profile_id")
+      .eq("id", v.matchId)
+      .eq("user_id", v.userId)
+      .maybeSingle();
+
+    if (matchError) {
+      console.error("job-ingest: match lookup failed —", matchError.message);
+      return json({ error: "match_lookup_failed", detail: matchError.message }, 500);
+    }
+    if (!match) return json({ error: "unknown_match" }, 404);
+
+    // The user's own enabled modules, with content — the only place `content` is
+    // ever read. Chosen ids are validated against THIS list, never against the
+    // list n8n claims to have filtered.
+    const { data: moduleRows, error: moduleError } = await supabaseEarly
+      .from("job_app_modules")
+      .select("id,name,slot,tags,lang,sort,content")
+      .eq("user_id", v.userId)
+      .eq("enabled", true);
+
+    if (moduleError) {
+      console.error("job-ingest: module read failed —", moduleError.message);
+      return json({ error: "modules_failed", detail: moduleError.message }, 500);
+    }
+
+    const catalog = (moduleRows ?? []) as ModuleRow[];
+    // Score, language and skills are what decide the intro and the closing. n8n
+    // already framed the plan it posted; re-deriving here is idempotent and means
+    // a plan from an older workflow — or from `curl` — comes out framed too.
+    const plan = normalizeModulePlan(v.rawModulePlan, catalog, {
+      score: v.score,
+      lang: v.lang,
+      skills: [...v.matchedSkills, ...v.requiredSkills],
+    });
+
+    const { error: updateError } = await supabaseEarly
+      .from("job_matches")
+      .update({
+        score: v.score,
+        required_skills: v.requiredSkills,
+        matched_skills: v.matchedSkills,
+        missing_skills: v.missingSkills,
+        reasoning: v.reasoning,
+        model: v.model,
+        module_plan: plan,
+        // A timestamp beside a null score would read as "we looked and had
+        // nothing to say", which is exactly the state the nullable column exists
+        // to keep distinct. Same rule as `normalizeMatch`.
+        evaluated_at: v.score === null ? null : new Date().toISOString(),
+      })
+      .eq("id", v.matchId)
+      .eq("user_id", v.userId);
+
+    if (updateError) {
+      console.error("job-ingest: match update failed —", updateError.message);
+      return json({ error: "match_update_failed", detail: updateError.message }, 500);
+    }
+
+    // No score means the model failed on this one. Storing a draft assembled from
+    // a plan nobody scored would put a document in the queue that looks reviewed.
+    if (v.score === null) {
+      return json({ ok: true, match_id: v.matchId, score: null, application: null });
+    }
+
+    const { data: posting, error: postingError } = await supabaseEarly
+      .from("job_postings")
+      .select("id,title,company,status")
+      .eq("id", match.posting_id)
+      .eq("user_id", v.userId)
+      .maybeSingle();
+
+    if (postingError || !posting) {
+      console.error("job-ingest: posting read failed —", postingError?.message ?? "not found");
+      return json({ error: "posting_read_failed" }, 500);
+    }
+
+    const assembled = assembleApplication(plan, catalog, posting);
+
+    const { data: application, error: appError } = await supabaseEarly
+      .from("job_applications")
+      .upsert(
+        {
+          user_id: v.userId,
+          posting_id: match.posting_id,
+          profile_id: match.profile_id,
+          body: assembled.body,
+          module_ids: assembled.module_ids,
+          missing_slots: assembled.missing_slots,
+          status: "draft",
+        },
+        { onConflict: "posting_id,profile_id", ignoreDuplicates: false },
+      )
+      .select("id")
+      .maybeSingle();
+
+    if (appError) {
+      // The score landed. Say so rather than 500-ing, which would make n8n resend
+      // a verdict that is already stored — and the match is no longer `pending`,
+      // so the resend would be the last chance to notice this at all.
+      console.error("job-ingest: application upsert failed —", appError.message);
+      return json(
+        { ok: false, error: "application_failed", detail: appError.message, match_id: v.matchId },
+        207,
+      );
+    }
+
+    // First score for this posting flips it out of 'discovered'. Guarded on the
+    // old value so a second profile's verdict cannot walk back a status a human
+    // has since moved on ('applied', 'dismissed').
+    if (posting.status === "discovered") {
+      const { error: statusError } = await supabaseEarly
+        .from("job_postings")
+        .update({ status: "evaluated" })
+        .eq("id", match.posting_id)
+        .eq("user_id", v.userId)
+        .eq("status", "discovered");
+      if (statusError) {
+        // Cosmetic. The score and the draft are both stored; do not fail the run.
+        console.error("job-ingest: posting status update failed —", statusError.message);
+      }
+    }
+
+    return json({
+      ok: true,
+      match_id: v.matchId,
+      score: v.score,
+      application_id: application?.id ?? null,
+      module_ids: assembled.module_ids,
+      missing_slots: assembled.missing_slots,
     });
   }
 

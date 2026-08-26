@@ -19,13 +19,19 @@ import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 
 import {
+  buildAlertPosting,
+  canonicalLinkedInJobUrl,
   cheapGate,
   dedupeKey,
+  extractAlertPageEnrichment,
   extractJobPostingLd,
+  extractJobindexCompany,
   extractJobindexStub,
   extractReadableText,
+  locationVerdict,
   normalizeLdJobPosting,
   parseJobindexFeed,
+  parseLinkedInAlertEmail,
   pickDescription,
   termHit,
 } from "./extract.js";
@@ -156,6 +162,200 @@ test("does not return the cookie banner as the ad body", () => {
   assert.doesNotMatch(text.slice(0, 400), /cookies og personoplysninger/i);
 });
 
+// MARK: - LinkedIn job-alert email
+//
+// Fixtures are two real alert emails captured from the inbox 2026-08-25:
+// `linkedin-alert.html` is a five-job digest, `linkedin-alert-2.html` a
+// single-job alert. Both layouts ship from `jobalerts-noreply@linkedin.com` and
+// a parser that only handles the digest silently harvests nothing from the other.
+
+test("reads all five jobs out of a real LinkedIn digest", () => {
+  const jobs = parseLinkedInAlertEmail(fixture("linkedin-alert.html"));
+  // Each card links the same job three times — logo, wrapper, title. Fifteen here
+  // means the grouping regressed and every job would be ingested in triplicate.
+  assert.equal(jobs.length, 5);
+  assert.deepEqual(jobs[0], {
+    title: "Fullstack softwareudvikler i PET",
+    company: "Politiets Efterretningstjeneste (PET)",
+    location: "København",
+    url: "https://www.linkedin.com/jobs/view/4444129797/",
+    external_id: "4444129797",
+    description: null,
+  });
+  assert.equal(new Set(jobs.map((j) => j.external_id)).size, 5, "duplicate ids");
+  for (const j of jobs) {
+    assert.ok(j.title, "job without a title");
+    assert.match(j.url, /^https:\/\/www\.linkedin\.com\/jobs\/view\/\d+\/$/);
+  }
+});
+
+test("a single-job alert is the same lane, not a special case", () => {
+  const jobs = parseLinkedInAlertEmail(fixture("linkedin-alert-2.html"));
+  assert.equal(jobs.length, 1);
+  assert.equal(jobs[0].title, "Associate Consultant, Netcompany Consulting");
+  assert.equal(jobs[0].company, "Netcompany");
+});
+
+test("Danish characters survive the parse", () => {
+  // The bodies arrive quoted-printable-encoded. Mojibake stored once is permanent.
+  const jobs = parseLinkedInAlertEmail(fixture("linkedin-alert.html"));
+  assert.ok(
+    jobs.some((j) => j.location === "København") && jobs.some((j) => j.location === "Humlebæk"),
+    `æ/ø mangled: ${jobs.map((j) => j.location).join(" | ")}`,
+  );
+});
+
+test("company and location split on the middle dot, not a hyphen", () => {
+  const jobs = parseLinkedInAlertEmail(fixture("linkedin-alert.html"));
+  const hybrid = jobs.find((j) => j.location?.includes("Hybrid"));
+  assert.ok(hybrid, "fixture no longer has a hybrid listing");
+  // "SimCorp · København (Hybridarbejde)" — the parenthetical belongs to the
+  // location, and splitting on the wrong character puts it in the company.
+  assert.equal(hybrid.company, "SimCorp");
+  assert.equal(hybrid.location, "København (Hybridarbejde)");
+});
+
+test("the tracking URL is reduced to the canonical job page", () => {
+  // The real href is ~800 characters and carries an `otpToken` that signs the
+  // recipient in. It must never be stored, and a URL-keyed seen-set built on it
+  // would treat the same job as new every day, because trackingId rotates.
+  // Token values are placeholders — the real ones are per-recipient credentials
+  // and this repo is public. The fixtures are redacted the same way.
+  const href =
+    "https://www.linkedin.com/comm/jobs/view/4309759193/?trackingId=REDACTED%3D%3D&amp;" +
+    "midToken=REDACTED&amp;trk=eml-email_job_alert_digest_01-primary_job_list-0-" +
+    "jobcard_body_2_jobid_9999999999_ssid_1736807042&amp;otpToken=REDACTED";
+  const canon = canonicalLinkedInJobUrl(href);
+  assert.equal(canon.url, "https://www.linkedin.com/jobs/view/4309759193/");
+  // `jobid_9999999999` also appears inside the trk parameter. Anchoring on
+  // /jobs/view/ is what stops the tracking copy being read as the identity.
+  assert.equal(canon.external_id, "4309759193");
+  assert.equal(canonicalLinkedInJobUrl("https://www.linkedin.com/feed/"), null);
+});
+
+test("a mangled query string still canonicalizes", () => {
+  // Real capture: quoted-printable decoding ate the '=' after trackingId, leaving
+  // `?trackingId[hCc7…`. The path is intact, so the job must still resolve.
+  assert.equal(
+    canonicalLinkedInJobUrl("https://www.linkedin.com/comm/jobs/view/4402511151/?trackingId[hCc7")
+      .url,
+    "https://www.linkedin.com/jobs/view/4402511151/",
+  );
+});
+
+test("a malformed or unrelated body yields [], never a throw", () => {
+  // One odd email in a batch of twenty must not take the other nineteen down.
+  assert.deepEqual(parseLinkedInAlertEmail(""), []);
+  assert.deepEqual(parseLinkedInAlertEmail(null), []);
+  assert.deepEqual(parseLinkedInAlertEmail(undefined), []);
+  assert.deepEqual(parseLinkedInAlertEmail("<html><body><p>no jobs here</p>"), []);
+  assert.deepEqual(parseLinkedInAlertEmail("<a href='https://www.linkedin.com/jobs/view/'>x</a>"), []);
+});
+
+test("a card with no location line does not borrow the next job's company", () => {
+  // The card region is bounded at the next job id precisely so this cannot happen.
+  const html =
+    `<a href="https://www.linkedin.com/comm/jobs/view/1111111111/?t=1"><img alt="Acme"></a>` +
+    `<a href="https://www.linkedin.com/comm/jobs/view/1111111111/?t=2">First Job</a>` +
+    `<a href="https://www.linkedin.com/comm/jobs/view/2222222222/?t=3"><img alt="Globex"></a>` +
+    `<a href="https://www.linkedin.com/comm/jobs/view/2222222222/?t=4">Second Job</a>` +
+    `<p>Globex · Aarhus</p>`;
+  const jobs = parseLinkedInAlertEmail(html);
+  assert.equal(jobs.length, 2);
+  assert.equal(jobs[0].title, "First Job");
+  assert.equal(jobs[0].company, "Acme", "fell back to the logo alt, as designed");
+  assert.equal(jobs[0].location, null, "an absent location must stay null, not be invented");
+  assert.equal(jobs[1].company, "Globex");
+  assert.equal(jobs[1].location, "Aarhus");
+});
+
+// MARK: - Alert-page enrichment
+
+test("JSON-LD wins when the public page has it", () => {
+  const html = `<script type="application/ld+json">
+    {"@type":"JobPosting","title":"T","jobLocationType":"TELECOMMUTE",
+     "description":"<p>Full ad body</p>","hiringOrganization":{"name":"Acme"}}</script>`;
+  const e = extractAlertPageEnrichment(html, { url: "u", sourceKind: "gmail_alerts" });
+  assert.equal(e.description, "Full ad body");
+  assert.equal(e.remote, true);
+});
+
+test("og:description is the fallback, with LinkedIn's stock suffix removed", () => {
+  // Probed live 2026-08-25: linkedin.com/jobs/view/<id>/ answers 200 with ZERO
+  // ld+json blocks. og:description is the only body text a guest page gives.
+  const html =
+    `<meta property="og:description" content="Vil du bruge dine kompetencer, hvor de ` +
+    `gør en forskel i en vigtig sag?…Se dette og tilsvarende job på LinkedIn.">`;
+  const e = extractAlertPageEnrichment(html, { url: "u", sourceKind: "gmail_alerts" });
+  assert.doesNotMatch(e.description, /LinkedIn/, "stock suffix leaked into the description");
+  assert.match(e.description, /^Vil du bruge dine kompetencer/);
+  assert.equal(e.remote, null, "og:description says nothing about remote");
+});
+
+test("an authwall or a stub enriches to null, not to junk", () => {
+  assert.equal(extractAlertPageEnrichment("", { url: "u", sourceKind: "k" }), null);
+  assert.equal(
+    extractAlertPageEnrichment(`<meta property="og:description" content="Sign in">`, {
+      url: "u",
+      sourceKind: "k",
+    }),
+    null,
+  );
+});
+
+// MARK: - buildAlertPosting
+
+test("a failed enrichment still produces a usable posting", () => {
+  // Dropping the job would make the lane's yield depend on LinkedIn's mood.
+  const [job] = parseLinkedInAlertEmail(fixture("linkedin-alert-2.html"));
+  const row = buildAlertPosting(job, { sourceKind: "gmail_alerts", enrichment: null });
+  assert.equal(row.source_kind, "gmail_alerts");
+  assert.equal(row.external_id, "4427828803");
+  assert.equal(row.url, "https://www.linkedin.com/jobs/view/4427828803/");
+  assert.equal(row.title, "Associate Consultant, Netcompany Consulting");
+  assert.equal(row.company, "Netcompany");
+  assert.equal(row.dedupe_key, dedupeKey("Netcompany", job.title));
+  assert.deepEqual(row.categories, []);
+});
+
+test("nothing is guessed: unknown fields are null, remote included", () => {
+  const row = buildAlertPosting(
+    { title: "T", company: "C", location: "Aarhus", url: "u", external_id: "1" },
+    { sourceKind: "gmail_alerts" },
+  );
+  for (const k of ["remote", "employment_type", "posted_at", "valid_through", "description", "ld_json"]) {
+    assert.equal(row[k], null, `${k} was guessed instead of left unknown`);
+  }
+  // A guessed remote:false would be read by the gate as a fact and drop an
+  // actually-remote job on a location miss.
+  assert.notEqual(row.remote, false);
+  assert.equal(row.apply_channel, "unknown");
+});
+
+test("enrichment fills the description without overwriting the email's facts", () => {
+  const row = buildAlertPosting(
+    { title: "T", company: "Email Co", location: "København", url: "u", external_id: "1" },
+    {
+      sourceKind: "gmail_alerts",
+      enrichment: { description: "the real ad body", company: "LD Co", location: "Odense", remote: true },
+    },
+  );
+  assert.equal(row.description, "the real ad body");
+  assert.equal(row.remote, true);
+  // The email is the source of truth for the alert lane; enrichment only fills gaps.
+  assert.equal(row.company, "Email Co");
+  assert.equal(row.location, "København");
+});
+
+test("an alert posting reaches the gate as any other posting does", () => {
+  const [job] = parseLinkedInAlertEmail(fixture("linkedin-alert-2.html"));
+  const row = buildAlertPosting(job, { sourceKind: "gmail_alerts" });
+  // No description and no categories: the gate must run on the title alone rather
+  // than throwing on the nulls.
+  assert.equal(cheapGate(row, { keywords: ["consultant"] }).verdict, "pass");
+  assert.equal(cheapGate(row, { keywords: ["unity"] }).verdict, "dropped");
+});
+
 // MARK: - Dedup
 
 test("the same job from two sources collapses to one key", () => {
@@ -279,6 +479,120 @@ test("an expired posting is dropped", () => {
   );
   assert.equal(g.verdict, "dropped");
   assert.match(g.reason, /closed/);
+});
+
+// MARK: - The employer, and titles with internal commas
+//
+// All four cases below are the same posting from the first live run:
+// jobindex.dk/vis-job/r13951651, whose feed title contains two commas and no
+// company segment at all. It was stored with the employer "Konservering".
+
+const ROYAL_TITLE =
+  "To studentermedhjælpere søges til Det Kongelige Akademi - Arkitektur, Design, Konservering";
+const ROYAL_COMPANY =
+  "Det Kongelige Danske Kunstakademis Skoler for Arkitektur, Design og Konservering";
+
+test("the feed split mis-reads a title whose own name contains commas", () => {
+  // Documents the FALLBACK's known limit rather than pretending it is safe. There
+  // is no information in the feed string that separates "<title>, <company>" from
+  // a title that simply has commas, which is exactly why the stub is preferred.
+  const xml = `<rss><channel><item><title>${ROYAL_TITLE}</title><link>https://www.jobindex.dk/vis-job/r13951651</link></item></channel></rss>`;
+  const [job] = parseJobindexFeed(xml);
+  assert.equal(job.company, "Konservering", "the split still does the wrong thing here");
+  assert.equal(job.external_id, "r13951651");
+});
+
+test("the stub's toolbar carries the real employer, commas and all", () => {
+  const html = fixture("jobindex-visjob-comma-company.html");
+  assert.equal(extractJobindexCompany(html), ROYAL_COMPANY);
+});
+
+test("a robot-scraped stub has no company-profile card, so the toolbar must win", () => {
+  // vp-card__name is absent on r-prefixed ads. It is the second signal, never the
+  // first — reversing them would return null on every robot-scraped ad.
+  const html = fixture("jobindex-visjob-comma-company.html");
+  assert.ok(!html.includes("vp-card__name"), "fixture must keep exercising this path");
+  assert.equal(extractJobindexStub(html).company, ROYAL_COMPANY);
+});
+
+test("a stub with neither signal returns null so the feed split can stand in", () => {
+  // Returning "" or "unknown" here would overwrite a usable feed company with junk.
+  assert.equal(extractJobindexCompany("<html><body>no company anywhere</body></html>"), null);
+  assert.equal(extractJobindexCompany(""), null);
+});
+
+test("the paid-ad stub still reads its company", () => {
+  assert.equal(extractJobindexCompany(fixture("jobindex-visjob.html")), "Grundfos A/S");
+});
+
+// MARK: - Location
+//
+// The first live run dropped 32 of 69 postings on location and about a third of
+// those were Danish towns. `locationVerdict` must distinguish "somewhere else"
+// from "somewhere I don't recognise".
+
+const DK = ["copenhagen", "københavn", "remote", "denmark", "danmark"];
+
+test("a Danish municipality that is not on the allow-list is unknown, not foreign", () => {
+  // Every one of these was a real, wrongly-dropped posting.
+  for (const town of ["Ishøj, Ishøj", "Gentofte", "Taastrup", "Ballerup", "Roskilde", "Humlebæk"]) {
+    assert.equal(locationVerdict(town, DK), "unknown", town);
+  }
+});
+
+test("a recognised foreign country is denied", () => {
+  for (const loc of [
+    "Oslo, Oslo, Norway",
+    "Stockholm, Stockholm, Sweden",
+    "València, València, Spain",
+    "London, London, United Kingdom",
+    "Munich, Munich, Germany",
+    "Espoo, Espoo, Finland",
+    "Norway, Norway, Norway",
+  ]) {
+    assert.equal(locationVerdict(loc, DK), "deny", loc);
+  }
+});
+
+test("an allowed location is allowed even wrapped in a work-arrangement note", () => {
+  assert.equal(locationVerdict("Copenhagen, Copenhagen, Denmark", DK), "allow");
+  assert.equal(locationVerdict("København (Hybridarbejde)", DK), "allow");
+  assert.equal(locationVerdict("Danmark", DK), "allow");
+});
+
+test("a parenthesised note does not hide the town", () => {
+  // "Glostrup (På arbejdesstedet)" must read as unknown-Danish, not as a foreign
+  // string — LinkedIn staples the work arrangement onto every location it emits.
+  assert.equal(locationVerdict("Glostrup (På arbejdesstedet)", DK), "unknown");
+  assert.equal(locationVerdict("Hørsholm Kommune (På arbejdesstedet)", DK), "unknown");
+});
+
+test("an unknown location does not drop the posting", () => {
+  // The regression that mattered: a real Data Engineer role in Ishøj.
+  const g = cheapGate(
+    { title: "Data Engineer til Dagrofa IT", description: "", location: "Ishøj, Ishøj" },
+    { keywords: ["data engineer"], locations: DK },
+  );
+  assert.equal(g.verdict, "pass");
+});
+
+test("a foreign posting is still dropped, unless it is remote", () => {
+  const p = { title: "Data Engineer", description: "", location: "Oslo, Oslo, Norway" };
+  assert.equal(cheapGate(p, { keywords: ["data engineer"], locations: DK }).verdict, "dropped");
+  assert.equal(
+    cheapGate({ ...p, remote: true }, { keywords: ["data engineer"], locations: DK }).verdict,
+    "pass",
+  );
+});
+
+test("a pass records which keyword matched", () => {
+  // A bare `reason: null` made the first run's single stored row unexplainable.
+  const g = cheapGate(
+    { title: "Studenterjob", description: "erfaring med unity, unreal, blender 3d", location: "København K" },
+    { keywords: ["unreal", "unity"], locations: DK },
+  );
+  assert.equal(g.verdict, "pass");
+  assert.equal(g.reason, "keyword: unreal", "the reason names the term that actually hit");
 });
 
 test("a category mismatch is dropped, but only when the ad has categories", () => {

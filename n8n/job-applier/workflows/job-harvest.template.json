@@ -1,8 +1,11 @@
 {
   "id": "nexus-job-harvest",
-  "name": "Job Harvest — Jobindex + TheHub",
+  "name": "Job Harvest — Jobindex + TheHub + Gmail alerts",
   "active": false,
-  "settings": { "executionOrder": "v1", "saveManualExecutions": true },
+  "settings": {
+    "executionOrder": "v1",
+    "saveManualExecutions": true
+  },
   "tags": [],
   "nodes": [
     {
@@ -10,21 +13,41 @@
       "name": "Every 4 Hours",
       "type": "n8n-nodes-base.scheduleTrigger",
       "typeVersion": 1.2,
-      "position": [-620, 300],
-      "parameters": { "rule": { "interval": [{ "field": "hours", "hoursInterval": 4 }] } }
+      "position": [
+        -620,
+        300
+      ],
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "hours",
+              "hoursInterval": 4
+            }
+          ]
+        }
+      }
     },
     {
       "id": "config",
       "name": "Load Config",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
-      "position": [-400, 300],
+      "position": [
+        -400,
+        300
+      ],
       "parameters": {
         "method": "POST",
         "url": "={{ $env.NEXUS_SUPABASE_URL }}/functions/v1/job-ingest",
         "sendHeaders": true,
         "headerParameters": {
-          "parameters": [{ "name": "X-Job-Key", "value": "={{ $env.JOB_INGEST_KEY }}" }]
+          "parameters": [
+            {
+              "name": "X-Job-Key",
+              "value": "={{ $env.JOB_INGEST_KEY }}"
+            }
+          ]
         },
         "sendBody": true,
         "specifyBody": "json",
@@ -37,7 +60,10 @@
       "name": "Fan Out Sources",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
-      "position": [-180, 300],
+      "position": [
+        -180,
+        300
+      ],
       "parameters": {
         "jsCode": "// One item per enabled source, each carrying the profiles and the seen-set.\n// The workflow deliberately holds no configuration of its own: profiles and\n// sources are rows in Supabase so that adding a fourth focus is an insert.\nconst cfg = $input.first().json;\nif (!cfg || cfg.ok !== true) {\n  throw new Error('job-ingest config failed: ' + JSON.stringify(cfg).slice(0, 300));\n}\nconst profiles = cfg.profiles || [];\nconst sources = cfg.sources || [];\nif (profiles.length === 0) throw new Error('no enabled job_profiles — set one up in the panel first');\n\nreturn sources.map((s) => ({\n  json: {\n    source: s,\n    profiles,\n    seen: cfg.seen || [],\n    seen_urls: cfg.seen_urls || [],\n  },\n}));"
       }
@@ -47,18 +73,27 @@
       "name": "Route Source",
       "type": "n8n-nodes-base.switch",
       "typeVersion": 3,
-      "position": [40, 300],
+      "position": [
+        40,
+        300
+      ],
       "parameters": {
         "rules": {
           "values": [
             {
               "conditions": {
-                "options": { "caseSensitive": true, "version": 2 },
+                "options": {
+                  "caseSensitive": true,
+                  "version": 2
+                },
                 "conditions": [
                   {
                     "leftValue": "={{ $json.source.kind }}",
                     "rightValue": "jobindex_rss",
-                    "operator": { "type": "string", "operation": "equals" }
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
                   }
                 ],
                 "combinator": "and"
@@ -67,43 +102,83 @@
             },
             {
               "conditions": {
-                "options": { "caseSensitive": true, "version": 2 },
+                "options": {
+                  "caseSensitive": true,
+                  "version": 2
+                },
                 "conditions": [
                   {
                     "leftValue": "={{ $json.source.kind }}",
                     "rightValue": "thehub_sitemap",
-                    "operator": { "type": "string", "operation": "equals" }
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
                   }
                 ],
                 "combinator": "and"
               },
               "outputKey": "thehub"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "version": 2
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.source.kind }}",
+                    "rightValue": "gmail_alerts",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "outputKey": "gmail"
             }
           ]
         },
-        "options": { "fallbackOutput": "none" }
+        "options": {
+          "fallbackOutput": "none"
+        }
       }
     },
-
     {
       "id": "ji_feed",
       "name": "Fetch Jobindex Feed",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
-      "position": [280, 180],
+      "position": [
+        280,
+        180
+      ],
       "parameters": {
         "url": "={{ $json.source.config.feed_url }}",
-        "options": { "response": { "response": { "responseFormat": "text" } } }
-      }
+        "options": {
+          "response": {
+            "response": {
+              "responseFormat": "text"
+            }
+          }
+        }
+      },
+      "onError": "continueRegularOutput"
     },
     {
       "id": "ji_parse",
       "name": "Parse Feed",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
-      "position": [500, 180],
+      "position": [
+        500,
+        180
+      ],
       "parameters": {
-        "jsCode": "__EXTRACT_JS__\n\n// --- node body ---\n// The feed declares ISO-8859-1. n8n's HTTP node hands us a decoded string; if\n// Danish characters arrive mangled, set the node's response encoding rather than\n// trying to repair them here — mojibake stored once is permanent.\nconst ctx = $('Fan Out Sources').first().json;\nconst xml = $input.first().json.data ?? $input.first().json.body ?? '';\nconst MAX_NEW = 25; // politeness cap: each survivor costs two more fetches\n\nconst seen = new Set(ctx.seen || []);\nconst items = parseJobindexFeed(xml)\n  .filter((i) => i.url && !seen.has('jobindex_rss ' + i.external_id))\n  .slice(0, MAX_NEW);\n\nreturn items.map((i) => ({ json: { ...i, source_id: ctx.source.id } }));"
+        "jsCode": "__EXTRACT_JS__\n\n// --- node body ---\n// The feed declares ISO-8859-1. n8n's HTTP node hands us a decoded string; if\n// Danish characters arrive mangled, set the node's response encoding rather than\n// trying to repair them here — mojibake stored once is permanent.\n//\n// ⚠️ There are THREE jobindex_rss source rows, so this node receives THREE feed\n// responses. It used to read `$input.first()` and parse only one of them — the\n// first live run fetched all three feeds and silently discarded two, which is why\n// a run that looked healthy produced no AI and no Data Science ads at all. The\n// generic \"alle jobs\" feed happened to sort first and ate the entire run.\n//\n// Pair each response with its own source row rather than reusing source #1's id,\n// or every ad is attributed to the wrong feed.\nconst sources = $('Fan Out Sources')\n  .all()\n  .map((i) => i.json)\n  .filter((c) => c.source && c.source.kind === 'jobindex_rss');\nconst ctx0 = sources[0] ?? $('Fan Out Sources').first().json;\nconst MAX_NEW = 25; // politeness cap: each survivor costs two more fetches\n\nconst seen = new Set(ctx0.seen || []);\nconst perFeed = $input.all().map((item, i) => {\n  // An `onError: continueRegularOutput` item carries `error` and no body. Parsing\n  // '' yields [], so one dead feed costs its own items and nothing else.\n  const xml = item.json.data ?? item.json.body ?? '';\n  const src = sources[i] ?? sources[0];\n  return parseJobindexFeed(xml)\n    .filter((j) => j.url && !seen.has(SOURCE_KIND.jobindex + ' ' + j.external_id))\n    .map((j) => ({ ...j, source_id: src && src.source ? src.source.id : null }));\n});\n\n// Round-robin across the feeds instead of concatenating them. The cap is global\n// (25 survivors = 50 further fetches), and taking it in feed order would let the\n// broadest feed spend the whole budget before the narrow, on-topic ones are\n// reached — the same starvation that produced a run with zero AI ads.\nconst picked = [];\nconst taken = new Set();\nfor (let round = 0; picked.length < MAX_NEW; round++) {\n  let anyLeft = false;\n  for (const feed of perFeed) {\n    if (round >= feed.length) continue;\n    anyLeft = true;\n    const job = feed[round];\n    // The AI and Data Science feeds overlap heavily; without this the same ad is\n    // fetched twice and stored twice.\n    if (taken.has(job.external_id)) continue;\n    taken.add(job.external_id);\n    picked.push(job);\n    if (picked.length >= MAX_NEW) break;\n  }\n  if (!anyLeft) break;\n}\n\nreturn picked.map((j) => ({ json: j }));"
       }
     },
     {
@@ -111,23 +186,39 @@
       "name": "Fetch Ad Stub",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
-      "position": [720, 180],
+      "position": [
+        720,
+        180
+      ],
       "parameters": {
         "url": "={{ $json.url }}",
         "options": {
-          "response": { "response": { "responseFormat": "text" } },
-          "batching": { "batch": { "batchSize": 3, "batchInterval": 1200 } }
+          "response": {
+            "response": {
+              "responseFormat": "text"
+            }
+          },
+          "batching": {
+            "batch": {
+              "batchSize": 3,
+              "batchInterval": 1200
+            }
+          }
         }
-      }
+      },
+      "onError": "continueRegularOutput"
     },
     {
       "id": "ji_stub_parse",
       "name": "Parse Stub",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
-      "position": [940, 180],
+      "position": [
+        940,
+        180
+      ],
       "parameters": {
-        "jsCode": "__EXTRACT_JS__\n\n// --- node body ---\n// A /vis-job/ page is a stub: banner, title link, location. The ad body lives one\n// hop further on, at the <h4> link. Items whose target cannot be resolved are\n// kept and fall back to the RSS title plus the og:description lead — a thin row\n// is more useful than a dropped one, and the gate can still see the title.\nconst out = [];\nconst items = $input.all();\nfor (let i = 0; i < items.length; i++) {\n  const html = items[i].json.data ?? items[i].json.body ?? '';\n  const meta = $('Parse Feed').all()[i]?.json ?? {};\n  const stub = extractJobindexStub(html);\n  out.push({ json: { ...meta, ...stub, stub_only: !stub.target_url } });\n}\nreturn out;"
+        "jsCode": "__EXTRACT_JS__\n\n// --- node body ---\n// A /vis-job/ page is a stub: banner, title link, location. The ad body lives one\n// hop further on, at the <h4> link. Items whose target cannot be resolved are\n// kept and fall back to the RSS title plus the og:description lead — a thin row\n// is more useful than a dropped one, and the gate can still see the title.\nconst out = [];\nconst items = $input.all();\nfor (let i = 0; i < items.length; i++) {\n  const html = items[i].json.data ?? items[i].json.body ?? '';\n  const meta = $('Parse Feed').all()[i]?.json ?? {};\n  const stub = extractJobindexStub(html);\n  // `...stub` must not be allowed to overwrite a good feed value with a null: the\n  // stub is the better signal WHEN IT HAS ONE. Company especially — the feed's\n  // split-on-last-comma turns \"…Akademi - Arkitektur, Design, Konservering\" into\n  // the employer \"Konservering\", and the stub's toolbar has the real name.\n  out.push({\n    json: {\n      ...meta,\n      ...stub,\n      company: stub.company || meta.company || null,\n      title: stub.title || meta.title || '',\n      stub_only: !stub.target_url,\n    },\n  });\n}\nreturn out;"
       }
     },
     {
@@ -135,45 +226,72 @@
       "name": "Fetch Ad Body",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
-      "position": [1160, 180],
+      "position": [
+        1160,
+        180
+      ],
       "parameters": {
         "url": "={{ $json.target_url || $json.url }}",
         "options": {
           "response": {
-            "response": { "responseFormat": "text", "neverError": true }
+            "response": {
+              "responseFormat": "text",
+              "neverError": true
+            }
           },
-          "batching": { "batch": { "batchSize": 3, "batchInterval": 1200 } }
+          "batching": {
+            "batch": {
+              "batchSize": 3,
+              "batchInterval": 1200
+            }
+          }
         }
-      }
+      },
+      "onError": "continueRegularOutput"
     },
     {
       "id": "ji_build",
       "name": "Build Jobindex Posting",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
-      "position": [1380, 180],
+      "position": [
+        1380,
+        180
+      ],
       "parameters": {
         "jsCode": "__EXTRACT_JS__\n\n// --- node body ---\n// An employer page may carry schema.org JobPosting even though Jobindex does not\n// — several ATS vendors do. Prefer it when present, fall back to readable text.\nconst out = [];\nconst items = $input.all();\nfor (let i = 0; i < items.length; i++) {\n  const html = items[i].json.data ?? items[i].json.body ?? '';\n  const meta = $('Parse Stub').all()[i]?.json ?? {};\n  const ld = extractJobPostingLd(html);\n  const fromLd = ld ? normalizeLdJobPosting(ld, { url: meta.url, sourceKind: 'jobindex_rss' }) : null;\n  const description = pickDescription(meta.lead, fromLd?.description, extractReadableText(html));\n  const company = meta.company || fromLd?.company || null;\n  const title = meta.title || fromLd?.title || '';\n  out.push({\n    json: {\n      source_kind: 'jobindex_rss',\n      source_id: meta.source_id ?? null,\n      url: meta.url,\n      source_url: meta.target_url ?? null,\n      apply_url: meta.target_url ?? null,\n      external_id: meta.external_id,\n      dedupe_key: dedupeKey(company, title),\n      title,\n      company,\n      location: meta.location ?? fromLd?.location ?? null,\n      remote: meta.remote ?? fromLd?.remote ?? null,\n      employment_type: fromLd?.employment_type ?? null,\n      posted_at: meta.posted_at ?? null,\n      valid_through: fromLd?.valid_through ?? null,\n      description,\n      ld_json: ld ?? null,\n      apply_channel: 'ats',\n      categories: meta.categories ?? [],\n    },\n  });\n}\nreturn out;"
       }
     },
-
     {
       "id": "hub_sitemap",
       "name": "Fetch TheHub Sitemap",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
-      "position": [280, 420],
+      "position": [
+        280,
+        420
+      ],
       "parameters": {
         "url": "={{ $json.source.config.sitemap_url }}",
-        "options": { "response": { "response": { "responseFormat": "text" } } }
-      }
+        "options": {
+          "response": {
+            "response": {
+              "responseFormat": "text"
+            }
+          }
+        }
+      },
+      "onError": "continueRegularOutput"
     },
     {
       "id": "hub_parse",
       "name": "Parse Sitemap",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
-      "position": [500, 420],
+      "position": [
+        500,
+        420
+      ],
       "parameters": {
         "jsCode": "// The sitemap lists ~1200 job URLs. Fetching all of them on the first run — when\n// EVERYTHING is new — is what gets a crawler blocked, and losing the source is a\n// permanent cost against a one-off saving. Diff against what we already have and\n// take a capped slice per run; the backlog drains over a few runs.\nconst ctx = $('Fan Out Sources').first().json;\nconst xml = $input.first().json.data ?? $input.first().json.body ?? '';\nconst MAX_NEW = 30;\n\nconst seen = new Set(ctx.seen_urls || []);\nconst locs = [...xml.matchAll(/<loc>([^<]+)<\\/loc>/g)].map((m) => m[1].trim());\nconst fresh = locs.filter((u) => /\\/jobs\\//.test(u) && !seen.has(u)).slice(0, MAX_NEW);\n\nif (fresh.length === 0) return [];\nreturn fresh.map((u) => ({ json: { url: u, source_id: ctx.source.id } }));"
       }
@@ -183,40 +301,206 @@
       "name": "Fetch Hub Job",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
-      "position": [720, 420],
+      "position": [
+        720,
+        420
+      ],
       "parameters": {
         "url": "={{ $json.url }}",
         "options": {
-          "response": { "response": { "responseFormat": "text", "neverError": true } },
-          "batching": { "batch": { "batchSize": 3, "batchInterval": 1200 } }
+          "response": {
+            "response": {
+              "responseFormat": "text",
+              "neverError": true
+            }
+          },
+          "batching": {
+            "batch": {
+              "batchSize": 3,
+              "batchInterval": 1200
+            }
+          }
         }
-      }
+      },
+      "onError": "continueRegularOutput"
     },
     {
       "id": "hub_build",
       "name": "Build Hub Posting",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
-      "position": [940, 420],
+      "position": [
+        940,
+        420
+      ],
       "parameters": {
         "jsCode": "__EXTRACT_JS__\n\n// --- node body ---\n// TheHub emits one schema.org JobPosting per job page. A page without one is\n// skipped rather than guessed at: a row with a title and no description would\n// score as a poor match for reasons that have nothing to do with the job.\nconst out = [];\nconst items = $input.all();\nfor (let i = 0; i < items.length; i++) {\n  const html = items[i].json.data ?? items[i].json.body ?? '';\n  const meta = $('Parse Sitemap').all()[i]?.json ?? {};\n  const ld = extractJobPostingLd(html);\n  if (!ld) continue;\n  const row = normalizeLdJobPosting(ld, { url: meta.url, sourceKind: 'thehub_sitemap' });\n  out.push({\n    json: {\n      ...row,\n      source_id: meta.source_id ?? null,\n      dedupe_key: dedupeKey(row.company, row.title),\n      apply_url: meta.url,\n      categories: [],\n    },\n  });\n}\nreturn out;"
       }
     },
-
+    {
+      "id": "gm_fetch",
+      "name": "Fetch Alert Emails",
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2,
+      "position": [
+        280,
+        660
+      ],
+      "parameters": {
+        "resource": "message",
+        "operation": "getAll",
+        "returnAll": false,
+        "limit": 25,
+        "simple": false,
+        "filters": {
+          "q": "={{ $json.source.config.query || 'from:jobalerts-noreply@linkedin.com newer_than:2d' }}"
+        },
+        "options": {}
+      },
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "GMAIL_CREDENTIAL_ID",
+          "name": "Gmail OAuth"
+        }
+      }
+    },
+    {
+      "id": "gm_parse",
+      "name": "Parse Alert Emails",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        500,
+        660
+      ],
+      "parameters": {
+        "jsCode": "__EXTRACT_JS__\n\n// --- node body ---\n// `simple: false` on the Gmail node is what makes `html` exist at all: the\n// simplified response carries headers and a snippet, and the snippet is a\n// truncated preheader, not the job cards. The fallbacks mirror the HTTP nodes'\n// `data ?? body` — n8n's shape here has changed between versions.\n//\n// No sender check. `parseLinkedInAlertEmail` already returns [] for anything that\n// is not a LinkedIn digest, so a second filter would only add a way to\n// accidentally drop everything.\nconst ctx = $('Fan Out Sources').first().json;\nconst MAX_ENRICH = 10; // politeness: each of these is one fetch of a public page\n\nconst seen = new Set(ctx.seen || []);\nconst fresh = new Set();\nconst jobs = [];\n\nfor (const item of $input.all()) {\n  const m = item.json;\n  const html = m.html ?? m.textAsHtml ?? m.body?.html ?? m.text ?? '';\n  for (const job of parseLinkedInAlertEmail(html)) {\n    // LinkedIn re-sends the same job for days, and the alert arrives twice daily,\n    // so both a cross-run and a within-run guard are needed.\n    // The seen-set is keyed on job_postings.source_kind, which is the SINGULAR\n    // 'gmail_alert' — not the plural job_sources.kind that routed us here. Using\n    // the plural here never matched, so the cross-run guard was dead and LinkedIn's\n    // daily re-sends would have been re-fetched forever.\n    if (seen.has(SOURCE_KIND.gmailAlert + ' ' + job.external_id) || fresh.has(job.external_id)) continue;\n    fresh.add(job.external_id);\n    jobs.push(job);\n  }\n}\n\n// Everything found is ingested; only the first MAX_ENRICH are enriched. Capping\n// the *jobs* instead would drop real postings for a cosmetic reason — the email\n// already carries title, company and location, which is all the gate needs.\nreturn jobs.map((job, i) => ({\n  json: { ...job, source_id: ctx.source.id, enrich: i < MAX_ENRICH },\n}));"
+      }
+    },
+    {
+      "id": "gm_if",
+      "name": "Needs Enrichment",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        720,
+        660
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "enrich",
+              "leftValue": "={{ $json.enrich }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "gm_page",
+      "name": "Fetch Job Page",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        940,
+        580
+      ],
+      "parameters": {
+        "url": "={{ $json.url }}",
+        "options": {
+          "response": {
+            "response": {
+              "responseFormat": "text",
+              "neverError": true
+            }
+          },
+          "batching": {
+            "batch": {
+              "batchSize": 2,
+              "batchInterval": 1500
+            }
+          }
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "id": "gm_build",
+      "name": "Build Enriched Posting",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1160,
+        580
+      ],
+      "parameters": {
+        "jsCode": "__EXTRACT_JS__\n\n// --- node body ---\n// LinkedIn is ingest-only: no API, and logged-in pages are never scraped. This\n// fetches the same public page anyone would get, and is allowed to come back\n// with nothing — probed 2026-08-25, it answers 200 with zero ld+json, so\n// `og:description` is usually all there is. `neverError` on the HTTP node keeps a\n// 999 or a timeout from failing the whole run.\nconst items = $input.all();\n// The true branch of the IF node is exactly the enrich-flagged items, in order.\n// Recomputing it from the parse node rather than reading a branch index keeps\n// this independent of how n8n numbers IF outputs.\nconst metas = $('Parse Alert Emails').all().map((i) => i.json).filter((j) => j.enrich);\n// If the two lists ever disagree in length, positional pairing would attach one\n// job's ad body to a different job — a silently wrong description is worse than\n// none, so the whole batch falls back to email-only.\nconst aligned = metas.length === items.length;\n\nconst out = [];\nfor (let i = 0; i < items.length; i++) {\n  const meta = metas[i];\n  if (!meta) continue;\n  const html = items[i].json.data ?? items[i].json.body ?? '';\n  const enrichment = aligned\n    ? extractAlertPageEnrichment(html, { url: meta.url, sourceKind: SOURCE_KIND.gmailAlert })\n    : null;\n  out.push({\n    json: buildAlertPosting(meta, {\n      sourceKind: SOURCE_KIND.gmailAlert,\n      sourceId: meta.source_id ?? null,\n      enrichment,\n    }),\n  });\n}\nreturn out;"
+      }
+    },
+    {
+      "id": "gm_plain",
+      "name": "Build Alert Posting",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1160,
+        760
+      ],
+      "parameters": {
+        "jsCode": "__EXTRACT_JS__\n\n// --- node body ---\n// Past the politeness cap, so no page was fetched. The row is built from the\n// email alone rather than dropped: it still carries title, company, location and\n// the canonical URL, which is everything the gate reads.\nreturn $input.all().map((item) => ({\n  json: buildAlertPosting(item.json, {\n    sourceKind: SOURCE_KIND.gmailAlert,\n    sourceId: item.json.source_id ?? null,\n    enrichment: null,\n  }),\n}));"
+      }
+    },
+    {
+      "id": "gm_merge",
+      "name": "Merge Alert Jobs",
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3,
+      "position": [
+        1380,
+        660
+      ],
+      "parameters": {
+        "mode": "append",
+        "numberInputs": 2
+      }
+    },
     {
       "id": "merge",
       "name": "Merge Sources",
       "type": "n8n-nodes-base.merge",
       "typeVersion": 3,
-      "position": [1600, 300],
-      "parameters": { "mode": "append", "numberInputs": 2 }
+      "position": [
+        1600,
+        300
+      ],
+      "parameters": {
+        "mode": "append",
+        "numberInputs": 3
+      }
     },
     {
       "id": "gate",
       "name": "Gate",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
-      "position": [1820, 300],
+      "position": [
+        1820,
+        300
+      ],
       "parameters": {
         "jsCode": "__EXTRACT_JS__\n\n// --- node body ---\n// Rule-only screening, before any model runs. Most of a Jobindex feed is\n// droppable on a regex, and a 7B model on this Mac costs seconds per posting.\n//\n// A posting that fails the gate for EVERY profile is not posted at all — storing\n// universally-rejected ads would fill the table with the 95% of the Danish job\n// market that is not a software job. A posting that passes for at least one\n// profile is posted with a verdict per profile, so a drop stays auditable.\nconst ctx = $('Fan Out Sources').first().json;\nconst profiles = ctx.profiles || [];\nconst now = new Date();\nconst out = [];\n\nfor (const item of $input.all()) {\n  const p = item.json;\n  const matches = profiles.map((profile) => {\n    const g = cheapGate(p, profile, now);\n    return {\n      profile_id: profile.id,\n      gate_verdict: g.verdict,\n      gate_reason: g.reason,\n      score: null,\n    };\n  });\n  if (!matches.some((m) => m.gate_verdict === 'pass')) continue;\n  const { categories, ...row } = p;\n  out.push({ json: { ...row, matches } });\n}\nreturn out;"
       }
@@ -226,7 +510,10 @@
       "name": "Post to job-ingest",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
-      "position": [2040, 300],
+      "position": [
+        2040,
+        300
+      ],
       "parameters": {
         "jsCode": "// Batch every surviving posting into one request. job-ingest caps a batch at 200.\nconst postings = $input.all().map((i) => i.json);\nif (postings.length === 0) return [];\nreturn [{ json: { user_id: $env.NEXUS_USER_ID, postings } }];"
       }
@@ -236,13 +523,21 @@
       "name": "Send",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
-      "position": [2260, 300],
+      "position": [
+        2260,
+        300
+      ],
       "parameters": {
         "method": "POST",
         "url": "={{ $env.NEXUS_SUPABASE_URL }}/functions/v1/job-ingest",
         "sendHeaders": true,
         "headerParameters": {
-          "parameters": [{ "name": "X-Job-Key", "value": "={{ $env.JOB_INGEST_KEY }}" }]
+          "parameters": [
+            {
+              "name": "X-Job-Key",
+              "value": "={{ $env.JOB_INGEST_KEY }}"
+            }
+          ]
         },
         "sendBody": true,
         "specifyBody": "json",
@@ -252,27 +547,290 @@
     }
   ],
   "connections": {
-    "Every 4 Hours": { "main": [[{ "node": "Load Config", "type": "main", "index": 0 }]] },
-    "Load Config": { "main": [[{ "node": "Fan Out Sources", "type": "main", "index": 0 }]] },
-    "Fan Out Sources": { "main": [[{ "node": "Route Source", "type": "main", "index": 0 }]] },
-    "Route Source": {
+    "Every 4 Hours": {
       "main": [
-        [{ "node": "Fetch Jobindex Feed", "type": "main", "index": 0 }],
-        [{ "node": "Fetch TheHub Sitemap", "type": "main", "index": 0 }]
+        [
+          {
+            "node": "Load Config",
+            "type": "main",
+            "index": 0
+          }
+        ]
       ]
     },
-    "Fetch Jobindex Feed": { "main": [[{ "node": "Parse Feed", "type": "main", "index": 0 }]] },
-    "Parse Feed": { "main": [[{ "node": "Fetch Ad Stub", "type": "main", "index": 0 }]] },
-    "Fetch Ad Stub": { "main": [[{ "node": "Parse Stub", "type": "main", "index": 0 }]] },
-    "Parse Stub": { "main": [[{ "node": "Fetch Ad Body", "type": "main", "index": 0 }]] },
-    "Fetch Ad Body": { "main": [[{ "node": "Build Jobindex Posting", "type": "main", "index": 0 }]] },
-    "Build Jobindex Posting": { "main": [[{ "node": "Merge Sources", "type": "main", "index": 0 }]] },
-    "Fetch TheHub Sitemap": { "main": [[{ "node": "Parse Sitemap", "type": "main", "index": 0 }]] },
-    "Parse Sitemap": { "main": [[{ "node": "Fetch Hub Job", "type": "main", "index": 0 }]] },
-    "Fetch Hub Job": { "main": [[{ "node": "Build Hub Posting", "type": "main", "index": 0 }]] },
-    "Build Hub Posting": { "main": [[{ "node": "Merge Sources", "type": "main", "index": 1 }]] },
-    "Merge Sources": { "main": [[{ "node": "Gate", "type": "main", "index": 0 }]] },
-    "Gate": { "main": [[{ "node": "Post to job-ingest", "type": "main", "index": 0 }]] },
-    "Post to job-ingest": { "main": [[{ "node": "Send", "type": "main", "index": 0 }]] }
+    "Load Config": {
+      "main": [
+        [
+          {
+            "node": "Fan Out Sources",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fan Out Sources": {
+      "main": [
+        [
+          {
+            "node": "Route Source",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Route Source": {
+      "main": [
+        [
+          {
+            "node": "Fetch Jobindex Feed",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Fetch TheHub Sitemap",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Fetch Alert Emails",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch Jobindex Feed": {
+      "main": [
+        [
+          {
+            "node": "Parse Feed",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse Feed": {
+      "main": [
+        [
+          {
+            "node": "Fetch Ad Stub",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch Ad Stub": {
+      "main": [
+        [
+          {
+            "node": "Parse Stub",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse Stub": {
+      "main": [
+        [
+          {
+            "node": "Fetch Ad Body",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch Ad Body": {
+      "main": [
+        [
+          {
+            "node": "Build Jobindex Posting",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Jobindex Posting": {
+      "main": [
+        [
+          {
+            "node": "Merge Sources",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch TheHub Sitemap": {
+      "main": [
+        [
+          {
+            "node": "Parse Sitemap",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse Sitemap": {
+      "main": [
+        [
+          {
+            "node": "Fetch Hub Job",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch Hub Job": {
+      "main": [
+        [
+          {
+            "node": "Build Hub Posting",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Hub Posting": {
+      "main": [
+        [
+          {
+            "node": "Merge Sources",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "Fetch Alert Emails": {
+      "main": [
+        [
+          {
+            "node": "Parse Alert Emails",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse Alert Emails": {
+      "main": [
+        [
+          {
+            "node": "Needs Enrichment",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Needs Enrichment": {
+      "main": [
+        [
+          {
+            "node": "Fetch Job Page",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Build Alert Posting",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch Job Page": {
+      "main": [
+        [
+          {
+            "node": "Build Enriched Posting",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Enriched Posting": {
+      "main": [
+        [
+          {
+            "node": "Merge Alert Jobs",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Alert Posting": {
+      "main": [
+        [
+          {
+            "node": "Merge Alert Jobs",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "Merge Alert Jobs": {
+      "main": [
+        [
+          {
+            "node": "Merge Sources",
+            "type": "main",
+            "index": 2
+          }
+        ]
+      ]
+    },
+    "Merge Sources": {
+      "main": [
+        [
+          {
+            "node": "Gate",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Gate": {
+      "main": [
+        [
+          {
+            "node": "Post to job-ingest",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Post to job-ingest": {
+      "main": [
+        [
+          {
+            "node": "Send",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
   }
 }
