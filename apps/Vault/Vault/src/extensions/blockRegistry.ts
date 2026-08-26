@@ -48,6 +48,7 @@ export type BlockGroup =
   | "width"      // per-note page width
   | "fold"       // collapse / expand heading sections
   | "vault"      // highlighters, database records
+  | "pathfinder" // live task views: list, board, table
   | "history";
 
 /**
@@ -609,6 +610,44 @@ export function buildBlockRegistry(opts: BlockRegistryOptions = {}): BlockAction
     run: atCursor((c) => c.insertSketch()),
   });
 
+  // ── PathFinder ────────────────────────────────────────────────────────────
+  // Three entries, three genuinely different surfaces — and one node type behind
+  // all of them. The `view` attribute is what distinguishes them, because a new
+  // node type can blank a note on a client that predates it while an unknown
+  // attribute is dropped in silence (see extensions/PathfinderBlock.ts). Offering
+  // them separately is the point: "insert a board" is a different thought from
+  // "insert a to-do list", and nobody should have to insert one and reconfigure
+  // it into the other.
+  actions.push(
+    {
+      id: "pf:list",
+      title: "Task list",
+      icon: "☑",
+      group: "pathfinder",
+      surfaces: ["slash", "toolbar"],
+      keywords: ["task", "tasks", "todo", "to-do", "pathfinder", "checklist", "pf"],
+      run: atCursor((c) => c.insertPathfinderBlock("list")),
+    },
+    {
+      id: "pf:board",
+      title: "Task board",
+      icon: "▦",
+      group: "pathfinder",
+      surfaces: ["slash", "toolbar"],
+      keywords: ["board", "kanban", "task", "tasks", "pathfinder", "columns", "status", "pf"],
+      run: atCursor((c) => c.insertPathfinderBlock("board")),
+    },
+    {
+      id: "pf:table",
+      title: "Task table",
+      icon: "▤",
+      group: "pathfinder",
+      surfaces: ["slash", "toolbar"],
+      keywords: ["table", "database", "grid", "task", "tasks", "pathfinder", "rows", "pf"],
+      run: atCursor((c) => c.insertPathfinderBlock("table")),
+    },
+  );
+
   // ── Folding ───────────────────────────────────────────────────────────────
   // Section folding is a VIEW state, not an edit — see extensions/headingFold.ts
   // for why it is decorations over a flat document rather than a container node.
@@ -694,5 +733,6 @@ export const GROUP_LABELS: Record<BlockGroup, string> = {
   tableOps: "Table",
   tableMore: "Table",
   vault: "Vault",
+  pathfinder: "PathFinder",
   history: "History",
 };

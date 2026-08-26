@@ -1,0 +1,608 @@
+/* ── PathFinder task blocks ─────────────────────────────────────────────────
+   One node type (`pathfinderBlock`) wearing three views — list, board, table —
+   selected by a `data-view` attribute. See extensions/PathfinderBlock.ts for
+   why the three blocks the slash menu offers are not three node types.
+
+   Its own file rather than more of App.css, which is past 8,000 lines: this is
+   a self-contained feature and everything here is namespaced `pf-`.
+
+   The block is chrome AND content — it sits in the text flow like a figure, but
+   everything inside it is interactive. Nothing in it may take a caret, so
+   `user-select` is off: a selection dragged across the note must sweep PAST the
+   block, not through its buttons. */
+
+.tiptap-editor .ProseMirror .pf-block {
+  margin: 16px 0;
+  border: 1px solid var(--border-base);
+  border-radius: 10px;
+  background: var(--bg-base);
+  overflow: hidden;
+  position: relative;
+  user-select: none;
+  font-size: 0.875rem;
+  line-height: 1.45;
+}
+
+.tiptap-editor .ProseMirror .pf-block.is-selected {
+  outline: 2px solid var(--edge-in);
+  outline-offset: 1px;
+}
+
+/* ── Header ─────────────────────────────────────────────────────────────── */
+
+.pf-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 7px 9px;
+  border-bottom: 1px solid var(--border-base);
+  background: var(--bg-subtle);
+}
+
+.pf-head-icon { font-size: 0.95rem; color: var(--fg-muted); flex: none; }
+
+/* Borderless until hovered: an unnamed block should read as a heading, not as a
+   form field parked in the middle of a document. */
+.pf-title {
+  flex: 1 1 auto;
+  min-width: 0;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: transparent;
+  padding: 3px 6px;
+  font: inherit;
+  font-weight: 600;
+  color: var(--fg-main);
+}
+.pf-title::placeholder { color: var(--fg-secondary); font-weight: 600; opacity: 1; }
+.pf-title:hover:not(:disabled) { border-color: var(--border-base); }
+.pf-title:focus { outline: none; border-color: var(--edge-in); background: var(--bg-base); }
+
+.pf-views { display: flex; gap: 2px; flex: none; }
+
+.pf-view-btn,
+.pf-icon-btn {
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--fg-muted);
+  padding: 3px 7px;
+  cursor: pointer;
+  font-size: 0.85rem;
+  line-height: 1.2;
+  position: relative;
+  transition: background var(--duration) var(--ease), color var(--duration) var(--ease);
+}
+.pf-view-btn:hover:not(:disabled),
+.pf-icon-btn:hover:not(:disabled) { background: var(--bg-muted); color: var(--fg-main); }
+.pf-view-btn.is-active,
+.pf-icon-btn.is-active {
+  background: var(--bg-base);
+  border-color: var(--border-strong);
+  color: var(--fg-main);
+}
+.pf-view-btn:disabled, .pf-icon-btn:disabled { opacity: 0.45; cursor: default; }
+.pf-view-btn:focus-visible,
+.pf-icon-btn:focus-visible { outline: 2px solid var(--edge-in); outline-offset: 1px; }
+
+.pf-icon-btn.is-spinning { animation: pf-spin 900ms linear infinite; }
+@keyframes pf-spin { to { transform: rotate(360deg); } }
+
+.pf-badge {
+  position: absolute;
+  top: -3px;
+  right: -3px;
+  min-width: 14px;
+  height: 14px;
+  border-radius: 7px;
+  background: var(--edge-in);
+  color: var(--bg-base);
+  font-size: 0.6rem;
+  font-weight: 700;
+  line-height: 14px;
+  text-align: center;
+  padding: 0 3px;
+}
+
+/* ── Filter bar ─────────────────────────────────────────────────────────── */
+
+.pf-filters {
+  padding: 7px 9px;
+  border-bottom: 1px solid var(--border-base);
+  background: var(--bg-raised);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.pf-filter-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+
+.pf-search {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  background: var(--bg-base);
+  border: 1px solid var(--border-base);
+  border-radius: 6px;
+  padding: 2px 7px;
+  color: var(--fg-muted);
+  flex: 1 1 150px;
+  min-width: 120px;
+  max-width: 260px;
+}
+.pf-search input {
+  border: none;
+  background: transparent;
+  font: inherit;
+  color: var(--fg-main);
+  padding: 2px 0;
+  width: 100%;
+  min-width: 0;
+}
+.pf-search input:focus { outline: none; }
+.pf-search:focus-within { border-color: var(--edge-in); }
+
+.pf-select, .pf-num {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 0.78rem;
+  color: var(--fg-muted);
+}
+.pf-select select, .pf-num input, .pf-cell-select {
+  font: inherit;
+  font-size: 0.78rem;
+  color: var(--fg-main);
+  background: var(--bg-base);
+  border: 1px solid var(--border-base);
+  border-radius: 6px;
+  padding: 2px 5px;
+  max-width: 150px;
+}
+.pf-num input { width: 58px; }
+.pf-select select:focus,
+.pf-num input:focus,
+.pf-cell-select:focus { outline: none; border-color: var(--edge-in); }
+
+.pf-chips { display: flex; align-items: center; gap: 3px; flex-wrap: wrap; }
+.pf-chips-label { font-size: 0.72rem; color: var(--fg-muted); margin-right: 2px; }
+
+.pf-chip {
+  border: 1px solid var(--border-base);
+  background: var(--bg-base);
+  color: var(--fg-secondary);
+  border-radius: 999px;
+  padding: 1px 8px;
+  font-size: 0.74rem;
+  cursor: pointer;
+  transition: background var(--duration) var(--ease), color var(--duration) var(--ease);
+}
+.pf-chip:hover:not(:disabled) { background: var(--bg-muted); }
+.pf-chip.is-on {
+  background: var(--fg-primary);
+  border-color: var(--fg-primary);
+  color: var(--bg-base);
+}
+.pf-chip.is-locked { opacity: 0.55; cursor: default; }
+.pf-chip:focus-visible { outline: 2px solid var(--edge-in); outline-offset: 1px; }
+
+.pf-toggle {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 0.76rem;
+  color: var(--fg-secondary);
+  cursor: pointer;
+}
+
+.pf-hint { font-size: 0.72rem; color: var(--fg-subdued); font-style: italic; }
+
+/* Plans, goals and teams can number in the dozens, so they get a popover rather
+   than chips. */
+.pf-multi { position: relative; }
+.pf-multi-btn {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  border: 1px solid var(--border-base);
+  border-radius: 6px;
+  background: var(--bg-base);
+  padding: 3px 7px;
+  font-size: 0.78rem;
+  color: var(--fg-main);
+  cursor: pointer;
+  max-width: 190px;
+}
+.pf-multi-btn.is-on { border-color: var(--fg-primary); }
+.pf-multi-label { color: var(--fg-muted); flex: none; }
+.pf-multi-value { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+.pf-multi-pop {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  z-index: 60;
+  min-width: 200px;
+  max-height: 260px;
+  overflow-y: auto;
+  background: var(--bg-base);
+  border: 1px solid var(--border-strong);
+  border-radius: 8px;
+  box-shadow: var(--shadow-md);
+  padding: 4px;
+}
+.pf-multi-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 6px;
+  border-radius: 5px;
+  cursor: pointer;
+  font-size: 0.8rem;
+  color: var(--fg-main);
+}
+.pf-multi-row:hover { background: var(--bg-subtle); }
+.pf-multi-clear {
+  width: 100%;
+  text-align: left;
+  border: none;
+  background: transparent;
+  color: var(--fg-muted);
+  font: inherit;
+  font-size: 0.76rem;
+  padding: 4px 6px;
+  cursor: pointer;
+  border-bottom: 1px solid var(--border-faint);
+  margin-bottom: 3px;
+}
+.pf-multi-clear:hover { color: var(--destructive); }
+.pf-multi-empty { padding: 8px; font-size: 0.78rem; color: var(--fg-muted); }
+
+/* ── Body & states ──────────────────────────────────────────────────────── */
+
+.pf-body { max-height: 560px; overflow-y: auto; }
+.pf-block.is-compact .pf-body { font-size: 0.82rem; }
+
+.pf-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+  padding: 18px 14px;
+  color: var(--fg-muted);
+  font-size: 0.83rem;
+}
+.pf-empty strong { color: var(--fg-main); font-weight: 600; }
+.pf-empty-error strong { color: var(--destructive); }
+.pf-empty-btn {
+  margin-top: 4px;
+  border: 1px solid var(--border-base);
+  background: var(--bg-raised);
+  border-radius: 6px;
+  padding: 3px 10px;
+  font: inherit;
+  font-size: 0.78rem;
+  color: var(--fg-main);
+  cursor: pointer;
+}
+.pf-empty-btn:hover { background: var(--bg-muted); }
+
+.pf-skeleton { padding: 12px 14px; display: flex; flex-direction: column; gap: 8px; }
+.pf-skeleton-row {
+  height: 14px;
+  border-radius: 5px;
+  background: linear-gradient(90deg, var(--bg-raised) 25%, var(--bg-muted) 50%, var(--bg-raised) 75%);
+  background-size: 200% 100%;
+  animation: pf-shimmer 1.3s ease-in-out infinite;
+}
+@keyframes pf-shimmer { to { background-position: -200% 0; } }
+
+/* ── Footer ─────────────────────────────────────────────────────────────── */
+
+.pf-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 5px 10px;
+  border-top: 1px solid var(--border-base);
+  background: var(--bg-subtle);
+  font-size: 0.73rem;
+  color: var(--fg-muted);
+}
+.pf-foot-error { color: var(--destructive); text-align: right; }
+.pf-stamp { color: var(--fg-subdued); }
+
+/* ── Shared row bits ────────────────────────────────────────────────────── */
+
+.pf-check { accent-color: var(--fg-primary); cursor: pointer; flex: none; }
+
+.pf-dot { width: 7px; height: 7px; border-radius: 50%; flex: none; }
+.pf-dot-high { background: var(--destructive); }
+.pf-dot-medium { background: var(--warning); }
+.pf-dot-low { background: var(--fg-dim); }
+
+.pf-tag {
+  font-size: 0.7rem;
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: var(--bg-muted);
+  color: var(--fg-secondary);
+  white-space: nowrap;
+  max-width: 150px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.pf-tag-kind { background: var(--sticky-border); color: var(--fg-primary); }
+.pf-tag-est { font-variant-numeric: tabular-nums; }
+.pf-tag-who { background: var(--success-bg); color: var(--success); }
+
+/* Unclaimed shared work is the state that needs someone to act, so it is the
+   one that looks unfinished rather than the one that looks neutral. */
+.pf-tag-who.is-unassigned {
+  background: transparent;
+  color: var(--fg-muted);
+  border: 1px dashed var(--border-strong);
+}
+
+.pf-due { font-size: 0.7rem; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.pf-due-overdue { color: var(--destructive); font-weight: 600; }
+.pf-due-today { color: var(--warning); font-weight: 600; }
+.pf-due-soon { color: var(--fg-muted); }
+
+.pf-editable { cursor: text; border-radius: 4px; padding: 1px 3px; margin: -1px -3px; }
+.pf-editable:hover:not(.is-locked) { background: var(--bg-muted); }
+.pf-editable.is-locked { cursor: default; }
+.pf-placeholder { color: var(--fg-ghost); font-style: italic; }
+
+.pf-edit-input {
+  font: inherit;
+  color: var(--fg-main);
+  background: var(--bg-base);
+  border: 1px solid var(--edge-in);
+  border-radius: 4px;
+  padding: 1px 3px;
+  width: 100%;
+  min-width: 0;
+}
+.pf-edit-input:focus { outline: none; }
+
+.pf-na { color: var(--fg-ghost); }
+
+.pf-row-del {
+  border: none;
+  background: transparent;
+  color: var(--fg-ghost);
+  cursor: pointer;
+  font-size: 1rem;
+  line-height: 1;
+  padding: 0 4px;
+  border-radius: 4px;
+  opacity: 0;
+  flex: none;
+  transition: opacity var(--duration) var(--ease), color var(--duration) var(--ease);
+}
+.pf-list-row:hover .pf-row-del,
+.pf-table tr:hover .pf-row-del,
+.pf-row-del:focus-visible { opacity: 1; }
+.pf-row-del:hover { color: var(--destructive); background: var(--destructive-bg); }
+
+.pf-inline-btn {
+  border: none;
+  background: transparent;
+  color: var(--edge-in);
+  text-decoration: underline;
+  font: inherit;
+  cursor: pointer;
+  padding: 0;
+}
+
+/* A row mid-write is dimmed rather than replaced: the value stays readable, so a
+   failed write that rolls back does not look like the row jumped. */
+.pf-list-row.is-busy, .pf-card.is-busy, .pf-table tr.is-busy { opacity: 0.55; }
+
+/* ── List view ──────────────────────────────────────────────────────────── */
+
+.pf-list { display: flex; flex-direction: column; }
+
+.pf-list-row {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--border-faint);
+}
+.pf-block.is-compact .pf-list-row { padding: 3px 10px; }
+.pf-list-row:last-of-type { border-bottom: none; }
+.pf-list-row:hover { background: var(--bg-subtle); }
+
+.pf-list-title { flex: 1 1 auto; min-width: 0; color: var(--fg-main); }
+.pf-list-row.is-done .pf-list-title { text-decoration: line-through; color: var(--fg-muted); }
+
+.pf-meta {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  flex: none;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.pf-add {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 6px 10px;
+  border-top: 1px solid var(--border-faint);
+  background: var(--bg-subtle);
+}
+.pf-add-plus { color: var(--fg-ghost); font-size: 0.95rem; flex: none; }
+.pf-add-input {
+  flex: 1;
+  border: none;
+  background: transparent;
+  font: inherit;
+  color: var(--fg-main);
+  padding: 2px 0;
+  min-width: 0;
+}
+.pf-add-input:focus { outline: none; }
+.pf-add-input::placeholder { color: var(--fg-ghost); }
+
+/* ── Board view ─────────────────────────────────────────────────────────── */
+
+.pf-board-wrap { padding: 8px; }
+
+.pf-board-note {
+  font-size: 0.76rem;
+  color: var(--fg-muted);
+  background: var(--bg-raised);
+  border: 1px solid var(--border-faint);
+  border-radius: 6px;
+  padding: 5px 8px;
+  margin-bottom: 8px;
+}
+
+/* Wide content scrolls in its own container — the note body must never scroll
+   horizontally. */
+.pf-board {
+  display: flex;
+  gap: 8px;
+  overflow-x: auto;
+  padding-bottom: 4px;
+  align-items: flex-start;
+}
+
+.pf-col {
+  flex: 0 0 190px;
+  background: var(--bg-raised);
+  border: 1px solid var(--border-faint);
+  border-radius: 8px;
+  display: flex;
+  flex-direction: column;
+  min-height: 84px;
+  transition: background var(--duration) var(--ease), border-color var(--duration) var(--ease);
+}
+.pf-col.is-over { background: var(--bg-muted); border-color: var(--edge-in); }
+/* The catch-all bucket is not a state anything can be dropped INTO. */
+.pf-col.is-other { border-style: dashed; opacity: 0.85; }
+
+.pf-col-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 5px 8px;
+  border-bottom: 1px solid var(--border-faint);
+  font-size: 0.74rem;
+  font-weight: 600;
+  color: var(--fg-secondary);
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+.pf-col-count { color: var(--fg-ghost); font-weight: 500; }
+
+.pf-col-body { padding: 6px; display: flex; flex-direction: column; gap: 6px; flex: 1; }
+
+.pf-col-empty {
+  border: 1px dashed var(--border-base);
+  border-radius: 6px;
+  padding: 10px;
+  text-align: center;
+  font-size: 0.72rem;
+  color: var(--fg-ghost);
+}
+
+.pf-card {
+  background: var(--bg-base);
+  border: 1px solid var(--border-base);
+  border-radius: 7px;
+  padding: 6px 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  cursor: grab;
+  box-shadow: var(--shadow-xs);
+  /* Vertical panning still belongs to the browser; horizontal is the board's own
+     scroll and the drag gesture's, so it must not be handed away. */
+  touch-action: pan-y;
+}
+.pf-card:hover { border-color: var(--border-strong); }
+.pf-card.is-dragging { opacity: 0.55; cursor: grabbing; box-shadow: var(--shadow-md); }
+.pf-card.is-done .pf-card-title { text-decoration: line-through; color: var(--fg-muted); }
+
+.pf-card-top { display: flex; align-items: flex-start; gap: 6px; }
+.pf-card-title { flex: 1; min-width: 0; color: var(--fg-main); word-break: break-word; }
+.pf-card-meta { display: flex; align-items: center; gap: 5px; flex-wrap: wrap; }
+
+/* ── Table view ─────────────────────────────────────────────────────────── */
+
+.pf-table-wrap { overflow-x: auto; }
+
+.pf-table { width: 100%; border-collapse: collapse; font-size: 0.8rem; }
+.pf-block.is-compact .pf-table { font-size: 0.75rem; }
+
+.pf-th {
+  text-align: left;
+  font-weight: 600;
+  font-size: 0.7rem;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  color: var(--fg-muted);
+  padding: 6px 8px;
+  border-bottom: 1px solid var(--border-base);
+  background: var(--bg-subtle);
+  white-space: nowrap;
+  cursor: pointer;
+  position: sticky;
+  top: 0;
+  z-index: 1;
+}
+.pf-th-act, .pf-th-done { cursor: default; width: 1%; }
+.pf-sort { margin-left: 3px; color: var(--fg-primary); }
+
+.pf-td {
+  padding: 5px 8px;
+  border-bottom: 1px solid var(--border-faint);
+  color: var(--fg-main);
+  vertical-align: middle;
+}
+.pf-block.is-compact .pf-td { padding: 2px 8px; }
+.pf-table tr:hover .pf-td { background: var(--bg-subtle); }
+.pf-table tr.is-done .pf-td-title { text-decoration: line-through; color: var(--fg-muted); }
+
+.pf-td-title { min-width: 160px; }
+.pf-td-soft { color: var(--fg-secondary); white-space: nowrap; }
+.pf-td-num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.pf-td-done, .pf-td-act { width: 1%; }
+.pf-td-who { white-space: nowrap; }
+
+.pf-date {
+  font: inherit;
+  font-size: 0.76rem;
+  color: var(--fg-main);
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 5px;
+  padding: 1px 3px;
+}
+.pf-date:hover { border-color: var(--border-base); background: var(--bg-base); }
+.pf-date:focus { outline: none; border-color: var(--edge-in); background: var(--bg-base); }
+
+/* On a narrow measure — an iPad in portrait, or a note set to the narrow width —
+   190px columns would each eat a third of the screen. */
+@media (max-width: 640px) {
+  .pf-col { flex-basis: 152px; }
+  .pf-body { max-height: 420px; }
+}
+
+/* A refresh indicator and a shimmer are not worth overriding a stated
+   preference for less motion. */
+@media (prefers-reduced-motion: reduce) {
+  .pf-icon-btn.is-spinning { animation: none; opacity: 0.55; }
+  .pf-skeleton-row { animation: none; background: var(--bg-raised); }
+}
+
+@media (prefers-color-scheme: dark) {
+  .pf-tag-who { background: oklch(1 0 0 / 6%); }
+  .pf-card { box-shadow: none; }
+}

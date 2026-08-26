@@ -12,6 +12,11 @@ export default defineConfig(async () => ({
   resolve: {
     alias: {
       "@": path.resolve(__dirname, "./src"),
+      // Deep alias, deliberately listed BEFORE the barrel so it wins the prefix
+      // match. The barrel re-exports AppGraph3D and therefore three.js, which a
+      // note-editor block has no business pulling into its chunk — same reason
+      // `@nexus/core/coverage` exists in PathFinder and NexusLocal.
+      "@nexus/core/pathfinder": path.resolve(__dirname, "../../../packages/nexus-core/src/pathfinder/index.ts"),
       "@nexus/core": path.resolve(__dirname, "../../../packages/nexus-core/src/index.ts"),
     },
     // Force a single `three` instance. App.tsx + @nexus/core import three from
