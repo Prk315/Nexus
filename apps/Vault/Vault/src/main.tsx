@@ -4,6 +4,9 @@ import { NexusAuthProvider, AuthGate } from "@nexus/core";
 import { supabase } from "./lib/supabase";
 import "./tailwind.css";
 import "./App.css";
+// After App.css: the block's styles are scoped `pf-` and depend on the custom
+// properties App.css declares on :root.
+import "./pathfinderBlock.css";
 import App from "./App";
 
 ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(
