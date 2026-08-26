@@ -1,9 +1,20 @@
 import { useMemo, useRef, useState } from "react";
-import { Mail, ChevronDown, ChevronRight, SlidersHorizontal, CheckCircle2, Plus, Clock3 } from "lucide-react";
+import {
+  Mail,
+  ChevronDown,
+  ChevronRight,
+  SlidersHorizontal,
+  CheckCircle2,
+  Plus,
+  Clock3,
+  Archive,
+  ThumbsDown,
+} from "lucide-react";
 import { DropdownMenu } from "radix-ui";
 import { cn } from "../utils";
 import type { MailAxis, MailCategory, MailMessage } from "../mail/types";
 import { MAIL_FETCH_LIMIT, type MailLoader, type MailSnapshot } from "../mail/loader";
+import type { MailApi } from "../mail/api";
 import {
   BUCKET_HEX,
   BUCKET_LABEL,
@@ -60,6 +71,13 @@ export type MailPanelProps = {
    * the action does not render.
    */
   onConvertToTask?: (message: MailMessage) => Promise<void>;
+  /**
+   * The two per-message triage writes — "Done" and "Not important". Build one
+   * with `createMailApi(supabase)`. Absent means the two row actions do not
+   * render, same contract as `onConvertToTask`: a control that cannot write
+   * is worse than no control.
+   */
+  mailApi?: MailApi;
 };
 
 // ── Small local helpers ──────────────────────────────────────────────────
@@ -215,15 +233,23 @@ function MailRow({
   category,
   rule,
   onConvertToTask,
+  onMarkDone,
+  onMarkNotImportant,
 }: {
   message: MailMessage;
   category: ResolvedCategory | null;
   rule: MailRule | null;
   onConvertToTask?: (message: MailMessage) => Promise<void>;
+  onMarkDone?: (message: MailMessage) => Promise<void>;
+  onMarkNotImportant?: (message: MailMessage) => Promise<void>;
 }) {
   const [expanded, setExpanded] = useState(false);
   const [converting, setConverting] = useState(false);
   const [convertError, setConvertError] = useState(false);
+  const [archiving, setArchiving] = useState(false);
+  const [archiveError, setArchiveError] = useState(false);
+  const [demoting, setDemoting] = useState(false);
+  const [demoteError, setDemoteError] = useState(false);
   const bucket = scoreBucket(message.score);
   // Every one of these is LLM-authored from arbitrary email content. They are
   // rendered as React children (escaped) and passed through plainText/plainLine
@@ -234,6 +260,10 @@ function MailRow({
   const due = fmtDue(message.due_date);
   const estimate = fmtEstimate(message.time_estimate);
   const converted = message.task_id !== null;
+  // "Not important" is a demotion, not a dismissal — the row stays, dimmed.
+  // `sinkLowImportance` (mail/score.ts) is what actually moves it within its
+  // bucket; this is only the visual half.
+  const notImportant = message.importance === "low";
 
   async function handleConvert() {
     if (!onConvertToTask || converting || converted) return;
@@ -250,8 +280,41 @@ function MailRow({
     }
   }
 
+  async function handleMarkDone() {
+    if (!onMarkDone || archiving) return;
+    setArchiving(true);
+    setArchiveError(false);
+    try {
+      await onMarkDone(message);
+      // No `finally`-reset of `archiving` on success: the parent removes this
+      // row from the list the moment the status flips (see MailPanel's
+      // `updateMessage`), so there is nothing left here to un-disable.
+    } catch {
+      setArchiveError(true);
+      setArchiving(false);
+    }
+  }
+
+  async function handleMarkNotImportant() {
+    if (!onMarkNotImportant || demoting || notImportant) return;
+    setDemoting(true);
+    setDemoteError(false);
+    try {
+      await onMarkNotImportant(message);
+    } catch {
+      setDemoteError(true);
+    } finally {
+      setDemoting(false);
+    }
+  }
+
   return (
-    <li className="rounded-md px-1.5 py-1.5 hover:bg-accent/50 transition-colors">
+    <li
+      className={cn(
+        "rounded-md px-1.5 py-1.5 hover:bg-accent/50 transition-colors",
+        notImportant && "opacity-50 hover:opacity-100",
+      )}
+    >
       <div className="flex items-start gap-2">
         <span
           aria-hidden
@@ -363,6 +426,53 @@ function MailRow({
             {convertError && (
               <span className="text-[9px] italic text-destructive">couldn't create</span>
             )}
+
+            {/* Already demoted: say so instead of offering the action again. */}
+            {notImportant ? (
+              <span
+                className="inline-flex items-center gap-0.5 px-1 text-[9px] text-muted-foreground/50"
+                title="Marked not important — sank to the bottom of its priority group"
+              >
+                <ThumbsDown className="h-2.5 w-2.5" />
+                Not important
+              </span>
+            ) : (
+              onMarkNotImportant && (
+                <DropdownMenu.Item asChild onSelect={(e) => e.preventDefault()}>
+                  <button
+                    type="button"
+                    onClick={handleMarkNotImportant}
+                    disabled={demoting}
+                    title="Not important — stays in the list, sinks to the bottom of its priority group"
+                    className="inline-flex items-center gap-0.5 rounded-sm px-1 py-px text-[9px] text-muted-foreground outline-none hover:bg-accent hover:text-foreground focus:bg-accent focus:text-foreground transition-colors disabled:opacity-50"
+                  >
+                    <ThumbsDown className="h-2.5 w-2.5" />
+                    {demoting ? "Marking…" : "Not important"}
+                  </button>
+                </DropdownMenu.Item>
+              )
+            )}
+            {demoteError && (
+              <span className="text-[9px] italic text-destructive">couldn't update</span>
+            )}
+
+            {onMarkDone && (
+              <DropdownMenu.Item asChild onSelect={(e) => e.preventDefault()}>
+                <button
+                  type="button"
+                  onClick={handleMarkDone}
+                  disabled={archiving}
+                  title="Done — archives this message, leaves the triage list"
+                  className="inline-flex items-center gap-0.5 rounded-sm px-1 py-px text-[9px] text-muted-foreground outline-none hover:bg-accent hover:text-emerald-600 focus:bg-accent focus:text-emerald-600 transition-colors disabled:opacity-50"
+                >
+                  <Archive className="h-2.5 w-2.5" />
+                  {archiving ? "Archiving…" : "Done"}
+                </button>
+              </DropdownMenu.Item>
+            )}
+            {archiveError && (
+              <span className="text-[9px] italic text-destructive">couldn't archive</span>
+            )}
           </div>
 
           {expanded && reply && (
@@ -398,11 +508,15 @@ function TriageList({
   categories,
   rules,
   onConvertToTask,
+  onMarkDone,
+  onMarkNotImportant,
 }: {
   triage: MailTriage;
   categories: readonly MailCategory[];
   rules: readonly MailRule[];
   onConvertToTask?: (message: MailMessage) => Promise<void>;
+  onMarkDone?: (message: MailMessage) => Promise<void>;
+  onMarkNotImportant?: (message: MailMessage) => Promise<void>;
 }) {
   // Built once per render rather than per row: a linear scan per message would
   // be O(messages x categories) across a 100-row window.
@@ -437,6 +551,8 @@ function TriageList({
                 category={resolveCategory(m.category, byName)}
                 rule={m.rule_id ? (rulesById.get(m.rule_id) ?? null) : null}
                 onConvertToTask={onConvertToTask}
+                onMarkDone={onMarkDone}
+                onMarkNotImportant={onMarkNotImportant}
               />
             ))}
           </ul>
@@ -454,13 +570,21 @@ function TriageList({
 
 // ── Root ─────────────────────────────────────────────────────────────────
 
-export function MailPanel({ loadMail, rulesApi, onConvertToTask }: MailPanelProps) {
+export function MailPanel({ loadMail, rulesApi, onConvertToTask, mailApi }: MailPanelProps) {
   const [snapshot, setSnapshot] = useState<MailSnapshot | null>(null);
-  const [triage, setTriage] = useState<MailTriage | null>(null);
   const [failed, setFailed] = useState(false);
   const [loading, setLoading] = useState(false);
   const [rulesOpen, setRulesOpen] = useState(false);
   const lastFetchRef = useRef(0);
+
+  // Derived, not a parallel state slot: `updateMessage` below only ever
+  // touches `snapshot.messages`, and re-deriving here is what makes an
+  // optimistic "Done" / "Not important" write show up immediately without a
+  // second place that has to remember to stay in sync.
+  const triage = useMemo(
+    () => (snapshot ? triageInbox(snapshot.messages) : null),
+    [snapshot],
+  );
 
   function handleOpenChange(open: boolean) {
     if (!open) return;
@@ -476,7 +600,6 @@ export function MailPanel({ loadMail, rulesApi, onConvertToTask }: MailPanelProp
     loadMail()
       .then((result) => {
         setSnapshot(result);
-        setTriage(triageInbox(result.messages));
         setFailed(false);
       })
       // Degrade silently, like every other fetch in the header: no crash, no
@@ -498,6 +621,64 @@ export function MailPanel({ loadMail, rulesApi, onConvertToTask }: MailPanelProp
    */
   function invalidate() {
     lastFetchRef.current = 0;
+  }
+
+  /**
+   * Patch one row of the cached snapshot in place.
+   *
+   * This is the whole mechanism behind both triage actions being optimistic:
+   * `triage` is derived from `snapshot.messages` above, so writing a patch
+   * here — before the network call resolves, and again to roll it back if it
+   * fails — is sufficient to move the row between buckets or out of the list
+   * entirely. No second "pending changes" structure to keep in sync.
+   */
+  function updateMessage(id: string, patch: Partial<MailMessage>) {
+    setSnapshot((prev) => {
+      if (!prev) return prev;
+      return {
+        ...prev,
+        messages: prev.messages.map((m) => (m.id === id ? { ...m, ...patch } : m)),
+      };
+    });
+  }
+
+  /**
+   * "Done" → `status: 'archived'`.
+   *
+   * Applied optimistically: the moment the write is issued the row is already
+   * an `isHandled` status, so the very next render moves it out of `pending`
+   * and into the "N already triaged, hidden" count — the same code path a
+   * real refetch would take, not a special-cased removal. A failed write
+   * restores the previous row exactly, which doubles as the undo: there is no
+   * separate "Undo" button, but a write that didn't actually land un-does
+   * itself rather than leaving the panel showing a state the database
+   * disagrees with.
+   */
+  async function handleMarkDone(message: MailMessage) {
+    if (!mailApi) return;
+    const previous = message;
+    updateMessage(message.id, { status: "archived" });
+    try {
+      const updated = await mailApi.markDone(message.id);
+      if (updated) updateMessage(message.id, updated);
+    } catch (e) {
+      updateMessage(message.id, previous);
+      throw e; // MailRow owns the per-row error label.
+    }
+  }
+
+  /** "Not important" → `importance: 'low'`. Same optimistic-then-reconcile shape. */
+  async function handleMarkNotImportant(message: MailMessage) {
+    if (!mailApi) return;
+    const previous = message;
+    updateMessage(message.id, { importance: "low" });
+    try {
+      const updated = await mailApi.markNotImportant(message.id);
+      if (updated) updateMessage(message.id, updated);
+    } catch (e) {
+      updateMessage(message.id, previous);
+      throw e;
+    }
   }
 
   const pendingCount = triage?.pending.length ?? 0;
@@ -603,6 +784,8 @@ export function MailPanel({ loadMail, rulesApi, onConvertToTask }: MailPanelProp
               categories={snapshot?.categories ?? []}
               rules={snapshot?.rules ?? []}
               onConvertToTask={onConvertToTask}
+              onMarkDone={mailApi ? handleMarkDone : undefined}
+              onMarkNotImportant={mailApi ? handleMarkNotImportant : undefined}
             />
           )}
 

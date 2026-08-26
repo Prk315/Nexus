@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { useNexusRegistration, NexusHeader, useNexusAuth, createMailLoader, createMailRulesApi, createJobsApi } from "@nexus/core";
+import { useNexusRegistration, NexusHeader, useNexusAuth, createMailLoader, createMailRulesApi, createMailApi, createJobsApi } from "@nexus/core";
 import { ymd } from "@nexus/core/coverage";
 import { loadScreenSpansForDate } from "./lib/actual";
 import { supabase } from "./lib/supabase";
@@ -49,6 +49,7 @@ async function handleConvertMail(m: ConvertibleMail): Promise<void> {
 // Authenticated client, module scope — see packages/nexus-core/src/mail/loader.ts.
 const loadMail = createMailLoader(supabase);
 const mailRulesApi = createMailRulesApi(supabase);
+const mailApi = createMailApi(supabase);
 // Same client, same reason — the five `job_*` tables are owner-only with no
 // anon policy, so this must be the authenticated one.
 const jobsApi = createJobsApi(supabase);
@@ -89,6 +90,7 @@ function App() {
             // loader so the button falls back rather than claiming "no mail".
             loadMail={user ? loadMail : undefined}
             mailRulesApi={user ? mailRulesApi : undefined}
+            mailApi={user ? mailApi : undefined}
             // Withheld when signed out for the same reason, with one difference:
             // the Jobs button still renders and says "sign in", because it has
             // no legacy plain-button fallback to degrade to.

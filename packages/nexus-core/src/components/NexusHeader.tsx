@@ -64,6 +64,12 @@ interface NexusHeaderProps {
    */
   onConvertMailToTask?: MailPanelProps["onConvertToTask"];
   /**
+   * The two per-message triage writes — "Done" and "Not important". Build one
+   * with `createMailApi(supabase)`. Without it those two row actions do not
+   * render, same contract as `mailRulesApi` and `onConvertMailToTask`.
+   */
+  mailApi?: MailPanelProps["mailApi"];
+  /**
    * Reads and writes the job-applier tables (`job_postings`, `job_matches`,
    * `job_applications`, `job_app_modules`). Build one with
    * `createJobsApi(supabase)`.
@@ -126,6 +132,7 @@ export function NexusHeader({
   loadMail,
   mailRulesApi,
   onConvertMailToTask,
+  mailApi,
   jobsApi,
 }: NexusHeaderProps) {
   const { apps, isNexusRunning } = useConnectedApps();
@@ -211,7 +218,7 @@ export function NexusHeader({
         <IconBtn onClick={onAgent}    title="AI Agent"><Bot         className="h-4 w-4" /></IconBtn>
         {/* No loader (nexus / Stonks / TimeTracker — no session) → unchanged button. */}
         {loadMail
-          ? <MailPanel loadMail={loadMail} rulesApi={mailRulesApi} onConvertToTask={onConvertMailToTask} />
+          ? <MailPanel loadMail={loadMail} rulesApi={mailRulesApi} onConvertToTask={onConvertMailToTask} mailApi={mailApi} />
           : <IconBtn onClick={onMail} title="Mail"><Mail className="h-4 w-4" /></IconBtn>}
         {/* Beside mail, because it is the same kind of thing: a queue somebody
             else filled that occasionally needs a human. */}

@@ -9,6 +9,7 @@ import {
   plainText,
   scoreBucket,
   receivedAtMs,
+  sinkLowImportance,
   sortMail,
   triageInbox,
 } from "./score";
@@ -230,6 +231,59 @@ describe("groupByBucket", () => {
     const input = [0, 30, 60, 80, 100, null].map((p, i) => msg({ id: `m${i}`, score: p }));
     const ids = groupByBucket(input).flatMap((g) => g.messages.map((m) => m.id));
     expect(ids.sort()).toEqual(input.map((m) => m.id).sort());
+  });
+});
+
+describe("sinkLowImportance", () => {
+  it("moves importance:'low' below everything else, preserving relative order on both sides", () => {
+    const sunk = sinkLowImportance([
+      msg({ id: "a", importance: "low" }),
+      msg({ id: "b", importance: "high" }),
+      msg({ id: "c", importance: null }),
+      msg({ id: "d", importance: "low" }),
+      msg({ id: "e", importance: "medium" }),
+    ]);
+    expect(sunk.map((m) => m.id)).toEqual(["b", "c", "e", "a", "d"]);
+  });
+
+  it("treats null and 'medium'/'high' identically — only an explicit 'low' verdict sinks", () => {
+    const sunk = sinkLowImportance([
+      msg({ id: "a", importance: null }),
+      msg({ id: "b", importance: "medium" }),
+      msg({ id: "c", importance: "high" }),
+    ]);
+    expect(sunk.map((m) => m.id)).toEqual(["a", "b", "c"]);
+  });
+
+  it("is a no-op when nothing or everything is low", () => {
+    const none = [msg({ id: "a", importance: "high" }), msg({ id: "b", importance: null })];
+    expect(sinkLowImportance(none).map((m) => m.id)).toEqual(["a", "b"]);
+    const all = [msg({ id: "a", importance: "low" }), msg({ id: "b", importance: "low" })];
+    expect(sinkLowImportance(all).map((m) => m.id)).toEqual(["a", "b"]);
+  });
+
+  it("does not mutate the input array", () => {
+    const input = [msg({ id: "a", importance: "low" }), msg({ id: "b", importance: "high" })];
+    const before = input.map((m) => m.id);
+    sinkLowImportance(input);
+    expect(input.map((m) => m.id)).toEqual(before);
+  });
+});
+
+describe("groupByBucket + sinkLowImportance integration", () => {
+  it("sinks 'Not important' mail within its own bucket, not to the very end of the inbox", () => {
+    // Two 'urgent'-bucket messages (one low-importance) and one 'normal'-bucket
+    // message. A low-importance urgent message must still out-rank a merely
+    // unset normal one — sinking is relative to same-band peers, not an
+    // absolute demotion past every other bucket.
+    const groups = groupByBucket([
+      msg({ id: "urgent-low", score: 95, importance: "low" }),
+      msg({ id: "urgent-high", score: 90, importance: "high" }),
+      msg({ id: "normal", score: 40, importance: null }),
+    ]);
+    expect(groups.map((g) => g.bucket)).toEqual(["urgent", "normal"]);
+    expect(groups[0].messages.map((m) => m.id)).toEqual(["urgent-high", "urgent-low"]);
+    expect(groups[1].messages.map((m) => m.id)).toEqual(["normal"]);
   });
 });
 

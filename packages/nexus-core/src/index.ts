@@ -24,6 +24,7 @@ export {
   type MailStatus,
 } from "./mail/types";
 export { createMailRulesApi, type MailRulesApi } from "./mail/rulesApi";
+export { createMailApi, type MailApi } from "./mail/api";
 export * from "./components/MailRulesDialog";
 export {
   createMailLoader,
