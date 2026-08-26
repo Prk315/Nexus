@@ -1,0 +1,250 @@
+{
+  "id": "nexus-job-notify",
+  "name": "Job Notify — decision emails",
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "saveManualExecutions": true
+  },
+  "tags": [],
+  "nodes": [
+    {
+      "id": "trigger",
+      "name": "Every 15 Minutes",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        -620,
+        300
+      ],
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "minutes",
+              "minutesInterval": 15
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "queue",
+      "name": "Fetch Notify Queue",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        -400,
+        300
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.NEXUS_SUPABASE_URL }}/functions/v1/job-ingest",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "X-Job-Key",
+              "value": "={{ $env.JOB_INGEST_KEY }}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={ \"action\": \"notify_queue\", \"user_id\": \"{{ $env.NEXUS_USER_ID }}\", \"limit\": 5 }",
+        "options": {
+          "timeout": 30000
+        }
+      }
+    },
+    {
+      "id": "split",
+      "name": "Split Notify Queue",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -180,
+        300
+      ],
+      "parameters": {
+        "jsCode": "// job-ingest answers with ONE item carrying the whole queue. Fan it out so each\n// application is its own item — one refused send then costs one email, not the\n// whole pass.\nconst res = $input.first().json;\nif (!res || res.ok !== true) {\n  throw new Error('job-ingest notify_queue failed: ' + JSON.stringify(res).slice(0, 300));\n}\nconst notify = res.notify || [];\n\n// An empty queue is the normal steady state, not a failure: it means every scored\n// application has already been mailed. Returning [] ends the run quietly. Throwing\n// would paint a red execution every 15 minutes and train everyone to ignore them —\n// and then the one that mattered would look exactly like the others.\nif (notify.length === 0) return [];\n\nreturn notify.map((n) => ({ json: n }));"
+      }
+    },
+    {
+      "id": "compose",
+      "name": "Build Decision Email",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        40,
+        300
+      ],
+      "parameters": {
+        "jsCode": "__NOTIFY_JS__\n\n// --- node body ---\n// One decision email per queued application, built by the tested\n// buildDecisionEmail rather than by string concatenation here: every field below\n// (title, company, location, the ad URL) was written by whoever posted the job, and\n// it all ends up in an HTML body and a mail header.\n//\n// The recipient is the user's OWN inbox. This workflow never mails a company — that\n// is job-apply, and keeping the two in separate workflows is deliberate.\nconst TO = $env.JOB_NOTIFY_TO || 'bastianrthomsen@gmail.com';\n\nconst out = [];\nfor (const item of $input.all()) {\n  const app = item.json || {};\n  const mail = buildDecisionEmail(app);\n  out.push({\n    json: {\n      application_id: app.application_id,\n      to: TO,\n      subject: mail.subject,\n      html: mail.html,\n      // n8n's Gmail node sends a single body part, so only `html` is transmitted\n      // today. `text` is the text/plain half a raw-MIME sender would attach, and it\n      // is what the tests pin the email's *content* against independently of its\n      // markup. Carrying it makes multipart a one-line change if that node gains it.\n      text: mail.text,\n    },\n  });\n}\nreturn out;"
+      }
+    },
+    {
+      "id": "send",
+      "name": "Send Decision Email",
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.1,
+      "position": [
+        280,
+        300
+      ],
+      "onError": "continueErrorOutput",
+      "parameters": {
+        "resource": "message",
+        "operation": "send",
+        "sendTo": "={{ $json.to }}",
+        "subject": "={{ $json.subject }}",
+        "emailType": "html",
+        "message": "={{ $json.html }}",
+        "options": {
+          "appendAttribution": false
+        }
+      },
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "GMAIL_CREDENTIAL_ID",
+          "name": "Gmail OAuth"
+        }
+      }
+    },
+    {
+      "id": "result",
+      "name": "Build Notify Result",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        520,
+        200
+      ],
+      "parameters": {
+        "jsCode": "__NOTIFY_JS__\n\n// --- node body ---\n// Reached only from the Gmail node's SUCCESS output. notify_result flips the row to\n// needs_approval server-side, so posting it for an email that never left would mark\n// a job \"waiting for you\" that you will never actually see.\n//\n// Pairing is by pairedItem, not by position. The error output pulls failed items\n// out of this stream, so output-0 index i stops being upstream index i the moment\n// one send fails — and that offset would stamp a Gmail message id onto the WRONG\n// application. pairedSourceIndex falls back to the index, which is correct whenever\n// nothing failed.\nconst composed = $('Build Decision Email').all();\n\nconst out = [];\nconst items = $input.all();\nfor (let i = 0; i < items.length; i++) {\n  const sent = items[i].json || {};\n  const src = composed[pairedSourceIndex(items[i].pairedItem, i)];\n  const applicationId = src && src.json ? src.json.application_id : null;\n\n  // No id, no claim. Silently skipping is right here: the row stays in draft and\n  // comes back next pass, which is strictly better than marking something sent on\n  // a guess.\n  if (!applicationId) continue;\n\n  // Gmail's message resource: `id` is the message, `threadId` the conversation.\n  out.push({\n    json: {\n      action: 'notify_result',\n      user_id: $env.NEXUS_USER_ID,\n      application_id: applicationId,\n      ok: true,\n      message_id: sent.id || sent.messageId || null,\n    },\n  });\n}\nreturn out;"
+      }
+    },
+    {
+      "id": "logfail",
+      "name": "Log Failed Send",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        520,
+        420
+      ],
+      "parameters": {
+        "jsCode": "// A failed send is not a failed run.\n//\n// notify_result is posted ONLY from the success output, so a row whose email did\n// not leave the machine keeps status 'draft' and the next 15-minute pass picks it\n// up again. That is the retry. Do not add another one here: Gmail can fail *after*\n// accepting a message, and a retry loop that cannot tell those apart is how the\n// same decision email arrives four times.\nconst failed = $input.all();\nfor (const item of failed) {\n  const j = item.json || {};\n  const err = j.error || j.message || j;\n  console.log(\n    'decision email failed, row left in draft for the next pass: ' +\n      JSON.stringify(err).slice(0, 300),\n  );\n}\nreturn [];"
+      }
+    },
+    {
+      "id": "post",
+      "name": "Post Notify Result",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        760,
+        200
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.NEXUS_SUPABASE_URL }}/functions/v1/job-ingest",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "X-Job-Key",
+              "value": "={{ $env.JOB_INGEST_KEY }}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json) }}",
+        "options": {
+          "batching": {
+            "batch": {
+              "batchSize": 1,
+              "batchInterval": 200
+            }
+          }
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Every 15 Minutes": {
+      "main": [
+        [
+          {
+            "node": "Fetch Notify Queue",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch Notify Queue": {
+      "main": [
+        [
+          {
+            "node": "Split Notify Queue",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Split Notify Queue": {
+      "main": [
+        [
+          {
+            "node": "Build Decision Email",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Decision Email": {
+      "main": [
+        [
+          {
+            "node": "Send Decision Email",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send Decision Email": {
+      "main": [
+        [
+          {
+            "node": "Build Notify Result",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Log Failed Send",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Notify Result": {
+      "main": [
+        [
+          {
+            "node": "Post Notify Result",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  }
+}

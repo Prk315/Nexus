@@ -1,8 +1,14 @@
 /**
  * Dry-run the harvest pipeline against the live sources.
  *
- *   node harvest-dryrun.mjs              # both sources, small caps
+ *   node harvest-dryrun.mjs              # both live sources, small caps
  *   node harvest-dryrun.mjs --hub 5 --ji 5
+ *   node harvest-dryrun.mjs --mail fixtures/linkedin-alert.html   # the Gmail lane
+ *
+ * `--mail` reads a **saved alert email**, not the inbox: this script has no Gmail
+ * credential and is never given one. Everything downstream of the parse — the
+ * enrichment fetch, the normalization and the gate — is the same code the n8n
+ * Gmail branch runs, so the fixture is the only stand-in required.
  *
  * Fetches nothing but public job pages, writes nothing anywhere, and posts
  * nothing to Supabase. It exists because the n8n workflow itself cannot be
@@ -15,14 +21,19 @@
  * against a temporary saving.
  */
 
+import { readFileSync } from "node:fs";
+
 import {
+  buildAlertPosting,
   cheapGate,
   dedupeKey,
+  extractAlertPageEnrichment,
   extractJobPostingLd,
   extractJobindexStub,
   extractReadableText,
   normalizeLdJobPosting,
   parseJobindexFeed,
+  parseLinkedInAlertEmail,
   pickDescription,
 } from "./extract.js";
 
@@ -30,10 +41,17 @@ const arg = (name, dflt) => {
   const i = process.argv.indexOf(`--${name}`);
   return i > -1 ? Number(process.argv[i + 1]) : dflt;
 };
+const strArg = (name) => {
+  const i = process.argv.indexOf(`--${name}`);
+  return i > -1 ? process.argv[i + 1] : null;
+};
 
 const JI_LIMIT = arg("ji", 4);
 const HUB_LIMIT = arg("hub", 4);
 const DELAY_MS = arg("delay", 1200);
+const MAIL_FIXTURE = strArg("mail");
+// Same cap the workflow's Parse Alert Emails node applies.
+const MAIL_ENRICH = arg("enrich", 10);
 
 const FEED = "https://www.jobindex.dk/jobsoegning.rss?q=game+developer";
 const SITEMAP = "https://thehub.io/sitemap-jobs.xml";
@@ -172,7 +190,57 @@ async function harvestHub() {
   return rows;
 }
 
-const all = [...(await harvestJobindex()), ...(await harvestHub())];
+/**
+ * The Gmail lane, from a saved alert email.
+ *
+ * LinkedIn is ingest-only by design: no API, and logged-in pages are never
+ * scraped. The email is the source of truth and the public job page is optional
+ * enrichment — so the interesting thing to watch here is the `enr` column. A run
+ * where every row says `enr=-` is still a working harvest; a lane that dropped
+ * those rows would silently yield nothing whenever LinkedIn feels like it.
+ */
+async function harvestMail(path) {
+  line(`\n\x1b[1m── Gmail alerts (${path}) ─────────────────────────\x1b[0m`);
+  const jobs = parseLinkedInAlertEmail(readFileSync(path, "utf8"));
+  line(`parsed ${jobs.length} job(s); enriching the first ${Math.min(MAIL_ENRICH, jobs.length)}`);
+
+  const rows = [];
+  for (const [i, job] of jobs.entries()) {
+    let enrichment = null;
+    let note = "\x1b[90m-\x1b[0m";
+    if (i < MAIL_ENRICH) {
+      await sleep(DELAY_MS);
+      try {
+        const res = await fetchText(job.url);
+        enrichment = extractAlertPageEnrichment(res.text, {
+          url: job.url,
+          sourceKind: "gmail_alerts",
+        });
+        note = enrichment
+          ? enrichment.ld_json
+            ? "\x1b[32mld\x1b[0m"
+            : "\x1b[32mog\x1b[0m"
+          : `\x1b[33m${res.status}/none\x1b[0m`;
+      } catch (e) {
+        // The whole point of the fallback: a failed fetch must not lose the job.
+        note = "\x1b[31mfail\x1b[0m";
+        line(`  ! page fetch failed: ${e.message}`);
+      }
+    }
+    const row = buildAlertPosting(job, { sourceKind: "gmail_alerts", enrichment });
+    rows.push(row);
+    line(
+      `  ${row.external_id.padEnd(11)} ${String(row.title).slice(0, 42).padEnd(44)}` +
+        `${String(row.company ?? "-").slice(0, 20).padEnd(22)}` +
+        `desc=${String(row.description?.length ?? 0).padStart(4)} enr=${note}  ${row.location ?? "-"}`,
+    );
+  }
+  return rows;
+}
+
+const all = MAIL_FIXTURE
+  ? await harvestMail(MAIL_FIXTURE)
+  : [...(await harvestJobindex()), ...(await harvestHub())];
 
 line(`\n\x1b[1m── Gate ────────────────────────────────────────────────\x1b[0m`);
 const now = new Date();
@@ -182,7 +250,14 @@ for (const row of all) {
   const pass = verdicts.filter((v) => v.g.verdict === "pass");
   if (pass.length) {
     kept++;
-    line(`  \x1b[32mPASS\x1b[0m ${String(row.title).slice(0, 46).padEnd(48)} -> ${pass.map((v) => v.p.name).join(", ")}`);
+    // Name the matching keyword, not just the profile. "Compensation & Benefits
+    // Manager -> Game Dev" is alarming and unexplainable; "Game Dev(unity)" says
+    // immediately that one ambiguous keyword is doing it, and which one to tune.
+    line(
+      `  \x1b[32mPASS\x1b[0m ${String(row.title).slice(0, 46).padEnd(48)} -> ${pass
+        .map((v) => `${v.p.name}(${String(v.g.reason ?? "").replace(/^keyword: /, "")})`)
+        .join(", ")}`,
+    );
   } else {
     line(
       `  \x1b[90mdrop ${String(row.title).slice(0, 46).padEnd(48)} (${verdicts[0].g.reason})\x1b[0m`,

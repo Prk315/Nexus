@@ -1,0 +1,233 @@
+{
+  "id": "nexus-job-evaluate",
+  "name": "Job Evaluate — local Qwen scoring + module plan",
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "saveManualExecutions": true
+  },
+  "tags": [],
+  "nodes": [
+    {
+      "id": "trigger",
+      "name": "Every 30 Minutes",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        -620,
+        300
+      ],
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "minutes",
+              "minutesInterval": 30
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "pending",
+      "name": "Fetch Pending",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        -400,
+        300
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.NEXUS_SUPABASE_URL }}/functions/v1/job-ingest",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "X-Job-Key",
+              "value": "={{ $env.JOB_INGEST_KEY }}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={ \"action\": \"pending\", \"user_id\": \"{{ $env.NEXUS_USER_ID }}\", \"limit\": 4 }",
+        "options": {}
+      }
+    },
+    {
+      "id": "split",
+      "name": "Split Pending",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -180,
+        300
+      ],
+      "parameters": {
+        "jsCode": "// job-ingest answers with ONE item carrying the whole queue. Fan it out so each\n// posting is its own item — one bad inference then costs one posting, not the run.\nconst res = $input.first().json;\nif (!res || res.ok !== true) {\n  throw new Error('job-ingest pending failed: ' + JSON.stringify(res).slice(0, 300));\n}\nconst pending = res.pending || [];\n\n// An empty queue is the normal steady state, not a failure. Everything gated has\n// already been scored. Returning [] ends the run quietly; throwing here would\n// paint a red execution every 30 minutes and train everyone to ignore them.\nif (pending.length === 0) return [];\n\nreturn pending.map((p) => ({ json: p }));"
+      }
+    },
+    {
+      "id": "prompt",
+      "name": "Build Prompt",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        40,
+        300
+      ],
+      "parameters": {
+        "jsCode": "__EVALUATE_JS__\n\n// --- node body ---\n// One prompt per pending posting. The catalog handed to the model carries id,\n// slot and tags — never content: the prose is what the edge function assembles\n// with, and it has no reason to travel to a Docker container or into a context\n// window.\nconst MODEL = 'qwen2.5:latest';\n\nconst out = [];\nfor (const item of $input.all()) {\n  const p = item.json;\n  const modules = p.modules || [];\n  const built = buildEvalPrompt(p.posting || {}, p.profile || {}, modules);\n  out.push({\n    json: {\n      match_id: p.match_id,\n      posting_id: p.posting_id,\n      title: (p.posting && p.posting.title) || '',\n      model: MODEL,\n      // The real ids, kept beside the request so the parser can filter the\n      // model's answer against them rather than against anything it returned.\n      module_ids: modules.map((m) => m.id),\n      request: {\n        model: MODEL,\n        stream: false,\n        // Ollama's grammar-constrained JSON mode. Not a guarantee — a 7B model\n        // still wraps output in fences often enough that parseEvalResponse\n        // slices first-brace-to-last-brace anyway.\n        format: 'json',\n        options: {\n          // This is a classification. Creativity here is just variance in a\n          // number a human is going to sort by.\n          temperature: 0.1,\n          num_ctx: 8192,\n        },\n        messages: [\n          { role: 'system', content: built.system },\n          { role: 'user', content: built.user },\n        ],\n      },\n    },\n  });\n}\nreturn out;"
+      }
+    },
+    {
+      "id": "qwen",
+      "name": "Qwen (Ollama)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        280,
+        300
+      ],
+      "onError": "continueRegularOutput",
+      "alwaysOutputData": true,
+      "parameters": {
+        "method": "POST",
+        "url": "http://host.docker.internal:11434/api/chat",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json.request) }}",
+        "options": {
+          "timeout": 300000,
+          "response": {
+            "response": {
+              "neverError": true
+            }
+          },
+          "batching": {
+            "batch": {
+              "batchSize": 1,
+              "batchInterval": 250
+            }
+          }
+        }
+      }
+    },
+    {
+      "id": "parse",
+      "name": "Parse Verdict",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        500,
+        300
+      ],
+      "parameters": {
+        "jsCode": "__EVALUATE_JS__\n\n// --- node body ---\n// A failed inference emits NOTHING for that item, so no evaluate_result is\n// posted, so the match keeps score IS NULL and comes back on the next pass. That\n// is why the Ollama node continues on fail: a 300 s timeout on posting three must\n// not discard the four that already succeeded.\n//\n// Note the pairing is by index. The Ollama node runs one item at a time and n8n\n// preserves item order even for a failed one, so index i here is index i there.\nconst prompts = $('Build Prompt').all();\nconst queue = $('Split Pending').all();\n\nconst out = [];\nconst items = $input.all();\nfor (let i = 0; i < items.length; i++) {\n  const meta = (prompts[i] && prompts[i].json) || {};\n  const raw = items[i].json || {};\n  const text = (raw.message && raw.message.content) || raw.response || '';\n  if (raw.error || !text) continue;\n\n  const parsed = parseEvalResponse(text, { moduleIds: meta.module_ids || [] });\n  if (!parsed.ok) continue;\n\n  const modules = (queue[i] && queue[i].json && queue[i].json.modules) || [];\n  const plan = planFromVerdict(parsed.verdict, modules);\n\n  // No body is assembled here. job-ingest does that, because the module prose\n  // never left Supabase — see EVALUATION.md, \"the one rule\".\n  out.push({\n    json: {\n      action: 'evaluate_result',\n      user_id: $env.NEXUS_USER_ID,\n      match_id: meta.match_id,\n      model: meta.model,\n      verdict: Object.assign({}, parsed.verdict, { module_plan: plan }),\n    },\n  });\n}\nreturn out;"
+      }
+    },
+    {
+      "id": "result",
+      "name": "Post Result",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        720,
+        300
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.NEXUS_SUPABASE_URL }}/functions/v1/job-ingest",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "X-Job-Key",
+              "value": "={{ $env.JOB_INGEST_KEY }}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json) }}",
+        "options": {
+          "batching": {
+            "batch": {
+              "batchSize": 1,
+              "batchInterval": 200
+            }
+          }
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Every 30 Minutes": {
+      "main": [
+        [
+          {
+            "node": "Fetch Pending",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch Pending": {
+      "main": [
+        [
+          {
+            "node": "Split Pending",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Split Pending": {
+      "main": [
+        [
+          {
+            "node": "Build Prompt",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Prompt": {
+      "main": [
+        [
+          {
+            "node": "Qwen (Ollama)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Qwen (Ollama)": {
+      "main": [
+        [
+          {
+            "node": "Parse Verdict",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse Verdict": {
+      "main": [
+        [
+          {
+            "node": "Post Result",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  }
+}
