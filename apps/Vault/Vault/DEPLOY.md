@@ -41,16 +41,17 @@ time (the anon key is public by design — RLS is the real guard, see below).
 
 ## Security posture (read before exposing publicly)
 
-Every `vault_*` table starts with a permissive `anon_all` RLS policy. **Until the
-per-user RLS migration is applied, anyone with the URL can read/write all data.**
-The deploy is only safe once:
+⚠️ This section previously said every `vault_*` table starts with a permissive
+`anon_all` policy pending a migration. **That was stale as of 2026-08-26** —
+verified live against the project (`pg_policies`): every `vault_*` table
+already carries an `owner_all` policy scoped to `user_id = auth.uid()`, and
+`user_id` holds real uids only (no leftover `'default'` rows). The three-step
+migration this section used to describe is already done; don't re-run it.
 
-1. You have signed up (creates your `auth.uid()`).
-2. Existing `user_id = 'default'` rows are migrated to your uid.
-3. `vault_*` RLS is switched from `anon_all` to `user_id = auth.uid()`.
-
-Until then, keep the Vercel deployment private (Vercel Deployment Protection /
-password) or don't share the URL.
+`20260826150000_vault_teams.sql` adds an **additive** sharing layer on top of
+that (a `team_id` column + policies OR'd alongside `owner_all`, reusing
+PathFinder's `pf_teams`/`pf_team_members`) — it does not change the base
+per-user scoping described above.
 
 The `vault-assets` storage bucket is currently public; asset URLs are
 unguessable (UUID paths) but not access-controlled. Tighten to signed URLs when

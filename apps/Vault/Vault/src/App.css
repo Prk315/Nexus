@@ -980,6 +980,14 @@ body {
   padding: 4px 0;
 }
 
+.node-list-section-header {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--fg-ghost);
+  padding: 8px 10px 2px;
+}
+
 .tree-item {
   display: flex;
   align-items: center;
@@ -1127,6 +1135,23 @@ body {
 .tree-item.active .fav-btn { visibility: visible; }
 .fav-btn.fav-active { visibility: visible; color: #f59e0b; }
 .fav-btn:hover { color: #f59e0b; }
+
+.share-btn {
+  background: none;
+  border: none;
+  color: var(--fg-ghost);
+  cursor: pointer;
+  font-size: 12px;
+  padding: 0 4px;
+  line-height: 1;
+  visibility: hidden;
+  box-shadow: none;
+  transition: color var(--duration) var(--ease);
+}
+.tree-item:hover .share-btn,
+.tree-item.active .share-btn { visibility: visible; }
+.share-btn.share-active { visibility: visible; color: #38bdf8; }
+.share-btn:hover { color: #38bdf8; }
 
 .unlink-btn {
   background: none;
