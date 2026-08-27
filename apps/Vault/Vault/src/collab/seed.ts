@@ -100,13 +100,23 @@ export function hydrate(stateB64: string): Y.Doc {
  * vault_content as the default, permanently losing the layout. Capturing it
  * here lets NoteEditor re-apply it after the first render.
  */
-export function readSeedWidth(seedJson: string): string | undefined {
+export function readSeedDocAttrs(seedJson: string): Record<string, string> {
   try {
     const doc = JSON.parse(seedJson);
     const attrs = doc?.doc?.attrs ?? doc?.attrs;
-    const width = attrs?.width;
-    return typeof width === "string" ? width : undefined;
+    if (!attrs || typeof attrs !== "object") return {};
+    const out: Record<string, string> = {};
+    // EVERY string doc attribute, not an enumerated list. This function is the
+    // only thing standing between a doc-level setting and Yjs dropping it, and
+    // an enumerated list means the next attribute added silently is not rescued
+    // — which is how `width` behaved before it was noticed. Non-string values
+    // are skipped because re-applying one is a `setDocAttribute` of a value the
+    // schema may not accept.
+    for (const [k, v] of Object.entries(attrs as Record<string, unknown>)) {
+      if (typeof v === "string") out[k] = v;
+    }
+    return out;
   } catch {
-    return undefined;
+    return {};
   }
 }

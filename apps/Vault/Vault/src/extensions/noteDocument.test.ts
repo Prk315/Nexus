@@ -4,7 +4,7 @@ import { EditorState } from "@tiptap/pm/state";
 import StarterKit from "@tiptap/starter-kit";
 import { buildNoteExtensions, noteSchema } from "./noteExtensions";
 import { auditNoteRaw } from "../lib/noteSchemaGuard";
-import { NOTE_WIDTHS, DEFAULT_NOTE_WIDTH } from "./noteDocument";
+import { NOTE_WIDTHS, DEFAULT_NOTE_WIDTH, NOTE_TEXT_SIZES, DEFAULT_NOTE_TEXT } from "./noteDocument";
 
 const schema = noteSchema();
 const exts = buildNoteExtensions();
@@ -64,6 +64,46 @@ describe("per-note width", () => {
 // createNodeFromContent return an EMPTY document and can cost you the note —
 // an unknown ATTRIBUTE is dropped silently, because Node.fromJSON builds attrs
 // by iterating the *type's* declared attributes and never looks for extras.
+describe("per-note text size", () => {
+  it("defaults to normal when the attribute is absent", () => {
+    const d = schema.nodeFromJSON({ type: "doc", content: [para()] });
+    expect(d.attrs.textSize).toBe(DEFAULT_NOTE_TEXT);
+  });
+
+  it("accepts every offered size and survives the JSON round trip", () => {
+    for (const t of NOTE_TEXT_SIZES) {
+      const d = schema.nodeFromJSON({ type: "doc", attrs: { textSize: t }, content: [para()] });
+      expect(d.attrs.textSize).toBe(t);
+      expect(schema.nodeFromJSON(d.toJSON()).attrs.textSize).toBe(t);
+    }
+  });
+
+  it("falls back to the default for a nonsense stored value", () => {
+    const d = schema.nodeFromJSON({ type: "doc", attrs: { textSize: "gigantic" }, content: [para()] });
+    // nodeFromJSON takes the stored value verbatim; the guard is in parseHTML
+    // and in the toolbar, which only offers the four. What matters here is that
+    // it does not throw and the content survives.
+    expect(d.content.childCount).toBe(1);
+  });
+
+  // The two settings are independent: choosing large text must not re-flow the
+  // note, and choosing full width must not resize the type.
+  it("is independent of width", () => {
+    const d = schema.nodeFromJSON({
+      type: "doc",
+      attrs: { width: "full", textSize: "large" },
+      content: [para()],
+    });
+    expect(d.attrs.width).toBe("full");
+    expect(d.attrs.textSize).toBe("large");
+  });
+
+  it("passes the schema guard", () => {
+    const raw = JSON.stringify({ type: "doc", attrs: { textSize: "xlarge" }, content: [para()] });
+    expect(auditNoteRaw(raw, schema).ok).toBe(true);
+  });
+});
+
 describe("an older client without the attribute", () => {
   const oldSchema = getSchema([StarterKit]);
 

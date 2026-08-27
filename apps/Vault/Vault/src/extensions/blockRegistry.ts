@@ -21,7 +21,10 @@ import { unwrapNearestContainer } from "./structural/containerCommands";
 import { insertToggle } from "./structural/toggleCommands";
 import { insertColumns, addColumn, deleteColumn } from "./structural/columnCommands";
 import { CODE_LANGUAGES } from "./noteCodeBlock";
-import { NOTE_WIDTHS, NOTE_WIDTH_LABELS, DEFAULT_NOTE_WIDTH } from "./noteDocument";
+import {
+  NOTE_WIDTHS, NOTE_WIDTH_LABELS, DEFAULT_NOTE_WIDTH,
+  NOTE_TEXT_SIZES, NOTE_TEXT_LABELS, DEFAULT_NOTE_TEXT,
+} from "./noteDocument";
 import { headingForSelection, toggleFoldAtSelection, setAllHeadingFolds } from "./headingFold";
 
 /** Every node in the structural family that "remove surrounding box" applies to. */
@@ -42,6 +45,7 @@ export type BlockGroup =
   | "tableOps"    // row/column editing, inline, only inside a table
   | "tableMore"   // header toggles, merge/split, delete — behind a menu
   | "media"      // images
+  | "textSize"   // per-note text size, a sibling of "width"
   | "align"
   | "color"
   | "code"       // code-block language, only inside one
@@ -597,6 +601,28 @@ export function buildBlockRegistry(opts: BlockRegistryOptions = {}): BlockAction
     });
   }
 
+  // ── Note text size ────────────────────────────────────────────────────────
+  // Registered exactly like width, and stored the same way: on the doc node, so
+  // it travels with the note rather than living in this browser.
+  for (const t of NOTE_TEXT_SIZES) {
+    actions.push({
+      id: `noteText:${t}`,
+      title: NOTE_TEXT_LABELS[t],
+      icon: t === "small" ? "ᴀ" : t === "normal" ? "A" : t === "large" ? "𝖠" : "𝗔",
+      group: "textSize",
+      surfaces: ["toolbar"],
+      keywords: ["text", "size", "font", "bigger", "smaller", "zoom", "large", "small"],
+      isActive: (e) => (e.state.doc.attrs.textSize ?? DEFAULT_NOTE_TEXT) === t,
+      run: (e) => {
+        // Plain transaction: there is no updateAttributes for the top node.
+        // `addToHistory: false` for the same reason the width toggles use it —
+        // an appearance change is not an edit, and undo should not step back
+        // through it on the way to actual text.
+        e.view.dispatch(e.state.tr.setDocAttribute("textSize", t).setMeta("addToHistory", false));
+      },
+    });
+  }
+
   // ── Sketch ────────────────────────────────────────────────────────────────
   actions.push({
     id: "sketch",
@@ -728,6 +754,7 @@ export const GROUP_LABELS: Record<BlockGroup, string> = {
   color: "Colour",
   code: "Language",
   width: "Note width",
+  textSize: "Text size",
   fold: "Sections",
   table: "Table",
   tableOps: "Table",

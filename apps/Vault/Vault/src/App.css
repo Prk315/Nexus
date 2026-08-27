@@ -3801,6 +3801,20 @@ body.vault-col-resizing * {
   --note-measure: 1180px;
 }
 
+/* ── Per-note text size ──────────────────────────────────────────────────────
+   A scale factor on the editor rather than a font-size on the paragraph: every
+   heading, list, table cell and code block in the note is already sized in `em`
+   or `rem` relative to the editor, so scaling once at the root keeps the whole
+   type hierarchy in proportion. Setting `p { font-size: … }` would grow the body
+   text past its own H3.
+
+   `--note-measure` is untouched on purpose: text size and column width are
+   independent settings, and coupling them would mean choosing large text
+   silently re-flowed the note. */
+.tiptap-editor .ProseMirror[data-note-text="small"]  { font-size: 0.88em; }
+.tiptap-editor .ProseMirror[data-note-text="large"]  { font-size: 1.15em; }
+.tiptap-editor .ProseMirror[data-note-text="xlarge"] { font-size: 1.32em; }
+
 /* "Full" fills the pane rather than naming a pixel width, so it keeps working
    when the sidebar or outline is toggled and on a split pane. */
 .tiptap-editor .ProseMirror[data-note-width="full"],

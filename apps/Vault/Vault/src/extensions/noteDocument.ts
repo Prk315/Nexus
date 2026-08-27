@@ -30,6 +30,25 @@ export const NOTE_WIDTH_LABELS: Record<NoteWidth, string> = {
 
 export const DEFAULT_NOTE_WIDTH: NoteWidth = "auto";
 
+// ── Text size ───────────────────────────────────────────────────────────────
+// Same reasoning as width, and for the same reason it is a doc attribute rather
+// than a localStorage preference: a dense reference note wants small text and a
+// journal page wants large, and that is a property of the NOTE. A per-browser
+// setting would also be per-browser wrong — the iPad is where you most want
+// bigger text, and it is the device least likely to have set it.
+
+export const NOTE_TEXT_SIZES = ["small", "normal", "large", "xlarge"] as const;
+export type NoteTextSize = (typeof NOTE_TEXT_SIZES)[number];
+
+export const NOTE_TEXT_LABELS: Record<NoteTextSize, string> = {
+  small: "Small text",
+  normal: "Normal text",
+  large: "Large text",
+  xlarge: "Extra large text",
+};
+
+export const DEFAULT_NOTE_TEXT: NoteTextSize = "normal";
+
 export const NoteDocument = Document.extend({
   addAttributes() {
     return {
@@ -42,6 +61,20 @@ export const NoteDocument = Document.extend({
         renderHTML: (attrs) =>
           attrs.width && attrs.width !== DEFAULT_NOTE_WIDTH
             ? { "data-note-width": attrs.width }
+            : {},
+      },
+      textSize: {
+        default: DEFAULT_NOTE_TEXT,
+        parseHTML: (el) => {
+          const v = el.getAttribute("data-note-text");
+          return (NOTE_TEXT_SIZES as readonly string[]).includes(v ?? "") ? v : DEFAULT_NOTE_TEXT;
+        },
+        // The default is not serialised, so a note that never changed it round
+        // trips byte-identically and does not grow an attribute for a setting
+        // nobody chose.
+        renderHTML: (attrs) =>
+          attrs.textSize && attrs.textSize !== DEFAULT_NOTE_TEXT
+            ? { "data-note-text": attrs.textSize }
             : {},
       },
     };
@@ -59,8 +92,12 @@ export const NoteDocument = Document.extend({
           // it the `.ProseMirror[data-note-width]` selectors match nothing and
           // the setting appears to do nothing at all.
           attributes: (state): Record<string, string> => {
+            const out: Record<string, string> = {};
             const w = state.doc.attrs?.width;
-            return w && w !== DEFAULT_NOTE_WIDTH ? { "data-note-width": String(w) } : {};
+            if (w && w !== DEFAULT_NOTE_WIDTH) out["data-note-width"] = String(w);
+            const t = state.doc.attrs?.textSize;
+            if (t && t !== DEFAULT_NOTE_TEXT) out["data-note-text"] = String(t);
+            return out;
           },
         },
       }),

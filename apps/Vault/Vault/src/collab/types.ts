@@ -40,13 +40,16 @@ export interface CollabSession {
    */
   isRemoteTransaction(tr: Transaction): boolean;
   /**
-   * The note's stored `width` doc attribute, captured BEFORE the Y.Doc was
-   * built. Yjs syncs the doc's content, not the doc node — the root is rebuilt
+   * The note's doc-level attributes, captured BEFORE the Y.Doc was built.
+   *
+   * ALL of them, not just `width`: this is the only thing standing between a
+   * doc-level setting and Yjs dropping it, so enumerating them means the next
+   * one added is silently not rescued. Yjs syncs the doc's content, not the doc node — the root is rebuilt
    * with `topNodeType.create(null, …)`, so every doc-level attribute is
    * dropped. Without re-applying this the note silently snaps back to the
    * default width and the next projection write makes that permanent.
    */
-  seedWidth: string | undefined;
+  seedDocAttrs: Record<string, string>;
   /** Persist immediately (tab close, blur, visibility change). */
   flush(): void;
   destroy(): void;

@@ -192,6 +192,32 @@ function escapeHtml(s: string) {
   return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 }
 
+/**
+ * Push a stored document's doc-level attributes onto a live editor.
+ *
+ * `setContent` replaces the content RANGE, not the doc node, so every doc
+ * attribute survives it untouched — loading a `wide` note into an editor
+ * showing `full` silently keeps `full`. Harmless on the mount path (`useEditor`
+ * builds the doc from the JSON, attributes and all) and wrong everywhere else.
+ *
+ * Driven off the JSON's own attrs rather than a hard-coded list: `width` was
+ * handled by name in three places, and a second doc attribute would have been
+ * stale in all three without a single line changing.
+ */
+function applyDocAttrs(editor: Editor, json: unknown): void {
+  const attrs = json && typeof json === "object" ? (json as any).attrs : undefined;
+  if (!attrs || typeof attrs !== "object") return;
+  let tr = editor.state.tr;
+  let touched = false;
+  for (const [k, v] of Object.entries(attrs as Record<string, unknown>)) {
+    if (v === undefined || editor.state.doc.attrs?.[k] === v) continue;
+    tr = tr.setDocAttribute(k, v);
+    touched = true;
+  }
+  // One transaction, and invisible to undo: an appearance change is not an edit.
+  if (touched) editor.view.dispatch(tr.setMeta("addToHistory", false));
+}
+
 function parseContent(raw: string) {
   if (!raw) return "";
   try {
@@ -437,13 +463,10 @@ function NoteEditorInner({ content, onChange, nodeId, graph, variant = "full", c
       // from the JSON, attributes and all), but this effect also runs when the
       // same open note changes underneath us — another device, another pane —
       // and without this the width would quietly stay stale.
-      const nextWidth = parsed && typeof parsed === "object" ? (parsed as any).attrs?.width : undefined;
-      const current = editor.state.doc.attrs?.width;
-      if (nextWidth !== undefined && nextWidth !== current) {
-        editor.view.dispatch(
-          editor.state.tr.setDocAttribute("width", nextWidth).setMeta("addToHistory", false)
-        );
-      }
+      // Every doc-level attribute, not just width — see DOC_ATTRS. An
+      // enumerated list here is how `textSize` would have gone stale on the
+      // "same note changed underneath us" path while width did not.
+      applyDocAttrs(editor, parsed);
     } catch (e) {
       console.error("[vault] refusing to load note content into the editor", e);
       setHardBlocked(true);
@@ -454,8 +477,9 @@ function NoteEditorInner({ content, onChange, nodeId, graph, variant = "full", c
   //
   // Yjs syncs the document's CONTENT — a Y.XmlFragment — and ySync rebuilds the
   // root node as `schema.topNodeType.create(null, …)`. `create(null, …)` means
-  // every doc-level attribute is dropped, so NoteDocument's `width` snaps back
-  // to its default the instant a note goes collaborative. That alone would be a
+  // EVERY doc-level attribute is dropped, so NoteDocument's `width` and
+  // `textSize` snap back to their defaults the instant a note goes
+  // collaborative. That alone would be a
   // visual annoyance; what makes it destructive is the projection write that
   // follows, which would persist the default and lose a wide note's layout for
   // good.
@@ -469,20 +493,28 @@ function NoteEditorInner({ content, onChange, nodeId, graph, variant = "full", c
   // separate, self-contained change.
   useEffect(() => {
     if (!collab || !editor || editor.isDestroyed) return;
-    const want = collab.seedWidth;
-    if (want === undefined) return;
+    const want = collab.seedDocAttrs;
+    const keys = Object.keys(want);
+    if (keys.length === 0) return;
     let cancelled = false;
     // After ySync's first render, not before — it replaces the doc.
     const id = setTimeout(() => {
       if (cancelled || editor.isDestroyed) return;
       try {
-        if (editor.state.doc.attrs?.width === want) return;
-        editor.view.dispatch(
-          editor.state.tr.setDocAttribute("width", want).setMeta("addToHistory", false)
-        );
+        // One transaction for all of them: two dispatches would be two undo
+        // steps to skip past, and they describe a single "restore what Yjs
+        // dropped" event rather than two decisions.
+        let tr = editor.state.tr;
+        let touched = false;
+        for (const k of keys) {
+          if (editor.state.doc.attrs?.[k] === want[k]) continue;
+          tr = tr.setDocAttribute(k, want[k]);
+          touched = true;
+        }
+        if (touched) editor.view.dispatch(tr.setMeta("addToHistory", false));
       } catch {
         // editor.view throws before the view exists (v3 getter). Nothing to do:
-        // the width is cosmetic and the next mount will retry.
+        // these are cosmetic and the next mount will retry.
       }
     }, 0);
     return () => {
@@ -521,12 +553,7 @@ function NoteEditorInner({ content, onChange, nodeId, graph, variant = "full", c
           // setContent replaces the content RANGE, not the doc node, so the
           // restored version's width would otherwise be silently ignored — the
           // same trap the [content] effect documents.
-          const width = json && typeof json === "object" ? (json as any).attrs?.width : undefined;
-          if (width !== undefined && editor.state.doc.attrs?.width !== width) {
-            editor.view.dispatch(
-              editor.state.tr.setDocAttribute("width", width).setMeta("addToHistory", false)
-            );
-          }
+          applyDocAttrs(editor, json);
           return true;
         } catch (e) {
           console.error("[vault] could not apply the restored version to the editor", e);
