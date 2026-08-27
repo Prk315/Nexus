@@ -20,6 +20,7 @@ import 'katex/contrib/mhchem';
 import { getStroke } from "perfect-freehand";
 import { KATEX_MACROS, KATEX_OPTS } from "../lib/katexShared";
 import { MathField } from "./MathField";
+import { CanvasPathfinderBlock } from "./CanvasPathfinderBlock";
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 
@@ -37,6 +38,20 @@ interface KanbanColumn   { id: string; title: string; cards: KanbanCard[]; }
 interface KanbanBlock    extends BaseBlock { type: "kanban"; columns: KanbanColumn[]; }
 type ShapeKind = "rect" | "rounded" | "ellipse" | "diamond";
 interface ShapeBlock     extends BaseBlock { type: "shape"; shape: ShapeKind; label: string; color?: string; }
+/**
+ * A live PathFinder task view on the canvas.
+ *
+ * Carries the SAME three fields the Tiptap node stores (`view`, `spec`,
+ * `title`), because it renders the same component — see PathfinderBlockView's
+ * host split. Storing them under different names here would mean the two hosts
+ * could not share a spec parser, which is the whole reason this was cheap.
+ *
+ * Like the note block, it holds the QUERY and never the rows: a canvas is
+ * saved as JSON and a snapshot of last week's tasks would go stale silently.
+ */
+interface PathfinderBlockOnCanvas extends BaseBlock {
+  type: "pathfinder"; view: string; spec: string; title: string;
+}
 interface FrameBlock     extends BaseBlock { type: "frame"; label: string; color?: string; borderStyle?: "solid" | "dashed" | "dotted"; borderWidth?: number; radius?: number; fill?: string; }
 interface OutputChunk    { type: "text" | "image" | "error" | "html" | "table"; content: string; }
 interface CodeCellBlock  extends BaseBlock { type: "code_cell"; code: string; outputs: OutputChunk[]; running: boolean; language?: "python" | "sql"; }
@@ -56,6 +71,7 @@ interface InkStrokeBlock  extends BaseBlock { type: "ink_stroke";  points: { x: 
 
 type CanvasBlock = TextBlock | StickyBlock | TitleBlock | DividerBlock | TableBlock | MathBlock
                 | ChecklistBlock | KanbanBlock | ShapeBlock | FrameBlock | CodeCellBlock | HtmlBlock | ImageBlock
+                | PathfinderBlockOnCanvas
                 | MoleculeBlock | ChemEqBlock | ElementBlock | MolDrawBlock | MatrixBlockData | GraphBlockData | GridBlockData
                 | DrawArrowBlock | DrawEllipseBlock | DrawPolygonBlock | InkStrokeBlock;
 type Patch = Record<string, unknown>;
@@ -225,6 +241,18 @@ function mkKanban(x: number, y: number): KanbanBlock {
 function mkShape(x: number, y: number): ShapeBlock {
   return { id: uid(), type: "shape", shape: "rounded", x, y, width: 180, height: 80, label: "" };
 }
+function mkPathfinder(x: number, y: number): PathfinderBlockOnCanvas {
+  return {
+    id: uid(), type: "pathfinder", x, y, width: 620, height: 420,
+    view: "list",
+    // Empty rather than a serialized default: `parseSpec` turns "" into exactly
+    // `defaultSpec(view)`, so this needs none of the spec machinery imported
+    // here — and cannot drift from it.
+    spec: "",
+    title: "",
+  };
+}
+
 function mkFrame(x: number, y: number): FrameBlock {
   return { id: uid(), type: "frame", x, y, width: 480, height: 320, label: "Group", color: "#94a3b8", borderStyle: "dashed", borderWidth: 2, radius: 10, fill: "transparent" };
 }
@@ -2056,6 +2084,15 @@ function renderHeaderPure(block: CanvasBlock, api: React.MutableRefObject<BlockA
       </div>
     );
   }
+  if (block.type === "pathfinder") {
+    return (
+      <div className="canvas-block-header" onPointerDown={e => api.current.onHeaderPointerDown(e, block)}>
+        <span className="canvas-block-drag">⠿</span>
+        <span className="canvas-block-type-label">Tasks</span>
+        {closeBtn(block.id, api)}
+      </div>
+    );
+  }
   if (block.type === "kanban") {
     return (
       <div className="canvas-block-header" onPointerDown={e => api.current.onHeaderPointerDown(e, block)}>
@@ -2188,6 +2225,21 @@ function renderContentPure(block: CanvasBlock, api: React.MutableRefObject<Block
     );
   }
   if (block.type === "checklist") return <ChecklistContent block={block} onUpdate={api.current.updateBlock} />;
+  if (block.type === "pathfinder") {
+    return (
+      // Wheel and pointer events stay inside the block: the canvas pans and
+      // zooms on both, so without this a scroll through a long task list drags
+      // the whole board out from under it.
+      <div className="canvas-pf-host" onWheel={e => e.stopPropagation()} onPointerDown={e => e.stopPropagation()}>
+        <CanvasPathfinderBlock
+          view={block.view}
+          spec={block.spec}
+          title={block.title}
+          onChange={(patch) => api.current.updateBlock(block.id, patch)}
+        />
+      </div>
+    );
+  }
   if (block.type === "kanban")    return <KanbanContent    block={block} onUpdate={api.current.updateBlock} onSelect={onSelect} />;
   if (block.type === "html") return (
     <HtmlContent block={block} onUpdate={api.current.updateBlock} onSelect={onSelect} />
@@ -4774,6 +4826,7 @@ export function CanvasEditor({ content, onChange, nodeId }: Props) {
               <button className="toolbar-dd-item" onClick={() => addBlock(mkTable)}>Table</button>
               <button className="toolbar-dd-item" onClick={() => addBlock(mkChecklist)}>Checklist</button>
               <button className="toolbar-dd-item" onClick={() => addBlock(mkKanban)}>Kanban</button>
+              <button className="toolbar-dd-item" onClick={() => addBlock(mkPathfinder)}>Tasks</button>
               <button className="toolbar-dd-item" onClick={() => addBlock(mkMath)}>∑ Math</button>
             </div>
           )}
