@@ -20,6 +20,9 @@ import { MathField } from "./MathField";
 import * as api from "../lib/api";
 import { DEFAULT_HIGHLIGHTERS, findAncestorOfKind, getDescendants } from "../nodeUtils";
 import type { VaultGraph, HighlighterCategory, VaultRecord } from "../types";
+// Types only — see collab/types.ts. A VALUE import from collab/ here would drag
+// yjs and both Tiptap collaboration packages into the eager note bundle.
+import type { CollabSession } from "../collab/types";
 import { KATEX_OPTS } from "../lib/katexShared";
 import "katex/dist/katex.min.css";
 import "katex/contrib/mhchem";
@@ -139,9 +142,25 @@ function MathEditPopover({
 
 interface Props {
   content: string;
-  onChange: (content: string) => void;
+  /**
+   * `meta.remote` marks a change that arrived from a co-editor rather than this
+   * keyboard. The optional second argument keeps every other caller
+   * (CanvasEditor, WorkbookEditor, BookshelfEditor, ParsedViewer) unchanged.
+   */
+  onChange: (content: string, meta?: { remote?: boolean }) => void;
   nodeId?: string;
   graph?: VaultGraph;
+  /**
+   * A live co-editing session, or null/undefined for the ordinary save path.
+   *
+   * Computed by EditorPane and passed in explicitly — NoteEditor deliberately
+   * does NOT look at `graph` for `team_id` and decide for itself. That is what
+   * makes the WorkbookEditor case structurally safe rather than a runtime
+   * check: WorkbookEditor renders NoteEditors with no nodeId and no graph, so
+   * it passes no session, so it takes today's exact code path. There is no
+   * `if (!nodeId)` guard here for anyone to forget.
+   */
+  collab?: CollabSession | null;
   /**
    * "embedded" drops the outline. WorkbookEditor renders one NoteEditor per
    * linked note, and N stacked outlines in a column of cards is noise, not
@@ -221,7 +240,15 @@ export function NoteEditor(props: Props) {
   return <NoteEditorInner {...props} />;
 }
 
-function NoteEditorInner({ content, onChange, nodeId, graph, variant = "full" }: Props) {
+function NoteEditorInner({ content, onChange, nodeId, graph, variant = "full", collab }: Props) {
+  const isCollab = !!collab;
+  // Read inside effects/callbacks that must not re-run when the session
+  // identity changes. `collab` is stable for the life of a mount (EditorPane
+  // keys the editor on it), but a ref keeps the [content] effect's dependency
+  // list unchanged, which matters given how much that effect's comment warns
+  // about its own timing.
+  const collabRef = useRef<CollabSession | null | undefined>(collab);
+  collabRef.current = collab;
   const [, forceUpdate] = useState(0);
   // Set when Tiptap itself rejects the content (structurally invalid but with
   // known types — the case the pre-flight audit deliberately doesn't cover).
@@ -312,26 +339,46 @@ function NoteEditorInner({ content, onChange, nodeId, graph, variant = "full" }:
     extensions: buildNoteExtensions({
       onMathClick: (kind, node, pos) => setMathEdit({ kind, pos, latex: node.attrs.latex }),
       extra: [slashExtRef.current, linkKeyExtRef.current],
+      // Empty for a private note. Supplying it also disables StarterKit's
+      // undoRedo — one fused decision, see noteExtensions.ts.
+      collab: collab?.extensions,
     }),
-    content: parseContent(content),
+    // Under collaboration the document comes from the Y.Doc, which ySync
+    // installs on first render. Passing initial content as well is at best
+    // wasted work and at worst a second copy of the note.
+    content: isCollab ? null : parseContent(content),
     // Catches content whose types all exist but whose *nesting* is invalid —
     // the residue the pre-flight audit deliberately doesn't check. Tiptap
     // recovers by substituting an empty doc, so the only safe response is to
     // stop emitting; onUpdate below is the thing that would overwrite.
     enableContentCheck: true,
-    onContentError: ({ error }) => {
+    onContentError: ({ error, disableCollaboration }) => {
       console.error("[vault] note content failed validation; edits are disabled", error);
+      // Under collaboration this fires from Collaboration's own
+      // filterInvalidContent plugin, which hands us the kill switch. Calling it
+      // stops ySync writing the substitute document back into the shared Y.Doc,
+      // where it would reach the other person too.
+      disableCollaboration?.();
       setHardBlocked(true);
     },
-    onUpdate: ({ editor }) => {
+    onUpdate: ({ editor, transaction }) => {
       // The single most important line in this file. When the document Tiptap
       // holds is not the document that was stored, letting one keystroke
       // through means EditorPane's 400ms autosave writes the substitute over
       // the original, and vault_content keeps no history.
       if (hardBlockedRef.current) return;
+      // editor.getJSON() reads the live ProseMirror document, attributes and
+      // all. Never project from the Y.Doc instead: ySync rebuilds the root as
+      // `topNodeType.create(null, …)`, so a projection taken from there loses
+      // the per-note `width` permanently.
       const json = JSON.stringify(editor.getJSON());
       lastEmittedRef.current = json;
-      onChange(json);
+      // Remote changes still flow through onChange — EditorPane's `content`
+      // state and globalContentCache must track the live document so a second
+      // pane, the outline and PDF export all stay correct. The flag stops the
+      // WRITE, not the state update: only the client whose keyboard produced a
+      // change persists the projection for it.
+      onChange(json, { remote: collabRef.current?.isRemoteTransaction(transaction) ?? false });
     },
     onTransaction: () => forceUpdate((n) => n + 1),
   });
@@ -347,6 +394,14 @@ function NoteEditorInner({ content, onChange, nodeId, graph, variant = "full" }:
     // the commit; on main, with no error boundary above, that took the whole app
     // down. Intermittent, because it's a race with the readContent await.
     if (!editor || editor.isDestroyed) return;
+    // Under collaboration the CRDT is the merge authority and this effect must
+    // not run at all. `setContent` on a Yjs-backed document is a full
+    // ReplaceStep against the shared fragment: it deletes everything the other
+    // person has written and re-inserts our copy as brand-new CRDT operations.
+    // With both people typing that is a mutual annihilation loop, not a
+    // refresh. Remote changes arrive through ySync instead, which is the whole
+    // point of the exercise.
+    if (collabRef.current) return;
     // Content came from this editor's own keystroke — no need to setContent.
     if (content === lastEmittedRef.current) return;
     lastEmittedRef.current = content;
@@ -377,6 +432,47 @@ function NoteEditorInner({ content, onChange, nodeId, graph, variant = "full" }:
       setHardBlocked(true);
     }
   }, [content]);
+
+  // Restore the per-note width under collaboration.
+  //
+  // Yjs syncs the document's CONTENT — a Y.XmlFragment — and ySync rebuilds the
+  // root node as `schema.topNodeType.create(null, …)`. `create(null, …)` means
+  // every doc-level attribute is dropped, so NoteDocument's `width` snaps back
+  // to its default the instant a note goes collaborative. That alone would be a
+  // visual annoyance; what makes it destructive is the projection write that
+  // follows, which would persist the default and lose a wide note's layout for
+  // good.
+  //
+  // So re-apply it from the seed JSON, captured before the Y.Doc was built.
+  // `addToHistory: false` for the same reason the width dispatch above uses it:
+  // an attribute-only change must stay invisible to undo.
+  //
+  // Note this restores but does not SYNC — changing the width still only
+  // affects your own view. Sharing it needs a Y.Map on the same doc; that is a
+  // separate, self-contained change.
+  useEffect(() => {
+    if (!collab || !editor || editor.isDestroyed) return;
+    const want = collab.seedWidth;
+    if (want === undefined) return;
+    let cancelled = false;
+    // After ySync's first render, not before — it replaces the doc.
+    const id = setTimeout(() => {
+      if (cancelled || editor.isDestroyed) return;
+      try {
+        if (editor.state.doc.attrs?.width === want) return;
+        editor.view.dispatch(
+          editor.state.tr.setDocAttribute("width", want).setMeta("addToHistory", false)
+        );
+      } catch {
+        // editor.view throws before the view exists (v3 getter). Nothing to do:
+        // the width is cosmetic and the next mount will retry.
+      }
+    }, 0);
+    return () => {
+      cancelled = true;
+      clearTimeout(id);
+    };
+  }, [collab, editor]);
 
   // Load this note's highlighter categories; seed defaults on first use.
   useEffect(() => {

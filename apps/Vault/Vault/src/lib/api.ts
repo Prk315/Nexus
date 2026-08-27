@@ -23,8 +23,13 @@ export async function loadGraph(): Promise<VaultGraph> {
   if (colorsRes.error) err(colorsRes.error);
 
   const nodes: Record<string, VaultNode> = {};
+  sharedNodeIds.clear();
   for (const n of nodesRes.data!) {
     nodes[n.id] = { id: n.id, name: n.name, kind: n.kind as NodeKind, tags: n.tags ?? [], team_id: n.team_id ?? null, user_id: n.user_id };
+    // Feeds assertNotCoedited, so the co-editing guard costs a query only on
+    // notes that could actually have CRDT state. team_id is already in the
+    // select, so this is free.
+    if (n.team_id != null) sharedNodeIds.add(n.id);
   }
 
   const edges: Record<string, string[]> = {};
@@ -65,6 +70,9 @@ export async function deleteNode(id: string): Promise<VaultGraph> {
     supabase.from("vault_content").delete().eq("node_id", `${id}_margins`),
     supabase.from("vault_journals").delete().eq("node_id", id),
     supabase.from("vault_records").delete().eq("source_node_id", id),
+    // The CRDT state for a live co-edited note. Keyed by the real node id, never
+    // a "<id>_suffix" key — co-editing covers the note body only.
+    supabase.from("vault_ydoc").delete().eq("node_id", id),
   ]);
   const { error } = await supabase.from("vault_nodes").delete().eq("id", id);
   if (error) err(error);
@@ -159,11 +167,12 @@ export async function deleteTagGlobal(tag: string): Promise<VaultGraph> {
 // ── Content (notes, canvas, workbook, PDF URL, annotations) ──────────────────
 
 // Thrown by saveContent/saveJournal when the row changed since this client
-// last read it — the sharing feature's only concurrency guard, since Vault
-// has no live co-editing (no CRDT/yjs — see BlockHandle.ts). Callers should
-// tell the user to reload rather than silently overwrite the other person's
-// edit. Keyed per node id, one map per table since the same id can appear in
-// both.
+// last read it. This is the concurrency guard for every surface that is NOT
+// live co-edited — which is all of them except a shared Tiptap note, where a
+// Yjs CRDT is the merge authority instead (see src/collab/ and
+// saveContentProjection below). Callers should tell the user to reload rather
+// than silently overwrite the other person's edit. Keyed per node id, one map
+// per table since the same id can appear in both.
 export class ContentConflictError extends Error {
   constructor(public nodeId: string) {
     super("This note was changed elsewhere — reload before saving over it.");
@@ -210,6 +219,54 @@ async function assertContentNotConflicted(id: string): Promise<void> {
   if (data?.updated_at && known && data.updated_at !== known) {
     throw new ContentConflictError(id);
   }
+  await assertNotCoedited(id);
+}
+
+// Thrown when a note has live co-editing state but this build is saving it the
+// old way — i.e. this client is too old (or has the feature switched off) to
+// participate, and writing the whole document would silently discard whatever
+// the CRDT holds.
+//
+// This is the guard, and it is the reason the reader has to ship a release
+// before the writer. Deploy order alone cannot fix the problem: the iPad is
+// installed over a cable on ~7-day certificates and there is no way to know it
+// is current. Without this check an old client reads the vault_content
+// projection (which the new clients keep freshly written, so it looks perfectly
+// healthy), edits it, and saves — the CRDT never sees the edit, and the next
+// projection flush overwrites it. vault_content keeps no history.
+//
+// It is the same doctrine noteSchemaGuard already records for the `__vault`
+// envelope: a marker cannot help clients that predate it, so every client has
+// to be taught to read it at least one release before anything starts writing.
+export class CollabOnlyError extends Error {
+  constructor(public nodeId: string) {
+    super("This note is being co-edited. Update Vault to edit it.");
+    this.name = "CollabOnlyError";
+  }
+}
+
+// Which nodes are currently shared, refreshed by every loadGraph() (which
+// already selects team_id, so this costs nothing). It exists so the guard below
+// can skip the round trip for the overwhelming majority of saves.
+const sharedNodeIds = new Set<string>();
+
+async function assertNotCoedited(id: string): Promise<void> {
+  // Only a SHARED note can have CRDT state, so only a shared note is worth a
+  // query. Without this the guard adds a round trip to every autosave of every
+  // private note in the vault, forever, to defend against something that by
+  // construction cannot happen to them.
+  //
+  // Suffix keys ("<id>_annot", "<id>_hl", …) are never co-edited either — CRDT
+  // scope is the note body — and they are excluded for free, since a suffix key
+  // is never a vault_nodes id and so never lands in the set.
+  if (!sharedNodeIds.has(id)) return;
+  // NOTE the deliberately ignored `error`. Before the migration is applied
+  // PostgREST answers PGRST205 ("could not find the table") and `data` is null,
+  // so this fails OPEN and saving keeps working. That is the right direction to
+  // fail — an unapplied migration should not brick the editor — but it does
+  // mean the guard is silently inert until the table exists.
+  const { data } = await supabase.from("vault_ydoc").select("node_id").eq("node_id", id).maybeSingle();
+  if (data) throw new CollabOnlyError(id);
 }
 
 // A save this big is not a document, it is a bug — almost certainly binary
@@ -237,6 +294,114 @@ export const saveContent: (id: string, content: string) => Promise<void> =
     }
     await assertContentNotConflicted(id);
     return queuedSaveContent(id, content);
+  };
+
+// The write path for a note that is being live co-edited.
+//
+// Deliberately a SEPARATE EXPORTED FUNCTION rather than an option on
+// saveContent. A boolean parameter is exactly the kind of thing a later
+// refactor drops or defaults, and dropping it here would disable the conflict
+// guard for every PRIVATE note in the vault — a bug with no symptom at all
+// until two devices quietly overwrite each other. A name that isn't called
+// cannot be reached by accident.
+//
+// It skips assertContentNotConflicted because on a co-edited note "the row
+// changed since I read it" is the normal case, not a conflict: both clients
+// write a projection derived from the same converged CRDT, several times a
+// minute. Leaving the check in would make live typing throw constantly.
+// Everything else is identical — same size cap, checked outside the queue for
+// the same reason, and the same single-flight queue.
+export const saveContentProjection: (id: string, content: string) => Promise<void> =
+  async (id, content) => {
+    if (content.length > MAX_CONTENT_BYTES) {
+      throw new Error(
+        `[vault] refusing to save ${(content.length / 1024 / 1024).toFixed(1)} MB to node ${id} ` +
+        `(cap ${MAX_CONTENT_BYTES / 1_000_000} MB). Images belong in Storage via uploadCanvasImage(), not inline.`
+      );
+    }
+    return queuedSaveContent(id, content);
+  };
+
+// Drop our record of when a node's content row was last written.
+//
+// Needed in two places, and both are bugs without it:
+//  * the Reload button — reloading with the stale timestamp still cached means
+//    the very next save re-throws the same conflict, so the button appears not
+//    to work;
+//  * collab teardown (a note unshared mid-session) — the projection writer
+//    never refreshes the OTHER client's cached timestamp, so falling back to
+//    the guarded path with a stale entry produces a permanent, unclearable
+//    "conflict" on a note nobody else is touching.
+// A missing entry passes the guard, via its `known &&` short-circuit.
+export function forgetContentVersion(id: string): void {
+  lastKnownContentUpdatedAt.delete(id);
+}
+
+// ── CRDT state for live co-edited notes ──────────────────────────────────────
+// One row per co-edited note, holding base64(Y.encodeStateAsUpdate(doc)).
+// vault_content.data stays the authoritative-looking JSON *projection* that
+// every other reader uses (the schema guard, PDF export, WorkbookEditor, and
+// any client too old to know about CRDTs); this table is the actual truth while
+// a note is being co-edited. See supabase/migrations/20260827120000.
+
+export async function readYdoc(nodeId: string): Promise<string | null> {
+  const { data, error } = await supabase.from("vault_ydoc")
+    .select("state").eq("node_id", nodeId).maybeSingle();
+  if (error) err(error);
+  return data ? (data.state ?? "") : null;
+}
+
+/**
+ * The seed election.
+ *
+ * Two clients hydrating a Y.Doc from the same stored JSON produce two
+ * INDEPENDENT documents — merging them duplicates the note end to end (see
+ * src/collab/seed.ts). So exactly one client's bytes win, and the caller then
+ * hydrates from whatever this returns regardless of whether it won.
+ *
+ * `ignoreDuplicates: true` is PostgREST's ON CONFLICT DO NOTHING. The re-read
+ * afterwards is unconditional and that is the whole point: there is no
+ * "did I win?" branch for a later refactor to get wrong.
+ */
+export async function seedYdoc(nodeId: string, state: string): Promise<string> {
+  const { error } = await supabase.from("vault_ydoc")
+    .upsert({ node_id: nodeId, state }, { onConflict: "node_id", ignoreDuplicates: true });
+  if (error) err(error);
+  return (await readYdoc(nodeId)) ?? "";
+}
+
+async function rawSaveYdoc(nodeId: string, state: string): Promise<void> {
+  const { error } = await supabase.from("vault_ydoc")
+    .upsert({ node_id: nodeId, state, updated_at: new Date().toISOString() },
+      { onConflict: "node_id" });
+  if (error) err(error);
+}
+
+const queuedSaveYdoc = makeSaver(rawSaveYdoc);
+
+// Yjs state grows monotonically — deleted content is collected but the delete
+// set and clocks are not, so a note edited for a year is several times its own
+// text. There is no safe automatic compaction: rebuilding the doc mints fresh
+// clientIDs and would re-collide with any live peer, i.e. reintroduce the
+// duplication bug as a scheduled job. So warn, and cap the same way content is
+// capped — outside the queue, so a permanently-oversized row cannot retry six
+// times and gate every other node's saves behind the shared backoff.
+// Recovery is manual and documented: with nobody editing, the owner deletes the
+// vault_ydoc row and the next open re-seeds from the projection.
+const MAX_YDOC_BYTES = 2_000_000;
+
+export const saveYdoc: (nodeId: string, state: string) => Promise<void> =
+  async (nodeId, state) => {
+    if (state.length > 512_000) {
+      console.warn(`[vault] large CRDT state: ${(state.length / 1024).toFixed(0)} kB for node ${nodeId}`);
+    }
+    if (state.length > MAX_YDOC_BYTES) {
+      throw new Error(
+        `[vault] refusing to persist ${(state.length / 1024 / 1024).toFixed(1)} MB of CRDT state for node ${nodeId}. ` +
+        `Live editing continues; recover by deleting the vault_ydoc row while nobody is editing.`
+      );
+    }
+    return queuedSaveYdoc(nodeId, state);
   };
 
 // ── Journals (handwriting stroke data) ───────────────────────────────────────
@@ -407,7 +572,10 @@ async function getMyTeamId(): Promise<string | null> {
   return teamIdPromise;
 }
 
-function collectDescendants(rootId: string, graph: VaultGraph): string[] {
+// Exported so callers that need to act on the same set share/unshare acts on
+// (cache invalidation, for one) cannot disagree with it about what "the
+// subtree" means.
+export function collectDescendants(rootId: string, graph: VaultGraph): string[] {
   const seen = new Set<string>([rootId]);
   const stack = [rootId];
   while (stack.length > 0) {
@@ -443,6 +611,17 @@ export async function shareNode(nodeId: string, graph: VaultGraph): Promise<Vaul
 // what "unshare" says.
 export async function unshareNode(nodeId: string, graph: VaultGraph): Promise<VaultGraph> {
   const ids = collectDescendants(nodeId, graph);
+  // Drop the CRDT state BEFORE clearing team_id: vault_ydoc's team policies are
+  // gated on vault_can_coedit(), which goes false the moment the node is
+  // unshared, so a teammate doing this would lose the permission to clean up
+  // and strand the rows. (The owner's own owner_all policy would still reach
+  // them, but relying on who happened to click is not a rule.)
+  //
+  // They must go. Re-sharing later re-seeds from vault_content, and a surviving
+  // CRDT would resurrect whatever the document looked like when sharing
+  // stopped — silently overwriting every private edit made in between.
+  await supabase.from("vault_ydoc").delete().in("node_id", ids);
+  for (const id of ids) forgetContentVersion(id);
   const { error } = await supabase.from("vault_nodes").update({ team_id: null }).in("id", ids);
   if (error) err(error);
   return loadGraph();

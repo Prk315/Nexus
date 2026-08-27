@@ -5,6 +5,7 @@
 // as getSubtree/getTaskScheduling in tasks.ts.
 
 import { err, supabase, getUserId } from "./_shared";
+import { memberName } from "@nexus/core/members";
 
 export interface Team {
   id: string;
@@ -22,18 +23,16 @@ function mapTeam(r: any): Team {
 }
 
 /**
- * There is no profiles table and `auth.users` is unreadable client-side, so the
- * two seeded members' display names are hardcoded rather than fetched.
- * `memberName` falls back to a uid prefix for anyone not in this map.
+ * There is no profiles table and `auth.users` is unreadable client-side, so a
+ * uid can only become a human name via a hardcoded map. That map now lives in
+ * nexus-core and is shared with Vault, which needs the same people plus a
+ * per-user colour for its live co-editing carets — and a colour that disagreed
+ * between two apps would make the same person visually a different person in
+ * each. Re-exported rather than re-pointed at every call site.
+ *
+ * Deep specifier, never the `@nexus/core` barrel: the barrel drags in three.js.
  */
-const KNOWN_MEMBERS: Record<string, string> = {
-  "a33625c2-4dd2-44fa-b2e5-4d455eeac59d": "Bastian",
-  "870ca14b-2a8a-4634-9c08-2eb2d67207b0": "Josefine",
-};
-
-export function memberName(userId: string): string {
-  return KNOWN_MEMBERS[userId] ?? userId.slice(0, 8);
-}
+export { memberName };
 
 export const getMyTeams = async (): Promise<Team[]> => {
   const { data, error } = await supabase.from("pf_teams").select("*");
