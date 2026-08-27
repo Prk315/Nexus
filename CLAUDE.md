@@ -1267,6 +1267,44 @@ invisible in-session because `globalContentCache` still held the right thing.
   now, which sets `isLoading` and commits only once the content is in hand.
 ## Vault: PathFinder task blocks
 
+### The list row: opt-out chips, and the title yields LAST
+
+⚠️ **`.pf-meta` is shrinkable and `.pf-list-title` has a floor.** It was the other
+way round — `title { flex: 1 1 auto; min-width: 0 }` against `meta { flex: none }`
+— so the chips took whatever they wanted and the title absorbed the entire
+deficit. In a note-width column that rendered "Living Room" as one letter per
+line while the same plan name and the same "Unassigned" sat comfortably beside it
+on all 27 rows. The title is the content; it is the last thing that gives way,
+and the chips ellipsise first (`.pf-meta > * { min-width: 0 }` is what makes
+`text-overflow` actually engage inside a flex row).
+
+The list also honours `spec.columns` now, where it used to render every chip
+unconditionally. `LIST_COLUMNS` is deliberately narrower than `PF_COLUMNS` —
+`urgency` and `stage` have nowhere to go in a line of text, and a switch that
+does nothing is worse than no switch. `tags` stays on its own `showTags` flag
+rather than joining `columns`: two switches for one chip is how they end up
+disagreeing. The spec is shared across views on purpose, so a table-only column
+survives being invisible in the list rather than being dropped.
+
+**Existing blocks change appearance on first load.** `DEFAULT_COLUMNS` is
+`done, title, plan, priority, due`, so the assignee and estimate chips go away
+until switched back on. That is the intended migration — the complaint was that
+the block insisted on showing everything — and the picker is now shown for lists,
+not just tables.
+
+`spec.metaPct` is the dragged title/metadata split, **as a percentage**. Not
+pixels: a note is 720 px to full-bleed depending on `NoteDocument`'s per-note
+width and the same note opens on an iPad, so a pixel width would be right on the
+screen it was dragged on and wrong everywhere else — the same reasoning that puts
+sketch coordinates in a 1000-unit logical space. 0 means auto. The grip writes a
+CSS variable straight to the DOM on pointermove and commits ONE transaction on
+release; a transaction per move would be ~60 document rewrites a second, each
+waking the note's 400 ms autosave.
+
+On a coarse pointer the grip is a short handle at the TOP of the list, not a
+full-height rule. Permanently visible (no hover to reveal it), a full-height
+stripe would sit over every row beneath it and swallow taps meant for tasks.
+
 The slash menu offers **three** blocks — *Task list*, *Task board*, *Task table* —
 that read and write PathFinder's `pf_tasks` live, from inside a note. They are
 **one** ProseMirror node type, `pathfinderBlock`, carrying a `view` attribute.
