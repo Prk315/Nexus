@@ -1154,3 +1154,17 @@
   .pf-detail { box-shadow: 0 18px 48px oklch(0 0 0 / 50%); }
   .pf-tag-vault { background: oklch(1 0 0 / 6%); }
 }
+
+/* ── Kanban drop indicator ───────────────────────────────────────────────────
+   The gap a dragged card would land in. A line rather than a moving placeholder
+   gap: a gap that opens and closes as the pointer crosses midpoints makes every
+   OTHER card jump, and on a short column that reflow is what the eye tracks
+   instead of the thing being dragged. */
+.pf-drop-line {
+  height: 2px;
+  margin: 2px 0;
+  border-radius: 2px;
+  background: var(--edge-in);
+  /* Just visible enough to read as "here", not as a card. */
+  box-shadow: 0 0 0 1px var(--edge-in-bg);
+}

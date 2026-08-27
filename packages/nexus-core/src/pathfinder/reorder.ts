@@ -1,8 +1,17 @@
-// Pure math for handle-initiated sibling reordering (dashboard StepRow tree,
-// workspace TaskBoard child rows). React-free on purpose, same as taskTree /
-// systems / nextUp — the interaction shell lives in
-// components/common/RowReorder.tsx; every decision about WHERE a drop lands
-// is here, where vitest can reach it.
+// Pure math for drag reordering: which slot a pointer is over, and the sibling
+// order that results. React-free on purpose, same as filter / tree — every
+// decision about WHERE a drop lands is here, where vitest can reach it, and the
+// interaction shell is somewhere else.
+//
+// Lives in nexus-core rather than in PathFinder because Vault's kanban board
+// needs the identical calculation for reordering cards in a column. Copying
+// ~50 lines of slot arithmetic would have been easy and wrong: two copies of a
+// drop rule disagree about the edges (the no-op slots either side of the
+// dragged row are exactly the kind of thing one copy gets right and the other
+// does not), and only one of them would have had the tests.
+//
+// Consumers today: PathFinder's RowReorder (dashboard StepRow tree, workspace
+// TaskBoard child rows) and Vault's PfBoardView.
 
 export interface RowRect {
   top: number;

@@ -177,6 +177,22 @@ export interface PathfinderApi {
   setKanbanStatus(id: number, status: string): Promise<PfTask>;
   setStage(id: number, stage: TaskStage): Promise<PfTask>;
   deleteTask(id: number): Promise<void>;
+  /**
+   * Persist a manual order: assigns `sort_order = position` for each id, in the
+   * order given.
+   *
+   * ⚠️ `sort_order` is ONE order per task, not one per view. A kanban column is
+   * a subset of tasks, so reordering inside it necessarily writes into the same
+   * order a manually-sorted list reads. That is inherent to the column, not to
+   * this function, and it is the correct meaning: dragging a card says "this
+   * task comes before that one", and that should hold wherever the two are seen
+   * together.
+   *
+   * Pass the COMPLETE list for the group being ordered — positions are assigned
+   * over precisely the ids given, so a partial list renumbers a few tasks into
+   * the middle of everyone else.
+   */
+  reorderTasks(orderedIds: number[]): Promise<void>;
 }
 
 /** Thrown by `setStage` when the scheduling gate refuses. Carries a message meant for the user. */
@@ -428,6 +444,21 @@ export function createPathfinderApi(
         return patchTask(created.id, planning);
       }
       return created;
+    },
+
+    async reorderTasks(orderedIds: number[]): Promise<void> {
+      const { db } = need();
+      // One statement per row, like PathFinder's own reorder. A single upsert
+      // would need every row's full payload (upsert replaces, it does not
+      // merge), which turns an ordering change into a whole-task rewrite —
+      // and any column missing from that payload would be silently reset.
+      const results = await Promise.all(
+        orderedIds.map((id, index) =>
+          db.from(TASKS_TABLE).update({ sort_order: index }).eq("id", id),
+        ),
+      );
+      const failed = results.find((r) => r.error);
+      if (failed?.error) fail(failed.error);
     },
 
     async toggleTask(id: number, done: boolean): Promise<PfTask> {

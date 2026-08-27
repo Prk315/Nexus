@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { insertionIndexFromPointer, reorderedIds, type RowRect } from "./reorderDrag";
+import { insertionIndexFromPointer, reorderedIds, type RowRect } from "./reorder";
 
 // Three stacked 30px rows starting at y=100: [100,130), [130,160), [160,190).
 // Midpoints at 115, 145, 175.
