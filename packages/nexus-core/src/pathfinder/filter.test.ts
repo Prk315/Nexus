@@ -216,6 +216,26 @@ describe("runQuery", () => {
 });
 
 describe("creationDefaults", () => {
+  // ⚠️ The guard for a deliberate GAP, which is harder to protect than a
+  // behaviour: `stages` is the one single-valued axis that must NOT be
+  // inherited. It is gated — the "no calendar minutes, no 'active'" rule lives
+  // only in setStage — and createTask writes pf_task_planning directly through
+  // patchTask. Inheriting it would mint tasks into 'active' with nothing
+  // scheduled and defeat the only check that enforces it.
+  //
+  // Without this test, "stages is in isUnfiltered but not here" reads as an
+  // oversight and gets tidied up.
+  it("never inherits stage, however unambiguous the filter is", () => {
+    const d = creationDefaults(filter({ stages: ["active"] }));
+    expect(d.stage).toBeUndefined();
+    expect(Object.keys(d)).not.toContain("stage");
+    // Not merely absent because the filter was empty — a sibling axis in the
+    // same filter still comes through.
+    const both = creationDefaults(filter({ stages: ["active"], planIds: [7] }));
+    expect(both.plan_id).toBe(7);
+    expect(both.stage).toBeUndefined();
+  });
+
   // A filter listing three plans says nothing about which one a new task belongs
   // to, so it must contribute nothing rather than guessing the first.
   it("inherits only unambiguous single-value constraints", () => {

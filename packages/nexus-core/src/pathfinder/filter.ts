@@ -396,6 +396,19 @@ export function creationDefaults(filter: TaskFilter): Record<string, unknown> {
   }
   // A due window is a range, not a date — except "today", which is exactly one.
   if (filter.due === "today") out.__dueToday = true;
+
+  // ⚠️ `stages` is ABSENT on purpose, and it is the one axis here that must
+  // stay absent. Every other single-valued constraint above is a plain column;
+  // `stage` is gated. The scheduling gate — a task may not reach 'active'
+  // without calendar minutes behind it — lives ONLY in `setStage`, and
+  // `createTask` routes planning fields through `patchTask`, which writes
+  // pf_task_planning directly. So inheriting it would let a block filtered to
+  // `stage = active` mint tasks straight into 'active' with nothing scheduled,
+  // silently defeating the one check that enforces it.
+  //
+  // It looks like an oversight — `stages` appears in `isUnfiltered` and in the
+  // filter UI like everything else — which is exactly why this comment and the
+  // test that pins it exist. Do not "complete" the list.
   return out;
 }
 
