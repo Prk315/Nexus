@@ -1178,6 +1178,8 @@
   border-style: solid;
   border-color: var(--edge-in);
   width: 14ch;
+}
+
 /* ── Kanban drop indicator ───────────────────────────────────────────────────
    The gap a dragged card would land in. A line rather than a moving placeholder
    gap: a gap that opens and closes as the pointer crosses midpoints makes every
