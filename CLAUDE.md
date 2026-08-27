@@ -1298,6 +1298,35 @@ invisible in-session because `globalContentCache` still held the right thing.
   now, which sets `isLoading` and commits only once the content is in hand.
 ## Vault: PathFinder task blocks
 
+### One block, two hosts — the note and the canvas
+
+The task block renders in a Tiptap node view AND as a canvas block, from one
+implementation. Its coupling to Tiptap was always five things — `node.attrs`,
+`updateAttributes`, `editor.isEditable`, `selected`, and the wrapper element —
+so they are named in `PathfinderBlockHostProps` and passed in rather than
+assumed. `PathfinderBlockView` is now a thin adapter over `PathfinderBlock`.
+
+⚠️ **`NodeViewWrapper` is not optional for Tiptap and not usable off it.** It
+registers the node view's DOM with ProseMirror, and it reads React context that
+only a node view renderer provides — outside one it throws rather than
+degrading. That is why the wrapper is a prop and why the canvas passes
+`PlainBlockWrapper`. It is a component and not the string `"div"` because the
+prop is typed: an intrinsic tag and `NodeViewWrapper` share no type that still
+checks the props being passed, and loosening it to `ElementType` gives up the
+checking entirely.
+
+A fresh canvas block stores `spec: ""`, not a serialized default. `parseSpec`
+turns an empty string into exactly `defaultSpec(view)`, so the canvas needs none
+of the spec machinery imported — and cannot drift from it.
+
+The canvas host is lazy for the same reason the note's is, and it is worth
+checking after any change: the build should keep `PathfinderBlockView` as its
+own chunk (~63 kB) with `CanvasEditor` unchanged. If the canvas chunk suddenly
+grows by that much, a static import has crept in and every canvas now carries
+the PathFinder data layer.
+
+Wheel and pointer events stop at the block. The canvas pans and zooms on both,
+so without that a scroll through a long task list drags the whole board.
 ### Board columns are editable on ONE axis, and only that one
 
 `spec.statuses` overrides the built-in four, and only for `kanban_status` — the

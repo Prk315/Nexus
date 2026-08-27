@@ -24,6 +24,7 @@
 //     never successfully run.
 
 import { useCallback, useEffect, useMemo, useState, useSyncExternalStore } from "react";
+import React from "react";
 import { NodeViewWrapper, type NodeViewProps } from "@tiptap/react";
 import {
   creationDefaults,
@@ -107,17 +108,77 @@ export interface TreeControls {
   expandHidden: (id: number) => void;
 }
 
+/**
+ * What the block needs from whatever is hosting it.
+ *
+ * The block is used in two places now — a Tiptap node view in a note, and a
+ * block on the canvas — and its coupling to Tiptap was always tiny:
+ * `node.attrs`, `updateAttributes`, `editor.isEditable`, `selected`, and the
+ * wrapper element. Naming those five is what lets one implementation serve both
+ * hosts instead of the canvas growing a second, drifting copy of a 660-line
+ * component.
+ */
+export interface PathfinderBlockHostProps {
+  attrs: { view?: string | null; spec?: string | null; title?: string | null };
+  setAttrs: (patch: { view?: string; spec?: string; title?: string }) => void;
+  editable: boolean;
+  selected: boolean;
+  /**
+   * The outer element.
+   *
+   * ⚠️ Tiptap MUST pass `NodeViewWrapper` — it is what registers the node view's
+   * DOM with ProseMirror. The canvas must NOT: `NodeViewWrapper` reads React
+   * context that only a node view renderer provides, so outside one it throws
+   * rather than degrading.
+   */
+  Wrapper: React.ComponentType<PathfinderWrapperProps>;
+}
+
+/** Exactly what the block asks of its wrapper — nothing host-specific. */
+export interface PathfinderWrapperProps {
+  className?: string;
+  "data-view"?: string;
+  contentEditable?: boolean;
+  children?: React.ReactNode;
+}
+
+/**
+ * The plain wrapper, for hosts that are not a Tiptap node view.
+ *
+ * A component rather than the string `"div"` because the prop is typed as a
+ * component: `NodeViewWrapper` and an intrinsic tag have no common type that
+ * still checks the props being passed, and loosening it to `ElementType` gives
+ * up that checking entirely.
+ */
+export function PlainBlockWrapper(props: PathfinderWrapperProps) {
+  return <div {...props} />;
+}
+
+/** The Tiptap host. Maps a node view onto the props above and nothing else. */
 export function PathfinderBlockView({ node, updateAttributes, editor, selected }: NodeViewProps) {
-  const view = (node.attrs.view ?? "list") as PfBlockView;
-  const title = (node.attrs.title ?? "") as string;
-  const spec = useMemo(() => parseSpec(node.attrs.spec, view), [node.attrs.spec, view]);
+  return (
+    <PathfinderBlock
+      attrs={node.attrs as PathfinderBlockHostProps["attrs"]}
+      setAttrs={updateAttributes}
+      editable={editor.isEditable}
+      selected={selected}
+      Wrapper={NodeViewWrapper}
+    />
+  );
+}
+
+export function PathfinderBlock({
+  attrs, setAttrs, editable, selected, Wrapper,
+}: PathfinderBlockHostProps) {
+  const view = (attrs.view ?? "list") as PfBlockView;
+  const title = (attrs.title ?? "") as string;
+  const spec = useMemo(() => parseSpec(attrs.spec, view), [attrs.spec, view]);
 
   const snap = usePathfinderData();
   // `useConfirm`, never window.confirm — the latter is a silent no-op in the iOS
   // WKWebView, so a "cancelled" delete would just make deleting stop working on
   // the iPad. `confirmDialog` has to be rendered for the promise to ever settle.
   const { confirm, dialog: confirmDialog } = useConfirm();
-  const editable = editor.isEditable;
 
   /** Rows mid-write, so a second click can't race the first. */
   const [busy, setBusy] = useState<Set<number>>(new Set());
@@ -140,9 +201,9 @@ export function PathfinderBlockView({ node, updateAttributes, editor, selected }
   const commitSpec = useCallback(
     (next: PfBlockSpec) => {
       if (!editable) return;
-      updateAttributes({ spec: serializeSpec(next) });
+      setAttrs({ spec: serializeSpec(next) });
     },
-    [editable, updateAttributes],
+    [editable, setAttrs],
   );
 
   const setView = useCallback(
@@ -152,9 +213,9 @@ export function PathfinderBlockView({ node, updateAttributes, editor, selected }
       // a configured list becomes a configured board without being rebuilt. Only
       // sort is nudged, because a board's manual order and a list's due order
       // are different questions.
-      updateAttributes({ view: next });
+      setAttrs({ view: next });
     },
-    [editable, updateAttributes, view],
+    [editable, setAttrs, view],
   );
 
   // ── Tags ──────────────────────────────────────────────────────────────────
@@ -514,7 +575,7 @@ export function PathfinderBlockView({ node, updateAttributes, editor, selected }
   }, [detailId, detailTask, snap.status]);
 
   return (
-    <NodeViewWrapper
+    <Wrapper
       className={`pf-block${selected ? " is-selected" : ""}${spec.compact ? " is-compact" : ""}`}
       data-view={view}
       // The node view owns its own pointer handling; without this a click on a
@@ -531,7 +592,7 @@ export function PathfinderBlockView({ node, updateAttributes, editor, selected }
           placeholder={label}
           disabled={!editable}
           aria-label="Block title"
-          onChange={(e) => editable && updateAttributes({ title: e.target.value })}
+          onChange={(e) => editable && setAttrs({ title: e.target.value })}
         />
 
         <div className="pf-views" role="group" aria-label="View">
@@ -677,7 +738,7 @@ export function PathfinderBlockView({ node, updateAttributes, editor, selected }
       ) : null}
 
       {confirmDialog}
-    </NodeViewWrapper>
+    </Wrapper>
   );
 }
 

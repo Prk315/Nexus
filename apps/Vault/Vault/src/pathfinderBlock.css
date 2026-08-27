@@ -1155,6 +1155,20 @@
   .pf-tag-vault { background: oklch(1 0 0 / 6%); }
 }
 
+/* ── The block hosted on a canvas ────────────────────────────────────────────
+   The canvas gives a block a fixed box and pans/zooms on wheel and pointer, so
+   the task list has to own both inside its own bounds — otherwise scrolling a
+   long list drags the whole board out from under it. The stopPropagation is in
+   the component; this is the half that makes the list scrollable at all. */
+.canvas-pf-host {
+  width: 100%;
+  height: 100%;
+  overflow: auto;
+  /* The block draws its own card; a second border from the canvas wrapper would
+     double it. */
+  background: var(--bg-base);
+}
+.canvas-pf-host .pf-block { border: none; border-radius: 0; }
 /* ── Board column editor ─────────────────────────────────────────────────── */
 
 .pf-chip-status { display: inline-flex; align-items: center; gap: 3px; }
