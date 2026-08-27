@@ -27,6 +27,7 @@ import { BlockHandle } from "./structural/BlockHandle";
 import { NoteDocument } from "./noteDocument";
 import { FoldableHeading } from "./headingFold";
 import { SketchBlock } from "./SketchBlock";
+import { PathfinderBlock } from "./PathfinderBlock";
 import { NoteImage } from "./noteImage";
 import { NoteCodeBlock } from "./noteCodeBlock";
 import TextAlign from "@tiptap/extension-text-align";
@@ -100,6 +101,10 @@ export function buildNoteExtensions(opts: NoteExtensionOpts = {}): Extensions {
     // vault_content row — see SketchBlock.ts for why, and for the size cap
     // that keeps a sketch from taking the note's text down with it.
     SketchBlock,
+    // A live query onto PathFinder's tasks. ONE node type carrying a `view`
+    // attribute, not three — see PathfinderBlock.ts for why the three blocks the
+    // slash menu offers must not be three node types.
+    PathfinderBlock,
     // Storage URLs only — see noteImage.ts for the incident this prevents.
     NoteImage,
     TextAlign.configure({ types: ["heading", "paragraph"] }),

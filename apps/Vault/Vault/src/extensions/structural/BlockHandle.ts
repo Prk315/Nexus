@@ -19,8 +19,10 @@
 // drop indicator instead of relying on a drop cursor plugin.
 
 import { Extension } from "@tiptap/core";
-import { Plugin, PluginKey, NodeSelection } from "@tiptap/pm/state";
+import { Plugin, PluginKey, NodeSelection, type Transaction } from "@tiptap/pm/state";
+import { Decoration, DecorationSet } from "@tiptap/pm/view";
 import type { EditorView } from "@tiptap/pm/view";
+import type { Node as PMNode, ResolvedPos } from "@tiptap/pm/model";
 
 export const blockHandleKey = new PluginKey("vaultBlockHandle");
 
@@ -47,12 +49,14 @@ interface HandleState {
   /** Document position of the block the grip currently points at. */
   pos: number | null;
   lastProbe: number;
+  /** True while the pointer is actively over the editor's hover band. */
+  hovering: boolean;
 }
 
 interface DragState {
   /** Position of the block being moved, in the doc as it was at pointerdown. */
   from: number;
-  /** Where it would land: position of a top-level boundary. */
+  /** Where it would land: position of a sibling boundary. */
   to: number | null;
   pointerId: number;
   startX: number;
@@ -60,31 +64,49 @@ interface DragState {
   active: boolean;
 }
 
+interface BlockHandlePluginState {
+  /** Positions of blocks toggled into a Cmd+Shift multi-selection. */
+  selected: number[];
+}
+
+function isBlockGroupNode(node: PMNode): boolean {
+  const group = node.type.spec.group;
+  return !!group && group.split(" ").includes("block");
+}
+
 /**
- * The TOP-LEVEL block under `coords`.
+ * The innermost group:"block" ancestor of a resolved position.
  *
- * Deliberately the outermost one: hovering a paragraph inside a callout offers
- * to drag the callout, and hovering a cell of a column row offers to drag the
- * row. With nested containers there is no single answer to "which block did
- * you mean", and a handle that sometimes grabs the inner block and sometimes
- * the outer one is worse than one that is always predictable.
- *
- * NOTE: resolve `found.pos`, not `found.inside`. `inside` is the position
- * *before* the node the coords fall in, so resolving it yields a depth-0
- * position and this always answered "the first block in the document" — the
- * grip stuck to the heading no matter what was hovered.
+ * Walking from the deepest depth outward — rather than jumping straight to
+ * depth 1 — is what makes a paragraph inside a column inside a toggle its own
+ * addressable block instead of always resolving to the outermost container.
+ * Non-block wrappers (`column`, `toggleSummary`, `toggleContent` — see
+ * Columns.ts/Toggle.ts) are deliberately not in group "block", so the walk
+ * passes over them and lands on the nearest real block: the toggle itself
+ * when hovering its summary line (the summary can't be moved on its own), or
+ * the specific paragraph when hovering content nested several levels deep.
  */
-function blockAt(view: EditorView, x: number, y: number): { pos: number; node: any } | null {
+function nearestBlock($pos: ResolvedPos): { pos: number; node: PMNode } | null {
+  for (let d = $pos.depth; d >= 1; d--) {
+    const node = $pos.node(d);
+    if (isBlockGroupNode(node)) return { pos: $pos.before(d), node };
+  }
+  return null;
+}
+
+function blockAt(view: EditorView, x: number, y: number): { pos: number; node: PMNode } | null {
   const found = view.posAtCoords({ left: x, top: y });
   if (!found) return null;
-
   const $pos = view.state.doc.resolve(Math.min(found.pos, view.state.doc.content.size));
   if ($pos.depth === 0) return null;
+  return nearestBlock($pos);
+}
 
-  const pos = $pos.before(1);
-  const node = view.state.doc.nodeAt(pos);
-  if (!node || node.isText) return null;
-  return { pos, node };
+/** The block the caret/selection is currently inside, at any depth. */
+function blockAtSelection(view: EditorView): { pos: number; node: PMNode } | null {
+  const $head = view.state.doc.resolve(view.state.selection.head);
+  if ($head.depth === 0) return null;
+  return nearestBlock($head);
 }
 
 function positionHandle(state: HandleState, pos: number) {
@@ -113,8 +135,40 @@ export const BlockHandle = Extension.create({
 
   addProseMirrorPlugins() {
     return [
-      new Plugin({
+      new Plugin<BlockHandlePluginState>({
         key: blockHandleKey,
+
+        state: {
+          init: () => ({ selected: [] }),
+          apply(tr: Transaction, value: BlockHandlePluginState) {
+            let selected = value.selected.map((p) => tr.mapping.map(p));
+            const meta = tr.getMeta(blockHandleKey) as { toggleSelect?: number } | undefined;
+            if (meta && typeof meta.toggleSelect === "number") {
+              const p = meta.toggleSelect;
+              selected = selected.includes(p) ? selected.filter((x) => x !== p) : [...selected, p];
+            } else if (tr.selectionSet) {
+              // Any other explicit selection change (a plain click, typing,
+              // arrow-key navigation) abandons a stale multi-selection —
+              // matching how every other multi-select UI treats a plain click.
+              selected = [];
+            }
+            return { selected };
+          },
+        },
+
+        props: {
+          decorations(state) {
+            const pluginState = blockHandleKey.getState(state) as BlockHandlePluginState | undefined;
+            const selected = pluginState?.selected ?? [];
+            if (!selected.length) return null;
+            const decos: Decoration[] = [];
+            for (const pos of selected) {
+              const node = state.doc.nodeAt(pos);
+              if (node) decos.push(Decoration.node(pos, pos + node.nodeSize, { class: "block-multi-selected" }));
+            }
+            return decos.length ? DecorationSet.create(state.doc, decos) : null;
+          },
+        },
 
         view(view) {
           const el = document.createElement("div");
@@ -122,7 +176,7 @@ export const BlockHandle = Extension.create({
           el.setAttribute("contenteditable", "false");
           el.setAttribute("role", "button");
           el.setAttribute("aria-label", "Drag block");
-          el.title = "Drag to move";
+          el.title = "Drag to move · ⌘⇧-click to multi-select";
           el.innerHTML = '<span class="block-handle-grip" aria-hidden="true">⠿</span>';
           el.style.display = "none";
 
@@ -137,10 +191,27 @@ export const BlockHandle = Extension.create({
           host?.appendChild(el);
           host?.appendChild(indicator);
 
-          const state: HandleState = { el, indicator, view, pos: null, lastProbe: 0 };
+          const state: HandleState = { el, indicator, view, pos: null, lastProbe: 0, hovering: false };
           let drag: DragState | null = null;
+          /** The block DOM currently muted by a handle press; cleared on release. */
+          let grabbedEl: HTMLElement | null = null;
 
-          // ── Hover: follow the block under the pointer ───────────────────────
+          // ── Follow: keep the handle next to whatever block is "live" ────────
+          // Hovering wins while the pointer is actually moving over the editor;
+          // once it leaves (or never entered — keyboard navigation, a paste,
+          // typing after a click elsewhere), the handle tracks the selection
+          // instead, so a block being edited always has a reachable handle no
+          // matter how deep it is nested.
+          function followSelection() {
+            if (drag || state.hovering) return;
+            const hit = blockAtSelection(view);
+            if (hit) positionHandle(state, hit.pos);
+            else {
+              el.style.display = "none";
+              state.pos = null;
+            }
+          }
+
           function onMouseMove(e: MouseEvent) {
             if (drag) return; // a drag owns the pointer; don't re-anchor
             // ONE clock, always. This was `e.timeStamp || Date.now()`, which
@@ -155,6 +226,7 @@ export const BlockHandle = Extension.create({
 
             const editorRect = view.dom.getBoundingClientRect();
             if (e.clientX < editorRect.left - GUTTER_PROBE_PX || e.clientX > editorRect.right) return;
+            state.hovering = true;
             // Probe slightly inside the content so a pointer out in the gutter
             // still resolves to the block beside it.
             const probeX = Math.max(e.clientX, editorRect.left + 4);
@@ -167,14 +239,16 @@ export const BlockHandle = Extension.create({
             // Keep it up while the pointer is on the grip itself, or it can
             // never be reached — it lives outside the editor's own box.
             if (el.contains(e.relatedTarget as Node)) return;
-            el.style.display = "none";
-            state.pos = null;
+            state.hovering = false;
+            followSelection();
           }
 
           // ── Drop target ────────────────────────────────────────────────────
           /**
-           * Nearest top-level boundary to `clientY`: before the hovered block
-           * if the pointer is in its upper half, after it otherwise.
+           * Nearest sibling boundary to `clientY`: before the hovered block
+           * if the pointer is in its upper half, after it otherwise. The
+           * boundary is at whatever depth the hovered block itself sits at —
+           * siblings within the same column, callout or top-level document.
            */
           function dropTargetAt(clientX: number, clientY: number): number | null {
             const editorRect = view.dom.getBoundingClientRect();
@@ -194,21 +268,32 @@ export const BlockHandle = Extension.create({
           function showIndicator(at: number) {
             const doc = view.state.doc;
             const editorRect = view.dom.getBoundingClientRect();
-            // A boundary sits between two top-level nodes; anchor the line to
-            // the bottom of the node before it, or the top of the doc.
             let top: number;
             let left = editorRect.left;
             let width = editorRect.width;
 
-            const $at = doc.resolve(Math.min(at, doc.content.size));
-            const index = $at.index(0);
-            const nodeBefore = index > 0 ? doc.child(index - 1) : null;
-            const anchorPos = nodeBefore ? at - nodeBefore.nodeSize : at;
-            const anchorDom = view.nodeDOM(Math.max(0, Math.min(anchorPos, doc.content.size - 1))) as HTMLElement | null;
+            // A boundary sits between two siblings, resolved via ProseMirror's
+            // own nodeBefore/nodeAfter rather than doc.child(index(0)) — that
+            // hardcoded top-level children, which is exactly what stopped this
+            // working for a boundary inside a column or a callout.
+            const clamped = Math.max(0, Math.min(at, doc.content.size));
+            const $at = doc.resolve(clamped);
+            const nodeBefore = $at.nodeBefore;
+            const nodeAfter = $at.nodeAfter;
+
+            let anchorDom: HTMLElement | null = null;
+            let anchorTop: "top" | "bottom" = "top";
+            if (nodeBefore) {
+              anchorDom = view.nodeDOM(Math.max(0, clamped - nodeBefore.nodeSize)) as HTMLElement | null;
+              anchorTop = "bottom";
+            } else if (nodeAfter) {
+              anchorDom = view.nodeDOM(clamped) as HTMLElement | null;
+              anchorTop = "top";
+            }
 
             if (anchorDom && anchorDom.nodeType === 1) {
               const r = anchorDom.getBoundingClientRect();
-              top = nodeBefore ? r.bottom : r.top;
+              top = anchorTop === "bottom" ? r.bottom : r.top;
               left = r.left;
               width = r.width;
             } else {
@@ -232,6 +317,8 @@ export const BlockHandle = Extension.create({
             hideIndicator();
             el.classList.remove("is-dragging");
             document.body.classList.remove("vault-block-dragging");
+            grabbedEl?.classList.remove("is-grabbed");
+            grabbedEl = null;
             window.removeEventListener("pointermove", onDragMove);
             window.removeEventListener("pointerup", onDragUp);
             window.removeEventListener("pointercancel", onDragCancel);
@@ -298,7 +385,15 @@ export const BlockHandle = Extension.create({
 
             const tr = s.tr.delete(from, end);
             const at = tr.mapping.map(to);
-            tr.insert(at, node);
+            try {
+              // A drop target resolved at any depth may land somewhere the
+              // moved node's schema doesn't allow (e.g. dragging into a
+              // structural boundary that isn't plain block+ content) — fail
+              // quietly rather than let ProseMirror throw mid-drag.
+              tr.insert(at, node);
+            } catch {
+              return;
+            }
             try {
               tr.setSelection(NodeSelection.create(tr.doc, at));
             } catch {
@@ -315,6 +410,15 @@ export const BlockHandle = Extension.create({
             e.preventDefault();
             e.stopPropagation();
 
+            if (e.metaKey && e.shiftKey) {
+              // Toggle membership only — no NodeSelection, no drag. A held
+              // Cmd+Shift click is purely "add/remove this block from my
+              // multi-selection", independent of the single-select gesture
+              // below, which stays exactly as it was.
+              view.dispatch(view.state.tr.setMeta(blockHandleKey, { toggleSelect: state.pos }));
+              return;
+            }
+
             const sel = (() => {
               try {
                 return NodeSelection.create(view.state.doc, state.pos!);
@@ -323,6 +427,15 @@ export const BlockHandle = Extension.create({
               }
             })();
             if (sel) view.dispatch(view.state.tr.setSelection(sel));
+
+            // Immediate feedback that this block has been grabbed, before the
+            // drag threshold is even crossed — the mute is the confirmation
+            // that the press registered, not a signal that a move happened.
+            const dom = view.nodeDOM(state.pos) as HTMLElement | null;
+            if (dom && dom.nodeType === 1) {
+              dom.classList.add("is-grabbed");
+              grabbedEl = dom;
+            }
 
             drag = {
               from: state.pos,
@@ -346,14 +459,21 @@ export const BlockHandle = Extension.create({
           view.dom.addEventListener("mousemove", onMouseMove);
           view.dom.addEventListener("mouseleave", onMouseLeave);
           el.addEventListener("mouseenter", () => {
-            if (!drag) el.style.display = "flex";
+            if (drag) return;
+            state.hovering = true;
+            el.style.display = "flex";
           });
 
           return {
             update: () => {
               // A doc change can move or remove the hovered block; re-anchor
               // rather than leave the grip floating over unrelated content.
-              if (!drag && state.pos !== null) positionHandle(state, state.pos);
+              if (drag) return;
+              if (state.hovering) {
+                if (state.pos !== null) positionHandle(state, state.pos);
+                return;
+              }
+              followSelection();
             },
             destroy: () => {
               endDrag(false);

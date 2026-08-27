@@ -3,7 +3,10 @@
   "version": "0.1.0",
   "type": "module",
   "exports": {
-    ".": "./src/index.ts"
+    ".": "./src/index.ts",
+    "./coverage": "./src/coverage.ts",
+    "./categories": "./src/categories.ts",
+    "./pathfinder": "./src/pathfinder/index.ts"
   },
   "scripts": {
     "test": "vitest run"

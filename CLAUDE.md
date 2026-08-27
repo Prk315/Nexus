@@ -1127,6 +1127,67 @@ and `applyUpdate` silently no-ops, so the session looks connected and simply
 never converges. (The `BlockHandle.ts` comment about "an app with no
 collaboration" is now out of date, but its conclusion still holds — the stack is
 lazy, and `@tiptap/extension-drag-handle` would import it eagerly.)
+## Vault: PathFinder task blocks
+
+The slash menu offers **three** blocks — *Task list*, *Task board*, *Task table* —
+that read and write PathFinder's `pf_tasks` live, from inside a note. They are
+**one** ProseMirror node type, `pathfinderBlock`, carrying a `view` attribute.
+
+That is the data-loss rule, not tidiness. An unknown **node type** does not
+degrade: `createNodeFromContent` catches ProseMirror's throw, returns an EMPTY
+document, and the 400 ms autosave writes that blank over the note. An unknown
+**attribute** is dropped in silence, because `Node.fromJSON` iterates the
+*type's* declared attributes and never looks for extras. Three node types would
+be three deploy-everywhere gates and three chances to blank a note; one means a
+fourth view (timeline, gallery) later costs nothing, and switching an existing
+block between views is a one-attribute edit. It is still a new node type — deploy
+web, Mac and iPad (`npm run ios:vault`) before creating a note containing one.
+
+**The data layer is `packages/nexus-core/src/pathfinder/`, reached through the
+`@nexus/core/pathfinder` deep alias** (not the barrel — that pulls in three.js).
+It exists because three hand-written copies of the `pf_tasks` read already
+existed when it was added, and the newest of them
+(`apps/NexusLocal/src/lib/pathfinder/api.ts`) had already dropped the
+`pf_task_planning` embed, so every task it renders reads as default urgency and
+stage. Three invariants live in application code, not the database, and each
+fails silently when another app writes the tables directly:
+
+- **`stage = 'active'` is gated on scheduled calendar minutes.** Only `setStage`
+  enforces it. A card dragged to "active" with a raw UPDATE defeats the one rule
+  the lifecycle exists for. The board surfaces the refusal instead of swallowing it.
+- **A flat patch must be SPLIT across relations** — `urgency`/`stage` live on
+  `pf_task_planning`; writing them onto `pf_tasks` does not error, it just does
+  nothing.
+- **`task_type` is generated and `aggregate_estimate` is trigger-maintained.**
+
+**Team-shared tasks work**, and needed explicit support: every read is broadened
+with the same `user_id.eq.…,team_id.in.(…)` `.or()` fragment PathFinder's
+`getTeamOrFilter` uses, or a task a teammate shared is simply absent —
+indistinguishable from not existing. `isTaskRelevantToMe` is copied verbatim
+from PathFinder's `lib/team.ts`: unclaimed (`null`) and everyone-assigned
+(`"all"`) team work is *mine*, and only a concrete other uid narrows it. If that
+rule drifts, a Vault block and PathFinder's dashboard disagree about whose work
+something is. Boards can group by assignee and reassign by drag; the
+`__unassigned__` column maps to `null`, never to its own key.
+
+Two rules the node view must keep:
+
+- **Data never touches the document.** Refetches, checkboxes and card drags
+  dispatch no transaction; only a CONFIG change calls `updateAttributes`.
+  Otherwise every poll wakes the note's autosave — the 2026-08-15 incident's shape.
+- **The NODE may only import something that imports nothing heavier than React
+  and Tiptap.** `extensions/PathfinderBlock.ts` points at
+  `components/PathfinderBlockLazy.tsx`, which dynamic-imports the real view.
+  Importing it directly would drag `lib/supabase.ts` (a module-scope
+  `createClient`) into the schema graph, so `noteSchemaGuard` — whose job is to
+  run when things are broken — would need a configured network client.
+
+One shared store (`lib/pathfinderStore.ts`) backs every block in the app, so N
+blocks in a note make one round trip and a tick in the list moves the card on the
+board above it. `signedOut`, `loading` and `error` are states distinct from
+"ready with zero rows": `pf_tasks` is `auth.uid()`-scoped, so a session-less read
+returns an **empty set, not an error**, and rendering that as "All done ✓" is the
+same lie as an "Inbox zero" panel that has never run.
 
 ## Scheduled server-side work (pg_cron)
 

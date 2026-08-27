@@ -12,9 +12,14 @@ export default defineConfig(async () => ({
   resolve: {
     alias: {
       "@": path.resolve(__dirname, "./src"),
-      // Deep specifier FIRST — Vite matches alias keys in order, so the bare
-      // "@nexus/core" entry below would otherwise swallow "@nexus/core/members"
-      // and resolve it to the barrel (which drags in three.js).
+      // Deep aliases, deliberately listed BEFORE the barrel so they win the
+      // prefix match. Vite matches alias keys in order, so the bare
+      // "@nexus/core" entry below would otherwise swallow both of these and
+      // resolve them to the barrel — which re-exports AppGraph3D and therefore
+      // three.js, and neither a note-editor block nor a two-entry member map
+      // has any business pulling that into its chunk. Same reason
+      // `@nexus/core/coverage` exists in PathFinder and NexusLocal.
+      "@nexus/core/pathfinder": path.resolve(__dirname, "../../../packages/nexus-core/src/pathfinder/index.ts"),
       "@nexus/core/members": path.resolve(__dirname, "../../../packages/nexus-core/src/members.ts"),
       "@nexus/core": path.resolve(__dirname, "../../../packages/nexus-core/src/index.ts"),
     },
