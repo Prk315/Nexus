@@ -3,11 +3,15 @@ import {
   axisDropValue,
   axisWriteField,
   boardColumns,
+  clearedSpec,
   defaultSpec,
   deriveLabel,
   parseSpec,
   serializeSpec,
   sortColumns,
+  specFilterCount,
+  specIsUnfiltered,
+  MAX_FILTER_TAGS,
   SPEC_MAX_LIMIT,
   PF_COLUMNS,
 } from "./pathfinderBlock";
@@ -83,6 +87,101 @@ describe("parseSpec", () => {
   it("showFilters defaults to on and survives an explicit false", () => {
     expect(parseSpec("{}", "list").showFilters).toBe(true);
     expect(parseSpec(JSON.stringify({ showFilters: false }), "list").showFilters).toBe(false);
+  });
+
+  // ── Hierarchy ─────────────────────────────────────────────────────────────
+
+  // A block written before hierarchy existed carries no `tree` key. It gets the
+  // default, which nests it — that IS the intended migration, and it changes the
+  // shape of the result without changing which tasks are in it.
+  it("nests a spec that predates the tree field", () => {
+    expect(parseSpec(JSON.stringify({ limit: 10 }), "list").tree).toBe("matched");
+  });
+
+  it("keeps a stored tree mode and rejects an unknown one", () => {
+    expect(parseSpec(JSON.stringify({ tree: "off" }), "list").tree).toBe("off");
+    expect(parseSpec(JSON.stringify({ tree: "full" }), "list").tree).toBe("full");
+    expect(parseSpec(JSON.stringify({ tree: "sideways" }), "list").tree).toBe("matched");
+  });
+
+  // ── Vault tags ────────────────────────────────────────────────────────────
+
+  // The store only ever holds lowercased tags, so a spec carrying "Reading"
+  // would match nothing while looking perfectly correct on screen.
+  it("re-normalises stored tags rather than trusting them", () => {
+    const spec = parseSpec(JSON.stringify({ tags: ["Reading", " thesis ", "reading", ""] }), "list");
+    expect(spec.tags).toEqual(["reading", "thesis"]);
+  });
+
+  it("caps the tag list so one block cannot outgrow SPEC_MAX_CHARS", () => {
+    const many = Array.from({ length: MAX_FILTER_TAGS + 25 }, (_, i) => `tag-${i}`);
+    expect(parseSpec(JSON.stringify({ tags: many }), "list").tags).toHaveLength(MAX_FILTER_TAGS);
+  });
+
+  it("defaults the tag mode and the two tag toggles", () => {
+    const spec = parseSpec("{}", "list");
+    expect(spec.tagMode).toBe("any");
+    expect(spec.untaggedOnly).toBe(false);
+    expect(spec.showTags).toBe(false);
+    expect(parseSpec(JSON.stringify({ tagMode: "sideways" }), "list").tagMode).toBe("any");
+    expect(parseSpec(JSON.stringify({ tagMode: "none" }), "list").tagMode).toBe("none");
+  });
+});
+
+describe("specFilterCount / specIsUnfiltered", () => {
+  // The badge on the ⚙ button and the "Clear filters" empty state both read from
+  // these. Missing the tag axes is a specific, confusing bug: a block filtered
+  // to one tag would show no badge, say "No open tasks", and offer a Clear
+  // button that clears everything EXCEPT the thing hiding the rows.
+  it("counts the Vault tag axes, which @nexus/core cannot see", () => {
+    const base = defaultSpec("list");
+    expect(specFilterCount(base)).toBe(0);
+    expect(specFilterCount({ ...base, tags: ["reading"] })).toBe(1);
+    expect(specFilterCount({ ...base, untaggedOnly: true })).toBe(1);
+    expect(specFilterCount({ ...base, tags: ["a", "b"], untaggedOnly: true })).toBe(2);
+  });
+
+  it("does not call a tag-filtered block unfiltered", () => {
+    const base = defaultSpec("list");
+    expect(specIsUnfiltered(base)).toBe(true);
+    expect(specIsUnfiltered({ ...base, tags: ["reading"] })).toBe(false);
+    expect(specIsUnfiltered({ ...base, untaggedOnly: true })).toBe(false);
+  });
+});
+
+describe("clearedSpec", () => {
+  it("clears both PathFinder's axes and Vault's tags", () => {
+    const spec = {
+      ...defaultSpec("list"),
+      filter: { ...DEFAULT_FILTER, planIds: [3], due: "overdue" as const, search: "x" },
+      tags: ["reading"],
+      untaggedOnly: true,
+    };
+    const cleared = clearedSpec(spec);
+    expect(cleared.filter.planIds).toEqual([]);
+    expect(cleared.filter.due).toBe("any");
+    expect(cleared.filter.search).toBe("");
+    expect(cleared.tags).toEqual([]);
+    expect(cleared.untaggedOnly).toBe(false);
+  });
+
+  // "Clear filters" must not silently undo a different decision. `done` is a
+  // view choice, and so are the display fields.
+  it("leaves display choices alone", () => {
+    const spec = {
+      ...defaultSpec("table"),
+      filter: { ...DEFAULT_FILTER, done: "all" as const },
+      tree: "full" as const,
+      compact: true,
+      showTags: true,
+      columns: ["title" as const, "due" as const],
+    };
+    const cleared = clearedSpec(spec);
+    expect(cleared.filter.done).toBe("all");
+    expect(cleared.tree).toBe("full");
+    expect(cleared.compact).toBe(true);
+    expect(cleared.showTags).toBe(true);
+    expect(cleared.columns).toEqual(["title", "due"]);
   });
 });
 

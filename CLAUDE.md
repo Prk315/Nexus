@@ -1189,6 +1189,97 @@ board above it. `signedOut`, `loading` and `error` are states distinct from
 returns an **empty set, not an error**, and rendering that as "All done ✓" is the
 same lie as an "Inbox zero" panel that has never run.
 
+### Hierarchy: the tree is built over the MATCHED set
+
+`pf_tasks` is recursive — a task's steps are tasks with steps of their own — and
+the list and table render that with indentation, a disclosure triangle and a
+`3/12` roll-up. The nesting rules are pure and live in
+`packages/nexus-core/src/pathfinder/tree.ts`, tested there.
+
+A filter and a hierarchy disagree by nature: "open tasks" matches a step whose
+parent is done. So **every matched task is re-parented to its nearest matched
+ancestor**, and a step whose parent was filtered out is promoted to a root rather
+than vanishing. Two invariants fall out, and both have tests: every matched task
+appears exactly once, and no unmatched task appears — except under `tree: "full"`,
+which is the mode that asks for whole subtrees.
+
+Four things that are easy to get wrong here:
+
+- **The counts come from the whole dataset, not the tree.** A row saying "3/12"
+  means three of the task's twelve real descendants are done, whatever the filter
+  hides. Same choice `aggregate_estimate` makes server-side, for the same reason:
+  a roll-up that changes when you change a view is not a roll-up.
+- **The flatten is depth-first so the LIMIT is safe.** A prefix of a depth-first
+  walk always contains a row's parent; slicing any other order produces an
+  indented row whose parent was cut off above it.
+- **Both walks are cycle-guarded.** Nothing in `pf_tasks` stops an UPDATE making
+  a task its own grandparent, and a hierarchy view is where that first shows up.
+  A cycle must render as a truncated branch, not a hung tab.
+- **Expand/collapse is React state, never a document attribute.** It is on the
+  DATA side of the "data never touches the document" line: persisting it would
+  put one undo step and one autosave behind every triangle.
+
+The board ignores `tree` entirely and shows a roll-up chip instead — a card
+cannot contain a card, and honouring the axis there would make a list→board
+switch silently change which tasks the block contains.
+
+### Vault-only tags: `vault_task_tags`, and the module split that protects the schema
+
+Tags on tasks that exist **only in Vault** — PathFinder never sees them, and on a
+team-shared task each person has their own set, which falls out of the table
+being keyed `(user_id, task_id, tag)` rather than being a column on `pf_tasks`.
+Migration `20260827140000_vault_task_tags.sql`; `user_id` is TEXT with an
+`auth.uid()::text` policy and **no anon policy**, matching `vault_tag_colors`.
+Colours are shared with note tags, so one word is one colour across Vault.
+
+⚠️ **`lib/taskTags.ts` (pure) and `lib/vaultTaskTags.ts` (queries) are two files
+on purpose, and merging them breaks the schema guard.** `lib/pathfinderBlock.ts`
+needs `normalizeTagList` and the `TagMode` domain to parse a block's spec, and
+that file is part of the note SCHEMA — `noteSchemaGuard` builds the schema before
+any editor exists. One module holding both halves puts `lib/supabase.ts`'s
+module-scope `createClient` on that path, and it throws `supabaseUrl is required`
+wherever Vite's env is absent. This is the `PathfinderBlockLazy` rule again,
+one layer down; it was hit and fixed during the hierarchy work.
+
+Two more, both about not lying when the table isn't there yet:
+
+- **A missing `vault_task_tags` must not take the task blocks down with it.** The
+  migration is applied by hand and separately from any deploy, so a build running
+  before it lands is normal. `loadTaskTags` reports a missing relation as
+  `available: false` rather than throwing, and the store catches anything else —
+  a naive read inside the snapshot's `Promise.all` would reject the whole thing
+  and every block would read "Couldn't load tasks". That is the `pf_reminders`
+  incident with the roles reversed.
+- **`activeFilterCount`/`isUnfiltered` in `@nexus/core` cannot see Vault's tags.**
+  Use `specFilterCount`/`specIsUnfiltered`/`clearedSpec` from
+  `lib/pathfinderBlock.ts`, or a tag-filtered block shows no badge, says "No open
+  tasks", and offers a Clear button that clears everything except the thing
+  actually hiding the rows.
+
+`spec.tags`, `tagMode`, `untaggedOnly`, `tree` and `showTags` are all
+**attributes**, which is why they could ship without a deploy-everywhere gate —
+an older client drops what it doesn't know and the note is fine. `untaggedOnly`
+is a hard gate rather than another AND-ed clause: "untagged AND tagged #reading"
+matches nothing, and a filter that can be configured into matching nothing reads
+as broken.
+
+The tag filter reaches `runQuery`/`runTreeQuery` as their `extra` predicate,
+which runs **before** the limit. Filtering after the cap would let a block render
+an empty list while matching rows sat just past the window.
+
+### `vitest.config.ts` REPLACES `vite.config.ts` — repeat the aliases
+
+Vitest prefers `vitest.config.ts` when both exist and does not merge them, so
+every `resolve.alias` has to be repeated there. Without them `@nexus/core/*`
+falls through to Node resolution, which follows the `node_modules/@nexus/core`
+workspace **symlink** — and that points at the primary checkout, not at the tree
+the test is running in. A git worktree therefore tests against a different copy
+of nexus-core than it compiles against, and the symptom is a resolution error
+with no obvious link to the change: `Missing "./pathfinder" specifier in
+"@nexus/core" package`. (Vault's `.env` is gitignored and lives only in the
+primary checkout too; copy it into a worktree or every test importing
+`lib/api.ts` fails with `supabaseUrl is required`.)
+
 ## Scheduled server-side work (pg_cron)
 
 Four jobs run in the database, and this is the pattern for anything that must happen

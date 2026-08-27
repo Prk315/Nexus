@@ -1,5 +1,5 @@
 // The shell every PathFinder block wears: title, view switcher, filter bar,
-// footer, and the three views it can render.
+// footer, the three views it can render, and the detail sheet.
 //
 // Two rules shape this component more than anything else:
 //
@@ -9,6 +9,12 @@
 //     this wrong would mean every poll wakes the note's 400 ms autosave and
 //     rewrites `vault_content` with content that did not change, which is the
 //     shape of the 2026-08-15 incident and of the BubbleMenu 130 Hz loop.
+//
+//     Expanding a row is on the DATA side of that line, deliberately. It is
+//     ephemeral view state — held in React, forgotten on remount — not
+//     configuration. Persisting it would put one undo step and one autosave
+//     behind every triangle, and a note with a big outline in it would rewrite
+//     `vault_content` as fast as you could click.
 //
 //  2. **An empty list must never be able to mean anything but "nothing
 //     matched."** Signed out, still loading, and failed-to-load are each their
@@ -20,18 +26,23 @@
 import { useCallback, useEffect, useMemo, useState, useSyncExternalStore } from "react";
 import { NodeViewWrapper, type NodeViewProps } from "@tiptap/react";
 import {
-  activeFilterCount,
   creationDefaults,
-  isUnfiltered,
   isoDay,
   runQuery,
+  runTreeQuery,
+  statFor,
   SchedulingGateError,
   type PfTask,
+  type SubtreeStat,
+  type TaskTreeRow,
 } from "@nexus/core/pathfinder";
 import {
+  clearedSpec,
   deriveLabel,
   parseSpec,
   serializeSpec,
+  specFilterCount,
+  specIsUnfiltered,
   PF_VIEWS,
   PF_VIEW_ICONS,
   PF_VIEW_LABELS,
@@ -44,10 +55,22 @@ import {
   patchCachedTask,
   refresh,
   removeTask,
+  setCachedTagIndex,
+  setCachedTaskTags,
   subscribe,
+  tagColorFor,
   upsertTask,
 } from "../lib/pathfinderStore";
+import {
+  addTaskTag,
+  deleteTaskTag,
+  loadTaskTags,
+  matchesTags,
+  removeTaskTag,
+  renameTaskTag,
+} from "../lib/vaultTaskTags";
 import { PathfinderFilterBar } from "./PathfinderFilterBar";
+import { PathfinderTaskDetail } from "./PathfinderTaskDetail";
 import { PfBoardView, PfListView, PfTableView } from "./PathfinderViews";
 import { useConfirm } from "./ConfirmDialog";
 
@@ -65,7 +88,21 @@ export interface TaskActions {
   patch: (task: PfTask, patch: Record<string, unknown>) => void;
   setStage: (task: PfTask, stage: string) => void;
   remove: (task: PfTask) => void;
+  /** Creates a child of `parent`, inheriting the block's creation context. */
+  addSubtask: (parent: PfTask, title: string) => void;
+  openDetail: (task: PfTask) => void;
+  addTag: (task: PfTask, tag: string) => void;
+  removeTag: (task: PfTask, tag: string) => void;
   busy: Set<number>;
+  /** Descendant roll-ups, so a row can show "3/12" without walking the tree itself. */
+  stats: Map<number, SubtreeStat>;
+}
+
+/** Expand/collapse, which is view state and never reaches the document. */
+export interface TreeControls {
+  toggleCollapse: (id: number) => void;
+  /** Pulls one row's filtered-out steps in, without changing the block's filter. */
+  expandHidden: (id: number) => void;
 }
 
 export function PathfinderBlockView({ node, updateAttributes, editor, selected }: NodeViewProps) {
@@ -84,6 +121,14 @@ export function PathfinderBlockView({ node, updateAttributes, editor, selected }
   const [busy, setBusy] = useState<Set<number>>(new Set());
   const [writeError, setWriteError] = useState<string | null>(null);
   const [refreshing, setRefreshing] = useState(false);
+
+  // Collapse state is a set of COLLAPSED ids, not expanded ones, so a freshly
+  // loaded block shows the whole outline. Defaulting to collapsed would hide the
+  // hierarchy the feature exists to show, and every row would need one click
+  // before it said anything a flat list didn't.
+  const [collapsed, setCollapsed] = useState<Set<number>>(new Set());
+  const [expandFull, setExpandFull] = useState<Set<number>>(new Set());
+  const [detailId, setDetailId] = useState<number | null>(null);
 
   // Today is computed once per mount rather than per render: it feeds every
   // due-date comparison, and recomputing it inside the memo would make the
@@ -110,10 +155,79 @@ export function PathfinderBlockView({ node, updateAttributes, editor, selected }
     [editable, updateAttributes, view],
   );
 
-  const result = useMemo(
-    () => runQuery(snap.tasks, spec.filter, spec.sort, spec.limit, today, snap.myUid),
-    [snap.tasks, spec.filter, spec.sort, spec.limit, today, snap.myUid],
-  );
+  // ── Tags ──────────────────────────────────────────────────────────────────
+
+  const tagsOf = useCallback((taskId: number) => snap.tags.get(taskId) ?? [], [snap.tags]);
+  const tagColor = useCallback((tag: string) => tagColorFor(snap, tag), [snap]);
+
+  /**
+   * The Vault-tag half of the query, as a predicate `runQuery` can apply
+   * alongside PathFinder's own axes.
+   *
+   * Memoized because it is passed INTO the query memo: an inline arrow would be
+   * a new identity every render, which would recompute the whole filter on every
+   * keystroke anywhere in the note.
+   */
+  const tagPredicate = useMemo(() => {
+    if (spec.tags.length === 0 && !spec.untaggedOnly) return undefined;
+    // A tag filter against a database that has no tag table would match nothing
+    // and read as "no tasks" — the block would look empty rather than
+    // unconfigured. Ignoring the axis keeps the rest of the block honest; the
+    // filter bar is where the missing table is reported.
+    if (!snap.tagsAvailable) return undefined;
+    return (t: PfTask) =>
+      matchesTags(snap.tags.get(t.id) ?? [], spec.tags, spec.tagMode, spec.untaggedOnly);
+  }, [spec.tags, spec.tagMode, spec.untaggedOnly, snap.tags, snap.tagsAvailable]);
+
+  // ── Query ─────────────────────────────────────────────────────────────────
+
+  const query = useMemo(() => {
+    // The board is always flat, whatever `tree` says. It has no nesting to
+    // render, and honouring the axis there would mean switching a block from
+    // list to board silently changed WHICH tasks it contains — `full` pulls in
+    // steps the filter excludes, so the card count would jump on a view switch
+    // that is supposed to be a pure re-presentation of the same rows.
+    if (spec.tree === "off" || view === "board") {
+      const r = runQuery(snap.tasks, spec.filter, spec.sort, spec.limit, today, snap.myUid, tagPredicate);
+      // Wrapped in the same row shape the tree produces so the list and table
+      // render one way rather than branching per row. Flat rows carry no
+      // children and no hidden-children count: in this mode subtasks appear as
+      // their own top-level rows, so there is nothing to disclose.
+      const rows: TaskTreeRow[] = r.tasks.map((task) => {
+        const stat = statFor(snap.stats, task.id);
+        return {
+          task,
+          depth: 0,
+          childCount: 0,
+          directCount: stat.direct,
+          descendants: stat.total,
+          descendantsDone: stat.done,
+          hiddenChildren: 0,
+          collapsed: false,
+        };
+      });
+      return { rows, tasks: r.tasks, matched: r.matched, truncated: r.truncated };
+    }
+
+    const r = runTreeQuery({
+      all: snap.tasks,
+      filter: spec.filter,
+      sort: spec.sort,
+      limit: spec.limit,
+      today,
+      myUid: snap.myUid,
+      mode: spec.tree,
+      collapsed,
+      expandFull,
+      extra: tagPredicate,
+      stats: snap.stats,
+    });
+    return { rows: r.rows, tasks: r.rows.map((x) => x.task), matched: r.matched, truncated: r.truncated };
+  }, [
+    snap.tasks, snap.myUid, snap.stats,
+    spec.filter, spec.sort, spec.limit, spec.tree, view,
+    today, collapsed, expandFull, tagPredicate,
+  ]);
 
   // ── Writes ────────────────────────────────────────────────────────────────
   //
@@ -137,6 +251,8 @@ export function PathfinderBlockView({ node, updateAttributes, editor, selected }
   const actions: TaskActions = useMemo(
     () => ({
       busy,
+      stats: snap.stats,
+      openDetail: (task) => setDetailId(task.id),
       toggle: (task) => {
         const prev = patchCachedTask(task.id, { done: !task.done });
         setWriteError(null);
@@ -181,18 +297,54 @@ export function PathfinderBlockView({ node, updateAttributes, editor, selected }
           }
         });
       },
+      addSubtask: (parent, titleText) => {
+        const text = titleText.trim();
+        if (!text) return;
+        setWriteError(null);
+        void (async () => {
+          try {
+            // A step inherits the block's creation context the same way a
+            // top-level add does, then overrides `parent_id`. Plan and goal come
+            // along because a step of a planned task belongs to that plan — but
+            // the parent's own plan wins over the filter's, since the parent is
+            // the more specific statement about where this work lives.
+            const defaults = creationPayload(spec, today);
+            upsertTask(await pathfinderApi.createTask({
+              ...defaults,
+              title: text,
+              parent_id: parent.id,
+              plan_id: parent.plan_id ?? (defaults.plan_id as number | null | undefined) ?? null,
+            }));
+            // A newly-broken-down task with a collapsed row would swallow the
+            // step the user just typed.
+            setCollapsed((c) => {
+              if (!c.has(parent.id)) return c;
+              const n = new Set(c);
+              n.delete(parent.id);
+              return n;
+            });
+          } catch (e: any) {
+            setWriteError(e?.message ?? String(e));
+          }
+        })();
+      },
       remove: (task) => {
         void (async () => {
+          const stat = statFor(snap.stats, task.id);
           const ok = await confirm({
             title: `Delete “${task.title}”?`,
             message: "This deletes the task in PathFinder, not just in this note.",
             details: [
-              "Any subtasks are deleted with it.",
+              stat.total > 0
+                ? `Its ${stat.total} step${stat.total === 1 ? "" : "s"} are deleted with it.`
+                : "Any subtasks are deleted with it.",
               "Future calendar blocks for it are removed; past ones are kept.",
+              "Its Vault tags go with it.",
             ],
             confirmLabel: "Delete",
           });
           if (!ok) return;
+          if (detailId === task.id) setDetailId(null);
           removeTask(task.id);
           setWriteError(null);
           try {
@@ -203,8 +355,54 @@ export function PathfinderBlockView({ node, updateAttributes, editor, selected }
           }
         })();
       },
+      addTag: (task, tag) => {
+        const current = snap.tags.get(task.id) ?? [];
+        const prev = setCachedTaskTags(task.id, [...current, tag]);
+        setWriteError(null);
+        void (async () => {
+          try {
+            await addTaskTag(task.id, tag);
+          } catch (e: any) {
+            setCachedTaskTags(task.id, prev);
+            setWriteError(e?.message ?? String(e));
+          }
+        })();
+      },
+      removeTag: (task, tag) => {
+        const current = snap.tags.get(task.id) ?? [];
+        const prev = setCachedTaskTags(task.id, current.filter((t) => t !== tag));
+        setWriteError(null);
+        void (async () => {
+          try {
+            await removeTaskTag(task.id, tag);
+          } catch (e: any) {
+            setCachedTaskTags(task.id, prev);
+            setWriteError(e?.message ?? String(e));
+          }
+        })();
+      },
     }),
-    [busy, confirm, withBusy],
+    [busy, confirm, withBusy, snap.stats, snap.tags, spec, today, detailId],
+  );
+
+  const treeControls: TreeControls = useMemo(
+    () => ({
+      toggleCollapse: (id) =>
+        setCollapsed((c) => {
+          const n = new Set(c);
+          if (n.has(id)) n.delete(id);
+          else n.add(id);
+          return n;
+        }),
+      expandHidden: (id) =>
+        setExpandFull((e) => {
+          if (e.has(id)) return e;
+          const n = new Set(e);
+          n.add(id);
+          return n;
+        }),
+    }),
+    [],
   );
 
   const addTask = useCallback(
@@ -214,12 +412,68 @@ export function PathfinderBlockView({ node, updateAttributes, editor, selected }
       setWriteError(null);
       try {
         const defaults = creationPayload(spec, today);
-        upsertTask(await pathfinderApi.createTask({ title: text, ...defaults }));
+        const created = await pathfinderApi.createTask({ title: text, ...defaults });
+        upsertTask(created);
+        // A block filtered to exactly one tag creates INTO that tag, for the
+        // same reason it creates into a single filtered plan: otherwise the task
+        // you just typed vanishes from the block that created it. Ambiguous
+        // selections (several tags, or "none of") contribute nothing — see
+        // `creationDefaults` for the same rule on PathFinder's axes.
+        if (snap.tagsAvailable && spec.tagMode === "any" && spec.tags.length === 1 && !spec.untaggedOnly) {
+          const tag = spec.tags[0];
+          setCachedTaskTags(created.id, [tag]);
+          try {
+            await addTaskTag(created.id, tag);
+          } catch {
+            setCachedTaskTags(created.id, []);
+          }
+        }
       } catch (e: any) {
         setWriteError(e?.message ?? String(e));
       }
     },
-    [spec, today],
+    [spec, today, snap.tagsAvailable],
+  );
+
+  /** Rename and delete rewrite many rows, so both refetch rather than guess. */
+  const renameTag = useCallback((from: string, to: string) => {
+    setWriteError(null);
+    void (async () => {
+      try {
+        await renameTaskTag(from, to);
+        setCachedTagIndex(await loadTaskTags());
+      } catch (e: any) {
+        setWriteError(e?.message ?? String(e));
+      }
+    })();
+  }, []);
+
+  const deleteTag = useCallback(
+    (tag: string) => {
+      void (async () => {
+        const ok = await confirm({
+          title: `Delete the tag “#${tag}”?`,
+          message: "It is removed from every task that carries it.",
+          details: [
+            "The tasks themselves are untouched.",
+            "PathFinder is unaffected — this tag only ever existed in Vault.",
+          ],
+          confirmLabel: "Delete tag",
+        });
+        if (!ok) return;
+        setWriteError(null);
+        try {
+          await deleteTaskTag(tag);
+          setCachedTagIndex(await loadTaskTags());
+          if (spec.tags.includes(tag)) {
+            commitSpec({ ...spec, tags: spec.tags.filter((t) => t !== tag) });
+          }
+        } catch (e: any) {
+          setWriteError(e?.message ?? String(e));
+        }
+      })();
+    },
+    [confirm, spec, commitSpec],
   );
 
   const doRefresh = useCallback(async () => {
@@ -233,7 +487,15 @@ export function PathfinderBlockView({ node, updateAttributes, editor, selected }
   }, []);
 
   const label = title || deriveLabel(spec, view, snap.plans, snap.goals, snap.teams, snap.members);
-  const filterCount = activeFilterCount(spec.filter);
+  const filterCount = specFilterCount(spec);
+
+  // Resolved from the live snapshot rather than held as an object: the sheet
+  // must show the task as it is NOW, and it must close by itself when the task
+  // stops existing — deleted here, or by another block, or in PathFinder.
+  const detailTask = detailId == null ? null : snap.tasks.find((t) => t.id === detailId) ?? null;
+  useEffect(() => {
+    if (detailId != null && !detailTask && snap.status === "ready") setDetailId(null);
+  }, [detailId, detailTask, snap.status]);
 
   return (
     <NodeViewWrapper
@@ -304,6 +566,11 @@ export function PathfinderBlockView({ node, updateAttributes, editor, selected }
           goals={snap.goals}
           teams={snap.teams}
           members={snap.members}
+          allTags={snap.allTags}
+          tagsAvailable={snap.tagsAvailable}
+          tagColor={tagColor}
+          onRenameTag={renameTag}
+          onDeleteTag={deleteTag}
           onChange={commitSpec}
         />
       ) : null}
@@ -313,41 +580,49 @@ export function PathfinderBlockView({ node, updateAttributes, editor, selected }
           status={snap.status}
           error={snap.error}
           hasRows={snap.tasks.length > 0}
-          matched={result.matched}
-          unfiltered={isUnfiltered(spec.filter)}
+          matched={query.matched}
+          unfiltered={specIsUnfiltered(spec)}
           onRetry={doRefresh}
-          onClearFilters={() => commitSpec({ ...spec, filter: { ...spec.filter, ...clearedFilter() } })}
+          onClearFilters={() => commitSpec(clearedSpec(spec))}
           editable={editable}
         >
           {view === "list" ? (
             <PfListView
-              tasks={result.tasks}
+              rows={query.rows}
               spec={spec}
               members={snap.members}
               actions={actions}
               today={today}
               editable={editable}
+              tagsOf={tagsOf}
+              tagColor={tagColor}
+              tree={treeControls}
               onAdd={addTask}
             />
           ) : view === "board" ? (
             <PfBoardView
-              tasks={result.tasks}
+              tasks={query.tasks}
               spec={spec}
               plans={snap.plans}
               members={snap.members}
               actions={actions}
               today={today}
               editable={editable}
+              tagsOf={tagsOf}
+              tagColor={tagColor}
               onSpecChange={commitSpec}
             />
           ) : (
             <PfTableView
-              tasks={result.tasks}
+              rows={query.rows}
               spec={spec}
               members={snap.members}
               actions={actions}
               today={today}
               editable={editable}
+              tagsOf={tagsOf}
+              tagColor={tagColor}
+              tree={treeControls}
               onSpecChange={commitSpec}
             />
           )}
@@ -356,9 +631,9 @@ export function PathfinderBlockView({ node, updateAttributes, editor, selected }
 
       <footer className="pf-foot">
         <span className="pf-count">
-          {result.truncated
-            ? `Showing ${result.tasks.length} of ${result.matched}`
-            : `${result.matched} ${result.matched === 1 ? "task" : "tasks"}`}
+          {query.truncated
+            ? `Showing ${query.rows.length} of ${query.matched}`
+            : `${query.matched} ${query.matched === 1 ? "task" : "tasks"}`}
           {snap.capped ? " · read was capped" : ""}
         </span>
         {writeError ? (
@@ -369,6 +644,20 @@ export function PathfinderBlockView({ node, updateAttributes, editor, selected }
           <span className="pf-stamp">Updated {new Date(snap.loadedAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</span>
         ) : null}
       </footer>
+
+      {detailTask ? (
+        <PathfinderTaskDetail
+          task={detailTask}
+          snap={snap}
+          actions={actions}
+          editable={editable}
+          today={today}
+          error={writeError}
+          tagColor={tagColor}
+          onClose={() => setDetailId(null)}
+          onSelectTask={(t) => setDetailId(t.id)}
+        />
+      ) : null}
 
       {confirmDialog}
     </NodeViewWrapper>
@@ -447,26 +736,6 @@ function PfBody({
   }
 
   return <>{children}</>;
-}
-
-/** The filter axes "Clear filters" resets — deliberately not `done`, which is a view choice. */
-function clearedFilter() {
-  return {
-    planIds: [] as number[],
-    goalIds: [] as number[],
-    taskTypes: [] as never[],
-    priorities: [] as never[],
-    urgencies: [] as never[],
-    stages: [] as never[],
-    kanbanStatuses: [] as string[],
-    due: "any" as const,
-    search: "",
-    rootsOnly: false,
-    excludeQuick: false,
-    scope: "any" as const,
-    teamIds: [] as string[],
-    assignee: "any" as const,
-  };
 }
 
 /**

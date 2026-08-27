@@ -30,14 +30,18 @@ import {
 } from "@nexus/core/pathfinder";
 import {
   BOARD_AXIS_LABELS,
+  MAX_FILTER_TAGS,
   PF_COLUMNS,
   PF_COLUMN_LABELS,
   SPEC_MAX_LIMIT,
+  TREE_MODE_HINTS,
+  TREE_MODE_LABELS,
   sortColumns,
   type PfBlockSpec,
   type PfBlockView,
   type PfColumn,
 } from "../lib/pathfinderBlock";
+import { TAG_MODES, TAG_MODE_LABELS, type TagMode } from "../lib/taskTags";
 
 const DUE_OPTIONS: Array<{ value: DueWindow; label: string }> = [
   { value: "any", label: "Any date" },
@@ -79,10 +83,20 @@ interface Props {
   goals: PfGoal[];
   teams: PfTeam[];
   members: PfTeamMember[];
+  /** Every Vault tag in use — the vocabulary, not this block's selection. */
+  allTags: string[];
+  /** False when `vault_task_tags` isn't in the database yet. */
+  tagsAvailable: boolean;
+  tagColor: (tag: string) => string | undefined;
+  onRenameTag: (from: string, to: string) => void;
+  onDeleteTag: (tag: string) => void;
   onChange: (next: PfBlockSpec) => void;
 }
 
-export function PathfinderFilterBar({ spec, view, plans, goals, teams, members, onChange }: Props) {
+export function PathfinderFilterBar({
+  spec, view, plans, goals, teams, members,
+  allTags, tagsAvailable, tagColor, onRenameTag, onDeleteTag, onChange,
+}: Props) {
   const set = (patch: Partial<PfBlockSpec>) => onChange({ ...spec, ...patch });
   const setFilter = (patch: Partial<TaskFilter>) => set({ filter: { ...spec.filter, ...patch } });
 
@@ -185,14 +199,92 @@ export function PathfinderFilterBar({ spec, view, plans, goals, teams, members, 
         />
       </div>
 
+      {/* Vault's own axis. It sits in its own row and says so out loud: a
+          control that looks like the PathFinder filters above but writes
+          somewhere PathFinder cannot see would be the most confusing thing in
+          this bar. */}
+      <div className="pf-filter-row pf-filter-row-tags">
+        <span className="pf-chips-label" title="Tags stored in Vault only — PathFinder never sees them">
+          Vault tags
+        </span>
+
+        {!tagsAvailable ? (
+          <span className="pf-hint pf-hint-warn">
+            Not available — apply <code>20260827140000_vault_task_tags.sql</code>.
+          </span>
+        ) : (
+          <>
+            <TagPicker
+              selected={spec.tags}
+              options={allTags}
+              tagColor={tagColor}
+              disabled={spec.untaggedOnly}
+              onChange={(tags) => set({ tags: tags.slice(0, MAX_FILTER_TAGS) })}
+              onRename={onRenameTag}
+              onDelete={onDeleteTag}
+            />
+
+            <Select
+              label="Match"
+              value={spec.tagMode}
+              options={TAG_MODES.map((m) => ({ value: m, label: TAG_MODE_LABELS[m] }))}
+              onChange={(v) => set({ tagMode: v as TagMode })}
+            />
+
+            <label className="pf-toggle">
+              <input
+                type="checkbox"
+                checked={spec.untaggedOnly}
+                // A hard gate rather than another AND-ed clause: "untagged AND
+                // tagged #reading" matches nothing, and a filter that can be
+                // configured into matching nothing reads as broken. The picker
+                // above disables itself for the same reason.
+                onChange={(e) => set({ untaggedOnly: e.target.checked })}
+              />
+              <span title="Only tasks with no Vault tags. Ignores the tag list while it is on.">
+                Untagged only
+              </span>
+            </label>
+
+            <label className="pf-toggle">
+              <input
+                type="checkbox"
+                checked={spec.showTags}
+                onChange={(e) => set({ showTags: e.target.checked })}
+              />
+              <span title="Render each row's tags as chips">Show on rows</span>
+            </label>
+          </>
+        )}
+      </div>
+
       <div className="pf-filter-row pf-filter-row-end">
+        {view !== "board" ? (
+          <Select
+            label="Subtasks"
+            value={spec.tree}
+            options={(Object.keys(TREE_MODE_LABELS) as Array<keyof typeof TREE_MODE_LABELS>).map((k) => ({
+              value: k,
+              label: TREE_MODE_LABELS[k],
+            }))}
+            onChange={(v) => set({ tree: v as PfBlockSpec["tree"] })}
+            hint={TREE_MODE_HINTS[spec.tree]}
+          />
+        ) : (
+          <span className="pf-hint" title="A card cannot contain another card. Each one shows a “done/total” roll-up instead, and the detail sheet holds the steps.">
+            Cards show a subtask roll-up
+          </span>
+        )}
+
         <label className="pf-toggle">
           <input
             type="checkbox"
             checked={spec.filter.rootsOnly}
             onChange={(e) => setFilter({ rootsOnly: e.target.checked })}
           />
-          <span title="Hide tasks that are steps of another task">Top-level only</span>
+          <span title="Hide tasks that are steps of another task. With “Nested + hidden steps” this gives the full outline of every top-level task.">
+            Top-level only
+          </span>
         </label>
 
         <label className="pf-toggle">
@@ -311,20 +403,178 @@ function SearchBox({ value, onChange }: { value: string; onChange: (v: string) =
 }
 
 function Select({
-  label, value, options, onChange,
+  label, value, options, onChange, hint,
 }: {
   label: string;
   value: string;
   options: Array<{ value: string; label: string }>;
   onChange: (v: string) => void;
+  hint?: string;
 }) {
   return (
-    <label className="pf-select">
+    <label className="pf-select" title={hint}>
       <span>{label}</span>
       <select value={value} onChange={(e) => onChange(e.target.value)}>
         {options.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
       </select>
     </label>
+  );
+}
+
+/**
+ * The tag filter, and the only place tags can be renamed or deleted globally.
+ *
+ * Tag *management* lives inside the filter's popover rather than in a settings
+ * screen because that is where a bad tag is noticed — you open the picker to
+ * filter by "chaper-3" and see the typo. Vault's note tags work the same way
+ * (TagsPanel), and the two share `vault_tag_colors`, so a colour set for a note
+ * tag shows up on task chips with the same name.
+ *
+ * Both destructive operations go through the RPCs, not a client-side loop: a
+ * rename that fails halfway would leave the tag existing under both names with
+ * no way to tell which tasks got which. See lib/vaultTaskTags.ts.
+ */
+function TagPicker({
+  selected, options, tagColor, disabled, onChange, onRename, onDelete,
+}: {
+  selected: string[];
+  options: string[];
+  tagColor: (tag: string) => string | undefined;
+  disabled?: boolean;
+  onChange: (v: string[]) => void;
+  onRename: (from: string, to: string) => void;
+  onDelete: (tag: string) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [managing, setManaging] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    const onDown = (e: MouseEvent) => {
+      if (ref.current && !ref.current.contains(e.target as Node)) { setOpen(false); setManaging(false); }
+    };
+    // `mousedown`, not `click`: a click listener added during a click event can
+    // fire on the very event that opened the popover and close it immediately.
+    document.addEventListener("mousedown", onDown);
+    return () => document.removeEventListener("mousedown", onDown);
+  }, [open]);
+
+  const toggle = (v: string) =>
+    onChange(selected.includes(v) ? selected.filter((x) => x !== v) : [...selected, v]);
+
+  const summary = disabled
+    ? "—"
+    : selected.length === 0
+      ? "Any"
+      : selected.length === 1
+        ? `#${selected[0]}`
+        : `${selected.length} tags`;
+
+  return (
+    <div className="pf-multi" ref={ref}>
+      <button
+        type="button"
+        className={`pf-multi-btn${selected.length && !disabled ? " is-on" : ""}`}
+        aria-expanded={open}
+        disabled={disabled}
+        title={disabled ? "Turn off “Untagged only” to filter by tag" : undefined}
+        onClick={() => setOpen((o) => !o)}
+      >
+        <span className="pf-multi-label">Tag</span>
+        <span className="pf-multi-value">{summary}</span>
+        <span aria-hidden="true">▾</span>
+      </button>
+
+      {open ? (
+        <div className="pf-multi-pop">
+          {options.length === 0 ? (
+            <div className="pf-multi-empty">
+              No tags yet. Open any task’s details (⋯) to add one.
+            </div>
+          ) : (
+            <>
+              <div className="pf-multi-tools">
+                {selected.length > 0 ? (
+                  <button type="button" className="pf-multi-clear" onClick={() => onChange([])}>Clear</button>
+                ) : <span />}
+                <button
+                  type="button"
+                  className={`pf-multi-clear${managing ? " is-on" : ""}`}
+                  onClick={() => setManaging((m) => !m)}
+                >
+                  {managing ? "Done" : "Manage"}
+                </button>
+              </div>
+
+              {options.map((t) => (
+                <div className="pf-multi-row" key={t}>
+                  {managing ? (
+                    <TagManageRow tag={t} tagColor={tagColor} onRename={onRename} onDelete={onDelete} />
+                  ) : (
+                    <label className="pf-multi-check">
+                      <input
+                        type="checkbox"
+                        checked={selected.includes(t)}
+                        onChange={() => toggle(t)}
+                      />
+                      <span className="pf-tag-swatch" style={{ background: tagColor(t) ?? "#94a3b8" }} aria-hidden="true" />
+                      <span>#{t}</span>
+                    </label>
+                  )}
+                </div>
+              ))}
+            </>
+          )}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+function TagManageRow({
+  tag, tagColor, onRename, onDelete,
+}: {
+  tag: string;
+  tagColor: (tag: string) => string | undefined;
+  onRename: (from: string, to: string) => void;
+  onDelete: (tag: string) => void;
+}) {
+  const [draft, setDraft] = useState(tag);
+
+  useEffect(() => { setDraft(tag); }, [tag]);
+
+  const commit = () => {
+    const next = draft.trim();
+    if (next && next !== tag) onRename(tag, next);
+    else setDraft(tag);
+  };
+
+  return (
+    <span className="pf-tag-manage">
+      <span className="pf-tag-swatch" style={{ background: tagColor(tag) ?? "#94a3b8" }} aria-hidden="true" />
+      <input
+        className="pf-tag-rename"
+        value={draft}
+        aria-label={`Rename tag ${tag}`}
+        onChange={(e) => setDraft(e.target.value)}
+        onBlur={commit}
+        onKeyDown={(e) => {
+          if (e.key === "Enter") { e.preventDefault(); (e.target as HTMLInputElement).blur(); }
+          if (e.key === "Escape") { e.preventDefault(); setDraft(tag); }
+          e.stopPropagation();
+        }}
+      />
+      <button
+        type="button"
+        className="pf-row-del"
+        title={`Remove #${tag} from every task`}
+        aria-label={`Delete tag ${tag}`}
+        onClick={() => onDelete(tag)}
+      >
+        ×
+      </button>
+    </span>
   );
 }
 

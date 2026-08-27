@@ -7,11 +7,26 @@
 // rows lying on their side. What IS shared is the write path — every one goes
 // through the `TaskActions` the shell builds, so the ISA split and the
 // scheduling gate are enforced identically whichever view you are looking at.
+//
+// ── Hierarchy lives in two of the three, and that is not an omission ─────────
+//
+// PathFinder tasks are recursive: a task's steps are tasks, with steps of their
+// own. The list and the table render that as indentation with a disclosure
+// triangle, over rows `runTreeQuery` has already nested (see
+// @nexus/core/pathfinder/tree.ts — the nesting rules and their edge cases are
+// tested there, not here).
+//
+// The board does not nest, because a Kanban card cannot contain another card
+// without ceasing to be one. It shows a subtask roll-up chip instead: "3/12" on
+// the card, and the whole subtree one click away in the detail sheet. A board
+// that tried to nest would either hide the steps or turn each column into a
+// second, worse outline.
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
   groupTasks,
   memberName,
+  statFor,
   PRIORITIES,
   STAGES,
   STAGE_LABELS,
@@ -20,6 +35,8 @@ import {
   type PfPlan,
   type PfTask,
   type PfTeamMember,
+  type SubtreeStat,
+  type TaskTreeRow,
 } from "@nexus/core/pathfinder";
 import {
   axisDropValue,
@@ -29,15 +46,19 @@ import {
   type PfBlockSpec,
   type PfColumn,
 } from "../lib/pathfinderBlock";
-import type { TaskActions } from "./PathfinderBlockView";
+import type { TaskActions, TreeControls } from "./PathfinderBlockView";
 
-interface ViewProps {
-  tasks: PfTask[];
+/** What every view needs, whatever shape it renders it in. */
+interface ViewCommon {
   spec: PfBlockSpec;
   members: PfTeamMember[];
   actions: TaskActions;
   today: string;
   editable: boolean;
+  /** Vault-only tags for one task. Never empty-vs-undefined — see `tagsFor`. */
+  tagsOf: (taskId: number) => string[];
+  /** Shared with note tags, so one word means one colour everywhere in Vault. */
+  tagColor: (tag: string) => string | undefined;
 }
 
 /** How a task's assignment reads on a card or row, or null when it has none. */
@@ -175,6 +196,126 @@ function DueChip({ due, today }: { due: string | null; today: string }) {
   return <span className={`pf-due pf-due-${tone}`}>{text}</span>;
 }
 
+/**
+ * A task's Vault tags.
+ *
+ * The colour comes from `vault_tag_colors`, the same table the note tags use, so
+ * "reading" is one colour across the graph, the tag panel and every task block.
+ * Untinted tags fall back to the neutral chip rather than picking a colour —
+ * a generated colour would disagree with the one the user later chooses.
+ */
+function TagChips({
+  tags, tagColor, onRemove,
+}: {
+  tags: string[];
+  tagColor: (tag: string) => string | undefined;
+  onRemove?: (tag: string) => void;
+}) {
+  if (tags.length === 0) return null;
+  return (
+    <>
+      {tags.map((t) => {
+        const c = tagColor(t);
+        return (
+          <span
+            key={t}
+            className="pf-tag pf-tag-vault"
+            style={c ? { background: `${c}22`, color: c, borderColor: `${c}55` } : undefined}
+            title={`Vault tag — not visible in PathFinder`}
+          >
+            #{t}
+            {onRemove ? (
+              <button
+                type="button"
+                className="pf-tag-x"
+                aria-label={`Remove tag ${t}`}
+                onClick={() => onRemove(t)}
+              >
+                ×
+              </button>
+            ) : null}
+          </span>
+        );
+      })}
+    </>
+  );
+}
+
+/**
+ * The "3/12" roll-up on a task that has steps.
+ *
+ * Counts every descendant in the whole dataset, not the ones this view happens
+ * to be showing — the same choice `aggregate_estimate` makes server-side. A
+ * roll-up that changes when you change the filter is not a roll-up.
+ */
+function SubtaskProgress({ stat }: { stat: SubtreeStat }) {
+  if (stat.total === 0) return null;
+  const pct = Math.round((stat.done / stat.total) * 100);
+  const complete = stat.done === stat.total;
+  return (
+    <span
+      className={`pf-progress${complete ? " is-complete" : ""}`}
+      title={`${stat.done} of ${stat.total} step${stat.total === 1 ? "" : "s"} done`}
+    >
+      <span className="pf-progress-bar" aria-hidden="true">
+        <span className="pf-progress-fill" style={{ width: `${pct}%` }} />
+      </span>
+      <span className="pf-progress-num">{stat.done}/{stat.total}</span>
+    </span>
+  );
+}
+
+/**
+ * The disclosure control, and the "+N" that stands in for it.
+ *
+ * A row with children toggles. A row whose children the FILTER is hiding gets a
+ * different affordance entirely — clicking it pulls that one subtree in rather
+ * than changing the block's filter, which would be a heavy answer to "what else
+ * is under this one?". Rendering the same triangle for both would promise an
+ * expand that reveals nothing.
+ *
+ * A row with neither still renders the spacer: without it every leaf's checkbox
+ * sits one notch left of its siblings' and the column stops reading as a column.
+ */
+function Disclosure({
+  row, onToggle, onExpandHidden,
+}: {
+  row: TaskTreeRow;
+  onToggle: (id: number) => void;
+  onExpandHidden: (id: number) => void;
+}) {
+  if (row.childCount > 0) {
+    return (
+      <button
+        type="button"
+        className={`pf-disclose${row.collapsed ? "" : " is-open"}`}
+        aria-expanded={!row.collapsed}
+        aria-label={row.collapsed ? `Show steps of ${row.task.title}` : `Hide steps of ${row.task.title}`}
+        title={row.collapsed ? "Show steps" : "Hide steps"}
+        onClick={() => onToggle(row.task.id)}
+      >
+        ▸
+      </button>
+    );
+  }
+
+  if (row.hiddenChildren > 0) {
+    return (
+      <button
+        type="button"
+        className="pf-disclose is-hidden-kids"
+        aria-label={`Show ${row.hiddenChildren} step${row.hiddenChildren === 1 ? "" : "s"} the filter is hiding`}
+        title={`${row.hiddenChildren} step${row.hiddenChildren === 1 ? "" : "s"} hidden by this block's filter — show them anyway`}
+        onClick={() => onExpandHidden(row.task.id)}
+      >
+        +{row.hiddenChildren}
+      </button>
+    );
+  }
+
+  return <span className="pf-disclose is-empty" aria-hidden="true" />;
+}
+
 /** The row action that is always available and always destructive. */
 function DeleteButton({ onClick, disabled }: { onClick: () => void; disabled?: boolean }) {
   return (
@@ -191,12 +332,99 @@ function DeleteButton({ onClick, disabled }: { onClick: () => void; disabled?: b
   );
 }
 
+function DetailButton({ onClick, title }: { onClick: () => void; title: string }) {
+  return (
+    <button
+      type="button"
+      className="pf-row-detail"
+      title={`Open details for “${title}”`}
+      aria-label={`Open details for ${title}`}
+      onClick={onClick}
+    >
+      ⋯
+    </button>
+  );
+}
+
+function SubtaskButton({ onClick, disabled }: { onClick: () => void; disabled?: boolean }) {
+  return (
+    <button
+      type="button"
+      className="pf-row-sub"
+      title="Add a step under this task"
+      aria-label="Add a step under this task"
+      disabled={disabled}
+      onClick={onClick}
+    >
+      ⤵
+    </button>
+  );
+}
+
+/**
+ * The inline "add a step" input.
+ *
+ * Enter commits and keeps the field open, so three steps are three keystrokes
+ * plus three Enters rather than three round trips through a button. Escape and
+ * blur close it — and blur COMMITS first, matching the list's own add row, so a
+ * typed step is never silently discarded by clicking elsewhere.
+ */
+function InlineAdd({
+  depth, placeholder, onSubmit, onClose,
+}: {
+  depth: number;
+  placeholder: string;
+  onSubmit: (title: string) => void;
+  onClose: () => void;
+}) {
+  const [draft, setDraft] = useState("");
+  const ref = useRef<HTMLInputElement>(null);
+
+  useEffect(() => { ref.current?.focus(); }, []);
+
+  const commit = (keepOpen: boolean) => {
+    const text = draft.trim();
+    if (text) {
+      setDraft("");
+      onSubmit(text);
+    }
+    if (!keepOpen) onClose();
+  };
+
+  return (
+    <div className="pf-list-row pf-subadd" style={{ "--pf-depth": depth } as React.CSSProperties}>
+      <span className="pf-disclose is-empty" aria-hidden="true" />
+      <span className="pf-add-plus" aria-hidden="true">↳</span>
+      <input
+        ref={ref}
+        className="pf-add-input"
+        value={draft}
+        placeholder={placeholder}
+        aria-label={placeholder}
+        onChange={(e) => setDraft(e.target.value)}
+        onKeyDown={(e) => {
+          if (e.key === "Enter") { e.preventDefault(); commit(true); }
+          if (e.key === "Escape") { e.preventDefault(); setDraft(""); onClose(); }
+          e.stopPropagation();
+        }}
+        onBlur={() => commit(false)}
+      />
+    </div>
+  );
+}
+
 // ─── List ───────────────────────────────────────────────────────────────────
 
 export function PfListView({
-  tasks, spec, members, actions, today, editable, onAdd,
-}: ViewProps & { onAdd: (title: string) => void }) {
+  rows, spec, members, actions, today, editable, tagsOf, tagColor, tree, onAdd,
+}: ViewCommon & {
+  rows: TaskTreeRow[];
+  tree: TreeControls;
+  onAdd: (title: string) => void;
+}) {
   const [draft, setDraft] = useState("");
+  /** Which row currently has an open "add a step" field. One at a time. */
+  const [addingUnder, setAddingUnder] = useState<number | null>(null);
 
   const submit = () => {
     const text = draft.trim();
@@ -207,37 +435,71 @@ export function PfListView({
 
   return (
     <div className="pf-list">
-      {tasks.map((t) => (
-        <div className={`pf-list-row${t.done ? " is-done" : ""}${actions.busy.has(t.id) ? " is-busy" : ""}`} key={t.id}>
-          <input
-            type="checkbox"
-            className="pf-check"
-            checked={t.done}
-            disabled={actions.busy.has(t.id)}
-            aria-label={t.done ? `Mark “${t.title}” not done` : `Mark “${t.title}” done`}
-            onChange={() => actions.toggle(t)}
-          />
+      {rows.map((r) => {
+        const t = r.task;
+        const tags = tagsOf(t.id);
+        const busy = actions.busy.has(t.id);
+        return (
+          <div key={t.id}>
+            <div
+              className={`pf-list-row${t.done ? " is-done" : ""}${busy ? " is-busy" : ""}${r.depth > 0 ? " is-step" : ""}`}
+              style={{ "--pf-depth": r.depth } as React.CSSProperties}
+            >
+              <Disclosure row={r} onToggle={tree.toggleCollapse} onExpandHidden={tree.expandHidden} />
 
-          <PriorityDot priority={t.priority} />
+              <input
+                type="checkbox"
+                className="pf-check"
+                checked={t.done}
+                disabled={busy}
+                aria-label={t.done ? `Mark “${t.title}” not done` : `Mark “${t.title}” done`}
+                onChange={() => actions.toggle(t)}
+              />
 
-          <EditableText
-            value={t.title}
-            className="pf-list-title"
-            disabled={!editable}
-            onCommit={(title) => actions.patch(t, { title })}
-          />
+              <PriorityDot priority={t.priority} />
 
-          <span className="pf-meta">
-            {t.plan_title ? <span className="pf-tag">{t.plan_title}</span> : null}
-            <AssigneeChip task={t} members={members} />
-            {t.task_type !== "task" ? <span className="pf-tag pf-tag-kind">{TASK_TYPE_LABELS[t.task_type]}</span> : null}
-            {t.aggregate_estimate ? <span className="pf-tag pf-tag-est">{fmtEstimate(t.aggregate_estimate)}</span> : null}
-            <DueChip due={t.due_date} today={today} />
-          </span>
+              <EditableText
+                value={t.title}
+                className="pf-list-title"
+                disabled={!editable}
+                onCommit={(title) => actions.patch(t, { title })}
+              />
 
-          {editable ? <DeleteButton onClick={() => actions.remove(t)} disabled={actions.busy.has(t.id)} /> : null}
-        </div>
-      ))}
+              <span className="pf-meta">
+                <SubtaskProgress stat={statFor(actions.stats, t.id)} />
+                {spec.showTags ? <TagChips tags={tags} tagColor={tagColor} /> : null}
+                {t.plan_title ? <span className="pf-tag">{t.plan_title}</span> : null}
+                <AssigneeChip task={t} members={members} />
+                {t.task_type !== "task" ? <span className="pf-tag pf-tag-kind">{TASK_TYPE_LABELS[t.task_type]}</span> : null}
+                {t.aggregate_estimate ? <span className="pf-tag pf-tag-est">{fmtEstimate(t.aggregate_estimate)}</span> : null}
+                <DueChip due={t.due_date} today={today} />
+              </span>
+
+              <span className="pf-row-actions">
+                <DetailButton onClick={() => actions.openDetail(t)} title={t.title} />
+                {editable ? (
+                  <>
+                    <SubtaskButton
+                      disabled={busy}
+                      onClick={() => setAddingUnder((cur) => (cur === t.id ? null : t.id))}
+                    />
+                    <DeleteButton onClick={() => actions.remove(t)} disabled={busy} />
+                  </>
+                ) : null}
+              </span>
+            </div>
+
+            {addingUnder === t.id && editable ? (
+              <InlineAdd
+                depth={r.depth + 1}
+                placeholder={`Step of “${t.title}”…`}
+                onSubmit={(title) => actions.addSubtask(t, title)}
+                onClose={() => setAddingUnder(null)}
+              />
+            ) : null}
+          </div>
+        );
+      })}
 
       {editable ? (
         <div className="pf-add">
@@ -269,6 +531,7 @@ export function PfListView({
  * they had filtered to is worse than making them pick.
  */
 function addPlaceholder(spec: PfBlockSpec): string {
+  if (spec.tags.length === 1 && spec.tagMode !== "none") return `Add a task tagged #${spec.tags[0]}…`;
   if (spec.filter.planIds.length === 1) return "Add a task to this plan…";
   if (spec.filter.due === "today") return "Add a task due today…";
   return "Add a task…";
@@ -277,8 +540,12 @@ function addPlaceholder(spec: PfBlockSpec): string {
 // ─── Board ──────────────────────────────────────────────────────────────────
 
 export function PfBoardView({
-  tasks, spec, plans, members, actions, today, editable, onSpecChange,
-}: ViewProps & { plans: PfPlan[]; onSpecChange: (next: PfBlockSpec) => void }) {
+  tasks, spec, plans, members, actions, today, editable, tagsOf, tagColor, onSpecChange,
+}: ViewCommon & {
+  tasks: PfTask[];
+  plans: PfPlan[];
+  onSpecChange: (next: PfBlockSpec) => void;
+}) {
   const axis = spec.groupBy;
   const columns = boardColumns(axis, plans, members);
   const groups = groupTasks(tasks, axis, columns, axis === "assignee" ? "Personal" : "Other");
@@ -354,10 +621,17 @@ export function PfBoardView({
                       disabled={!editable}
                       onCommit={(title) => actions.patch(t, { title })}
                     />
+                    <span className="pf-row-actions" onPointerDown={(e) => e.stopPropagation()}>
+                      <DetailButton onClick={() => actions.openDetail(t)} title={t.title} />
+                    </span>
                   </div>
 
                   <div className="pf-card-meta">
                     <PriorityDot priority={t.priority} />
+                    {/* A card cannot nest, so the subtree shows as a roll-up and
+                        the detail sheet is where the steps themselves live. */}
+                    <SubtaskProgress stat={statFor(actions.stats, t.id)} />
+                    {spec.showTags ? <TagChips tags={tagsOf(t.id)} tagColor={tagColor} /> : null}
                     {/* Suppressed when the board is already grouped by person —
                         a chip repeating the column header is noise. */}
                     {axis !== "assignee" ? <AssigneeChip task={t} members={members} /> : null}
@@ -510,8 +784,12 @@ function useCardDrag({
 // ─── Table ──────────────────────────────────────────────────────────────────
 
 export function PfTableView({
-  tasks, spec, members, actions, today, editable, onSpecChange,
-}: ViewProps & { onSpecChange: (next: PfBlockSpec) => void }) {
+  rows, spec, members, actions, today, editable, tagsOf, tagColor, tree, onSpecChange,
+}: ViewCommon & {
+  rows: TaskTreeRow[];
+  tree: TreeControls;
+  onSpecChange: (next: PfBlockSpec) => void;
+}) {
   const cols = spec.columns;
 
   const sortBy = (key: PfColumn) => {
@@ -547,20 +825,37 @@ export function PfTableView({
                 {sortIndicator(spec, c)}
               </th>
             ))}
-            {editable ? <th className="pf-th pf-th-act" scope="col" aria-label="Actions" /> : null}
+            <th className="pf-th pf-th-act" scope="col" aria-label="Actions" />
           </tr>
         </thead>
         <tbody>
-          {tasks.map((t) => (
-            <tr key={t.id} className={`${t.done ? "is-done" : ""}${actions.busy.has(t.id) ? " is-busy" : ""}`}>
+          {rows.map((r) => (
+            <tr
+              key={r.task.id}
+              className={`${r.task.done ? "is-done" : ""}${actions.busy.has(r.task.id) ? " is-busy" : ""}${r.depth > 0 ? " is-step" : ""}`}
+            >
               {cols.map((c) => (
-                <Cell key={c} col={c} task={t} members={members} actions={actions} today={today} editable={editable} />
+                <Cell
+                  key={c}
+                  col={c}
+                  row={r}
+                  members={members}
+                  actions={actions}
+                  today={today}
+                  editable={editable}
+                  tagsOf={tagsOf}
+                  tagColor={tagColor}
+                  tree={tree}
+                />
               ))}
-              {editable ? (
-                <td className="pf-td pf-td-act">
-                  <DeleteButton onClick={() => actions.remove(t)} disabled={actions.busy.has(t.id)} />
-                </td>
-              ) : null}
+              <td className="pf-td pf-td-act">
+                <span className="pf-row-actions">
+                  <DetailButton onClick={() => actions.openDetail(r.task)} title={r.task.title} />
+                  {editable ? (
+                    <DeleteButton onClick={() => actions.remove(r.task)} disabled={actions.busy.has(r.task.id)} />
+                  ) : null}
+                </span>
+              </td>
             </tr>
           ))}
         </tbody>
@@ -579,15 +874,19 @@ function sortIndicator(spec: PfBlockSpec, col: PfColumn) {
 }
 
 function Cell({
-  col, task, members, actions, today, editable,
+  col, row, members, actions, today, editable, tagsOf, tagColor, tree,
 }: {
   col: PfColumn;
-  task: PfTask;
+  row: TaskTreeRow;
   members: PfTeamMember[];
   actions: TaskActions;
   today: string;
   editable: boolean;
+  tagsOf: (taskId: number) => string[];
+  tagColor: (tag: string) => string | undefined;
+  tree: TreeControls;
 }) {
+  const task = row.task;
   const busy = actions.busy.has(task.id);
   // Every planning-backed cell is blank-and-inert on a sparse kind rather than
   // showing an invented default. A reminder has no stage; a dropdown claiming it
@@ -610,13 +909,29 @@ function Cell({
       );
 
     case "title":
+      // The indent lives in the title cell rather than on the <tr>: a row-level
+      // padding would push every column right, and the table would lose its
+      // grid the moment anything nested.
       return (
         <td className="pf-td pf-td-title">
-          <EditableText
-            value={task.title}
-            disabled={!editable}
-            onCommit={(title) => actions.patch(task, { title })}
-          />
+          <span className="pf-cell-tree" style={{ "--pf-depth": row.depth } as React.CSSProperties}>
+            <Disclosure row={row} onToggle={tree.toggleCollapse} onExpandHidden={tree.expandHidden} />
+            <EditableText
+              value={task.title}
+              disabled={!editable}
+              onCommit={(title) => actions.patch(task, { title })}
+            />
+            <SubtaskProgress stat={statFor(actions.stats, task.id)} />
+          </span>
+        </td>
+      );
+
+    case "tags":
+      return (
+        <td className="pf-td pf-td-tags">
+          {tagsOf(task.id).length > 0
+            ? <TagChips tags={tagsOf(task.id)} tagColor={tagColor} />
+            : <span className="pf-na">—</span>}
         </td>
       );
 
