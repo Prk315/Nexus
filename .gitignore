@@ -42,8 +42,23 @@ npm-debug.log*
 .idea/
 *.swp
 
-# Agent / tooling config (machine-local)
-.claude/
+# Agent / tooling config (machine-local): settings, job scratch, and the git
+# worktrees agents run in — none of which belong to anyone but this machine.
+#
+# `.claude/*` rather than `.claude/`, and the difference is load-bearing: git
+# will not descend into an excluded DIRECTORY, so a `!` negation underneath one
+# can never re-include anything. Ignoring the contents instead leaves the door
+# open for the exception below.
+#
+# ⚠️ Keep this as `*` plus explicit negations. Un-ignoring `.claude/` wholesale
+# would start tracking `.claude/worktrees/`, which contains checkouts of this
+# same repository — a repository inside itself.
+.claude/*
+
+# Skills are project knowledge, not machine state. A skill that only exists on
+# one laptop is worse than none: every other session, checkout and CI run
+# silently lacks the thing the docs point at.
+!.claude/skills/
 
 # R (RStudio leaves these next to any script it runs)
 .Rhistory
