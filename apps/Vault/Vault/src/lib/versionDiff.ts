@@ -239,23 +239,3 @@ export function formatBytes(n: number): string {
   return `${(n / 1024 / 1024).toFixed(1)} MB`;
 }
 
-/**
- * "4 min ago", "yesterday", "12 Aug".
- *
- * `now` is a parameter rather than a `Date.now()` call so the function is
- * testable without freezing the clock.
- */
-export function relativeTime(iso: string, now: number = Date.now()): string {
-  const t = Date.parse(iso);
-  if (!Number.isFinite(t)) return "unknown";
-  const secs = Math.round((now - t) / 1000);
-  if (secs < 45) return "just now";
-  const mins = Math.round(secs / 60);
-  if (mins < 60) return `${mins} min ago`;
-  const hours = Math.round(mins / 60);
-  if (hours < 24) return `${hours} h ago`;
-  const days = Math.round(hours / 24);
-  if (days === 1) return "yesterday";
-  if (days < 7) return `${days} days ago`;
-  return new Date(t).toLocaleDateString(undefined, { day: "numeric", month: "short" });
-}

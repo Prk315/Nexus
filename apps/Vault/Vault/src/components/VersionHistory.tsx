@@ -2,7 +2,8 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { memberName } from "@nexus/core/members";
 import * as api from "../lib/api";
 import { useConfirm } from "./ConfirmDialog";
-import { diffContent, formatBytes, noteLines, relativeTime } from "../lib/versionDiff";
+import { diffContent, formatBytes, noteLines } from "../lib/versionDiff";
+import { relativeTime } from "../lib/timestamps";
 import type { ContentVersion, VersionOrigin } from "../lib/api";
 
 // The History panel: what this note used to be, and a way back.
@@ -207,7 +208,15 @@ export function VersionHistory({ nodeId, nodeName, currentContent, collab, onRes
                   )}
                 </div>
                 <div className="vh-row-meta">
-                  {v.user_id ? memberName(v.user_id) : "unknown"} · {formatBytes(v.byte_len)}
+                  {/* updated_by, NOT user_id. user_id is rewritten to the note's
+                      OWNER on every write by vault_content_force_owner(), so
+                      displaying it put the owner's name against versions the
+                      owner did not write — a confident lie about authorship on
+                      exactly the screen you consult to decide whose work to
+                      keep. null means the version predates the column; "unknown"
+                      is the honest answer, and falling back to the owner would
+                      reintroduce the bug with extra steps. */}
+                  {v.updated_by ? memberName(v.updated_by) : "unknown author"} · {formatBytes(v.byte_len)}
                 </div>
               </button>
             ))}

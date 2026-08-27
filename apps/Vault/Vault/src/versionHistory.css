@@ -311,6 +311,17 @@
 }
 .vh-btn-primary:hover:not(:disabled) { background: var(--fg-bright); border-color: var(--fg-bright); }
 
+/* The resting "Saved · 4 min ago" line, shown whenever nothing transient is
+   happening. Quieter than the transient statuses on purpose: it is present all
+   the time, and something permanently in the corner of the eye must not read as
+   an alert. It shares .save-status so the sizing and the no-select behaviour
+   stay in one place. */
+.save-status-resting {
+  color: var(--fg-ghost);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
 /* The way in, in the editor toolbar next to the save status. Quiet by default:
    it sits beside a note title on every note in the vault, and a button that
    competes with the title for attention on every screen is a tax paid all day

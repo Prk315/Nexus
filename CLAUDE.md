@@ -1198,6 +1198,27 @@ operations the other person receives. There is a direct-write fallback for when
 no editor is mounted (the schema guard is showing, or a non-Tiptap kind), and it
 deliberately refuses on a co-edited note rather than appearing to work.
 
+⚠️ **`vault_content.user_id` is the OWNER, never the author.**
+`vault_content_force_owner()` rewrites it to the parent node's owner on every
+write — correct, and it must stay, since `owner_all` is written against that
+column — so on a shared note it names the owner no matter who typed. The History
+panel displayed it as a byline for one release and was therefore putting the
+owner's name against versions the owner did not write. `updated_by`
+(`20260827180000`, `APPLY.md` §12) is the real answer: a separate BEFORE trigger
+stamps it from `auth.uid()`, SECURITY **INVOKER** so the claim resolves against
+the caller. It is nullable with no backfill on purpose — rows written earlier
+have an author nobody recorded, and NULL says so; backfilling from `user_id`
+would manufacture exactly the false attribution it exists to remove. Render NULL
+as "unknown", never as the owner.
+
+The editor toolbar shows a **resting** "Saved · 4 min ago" line whenever nothing
+transient is happening. `saveStatus` is deliberately short-lived ("Saving…",
+then "Saved" for 1.5 s, then nothing), which left the pane silent about whether
+the work was safe for almost all of every minute — the wrong default for a
+surface whose entire failure mode is a save that quietly did not happen. The
+"by whom" half appears only on a shared note: on a private one the answer is
+always "you", and a byline that can only say one thing is noise.
+
 A conflict now has three exits instead of one — **Reload**, **Keep mine**, and
 **Compare**. "Keep mine" (`api.overwriteContent`) is only safe to offer because
 it snapshots the server's copy first, so the person being overwritten can
@@ -1206,6 +1227,24 @@ failed snapshot leaves the conflict standing rather than clearing the guard for
 a write with no safety net. Like `saveContentProjection`, it is a separate
 exported name rather than a `force` flag — the one sanctioned way past
 `assertContentNotConflicted`.
+
+### The conflict guard, and the false alarm that trained people to ignore it
+
+⚠️ **The conflict guard compares INSTANTS, not strings** (`lib/timestamps.ts`
+`sameInstant`). It compared strings once, and every note then reported "changed
+by the other user" on its second save and every save after, alone: `updated_at`
+is a `timestamptz`, the client cached `new Date().toISOString()` (`…628Z`) after
+a save, and PostgREST returns `…628+00:00`. The same instant, two spellings. The
+first save of a session passed only because the cache had been seeded from a
+READ; the first WRITE reseeded it and the formats never matched again. Parsing
+also absorbs Postgres trimming trailing zeros (`.100Z` → `.1+00:00`), so
+normalising the suffix alone would not have been enough. Both raw savers now
+also `.select("updated_at")` and cache what the SERVER stored — `updated_at` is
+written from the client's clock, so a device a few seconds off would otherwise
+cache an instant the row does not hold.
+
+The general rule: **a timestamp that crosses a serialisation boundary is a
+value, not a string.**
 
 ### Two more ways a note could be written over another, both in EditorPane
 
