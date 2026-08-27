@@ -1,10 +1,23 @@
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient, type QueryClient } from "@tanstack/react-query";
 import {
   getAllTasks, getPlans, createTask, updateTask, toggleTask, deleteTask,
   moveTask, reorderTasks, setTaskKanbanStatus, patchTask,
 } from "../lib/api";
 import { qk } from "../lib/queryClient";
 import type { TaskWithContext, Plan, Priority } from "../types";
+
+/**
+ * Invalidates the caches a quick-action write can affect but doesn't hold a
+ * mutation hook for — TaskActionMenu's schedule/due items run
+ * `scheduleTaskOn`/`setTaskDue` themselves (see lib/api/quickActions.ts)
+ * rather than through a `useTaskMutation`, so nothing here patches the cache
+ * optimistically. A plain invalidate-on-success keeps the board's "scheduled"
+ * badge and the stage gate's coverage figure in sync with the new block/date.
+ */
+export function invalidateTaskCaches(qc: QueryClient) {
+  qc.invalidateQueries({ queryKey: qk.tasks });
+  qc.invalidateQueries({ queryKey: qk.taskScheduling });
+}
 
 // ── Reads ────────────────────────────────────────────────────────────────────
 
@@ -132,6 +145,14 @@ export function useSetAssignee() {
   return useTaskMutation<{ id: number; assigned_to: string | null }>(
     ({ id, assigned_to }) => patchTask(id, { assigned_to }),
     (tasks, { id, assigned_to }) => tasks.map((t) => (t.id === id ? { ...t, assigned_to } : t)),
+  );
+}
+
+/** Inline rename — the board row, the planner's root title, and BreakdownTree steps. */
+export function useRenameTask() {
+  return useTaskMutation<{ id: number; title: string }>(
+    ({ id, title }) => patchTask(id, { title }),
+    (tasks, { id, title }) => tasks.map((t) => (t.id === id ? { ...t, title } : t)),
   );
 }
 

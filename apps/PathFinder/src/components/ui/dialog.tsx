@@ -12,7 +12,7 @@ export function DialogContent({
   title,
   description,
   ...props
-}: DialogPrimitive.DialogContentProps & { title: string; description?: string }) {
+}: Omit<DialogPrimitive.DialogContentProps, "title"> & { title: React.ReactNode; description?: string }) {
   return (
     <DialogPrimitive.Portal>
       <DialogPrimitive.Overlay className="fixed inset-0 z-50 bg-black/40 backdrop-blur-sm data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0" />

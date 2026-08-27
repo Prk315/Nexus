@@ -1,8 +1,16 @@
-import { useState } from "react";
-import { useNexusRegistration, NexusHeader, useNexusAuth, createMailLoader, createMailRulesApi, createMailApi, createJobsApi } from "@nexus/core";
+import { useState, useSyncExternalStore } from "react";
+import { useNexusRegistration, NexusHeader, useNexusAuth, useNexusAppearance, SettingsDialog, createMailLoader, createMailRulesApi, createMailApi, createJobsApi } from "@nexus/core";
 import { ymd } from "@nexus/core/coverage";
 import { loadScreenSpansForDate } from "./lib/actual";
 import { supabase } from "./lib/supabase";
+import {
+  DASH_BLOCK_IDS,
+  DASH_BLOCK_LABELS,
+  getDashBlockVisibility,
+  setDashBlockVisible,
+  subscribeDashBlocks,
+  type DashBlockId,
+} from "./lib/dashBlocks";
 import "./App.css";
 import { Sidebar, type Page } from "./components/Sidebar";
 import { SchedulesProvider } from "./contexts/SchedulesContext";
@@ -55,11 +63,47 @@ const mailApi = createMailApi(supabase);
 // anon policy, so this must be the authenticated one.
 const jobsApi = createJobsApi(supabase);
 
+/**
+ * The Dashboard-blocks checkboxes shown inside the shared Settings dialog.
+ *
+ * Lives here, not in nexus-core: nexus-core has no notion of a "Dashboard" or
+ * what's on it. `dashBlocks.ts` is the same getter/setter/subscribe shape as
+ * nexus-core's own `settings.ts`, just scoped to PathFinder's localStorage
+ * namespace (`pf.dash.blocks`) instead of the shared `nexus.settings.` one.
+ */
+function DashboardBlocksSection() {
+  const visibility = useSyncExternalStore(subscribeDashBlocks, getDashBlockVisibility);
+  return (
+    <div className="flex flex-col gap-2">
+      <h3 className="text-[11px] font-medium text-muted-foreground uppercase tracking-wider">
+        Dashboard blocks
+      </h3>
+      <div className="flex flex-col gap-1.5">
+        {DASH_BLOCK_IDS.map((id: DashBlockId) => (
+          <label key={id} className="flex items-center gap-2 text-sm text-foreground cursor-pointer select-none">
+            <input
+              type="checkbox"
+              checked={visibility[id]}
+              onChange={(e) => setDashBlockVisible(id, e.target.checked)}
+              className="h-3.5 w-3.5 rounded border-input accent-primary"
+            />
+            {DASH_BLOCK_LABELS[id]}
+          </label>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 function App() {
   useNexusRegistration("PathFinder");
   const { user, signOut } = useNexusAuth();
+  // Applies theme (.dark class) + UI scale (root zoom) — the header only
+  // opens the dialog that edits these, it never applies appearance itself.
+  useNexusAppearance();
   const [page, setPage] = useState<Page>("dashboard");
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+  const [settingsOpen, setSettingsOpen] = useState(false);
 
   return (
     <QuickPanelsProvider>
@@ -85,6 +129,7 @@ function App() {
             onHome={() => setPage("dashboard")}
             userEmail={user?.email}
             onSignOut={() => signOut()}
+            onSettings={() => setSettingsOpen(true)}
             loadScreenSpans={() => loadScreenSpansForDate(ymd(new Date()))}
             onConvertMailToTask={handleConvertMail}
             // Signed out the RLS read returns [], not an error — withhold the
@@ -114,6 +159,12 @@ function App() {
       </div>
 
       {IS_IOS && <BottomNav currentPage={page} onNavigate={setPage} />}
+
+      <SettingsDialog
+        open={settingsOpen}
+        onClose={() => setSettingsOpen(false)}
+        sections={<DashboardBlocksSection />}
+      />
     </div>
     </QuickPanelsProvider>
   );

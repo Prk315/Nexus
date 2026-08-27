@@ -6,7 +6,7 @@
 
 import { useEffect, useState, useCallback, useRef, useMemo } from "react";
 import { ChevronLeft, ChevronRight, Target, Flag, GraduationCap, PanelLeft, PanelRight, PanelBottom, PanelTop, CalendarRange } from "lucide-react";
-import { getWeekItems, getAllTasks, getGoals, getPlans, getSystems, createTask, updateTask, deleteTask, toggleTask, toTaskWithContext, createGoal, updateGoal, deleteGoal, createPlan, updatePlan, deletePlan, createSystem, updateSystem, deleteSystem, markSystemDone, getCalBlocks, createCalBlock, updateCalBlock, deleteCalBlock, getTaskSessionsInRange, logTaskSession, unlogTaskOccurrence, getTaskScheduling, createRecurringCalBlock, updateRecurringCalBlock, deleteRecurringCalBlock, getDeadlines, toggleDeadline, updateCourseAssignment, getCoverageCategories } from "../lib/api";
+import { getWeekItems, getAllTasks, getGoals, getPlans, getSystems, createTask, updateTask, deleteTask, toggleTask, toTaskWithContext, createGoal, updateGoal, deleteGoal, createPlan, updatePlan, deletePlan, createSystem, updateSystem, deleteSystem, markSystemDone, getCalBlocks, createCalBlock, updateCalBlock, deleteCalBlock, getTaskSessionsInRange, logTaskSession, unlogTaskOccurrence, getTaskScheduling, createRecurringCalBlock, updateRecurringCalBlock, deleteRecurringCalBlock, getDeadlines, toggleDeadline, updateCourseAssignment, getCoverageCategories, patchTask } from "../lib/api";
 import { loadActualWeek, loadSleepWeek } from "../lib/actual";
 import { Button } from "../components/ui/button";
 import { cn } from "../lib/utils";
@@ -63,6 +63,10 @@ export function Week() {
   // month, and calling that unscheduled would be wrong.
   const [taskCoverage, setTaskCoverage] = useState<Map<number, TaskCoverage>>(new Map());
   const [modal,        setModal]       = useState<ModalState | null>(null);
+  // Surfaces a failed quick-schedule/due action from RightPanel's kebab menu —
+  // same "don't fail silently" rule as the board's gateError banner, just
+  // local to this page since Week has no shared error-banner state to reuse.
+  const [quickActionError, setQuickActionError] = useState<string | null>(null);
   const gridRef = useRef<HTMLDivElement>(null);
 
   // Vertical zoom (U2 §1) — desktop only; mobile always renders at the fixed
@@ -291,6 +295,15 @@ export function Week() {
   };
 
   const handleDeleteTask = async (id: number) => { await deleteTask(id); setModal(null); load(); };
+
+  /** Inline rename from a task-action kebab (RightPanel row, TaskPopupChip). */
+  const handleRenameTask = async (id: number, title: string) => {
+    await patchTask(id, { title });
+    load();
+  };
+
+  /** TaskActionMenu's schedule/due items write on their own; this just refreshes the read models. */
+  const handleQuickActionDone = () => load();
 
   const handleCreateGoal = async (d: GoalDraft) => {
     await createGoal({ title: d.title, priority: d.priority, deadline: d.deadline || null, description: d.description || null });
@@ -781,7 +794,8 @@ export function Week() {
             {selTasks.map((t) => (
               <TaskPopupChip key={`t-${t.id}`} t={t} {...chipProps(t)}
                 onToggle={() => handleToggleTask(t.id)}
-                onEdit={() => setModal({ kind: "edit-task", task: t })} />
+                onEdit={() => setModal({ kind: "edit-task", task: t })}
+                onRename={(title) => handleRenameTask(t.id, title)} />
             ))}
             {selDL.map((d) => (
               <div key={`dl-${d.id}`}
@@ -1020,6 +1034,7 @@ export function Week() {
                         dragPayload={computeDragPayload(t)}
                         onToggle={() => handleToggleTask(t.id)}
                         onEdit={() => setModal({ kind: "edit-task", task: t })}
+                        onRename={(title) => handleRenameTask(t.id, title)}
                       />
                     ))}
                     {dayDL.map((d) => (
@@ -1126,6 +1141,10 @@ export function Week() {
             onToggleTask={handleToggleTask}
             onToggleDeadline={handleToggleDeadline}
             onToggleAssignment={handleToggleAssignment}
+            onRenameTask={handleRenameTask}
+            onOpenTask={(t) => setModal({ kind: "edit-task", task: t })}
+            onQuickActionDone={handleQuickActionDone}
+            onQuickActionError={setQuickActionError}
           />
         )}
 
@@ -1146,6 +1165,15 @@ export function Week() {
           <DragGhostLayer subscribe={interactions.subscribeGhost} getSnapshot={interactions.getGhostSnapshot} />
           <ExternalDragGhostLayer subscribe={interactions.subscribeExternalGhost} getSnapshot={interactions.getExternalGhostSnapshot} />
         </>
+      )}
+
+      {/* RightPanel kebab's quick-schedule/due failures (e.g. no free slot) —
+          same "surface the refusal" rule as the board's gateError banner. */}
+      {quickActionError && (
+        <div className="fixed bottom-4 right-4 z-50 flex items-start gap-2 max-w-xs rounded-lg border border-destructive/30 bg-card px-3 py-2 text-xs text-destructive shadow-lg">
+          <span className="flex-1">{quickActionError}</span>
+          <button onClick={() => setQuickActionError(null)} className="shrink-0 hover:underline">Dismiss</button>
+        </div>
       )}
 
       {renderModals()}

@@ -5,6 +5,7 @@ import {
 import { Dialog, DialogContent } from "../ui/dialog";
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
+import { InlineEditText } from "../common";
 import {
   cn, STAGE_LABEL, STAGE_HINT, STAGE_CLASSES, STAGE_ORDER, formatDateShort,
 } from "../../lib/utils";
@@ -70,6 +71,7 @@ export function TaskPlanner({ rootId, onClose }: { rootId: number; onClose: () =
   const [step, setStep] = useState<Step>("refine");
   const [scheduleTargetId, setScheduleTargetId] = useState<number>(rootId);
   const [gateError, setGateError] = useState<string | null>(null);
+  const [renamingRoot, setRenamingRoot] = useState(false);
 
   // Mutations
   const addSubtask = useAddSubtask(rootId);
@@ -118,7 +120,14 @@ export function TaskPlanner({ rootId, onClose }: { rootId: number; onClose: () =
   return (
     <Dialog open onOpenChange={(o) => { if (!o) onClose(); }}>
       <DialogContent
-        title={t.title}
+        title={
+          <InlineEditText
+            value={t.title}
+            onCommit={(title) => patch.mutate({ id: t.id, patch: { title } })}
+            editing={renamingRoot}
+            onEditingChange={setRenamingRoot}
+          />
+        }
         description={[t.plan_title, t.goal_title].filter(Boolean).join(" · ") || undefined}
         className="max-w-3xl"
       >

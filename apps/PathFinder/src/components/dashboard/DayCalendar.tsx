@@ -5,6 +5,7 @@ import { Check, Plus, X, Eye, EyeOff } from "lucide-react";
 import { cn, layoutCalItems } from "../../lib/utils";
 import type { TaskWithContext, SystemEntry, CalBlock, CourseAssignment, ScheduleEntry, TaskSession } from "../../types";
 import { DCBlockDraft, DC_COLORS, DC_COLOR_KEYS, DC_HOURS, DC_HOUR_END, DC_HOUR_PX, DC_HOUR_START, addMinutes, dcAddHour, dcMinToPx, dcPxToTime, dcTimeToMin } from "./_shared";
+import type { DashDropTarget } from "./useDashDrag";
 
 // ── Day Block Modal ───────────────────────────────────────────────────────────
 
@@ -171,6 +172,7 @@ function DayBlockModal({
 export function DayCalendar({
   date: _date, calBlocks, systems, courseAssignments, scheduleEntries, tasks,
   sessionsByBlock, onCreateBlock, onUpdateBlock, onDeleteBlock, onToggleWorked,
+  dropTarget,
 }: {
   date: string;
   calBlocks: CalBlock[];
@@ -184,6 +186,10 @@ export function DayCalendar({
   onUpdateBlock: (id: number, d: DCBlockDraft) => Promise<void>;
   onDeleteBlock: (b: CalBlock) => Promise<void>;
   onToggleWorked: (b: CalBlock) => void;
+  /** Dashboard's drag-to-schedule handle — the event column registers as its
+   *  drop surface when present. Rail hidden → this component unmounts →
+   *  unregistered → drags simply have nowhere to land. */
+  dropTarget?: DashDropTarget;
 }) {
   const colRef    = useRef<HTMLDivElement>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -204,6 +210,15 @@ export function DayCalendar({
       scrollRef.current.scrollTop = dcMinToPx(8 * 60) - 24;
     }
   }, []);
+
+  // Register the event column (geometry) + scroll viewport (visibility clip)
+  // as the drag-to-schedule drop surface; unregister on unmount so a hidden
+  // or collapsed rail leaves drags with no target rather than a stale rect.
+  useEffect(() => {
+    if (!dropTarget) return;
+    dropTarget.registerCalendar(colRef.current, scrollRef.current);
+    return () => dropTarget.registerCalendar(null, null);
+  }, [dropTarget]);
 
   const now     = new Date();
   const nowMin  = now.getHours() * 60 + now.getMinutes();

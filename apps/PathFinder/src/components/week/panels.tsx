@@ -6,6 +6,7 @@ import { getCaSubtasks, toggleCaSubtask, memberName } from "../../lib/api";
 import { cn } from "../../lib/utils";
 import { isDue } from "../../components/workspace/systemForms";
 import { PRIORITY_CHIP_CHECK } from "../task/taskVisual";
+import { TaskActionMenu, InlineEditText, contextMenuOpener } from "../common";
 import type { Goal, Plan, TaskWithContext, SystemEntry, WeekItems, Deadline, CourseAssignment, CaSubtask } from "../../types";
 import { DAY_NAMES, toISO } from "./_shared";
 import type { WeekInteractions, ExternalDragPayload } from "./useWeekInteractions";
@@ -359,9 +360,87 @@ export function AssignmentSection({ assignments, onToggle, daysTag }: {
   );
 }
 
+// ── Right panel task row ─────────────────────────────────────────────────────
+//
+// A drag source (U3 Part A) AND a quick-action target, which is the one
+// wrinkle here: the row's own `onPointerDown` arms drag-to-schedule, so both
+// the inline-rename hit area and the kebab trigger stop that event from
+// bubbling — otherwise clicking either would start a phantom drag.
+
+function RightPanelTaskRow({ t, isDraggingThis, interactions, dragPayload, daysTag, onToggle, onRename, onOpen, onScheduleDone, onError }: {
+  t: TaskWithContext;
+  isDraggingThis: boolean;
+  interactions: WeekInteractions;
+  dragPayload: ExternalDragPayload;
+  daysTag: React.ReactNode;
+  onToggle: () => void;
+  onRename: (title: string) => void;
+  onOpen: () => void;
+  onScheduleDone: () => void;
+  onError: (message: string) => void;
+}) {
+  const [renaming, setRenaming] = useState(false);
+  const [menuOpen, setMenuOpen] = useState(false);
+
+  return (
+    <div
+      onPointerDown={(e) => interactions.onExternalDragPointerDown(e, dragPayload)}
+      onContextMenu={contextMenuOpener(setMenuOpen)}
+      className={cn(
+        "group flex items-center gap-2 min-w-0 cursor-grab transition-opacity",
+        isDraggingThis && "opacity-30",
+      )}
+    >
+      <button
+        onPointerDown={(e) => e.stopPropagation()}
+        onClick={onToggle}
+        className={cn(
+          "h-3.5 w-3.5 shrink-0 rounded-sm border flex items-center justify-center transition-colors",
+          PRIORITY_CHIP_CHECK[t.priority] ?? PRIORITY_CHIP_CHECK.low,
+        )}
+      />
+      <InlineEditText
+        value={t.title}
+        onCommit={onRename}
+        editing={renaming}
+        onEditingChange={setRenaming}
+        className="flex-1 min-w-0 text-xs text-foreground leading-tight truncate"
+      />
+      {t.team_id != null && (
+        <Users
+          className="h-2.5 w-2.5 shrink-0 text-muted-foreground/50"
+          aria-label={t.assigned_to != null && t.assigned_to !== "all" ? `Team task · ${memberName(t.assigned_to)}` : "Team task · everyone"}
+        />
+      )}
+      {daysTag}
+      <div onPointerDown={(e) => e.stopPropagation()} className="opacity-0 group-hover:opacity-100 transition-opacity">
+        <TaskActionMenu
+          task={t}
+          open={menuOpen}
+          onOpenChange={setMenuOpen}
+          className="h-5 w-5"
+          callbacks={{
+            onScheduleToday: onScheduleDone,
+            onScheduleTomorrow: onScheduleDone,
+            onDueToday: onScheduleDone,
+            onDueTomorrow: onScheduleDone,
+            onRename: () => setRenaming(true),
+            onOpen,
+            onError,
+          }}
+        />
+      </div>
+    </div>
+  );
+}
+
 // ── Right panel ───────────────────────────────────────────────────────────────
 
-export function RightPanel({ tasks, deadlines, courseAssignments, today, interactions, getDragPayload, onToggleTask, onToggleDeadline, onToggleAssignment }: {
+export function RightPanel({
+  tasks, deadlines, courseAssignments, today, interactions, getDragPayload,
+  onToggleTask, onToggleDeadline, onToggleAssignment,
+  onRenameTask, onOpenTask, onQuickActionDone, onQuickActionError,
+}: {
   tasks: TaskWithContext[]; deadlines: Deadline[]; courseAssignments: CourseAssignment[];
   today: string;
   /** U3 Part A — desktop only (RightPanel is never rendered on mobile, so
@@ -371,6 +450,11 @@ export function RightPanel({ tasks, deadlines, courseAssignments, today, interac
    *  map to run the duration heuristic, neither of which RightPanel has. */
   getDragPayload: (task: TaskWithContext) => ExternalDragPayload;
   onToggleTask: (id: number) => void; onToggleDeadline: (id: number) => void; onToggleAssignment: (a: CourseAssignment) => void;
+  /** Quick-action kebab (TaskActionMenu): rename, open, and schedule/due shortcuts. */
+  onRenameTask: (id: number, title: string) => void;
+  onOpenTask: (t: TaskWithContext) => void;
+  onQuickActionDone: () => void;
+  onQuickActionError: (message: string) => void;
 }) {
   const upcomingDL = deadlines.filter((d) => !d.done).sort((a, b) => a.due_date.localeCompare(b.due_date));
   const doneDL     = deadlines.filter((d) => d.done);
@@ -404,43 +488,21 @@ export function RightPanel({ tasks, deadlines, courseAssignments, today, interac
           {pendingTasks.length === 0 && doneTasks.length === 0 && (
             <p className="text-xs text-muted-foreground italic">No tasks this week.</p>
           )}
-          {pendingTasks.map((t) => {
-            const isDraggingThis = interactions.externalDraggingTaskId === t.id;
-            return (
-              <div
-                key={t.id}
-                // U3 Part A drag source — root tasks and steps alike, whatever
-                // this panel already lists. The 4px threshold lives in the
-                // hook itself, so a plain click on the checkbox below still
-                // just toggles it (the pointerdown here arms the gesture, but
-                // under-threshold it's a no-op and the browser's native click
-                // still reaches the checkbox unmolested — same contract as
-                // U2's block drag).
-                onPointerDown={(e) => interactions.onExternalDragPointerDown(e, getDragPayload(t))}
-                className={cn(
-                  "flex items-center gap-2 min-w-0 cursor-grab transition-opacity",
-                  isDraggingThis && "opacity-30",
-                )}
-              >
-                <button
-                  onPointerDown={(e) => e.stopPropagation()}
-                  onClick={() => onToggleTask(t.id)}
-                  className={cn(
-                    "h-3.5 w-3.5 shrink-0 rounded-sm border flex items-center justify-center transition-colors",
-                    PRIORITY_CHIP_CHECK[t.priority] ?? PRIORITY_CHIP_CHECK.low,
-                  )}
-                />
-                <span className="flex-1 text-xs text-foreground leading-tight truncate">{t.title}</span>
-                {t.team_id != null && (
-                  <Users
-                    className="h-2.5 w-2.5 shrink-0 text-muted-foreground/50"
-                    aria-label={t.assigned_to != null && t.assigned_to !== "all" ? `Team task · ${memberName(t.assigned_to)}` : "Team task · everyone"}
-                  />
-                )}
-                {daysTag(t.due_date ?? null)}
-              </div>
-            );
-          })}
+          {pendingTasks.map((t) => (
+            <RightPanelTaskRow
+              key={t.id}
+              t={t}
+              isDraggingThis={interactions.externalDraggingTaskId === t.id}
+              interactions={interactions}
+              dragPayload={getDragPayload(t)}
+              daysTag={daysTag(t.due_date ?? null)}
+              onToggle={() => onToggleTask(t.id)}
+              onRename={(title) => onRenameTask(t.id, title)}
+              onOpen={() => onOpenTask(t)}
+              onScheduleDone={onQuickActionDone}
+              onError={onQuickActionError}
+            />
+          ))}
           {doneTasks.map((t) => (
             <div key={t.id} className="flex items-center gap-2 min-w-0 opacity-40">
               <button

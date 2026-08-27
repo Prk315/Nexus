@@ -4,6 +4,7 @@ export * from "./client";
 export * from "./auth/NexusAuth";
 export * from "./components/AppGridButton";
 export * from "./components/NexusHeader";
+export * from "./components/SettingsDialog";
 export * from "./components/ClockDropdown";
 export * from "./components/MailPanel";
 // Narrow on purpose. `mail/priority` also exports plainText / plainLine /
@@ -79,7 +80,9 @@ export * from "./components/WorkflowViewer";
 export * from "./components/Chart2D";
 export * from "./components/Chart3D";
 export * from "./components/AppGraph3D";
+export * from "./settings";
 export * from "./hooks/useConnectedApps";
+export * from "./hooks/useAppearance";
 export * from "./hooks/useNexusRegistration";
 export * from "./hooks/useAgentBar";
 export * from "./hooks/useCalendarSidebar";

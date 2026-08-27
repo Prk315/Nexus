@@ -18,4 +18,5 @@ export * from "./games";
 export * from "./training";
 export * from "./mail";
 export * from "./misc";
+export * from "./quickActions";
 export * from "./teams";
