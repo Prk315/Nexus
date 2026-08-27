@@ -1327,6 +1327,53 @@ the PathFinder data layer.
 
 Wheel and pointer events stop at the block. The canvas pans and zooms on both,
 so without that a scroll through a long task list drags the whole board.
+### Board columns are editable on ONE axis, and only that one
+
+`spec.statuses` overrides the built-in four, and only for `kanban_status` — the
+one board axis whose values are free text on the task. Every other axis has a
+closed domain (you cannot invent a priority), so offering to edit its columns
+would promise something the model cannot keep. There is a test for that.
+
+Stored **per block**, not globally: a status is not owned by anything, so one
+note can track a review pipeline and another a shipping one without either
+becoming the definition. Keys are lower-cased, because a key is matched against
+`pf_tasks.kanban_status` by exact string equality — a column labelled "Doing"
+that does not hold the "doing" tasks reads as an empty board rather than as a
+mismatch. All 543 rows in the database are already lower-case.
+
+Removing a column **does not touch the tasks in it**. They keep their status and
+surface in the `__other__` bucket, which stays a non-drop-target because
+dropping there would have to invent a value. A delete that silently rewrote
+every card in the column would be a bulk edit disguised as a layout change.
+### The board: dragging within a column writes a GLOBAL order
+
+Cross-column drag writes the axis field; same-column drag reorders. The slot
+arithmetic is `insertionIndexFromPointer` / `reorderedIds` in
+`@nexus/core/pathfinder` — promoted out of PathFinder rather than copied,
+because two copies of a drop rule disagree about the edges (the no-op slots
+either side of the dragged card are exactly what one copy gets right and the
+other does not) and only one would have had the tests.
+
+⚠️ **`pf_tasks.sort_order` is ONE order per task, not one per view.** It is a
+plain `integer` with default 0 — and today 405 of 543 tasks sit at 0, so manual
+order is undefined for most of them and ties break by id. A kanban column is a
+subset, so reordering inside it necessarily writes into the same order a
+manually-sorted list reads. That is inherent to the column rather than to the
+implementation, and it is the right meaning: "this task comes before that one"
+should hold wherever the two are seen together. `reorderTasks` assigns
+`sort_order = index` over precisely the ids passed, so always hand it the
+COMPLETE group — a partial list renumbers a few tasks into the middle of
+everyone else.
+
+Reorder is offered **only under manual sort**. Under any other key the board
+recomputes the order from the data, so the drag would write a value nothing
+displays — a gesture that appears to do nothing, which is worse than one that
+is visibly refused.
+
+Geometry is read from the DOM at the moment it is needed, never cached at
+pointerdown: the board reflows during a drag (a column highlights, the drop
+line appears), and a cached rect lands the card in the wrong gap without ever
+looking wrong on screen.
 
 ### The table: column order is the ARRAY order
 

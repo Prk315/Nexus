@@ -91,6 +91,8 @@ export interface TaskActions {
   remove: (task: PfTask) => void;
   /** Creates a child of `parent`, inheriting the block's creation context. */
   addSubtask: (parent: PfTask, title: string) => void;
+  /** Persist a manual order. Pass the COMPLETE ordered group — see the api. */
+  reorder: (orderedIds: number[]) => void;
   openDetail: (task: PfTask) => void;
   addTag: (task: PfTask, tag: string) => void;
   removeTag: (task: PfTask, tag: string) => void;
@@ -357,6 +359,20 @@ export function PathfinderBlock({
             );
           }
         });
+      },
+      reorder: (orderedIds) => {
+        setWriteError(null);
+        void (async () => {
+          try {
+            await pathfinderApi.reorderTasks(orderedIds);
+            // Refetch rather than patch the snapshot: the write touches every
+            // id in the list, and reproducing that locally is a second copy of
+            // "sort_order = index" that can disagree with the one that ran.
+            await refresh(true);
+          } catch (e: any) {
+            setWriteError(e?.message ?? String(e));
+          }
+        })();
       },
       addSubtask: (parent, titleText) => {
         const text = titleText.trim();

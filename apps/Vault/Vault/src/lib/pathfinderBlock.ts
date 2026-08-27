@@ -195,7 +195,24 @@ export interface PfBlockSpec {
    * slightly smaller share and removing one gives it back.
    */
   colWeights: Record<string, number>;
+
+  /**
+   * Board only, and only on the `kanban_status` axis: the columns this board
+   * shows. Empty means the built-in four.
+   *
+   * Per BLOCK rather than global, and that is a real choice. `kanban_status` is
+   * free text on the task, so a status is not owned by anything — one note can
+   * track a review pipeline and another a shipping one without either becoming
+   * the definition. The cost is that a task whose status no board lists still
+   * exists: it lands in the "Other" bucket, which is why that bucket is not a
+   * drop target (dropping there would have to invent a value).
+   */
+  statuses: string[];
 }
+
+/** A board with thirty columns is not a board, and the spec is size-capped. */
+export const MAX_STATUSES = 12;
+const MAX_STATUS_CHARS = 24;
 
 /** A column may not be dragged to nothing, nor swallow the table. */
 export const COL_WEIGHT_MIN = 0.25;
@@ -248,6 +265,7 @@ export function defaultSpec(view: PfBlockView): PfBlockSpec {
     showTags: false,
     metaPct: 0,
     colWeights: {},
+    statuses: [],
   };
 }
 
@@ -364,6 +382,7 @@ export function parseSpec(raw: string | null | undefined, view: PfBlockView): Pf
     showTags: obj.showTags === true,
     metaPct: clampMetaPct(obj.metaPct),
     colWeights: parseWeights(obj.colWeights),
+    statuses: normalizeStatuses(obj.statuses),
   };
 }
 
@@ -445,6 +464,34 @@ function parseWeights(v: unknown): Record<string, number> {
     if (w !== null && w !== 1) out[k] = w;   // 1 is the default; storing it is noise
   }
   return out;
+}
+
+/**
+ * Clean a status list: trimmed, lower-cased, de-duplicated, bounded.
+ *
+ * Lower-cased because the KEY is matched against `pf_tasks.kanban_status` by
+ * exact string equality, and a column labelled "Doing" that does not hold the
+ * tasks whose status is "doing" is the worst kind of wrong — it looks like the
+ * board is empty rather than like a mismatch. Every one of the 543 rows in the
+ * database today is already lower-case, so this agrees with the data as well as
+ * with itself. Display capitalisation is applied at render time.
+ */
+export function normalizeStatuses(v: unknown): string[] {
+  if (!Array.isArray(v)) return [];
+  const out: string[] = [];
+  for (const raw of v) {
+    if (typeof raw !== "string") continue;
+    const k = raw.trim().toLowerCase().slice(0, MAX_STATUS_CHARS);
+    if (!k || out.includes(k)) continue;
+    out.push(k);
+    if (out.length >= MAX_STATUSES) break;
+  }
+  return out;
+}
+
+/** The statuses a board actually shows: the block's own, or the built-in four. */
+export function boardStatuses(spec: PfBlockSpec): string[] {
+  return spec.statuses.length ? spec.statuses : [...KANBAN_STATUSES];
 }
 
 export function columnWeight(weights: Record<string, number>, c: PfColumn): number {
@@ -570,6 +617,8 @@ export function boardColumns(
   axis: BoardAxis,
   plans: PfPlan[],
   members: PfTeamMember[] = [],
+  /** Overrides the built-in four on the `kanban_status` axis. */
+  statuses: string[] = [],
 ): Array<{ key: string; label: string }> {
   switch (axis) {
     case "assignee": {
@@ -584,8 +633,10 @@ export function boardColumns(
         ...[...seen.entries()].map(([id, label]) => ({ key: id, label })),
       ];
     }
-    case "kanban_status":
-      return KANBAN_STATUSES.map((k) => ({ key: k, label: k.charAt(0).toUpperCase() + k.slice(1) }));
+    case "kanban_status": {
+      const list = statuses.length ? statuses : [...KANBAN_STATUSES];
+      return list.map((k) => ({ key: k, label: k.charAt(0).toUpperCase() + k.slice(1) }));
+    }
     case "stage":
       return STAGES.map((s) => ({ key: s, label: STAGE_LABELS[s] }));
     case "priority":

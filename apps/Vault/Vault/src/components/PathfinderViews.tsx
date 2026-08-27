@@ -22,7 +22,7 @@
 // that tried to nest would either hide the steps or turn each column into a
 // second, worse outline.
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   groupTasks,
   memberName,
@@ -37,11 +37,14 @@ import {
   type PfTeamMember,
   type SubtreeStat,
   type TaskTreeRow,
+  insertionIndexFromPointer,
+  reorderedIds,
 } from "@nexus/core/pathfinder";
 import {
   axisDropValue,
   axisWriteField,
   boardColumns,
+  boardStatuses,
   PF_COLUMN_LABELS,
   META_PCT_MAX,
   META_PCT_MIN,
@@ -633,15 +636,36 @@ export function PfBoardView({
   onSpecChange: (next: PfBlockSpec) => void;
 }) {
   const axis = spec.groupBy;
-  const columns = boardColumns(axis, plans, members);
+  const columns = boardColumns(axis, plans, members, boardStatuses(spec));
   const groups = groupTasks(tasks, axis, columns, axis === "assignee" ? "Personal" : "Other");
   const writeField = axisWriteField(axis);
 
-  const { dragId, overKey, handlers } = useCardDrag({
-    enabled: editable && writeField != null,
-    onDrop: (taskId, colKey) => {
+  // Reordering is only meaningful under manual sort. Under any other key the
+  // board recomputes the order from the data, so a drag would write sort_order
+  // that nothing displays — a gesture that appears to do nothing, which is
+  // worse than one that is refused. The board defaults to manual.
+  const canReorder = editable && spec.sort.key === "manual";
+
+  const { dragId, overKey, overSlot, handlers } = useCardDrag({
+    enabled: editable && (writeField != null || canReorder),
+    onDrop: (taskId, colKey, slot) => {
       const task = tasks.find((t) => t.id === taskId);
-      if (!task || !writeField || colKey === "__other__") return;
+      if (!task || colKey === "__other__") return;
+
+      // Same column: this is a reorder, not a move. The axis value is already
+      // right, and writing it again would be a no-op round trip.
+      const from = groups.find((g) => g.tasks.some((t) => t.id === taskId));
+      if (from?.key === colKey) {
+        if (!canReorder) return;
+        const ids = from.tasks.map((t) => t.id);
+        // `reorderedIds` returns null for the two slots either side of the
+        // dragged card, which change nothing — so a nudge writes no rows.
+        const next = reorderedIds(ids, ids.indexOf(taskId), slot);
+        if (next) actions.reorder(next);
+        return;
+      }
+
+      if (!writeField) return;
       // Assigning a task that belongs to nobody's team has no meaning — the
       // column would claim an owner for work that is not shared. Refuse rather
       // than writing a field the model says is meaningless.
@@ -683,10 +707,16 @@ export function PfBoardView({
             </header>
 
             <div className="pf-col-body">
-              {g.tasks.map((t) => (
+              {g.tasks.map((t, i) => (
+                <React.Fragment key={t.id}>
+                {/* The gap the card would land in. Shown only for the column
+                    under the pointer, and only when a reorder would actually
+                    result — no line where the drop is a no-op. */}
+                {dragId != null && overKey === g.key && overSlot === i && canReorder ? (
+                  <div className="pf-drop-line" aria-hidden="true" />
+                ) : null}
                 <article
                   className={`pf-card${dragId === t.id ? " is-dragging" : ""}${t.done ? " is-done" : ""}${actions.busy.has(t.id) ? " is-busy" : ""}`}
-                  key={t.id}
                   data-card={t.id}
                   onPointerDown={(e) => handlers.onPointerDown(e, t.id)}
                 >
@@ -726,7 +756,14 @@ export function PfBoardView({
                     <DueChip due={t.due_date} today={today} />
                   </div>
                 </article>
+                </React.Fragment>
               ))}
+              {/* The gap after the last card. `slot === length` is a real slot
+                  in `insertionIndexFromPointer`'s numbering, and without this
+                  the one drop position users reach for most has no indicator. */}
+              {dragId != null && overKey === g.key && overSlot === g.tasks.length && canReorder ? (
+                <div className="pf-drop-line" aria-hidden="true" />
+              ) : null}
 
               {g.tasks.length === 0 ? <div className="pf-col-empty">Drop here</div> : null}
             </div>
@@ -758,10 +795,16 @@ function useCardDrag({
   enabled, onDrop,
 }: {
   enabled: boolean;
-  onDrop: (taskId: number, columnKey: string) => void;
+  /**
+   * `slot` is the insertion index WITHIN the target column, in the same
+   * numbering `reorderedIds` expects: slot i means "before the card currently
+   * at index i", and length means "after the last one".
+   */
+  onDrop: (taskId: number, columnKey: string, slot: number) => void;
 }) {
   const [dragId, setDragId] = useState<number | null>(null);
   const [overKey, setOverKey] = useState<string | null>(null);
+  const [overSlot, setOverSlot] = useState<number | null>(null);
 
   // The whole gesture lives in a ref, and the window listeners are attached
   // imperatively in pointerdown rather than by an effect keyed on state. An
@@ -778,10 +821,33 @@ function useCardDrag({
     detach: () => void;
   } | null>(null);
 
-  const columnAt = (x: number, y: number): string | null => {
+  const columnAt = (x: number, y: number): HTMLElement | null => {
     const el = document.elementFromPoint(x, y);
-    const col = (el as HTMLElement | null)?.closest?.("[data-col]") as HTMLElement | null;
-    return col?.dataset.col ?? null;
+    return ((el as HTMLElement | null)?.closest?.("[data-col]") as HTMLElement | null) ?? null;
+  };
+
+  /**
+   * Which gap in this column the pointer is over.
+   *
+   * Geometry is read from the DOM at the moment it is needed rather than
+   * cached at pointerdown: the board reflows while a drag is in flight (a
+   * column highlights, a card animates), and a cached rect drops the card in
+   * the wrong gap without ever looking wrong on screen.
+   *
+   * The slot arithmetic itself is `insertionIndexFromPointer` from
+   * @nexus/core/pathfinder — the same function PathFinder's row reorder uses,
+   * rather than a second copy that would disagree about the edges.
+   */
+  const slotAt = (col: HTMLElement | null, y: number): number => {
+    if (!col) return 0;
+    const cards = Array.from(col.querySelectorAll<HTMLElement>("[data-card]"));
+    return insertionIndexFromPointer(
+      y,
+      cards.map((c) => {
+        const b = c.getBoundingClientRect();
+        return { top: b.top, height: b.height };
+      }),
+    );
   };
 
   const end = useCallback((commit: { x: number; y: number } | null) => {
@@ -792,12 +858,14 @@ function useCardDrag({
     gesture.current = null;
     setDragId(null);
     setOverKey(null);
+    setOverSlot(null);
 
     if (commit && g.armed) {
-      const key = columnAt(commit.x, commit.y);
+      const col = columnAt(commit.x, commit.y);
+      const key = col?.dataset.col ?? null;
       // `__other__` is the catch-all bucket, not a state anything can be moved
       // INTO — dropping there would have to invent a value for the axis.
-      if (key && key !== "__other__") onDrop(g.id, key);
+      if (key && key !== "__other__") onDrop(g.id, key, slotAt(col, commit.y));
     }
   }, [onDrop]);
 
@@ -828,7 +896,9 @@ function useCardDrag({
       // Only once armed. Preventing the default earlier would swallow the very
       // scroll gesture we just decided not to take over.
       ev.preventDefault();
-      setOverKey(columnAt(ev.clientX, ev.clientY));
+      const col = columnAt(ev.clientX, ev.clientY);
+      setOverKey(col?.dataset.col ?? null);
+      setOverSlot(col ? slotAt(col, ev.clientY) : null);
     };
 
     const onUp = (ev: PointerEvent) => {
@@ -864,7 +934,7 @@ function useCardDrag({
     }
   }, [enabled, end]);
 
-  return { dragId, overKey, handlers: { onPointerDown } };
+  return { dragId, overKey, overSlot, handlers: { onPointerDown } };
 }
 
 // ─── Table ──────────────────────────────────────────────────────────────────
