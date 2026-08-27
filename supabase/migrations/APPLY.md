@@ -21,6 +21,7 @@ query after each.
 | 10 | `20260827140000_vault_task_tags.sql` | `vault_task_tags` + `vault_rename_task_tag()` / `vault_delete_task_tag()` — **already applied live on 2026-08-27**; see §10 |
 | 11 | `20260827160000_vault_content_versions.sql` | `vault_content_versions` + a snapshot trigger on `vault_content` and a byte-budgeted retention trigger — Vault's note history. **Already applied live on 2026-08-27**; the only file here that adds a trigger to an existing hot write path — see §11 |
 | 12 | `20260827180000_vault_updated_by.sql` | `updated_by` on `vault_content` / `vault_journals` / `vault_content_versions`, stamped from `auth.uid()` — who actually wrote a document last. **Already applied live on 2026-08-27**; see §12 |
+| 13 | `20260827200000_pf_agent_brief.sql` | `pf_agent_brief(p_user_id text)` — one call returning goals, active tasks, what is due and live plans as a compact jsonb snapshot, for terminal agents. **Already applied live on 2026-08-27**; read-only, adds no table; see §13 |
 
 ⚠️ **File 10 is the one exception to "not applied by the code that wrote it"** —
 it was applied to `efxmzsdisaymtpebaxlp` at the time it was written, and the file
@@ -734,3 +735,80 @@ PostgREST answers a missing column with an error, not an empty value, so the
 save path would fail outright. This is the ordered-removal rule from the top of
 this file, and it applies to this one where it did not apply to files 11 and 12
 going in.
+
+---
+
+## §13 — The agent brief (`20260827200000_pf_agent_brief.sql`)
+
+One read-only function. **No table, no trigger, no policy** — it only reads what
+is already there, so it is the cheapest file in this document to apply and to
+roll back.
+
+**Applied live on 2026-08-27** and measured against the real database:
+6480 bytes, ≈1600 tokens, split 31 % `due_soon` / 29 % `active` / 28 % `plans` /
+6 % `goals`. No section dominates, so nothing was trimmed.
+
+### Two design decisions worth not undoing
+
+**Facts, never judgements.** The function returns nothing derived beyond a count
+and `due_date < today`. The tempting additions — "is this system due", "what
+should I do next", "what is the real estimate" — are rules that live in exactly
+one place each (`lib/systems.ts`, `lib/nextUp.ts`, `lib/taskTree.ts`), and
+CLAUDE.md records that the due rule was previously written three times with the
+copies already disagreeing. A SQL fourth copy would be the worst of them,
+because `npm test` cannot reach it. `pf_systems` rows come back **raw** so a
+caller holding the real rule can apply it.
+
+**A function, not a view, because the main caller has no identity.** The
+Supabase MCP connects as service-role, where `auth.uid()` is NULL. A view scoped
+to `auth.uid()` would return an empty brief to exactly the client this exists
+for; an unscoped one would fold a teammate's shared rows into "your" brief
+silently. `SECURITY INVOKER` keeps the parameter safe rather than making it a
+hole: for a signed-in caller RLS still gates every underlying table, so
+`p_user_id` can only narrow what they could already read.
+
+### ⚠️ Omitting the argument is a silent empty brief
+
+Verified, and it is the one way to be misled by this function:
+
+```sql
+select pf_agent_brief()->'counts';                     -- {"active":0,"open_tasks":0,…}
+select pf_agent_brief('<uid>')->'counts';              -- {"active":8,"open_tasks":369,…}
+```
+
+Zeros are indistinguishable from "nothing is planned". Callers must pass the uid
+whenever there is no session — which, for every agent, is always.
+
+### Verify
+
+```sql
+-- Present, and correctly SECURITY INVOKER (prosecdef = false).
+select proname, pg_get_function_identity_arguments(oid) as args, prosecdef
+from pg_proc where proname = 'pf_agent_brief';
+
+-- Shape and size against real data.
+select jsonb_object_keys(pf_agent_brief('<uid>')) ;
+select length(pf_agent_brief('<uid>')::text) as bytes;
+```
+
+Expect `p_user_id text`, `prosecdef = f`, keys
+`generated_at, user_id, counts, goals, active, due_soon, plans, systems`.
+
+### A note on `pf_tasks.due_date`
+
+It is **TEXT**, not `date` — 174 values, all `YYYY-MM-DD`, but the column carries
+no constraint. The function compares it as text against
+`to_char(current_date,'YYYY-MM-DD')`: ISO-8601 sorts lexicographically in date
+order, so this is exact for well-formed values, and a malformed one sorts oddly
+rather than raising the way a `::date` cast would — which would take the whole
+brief down rather than one row. Rows failing a shape check are left out of
+`due_soon` instead of being mis-sorted into it.
+
+### Rolling back
+
+```sql
+drop function if exists public.pf_agent_brief(text);
+```
+
+Nothing else references it; the only consumers are `.claude/skills/brief` and a
+pointer in CLAUDE.md.
