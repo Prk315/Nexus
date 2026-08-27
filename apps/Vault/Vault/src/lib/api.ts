@@ -1,5 +1,6 @@
 import { supabase, getUserId } from "./supabase";
 import { makeSaver } from "./saveQueue";
+import { sameInstant } from "./timestamps";
 import { VaultGraph, VaultNode, NodeKind, VaultRecord, HighlighterCategory } from "../types";
 
 function err(e: any): never { throw new Error(e?.message ?? String(e)); }
@@ -189,6 +190,11 @@ export class ContentConflictError extends Error {
 const lastKnownContentUpdatedAt = new Map<string, string>();
 const lastKnownJournalUpdatedAt = new Map<string, string>();
 
+// ⚠️ The conflict guards below compare instants, never strings. `updated_at` is
+// a timestamptz that PostgREST spells `…+00:00` and `new Date().toISOString()`
+// spells `…Z`, so `!==` on the raw values reported a conflict with nobody on the
+// second save of every note. See lib/timestamps.ts for the full account.
+
 export async function readContent(id: string): Promise<string> {
   const { data } = await supabase.from("vault_content")
     .select("data, updated_at").eq("node_id", id).maybeSingle();
@@ -208,11 +214,23 @@ async function rawSaveContent(id: string, content: string): Promise<void> {
     console.warn(`[vault] large content save: ${(content.length / 1024).toFixed(0)} kB for node ${id}`);
   }
   const nowIso = new Date().toISOString();
-  const { error } = await supabase.from("vault_content")
+  // `.select("updated_at").single()` so the cache is seeded with what the SERVER
+  // stored, not with what this client sent. Comparing like with like is the
+  // point: the read path can only ever return PostgREST's spelling, so the write
+  // path must cache PostgREST's spelling too.
+  //
+  // sameInstant() already makes the formats agree, so this is the belt to its
+  // braces — but it buys something the parsing cannot. `updated_at` is written
+  // from the CLIENT's clock, and a phone a few seconds off would otherwise cache
+  // an instant the row does not hold, turning clock skew into a phantom
+  // conflict on the next save. One column on a row we are already writing.
+  const { data, error } = await supabase.from("vault_content")
     .upsert({ node_id: id, data: content, user_id: getUserId(), updated_at: nowIso },
-      { onConflict: "node_id" });
+      { onConflict: "node_id" })
+    .select("updated_at")
+    .single();
   if (error) err(error);
-  lastKnownContentUpdatedAt.set(id, nowIso);
+  lastKnownContentUpdatedAt.set(id, data?.updated_at ?? nowIso);
 }
 
 // Checked OUTSIDE the save queue, same reason MAX_CONTENT_BYTES is: a
@@ -222,7 +240,7 @@ async function rawSaveContent(id: string, content: string): Promise<void> {
 async function assertContentNotConflicted(id: string): Promise<void> {
   const { data } = await supabase.from("vault_content").select("updated_at").eq("node_id", id).maybeSingle();
   const known = lastKnownContentUpdatedAt.get(id);
-  if (data?.updated_at && known && data.updated_at !== known) {
+  if (data?.updated_at && known && !sameInstant(data.updated_at, known)) {
     throw new ContentConflictError(id);
   }
   await assertNotCoedited(id);
@@ -349,7 +367,17 @@ export function forgetContentVersion(id: string): void {
 // per node per five minutes; everything here either reads them or adds an
 // explicit one before a destructive action.
 
-export type VersionOrigin = "autosave" | "conflict" | "restore" | "overwrite" | "manual";
+// The `origin` column is plain text with no CHECK constraint — the list in the
+// migration is descriptive, so a new value needs no schema change. `discarded`
+// was added after the table went live, for exactly that reason.
+export type VersionOrigin =
+  | "autosave"
+  | "conflict"
+  | "restore"
+  | "overwrite"
+  /** The on-screen document, captured just before a Reload replaced it. */
+  | "discarded"
+  | "manual";
 
 export interface ContentVersion {
   id: number;
@@ -401,6 +429,41 @@ export async function readContentVersion(versionId: number): Promise<string> {
  * preserve. Never throws: a failed snapshot must not block the user's action,
  * but the caller may want to say the safety net was missing.
  */
+/**
+ * Snapshot a document this client is holding — the one on screen, not the one
+ * on the server.
+ *
+ * The counterpart to snapshotCurrentContent, and the difference matters: that
+ * one preserves what is about to be OVERWRITTEN, this one preserves what is
+ * about to be DISCARDED. Reload throws away everything typed since the last
+ * successful save, and before this existed there was no way back from pressing
+ * it — which is a bad property for a button offered in the one situation where
+ * the user is already unsure which copy is the good one.
+ *
+ * Never throws, same as its sibling: a failed snapshot must not block the
+ * reload the user asked for.
+ */
+export async function snapshotLocalContent(
+  nodeId: string,
+  data: string,
+  origin: VersionOrigin
+): Promise<boolean> {
+  if (!data) return false;
+  try {
+    const { error } = await supabase.from("vault_content_versions").insert({
+      node_id: nodeId,
+      data,
+      user_id: getUserId(),
+      origin,
+    });
+    if (error) throw error;
+    return true;
+  } catch (e) {
+    console.error("[vault] could not snapshot the on-screen document", e);
+    return false;
+  }
+}
+
 export async function snapshotCurrentContent(
   nodeId: string,
   origin: VersionOrigin
@@ -532,19 +595,23 @@ export async function readJournal(id: string): Promise<string> {
   return data?.data ?? "";
 }
 
+// Same shape as rawSaveContent, and it carried the same bug — a journal is a
+// day of handwriting, so a phantom conflict here costs more than on a note.
 async function rawSaveJournal(id: string, data: string): Promise<void> {
   const nowIso = new Date().toISOString();
-  const { error } = await supabase.from("vault_journals")
+  const { data: row, error } = await supabase.from("vault_journals")
     .upsert({ node_id: id, data, user_id: getUserId(), updated_at: nowIso },
-      { onConflict: "node_id" });
+      { onConflict: "node_id" })
+    .select("updated_at")
+    .single();
   if (error) err(error);
-  lastKnownJournalUpdatedAt.set(id, nowIso);
+  lastKnownJournalUpdatedAt.set(id, row?.updated_at ?? nowIso);
 }
 
 async function assertJournalNotConflicted(id: string): Promise<void> {
   const { data } = await supabase.from("vault_journals").select("updated_at").eq("node_id", id).maybeSingle();
   const known = lastKnownJournalUpdatedAt.get(id);
-  if (data?.updated_at && known && data.updated_at !== known) {
+  if (data?.updated_at && known && !sameInstant(data.updated_at, known)) {
     throw new ContentConflictError(id);
   }
 }

@@ -25,6 +25,7 @@ const ORIGIN_LABELS: Record<VersionOrigin, string> = {
   conflict: "before a conflicting save",
   restore: "before a restore",
   overwrite: "before an overwrite",
+  discarded: "your unsaved copy",
   manual: "checkpoint",
 };
 

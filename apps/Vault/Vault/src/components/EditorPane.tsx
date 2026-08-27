@@ -631,6 +631,12 @@ export const EditorPane = forwardRef<EditorPaneHandle, EditorPaneProps>(
     async function reloadCurrent() {
       const id = selectedId;
       if (!id) return;
+      // Preserve what is on screen BEFORE replacing it with the server's copy.
+      // Reload discards everything typed since the last successful save, and it
+      // is offered in precisely the situation where the user does not yet know
+      // which copy is the good one — so pressing it must be recoverable rather
+      // than final. It lands in History as "your unsaved copy".
+      await api.snapshotLocalContent(id, content, "discarded");
       invalidateContentCache(id);
       api.forgetContentVersion(id);
       const text = await api.readContent(id);
@@ -805,7 +811,15 @@ export const EditorPane = forwardRef<EditorPaneHandle, EditorPaneProps>(
                       : saveStatus === "collab-only" ? "Not saved — this note is being co-edited; update Vault to edit it"
                       : saveStatus === "conflict" ? (
                         <>
-                          Changed by the other user —{" "}
+                          {/* Name the actual situation. A private note has no
+                              "other user" — saying so on a note nobody else can
+                              even see made a real conflict read as a glitch, and
+                              trained the reflex to dismiss it. Whoever wrote the
+                              row is the only thing we know, so say only that. */}
+                          {selectedNode?.team_id != null
+                            ? "Changed by the other user"
+                            : "Changed on another device"}{" "}
+                          —{" "}
                           {/* Three exits, and offering fewer is what made this
                               status a dead end. "Reload" used to be the only
                               one, so keeping your own version meant copying it
