@@ -9,6 +9,13 @@ import {
   parseSpec,
   serializeSpec,
   sortColumns,
+  withColumn,
+  withoutColumn,
+  moveColumn,
+  columnWidths,
+  columnWeight,
+  COL_WEIGHT_MAX,
+  COL_WEIGHT_MIN,
   listColumns,
   LIST_COLUMNS,
   META_PCT_MAX,
@@ -17,7 +24,6 @@ import {
   specIsUnfiltered,
   MAX_FILTER_TAGS,
   SPEC_MAX_LIMIT,
-  PF_COLUMNS,
 } from "./pathfinderBlock";
 import { DEFAULT_FILTER } from "@nexus/core/pathfinder";
 
@@ -69,10 +75,22 @@ describe("parseSpec", () => {
     expect(spec.columns).toContain("title");
   });
 
-  it("normalises column order so toggling one off and on does not move it", () => {
+  // This test used to assert the OPPOSITE — that parseSpec normalised the order
+  // — and that is precisely what made column placement unstorable: a
+  // hand-ordered table snapped back to canonical order on the next load.
+  //
+  // The property that assertion was really protecting ("toggling a column off
+  // and on again does not move it") has not been dropped; it moved to
+  // `withColumn`, which inserts at the canonical position RELATIVE to the
+  // columns already shown. It is asserted there, under "column placement".
+  it("preserves a hand-set column order instead of normalising it", () => {
     const spec = parseSpec(JSON.stringify({ columns: ["due", "title", "done"] }), "table");
-    expect(spec.columns).toEqual(sortColumns(spec.columns));
-    expect(PF_COLUMNS.indexOf(spec.columns[0])).toBeLessThan(PF_COLUMNS.indexOf(spec.columns[1]));
+    expect(spec.columns).toEqual(["due", "title", "done"]);
+    expect(spec.columns).not.toEqual(sortColumns(spec.columns));
+  });
+
+  it("still seeds a fresh block in canonical order", () => {
+    expect(defaultSpec("table").columns).toEqual(sortColumns(defaultSpec("table").columns));
   });
 
   it("keeps opaque team and assignee identifiers as-is", () => {
@@ -350,5 +368,102 @@ describe("spec.metaPct", () => {
   it("survives a serialize/parse round trip", () => {
     const spec = { ...defaultSpec("list"), metaPct: 42 };
     expect(parseSpec(serializeSpec(spec), "list").metaPct).toBe(42);
+  });
+});
+
+describe("column placement", () => {
+  it("re-enables a column at its canonical position, not at the end", () => {
+    // The property sortColumns used to give for free. Without it, one stray
+    // double-click on a chip silently rearranges the table.
+    expect(withColumn(["done", "title", "due"], "plan")).toEqual(["done", "title", "plan", "due"]);
+  });
+
+  it("appends when nothing canonical comes after it", () => {
+    expect(withColumn(["done", "title"], "type")).toEqual(["done", "title", "type"]);
+  });
+
+  it("is a no-op for a column already shown", () => {
+    const cols = ["done", "title"] as const;
+    expect(withColumn([...cols], "title")).toEqual([...cols]);
+  });
+
+  it("refuses to remove the title — a table with no labels is not a table", () => {
+    expect(withoutColumn(["done", "title", "due"], "title")).toEqual(["done", "title", "due"]);
+    expect(withoutColumn(["done", "title", "due"], "due")).toEqual(["done", "title"]);
+  });
+
+  it("moves a column to where the target sits", () => {
+    expect(moveColumn(["done", "title", "plan", "due"], "due", "title"))
+      .toEqual(["done", "due", "title", "plan"]);
+    expect(moveColumn(["done", "title", "plan", "due"], "done", "due"))
+      .toEqual(["title", "plan", "due", "done"]);
+  });
+
+  it("ignores a move that cannot happen", () => {
+    const cols = ["done", "title"] as const;
+    expect(moveColumn([...cols], "title", "title")).toEqual([...cols]);
+    expect(moveColumn([...cols], "plan", "title")).toEqual([...cols]);
+    expect(moveColumn([...cols], "title", "plan")).toEqual([...cols]);
+  });
+
+  // The regression that made placement unstorable: parseSpec forced canonical
+  // order on every load, so a hand-ordered table snapped back on refresh.
+  it("survives a serialize/parse round trip in the order the user set", () => {
+    const spec = { ...defaultSpec("table"), columns: ["due", "title", "done"] as never };
+    expect(parseSpec(serializeSpec(spec), "table").columns).toEqual(["due", "title", "done"]);
+  });
+});
+
+describe("column widths", () => {
+  const W = (o: Record<string, number>) => parseSpec(JSON.stringify({ colWeights: o }), "table").colWeights;
+
+  it("defaults every column to an equal share", () => {
+    const { data } = columnWidths(["title", "plan", "due"], {});
+    expect(data[0]).toBeCloseTo(data[1]);
+    expect(data[1]).toBeCloseTo(data[2]);
+  });
+
+  it("always leaves room for the actions column", () => {
+    const { data, actions } = columnWidths(["title", "plan"], {});
+    expect(actions).toBeGreaterThan(0);
+    expect(data.reduce((a, b) => a + b, 0) + actions).toBeCloseTo(100);
+  });
+
+  it("gives a heavier column proportionally more", () => {
+    const { data } = columnWidths(["title", "plan"], { title: 3 });
+    expect(data[0]).toBeCloseTo(data[1] * 3);
+  });
+
+  // Weights renormalise, which is the whole reason they are not percentages:
+  // adding a column must not require rewriting every other one.
+  it("renormalises when a column is added", () => {
+    const two = columnWidths(["title", "plan"], {});
+    const three = columnWidths(["title", "plan", "due"], {});
+    expect(three.data[0]).toBeLessThan(two.data[0]);
+    expect(three.data.reduce((a, b) => a + b, 0) + three.actions).toBeCloseTo(100);
+  });
+
+  it("clamps a stored weight into the band", () => {
+    expect(columnWeight(W({ title: 99 }), "title")).toBe(COL_WEIGHT_MAX);
+    expect(columnWeight(W({ title: 0.01 }), "title")).toBe(COL_WEIGHT_MIN);
+  });
+
+  it("drops junk rather than rendering a broken table", () => {
+    expect(W({ title: NaN })).toEqual({});
+    expect(W({ title: "wide" as never })).toEqual({});
+    expect(W({ notAColumn: 2 })).toEqual({});
+    expect(parseSpec(JSON.stringify({ colWeights: [1, 2] }), "table").colWeights).toEqual({});
+    expect(parseSpec(JSON.stringify({ colWeights: null }), "table").colWeights).toEqual({});
+  });
+
+  it("does not store the default weight", () => {
+    // 1 is what a missing entry means; writing it is bytes against SPEC_MAX_CHARS.
+    expect(W({ title: 1 })).toEqual({});
+  });
+
+  it("never divides by zero on an empty table", () => {
+    const { data, actions } = columnWidths([], {});
+    expect(data).toEqual([]);
+    expect(actions).toBeGreaterThan(0);
   });
 });

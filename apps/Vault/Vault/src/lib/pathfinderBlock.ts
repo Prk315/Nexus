@@ -182,7 +182,30 @@ export interface PfBlockSpec {
    * that puts sketch coordinates in a 1000-unit logical space.
    */
   metaPct: number;
+
+  /**
+   * Table only. Relative column widths, keyed by column. Missing = 1.
+   *
+   * WEIGHTS, not pixels and not percentages. Pixels would be wrong the moment
+   * the note changes width or opens on the iPad (same reasoning as `metaPct`),
+   * and stored percentages stop summing to 100 the moment a column is added or
+   * removed — so they would need renormalising on every toggle, and any bug in
+   * that renormalisation is a table that slowly drifts off the edge. Weights
+   * normalise at render time, so adding a column simply gives everyone a
+   * slightly smaller share and removing one gives it back.
+   */
+  colWeights: Record<string, number>;
 }
+
+/** A column may not be dragged to nothing, nor swallow the table. */
+export const COL_WEIGHT_MIN = 0.25;
+export const COL_WEIGHT_MAX = 6;
+
+/**
+ * The actions column's share. Not user-adjustable: it holds two icon buttons
+ * and has no content that could want more room.
+ */
+const ACTIONS_WEIGHT = 0.55;
 
 /** Neither side of the split may vanish; below these a drag becomes a delete. */
 export const META_PCT_MIN = 12;
@@ -224,6 +247,7 @@ export function defaultSpec(view: PfBlockView): PfBlockSpec {
     untaggedOnly: false,
     showTags: false,
     metaPct: 0,
+    colWeights: {},
   };
 }
 
@@ -318,7 +342,11 @@ export function parseSpec(raw: string | null | undefined, view: PfBlockView): Pf
     },
     limit: clampLimit(obj.limit, base.limit),
     groupBy: pick(obj.groupBy, BOARD_AXES, base.groupBy),
-    columns: columns.length ? sortColumns(columns) : [...DEFAULT_COLUMNS],
+    // NOT sorted. `sortColumns` used to run here, which meant a hand-ordered
+    // table snapped back to canonical order on the next load — placement could
+    // be changed but never survive. `strArray` already validates and dedupes
+    // while preserving order, so the stored array IS the order.
+    columns: columns.length ? columns : [...DEFAULT_COLUMNS],
     compact: obj.compact === true,
     showFilters: obj.showFilters !== false,
     // A block written before hierarchy existed carries no `tree` key, and gets
@@ -335,6 +363,7 @@ export function parseSpec(raw: string | null | undefined, view: PfBlockView): Pf
     untaggedOnly: obj.untaggedOnly === true,
     showTags: obj.showTags === true,
     metaPct: clampMetaPct(obj.metaPct),
+    colWeights: parseWeights(obj.colWeights),
   };
 }
 
@@ -355,9 +384,94 @@ function clampLimit(v: unknown, fallback: number): number {
   return Math.min(Math.round(v), SPEC_MAX_LIMIT);
 }
 
-/** Canonical column order, so toggling one off and on again doesn't move it. */
+/**
+ * Canonical column order. Still used to seed a fresh block and to reason about
+ * where a re-enabled column belongs — but no longer imposed on a stored spec,
+ * because that is what made column placement unstorable.
+ */
 export function sortColumns(cols: PfColumn[]): PfColumn[] {
   return PF_COLUMNS.filter((c) => cols.includes(c));
+}
+
+/**
+ * Re-enable a column, at its canonical position RELATIVE to the columns already
+ * shown — not appended to the end.
+ *
+ * This is what preserves the property `sortColumns` used to provide ("toggling
+ * one off and on again doesn't move it") now that the array order is the user's
+ * to set. Appending instead would mean every accidental double-click silently
+ * rearranged the table.
+ */
+export function withColumn(cols: PfColumn[], c: PfColumn): PfColumn[] {
+  if (cols.includes(c)) return cols;
+  const rank = (x: PfColumn) => PF_COLUMNS.indexOf(x);
+  const at = cols.findIndex((x) => rank(x) > rank(c));
+  const next = [...cols];
+  next.splice(at === -1 ? next.length : at, 0, c);
+  return next;
+}
+
+export function withoutColumn(cols: PfColumn[], c: PfColumn): PfColumn[] {
+  // `title` is not removable — a table whose rows carry no label is not a table.
+  if (REQUIRED_COLUMNS.includes(c)) return cols;
+  return cols.filter((x) => x !== c);
+}
+
+/** Move `from` so that it sits where `to` currently is. */
+export function moveColumn(cols: PfColumn[], from: PfColumn, to: PfColumn): PfColumn[] {
+  if (from === to) return cols;
+  const i = cols.indexOf(from);
+  const j = cols.indexOf(to);
+  if (i === -1 || j === -1) return cols;
+  const next = [...cols];
+  next.splice(i, 1);
+  next.splice(j, 0, from);
+  return next;
+}
+
+function clampWeight(v: unknown): number | null {
+  if (typeof v !== "number" || !Number.isFinite(v) || v <= 0) return null;
+  return Math.min(COL_WEIGHT_MAX, Math.max(COL_WEIGHT_MIN, Math.round(v * 100) / 100));
+}
+
+function parseWeights(v: unknown): Record<string, number> {
+  if (!v || typeof v !== "object" || Array.isArray(v)) return {};
+  const out: Record<string, number> = {};
+  for (const [k, raw] of Object.entries(v as Record<string, unknown>)) {
+    // Unknown column names are dropped rather than kept: a weight for a column
+    // this build does not have is dead weight in a size-capped attribute.
+    if (!(PF_COLUMNS as string[]).includes(k)) continue;
+    const w = clampWeight(raw);
+    if (w !== null && w !== 1) out[k] = w;   // 1 is the default; storing it is noise
+  }
+  return out;
+}
+
+export function columnWeight(weights: Record<string, number>, c: PfColumn): number {
+  return clampWeight(weights[c]) ?? 1;
+}
+
+/**
+ * Weights → CSS percentages, including the trailing actions column.
+ *
+ * Percentages rather than pixels so a table keeps its proportions across the
+ * 720px-to-full-bleed range a note can be, and on the iPad. The actions column
+ * is folded into the same total rather than given a fixed px width: mixing px
+ * and % under `table-layout: fixed` leaves the browser to reconcile them, and
+ * "the browser will sort it out" is how a table ends up 3px wider than its
+ * scroll container on one platform only.
+ */
+export function columnWidths(
+  cols: PfColumn[],
+  weights: Record<string, number>,
+): { data: number[]; actions: number } {
+  const ws = cols.map((c) => columnWeight(weights, c));
+  const total = ws.reduce((a, b) => a + b, 0) + ACTIONS_WEIGHT;
+  if (total <= 0) return { data: cols.map(() => 0), actions: 100 };
+  return {
+    data: ws.map((w) => (w / total) * 100),
+    actions: (ACTIONS_WEIGHT / total) * 100,
+  };
 }
 
 export function serializeSpec(spec: PfBlockSpec): string {

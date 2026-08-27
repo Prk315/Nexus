@@ -1279,6 +1279,42 @@ invisible in-session because `globalContentCache` still held the right thing.
   now, which sets `isLoading` and commits only once the content is in hand.
 ## Vault: PathFinder task blocks
 
+### The table: column order is the ARRAY order
+
+⚠️ **`parseSpec` must not sort `spec.columns`.** It used to, and that single call
+is what made column placement unstorable: a hand-ordered table snapped back to
+canonical order on the very next load, so the feature could be built and would
+still appear not to work. `strArray` already validates and dedupes while
+preserving order, so the stored array *is* the order.
+
+The property the sort was really providing — "toggling a column off and on again
+does not move it" — has not been dropped. It moved to `withColumn`, which
+inserts at the canonical position **relative to the columns already shown**.
+Appending instead would mean one stray double-click silently rearranged the
+table. `defaultSpec` still seeds canonically; there are tests for both halves.
+
+`spec.colWeights` are **weights**, not pixels and not percentages. Pixels are
+wrong the moment the note changes width or opens on the iPad (same reasoning as
+`metaPct`), and stored percentages stop summing to 100 the moment a column is
+added or removed — so they would need renormalising on every toggle, and any bug
+in that renormalisation is a table that slowly drifts off its container. Weights
+normalise at render time. `columnWidths` folds the actions column into the same
+total rather than giving it a fixed px width: mixing px and % under
+`table-layout: fixed` leaves the browser to reconcile them, which is how a table
+ends up wider than its scroll container on one platform only.
+
+`table-layout: fixed` is what makes the `<colgroup>` percentages authoritative —
+under `auto` a width is a suggestion and the browser sizes from content, so a
+dragged column springs back as soon as a long title arrives. Fixed layout will
+not grow a cell to fit, so `th`/`td` need explicit `overflow: hidden;
+text-overflow: ellipsis` or text spills across the boundary.
+
+Reorder is **pointer-based, not HTML5 drag-and-drop**: the table lives inside a
+ProseMirror node view, where a native `dragstart` competes with the editor's own
+drag handling — the same reason `BlockHandle` is hand-rolled. Sorting therefore
+happens on pointer-*up* when the press never reached another column; an
+additional `onClick` would fire after a reorder and sort by whatever was dropped.
+
 ### The list row: opt-out chips, and the title yields LAST
 
 ⚠️ **`.pf-meta` is shrinkable and `.pf-list-title` has a floor.** It was the other
