@@ -46,4 +46,31 @@ describe("dashBlocks visibility store", () => {
     localStorage.setItem("pf.dash.blocks", "{not json");
     expect(getDashBlockVisibility()).toEqual(DASH_BLOCK_DEFAULTS);
   });
+
+  // The regression that white-screened the deployed dashboard (PR #132): this
+  // is a useSyncExternalStore getSnapshot, and React compares snapshots with
+  // `Object.is`. A fresh object per call means every commit looks like a store
+  // change, so the tree re-renders forever until React throws "Maximum update
+  // depth exceeded". Identity is the contract here, not just deep equality.
+  it("returns an identical snapshot while the stored value is unchanged", () => {
+    expect(getDashBlockVisibility()).toBe(getDashBlockVisibility());
+
+    setDashBlockVisible("habits", false);
+    expect(getDashBlockVisibility()).toBe(getDashBlockVisibility());
+  });
+
+  it("returns a NEW snapshot once the stored value changes", () => {
+    const before = getDashBlockVisibility();
+    setDashBlockVisible("habits", false);
+    const after = getDashBlockVisibility();
+    expect(after).not.toBe(before);
+    expect(after.habits).toBe(false);
+  });
+
+  it("picks up a write made behind its back (cross-tab `storage` event)", () => {
+    expect(getDashBlockVisibility().welcome).toBe(true);
+    // Another tab wrote directly — no setDashBlockVisible call in this one.
+    localStorage.setItem("pf.dash.blocks", JSON.stringify({ welcome: false }));
+    expect(getDashBlockVisibility().welcome).toBe(false);
+  });
 });
