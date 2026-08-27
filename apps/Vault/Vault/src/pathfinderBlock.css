@@ -606,3 +606,415 @@
   .pf-tag-who { background: oklch(1 0 0 / 6%); }
   .pf-card { box-shadow: none; }
 }
+
+/* ════════════════════════════════════════════════════════════════════════════
+   Hierarchy, Vault tags, and the detail sheet
+   ══════════════════════════════════════════════════════════════════════════ */
+
+/* ── Indentation ─────────────────────────────────────────────────────────────
+   `--pf-depth` is set inline by the row, and the indent is a margin on the
+   disclosure rather than padding on the row: padding would drag the row's
+   background and hover highlight in with the text, so a nested row would read
+   as a NARROWER row rather than an indented one. */
+
+.pf-disclose {
+  flex: none;
+  width: 16px;
+  height: 16px;
+  margin-left: calc(var(--pf-depth, 0) * 15px);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  background: transparent;
+  color: var(--fg-ghost);
+  font-size: 0.62rem;
+  line-height: 1;
+  border-radius: 4px;
+  cursor: pointer;
+  padding: 0;
+  transition: transform var(--duration) var(--ease), color var(--duration) var(--ease);
+}
+.pf-disclose:hover { color: var(--fg-main); background: var(--bg-muted); }
+.pf-disclose:focus-visible { outline: 2px solid var(--edge-in); outline-offset: 1px; }
+.pf-disclose.is-open { transform: rotate(90deg); }
+
+/* The spacer. Without it every leaf's checkbox sits one notch left of its
+   siblings' and the column stops reading as a column. */
+.pf-disclose.is-empty { cursor: default; pointer-events: none; }
+
+/* Steps the FILTER is hiding get a different affordance from steps that are
+   merely collapsed — a triangle would promise an expand that reveals nothing.
+   This one pulls that subtree in. */
+.pf-disclose.is-hidden-kids {
+  width: auto;
+  min-width: 20px;
+  padding: 0 4px;
+  font-variant-numeric: tabular-nums;
+  color: var(--fg-muted);
+  border: 1px dashed var(--border-base);
+}
+.pf-disclose.is-hidden-kids:hover { border-style: solid; color: var(--fg-main); }
+
+/* A nested row's title is a shade quieter than a root's, so the outline stays
+   scannable at the top level without the eye parsing the indent first. */
+.pf-list-row.is-step .pf-list-title { color: var(--fg-secondary); }
+
+.pf-subadd { background: var(--bg-subtle); }
+
+/* ── Subtask roll-up ─────────────────────────────────────────────────────── */
+
+.pf-progress {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  flex: none;
+  font-size: 0.68rem;
+  color: var(--fg-muted);
+  font-variant-numeric: tabular-nums;
+}
+.pf-progress-bar {
+  width: 26px;
+  height: 3px;
+  border-radius: 2px;
+  background: var(--bg-muted);
+  overflow: hidden;
+}
+.pf-progress-fill {
+  display: block;
+  height: 100%;
+  background: var(--fg-ghost);
+  transition: width var(--duration) var(--ease);
+}
+.pf-progress.is-complete .pf-progress-fill { background: var(--success); }
+.pf-progress.is-complete .pf-progress-num { color: var(--success); }
+
+/* ── Row actions ─────────────────────────────────────────────────────────── */
+
+.pf-row-actions { display: inline-flex; align-items: center; gap: 1px; flex: none; }
+
+.pf-row-detail, .pf-row-sub {
+  flex: none;
+  border: none;
+  background: transparent;
+  color: var(--fg-ghost);
+  cursor: pointer;
+  font-size: 0.8rem;
+  line-height: 1;
+  padding: 3px 4px;
+  border-radius: 4px;
+  opacity: 0;
+  transition: opacity var(--duration) var(--ease), color var(--duration) var(--ease);
+}
+.pf-list-row:hover .pf-row-detail,
+.pf-list-row:hover .pf-row-sub,
+.pf-table tr:hover .pf-row-detail,
+.pf-card:hover .pf-row-detail,
+.pf-row-detail:focus-visible,
+.pf-row-sub:focus-visible { opacity: 1; }
+.pf-row-detail:hover, .pf-row-sub:hover { color: var(--fg-main); background: var(--bg-muted); }
+
+/* A coarse pointer has no hover, so a hover-revealed control is an invisible
+   control. On a touch screen every row action is simply always there. */
+@media (hover: none) {
+  .pf-row-detail, .pf-row-sub, .pf-row-del { opacity: 1; }
+}
+
+/* ── Vault tags ──────────────────────────────────────────────────────────── */
+
+.pf-tag-vault {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  border: 1px solid transparent;
+  background: var(--bg-muted);
+  color: var(--fg-secondary);
+}
+.pf-tag-x {
+  border: none;
+  background: transparent;
+  color: inherit;
+  opacity: 0.55;
+  cursor: pointer;
+  font-size: 0.85em;
+  line-height: 1;
+  padding: 0 1px;
+}
+.pf-tag-x:hover { opacity: 1; }
+
+.pf-tag-swatch { width: 8px; height: 8px; border-radius: 50%; flex: none; }
+
+.pf-filter-row-tags { align-items: center; }
+
+.pf-hint-warn { color: var(--destructive); }
+.pf-hint-warn code, .pf-detail-warn code {
+  font-size: 0.92em;
+  background: var(--bg-muted);
+  border-radius: 3px;
+  padding: 0 3px;
+}
+
+.pf-multi-tools { display: flex; justify-content: space-between; gap: 6px; padding: 0 2px 4px; }
+.pf-multi-clear.is-on { color: var(--fg-main); font-weight: 600; }
+.pf-multi-check { display: flex; align-items: center; gap: 6px; width: 100%; cursor: pointer; }
+
+.pf-tag-manage { display: flex; align-items: center; gap: 6px; width: 100%; }
+.pf-tag-rename {
+  flex: 1;
+  min-width: 0;
+  border: 1px solid var(--border-faint);
+  border-radius: 4px;
+  background: var(--bg-base);
+  font: inherit;
+  font-size: 0.78rem;
+  color: var(--fg-main);
+  padding: 2px 5px;
+}
+.pf-tag-rename:focus { outline: none; border-color: var(--edge-in); }
+
+.pf-td-tags { max-width: 200px; }
+.pf-td-tags .pf-tag { margin-right: 3px; }
+
+/* The tree column inside a table cell. The indent lives HERE rather than on the
+   <tr> so nesting never pushes the other columns out of alignment. */
+.pf-cell-tree {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+  padding-left: calc(var(--pf-depth, 0) * 15px);
+}
+.pf-cell-tree .pf-disclose { margin-left: 0; }
+.pf-table tr.is-step .pf-td-title { color: var(--fg-secondary); }
+
+/* ── Detail sheet ────────────────────────────────────────────────────────── */
+
+/* Fixed, not absolute: a node view lives inside the editor's scroll container
+   and several of its ancestors clip overflow, so an absolutely-positioned sheet
+   would be cropped by the block's own box. Same reason ConfirmDialog is fixed. */
+.pf-detail-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 1200;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 16px;
+  background: oklch(0 0 0 / 38%);
+  overscroll-behavior: contain;
+}
+
+.pf-detail {
+  width: min(560px, 100%);
+  max-height: min(84vh, 760px);
+  overflow-y: auto;
+  background: var(--bg-base);
+  border: 1px solid var(--border-strong);
+  border-radius: 12px;
+  box-shadow: 0 18px 48px oklch(0 0 0 / 22%);
+  padding: 14px 16px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  text-align: left;
+}
+
+.pf-detail-head { display: flex; align-items: flex-start; gap: 8px; }
+.pf-crumbs {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex-wrap: wrap;
+  font-size: 0.72rem;
+  color: var(--fg-muted);
+}
+.pf-crumb {
+  border: none;
+  background: transparent;
+  color: var(--fg-secondary);
+  font: inherit;
+  cursor: pointer;
+  padding: 1px 3px;
+  border-radius: 4px;
+  max-width: 190px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.pf-crumb:hover { background: var(--bg-muted); color: var(--fg-main); }
+.pf-crumb-sep { color: var(--fg-ghost); }
+.pf-crumb-kind { text-transform: uppercase; letter-spacing: 0.05em; font-size: 0.66rem; }
+
+.pf-detail-close {
+  flex: none;
+  border: none;
+  background: transparent;
+  color: var(--fg-muted);
+  font-size: 1.15rem;
+  line-height: 1;
+  cursor: pointer;
+  padding: 2px 6px;
+  border-radius: 6px;
+}
+.pf-detail-close:hover { background: var(--bg-muted); color: var(--fg-main); }
+
+.pf-detail-title-row { display: flex; align-items: flex-start; gap: 9px; }
+.pf-check-lg { width: 17px; height: 17px; margin-top: 3px; }
+.pf-detail-title {
+  flex: 1;
+  min-width: 0;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: transparent;
+  font: inherit;
+  font-size: 1.02rem;
+  font-weight: 600;
+  color: var(--fg-main);
+  padding: 3px 5px;
+}
+.pf-detail-title:hover:not(:disabled) { border-color: var(--border-faint); }
+.pf-detail-title:focus { outline: none; border-color: var(--edge-in); background: var(--bg-subtle); }
+
+.pf-detail-error {
+  font-size: 0.76rem;
+  color: var(--destructive);
+  background: var(--destructive-bg);
+  border-radius: 6px;
+  padding: 5px 8px;
+}
+
+.pf-detail-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 9px 12px;
+}
+
+.pf-field { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+.pf-field-label {
+  font-size: 0.68rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--fg-muted);
+}
+/* The hint is both a `title` and visible text on purpose: a tooltip is
+   unreachable on a touch screen, and half of these explain a rule (the
+   scheduling gate, the estimate roll-up) that is confusing to hit blind. */
+.pf-field-hint { font-size: 0.68rem; color: var(--fg-ghost); line-height: 1.35; }
+
+.pf-text-input, .pf-num-input {
+  border: 1px solid var(--border-faint);
+  border-radius: 6px;
+  background: var(--bg-base);
+  font: inherit;
+  font-size: 0.8rem;
+  color: var(--fg-main);
+  padding: 4px 6px;
+  min-width: 0;
+}
+.pf-num-input { font-variant-numeric: tabular-nums; }
+.pf-text-input:focus, .pf-num-input:focus { outline: none; border-color: var(--edge-in); }
+
+.pf-detail-section { display: flex; flex-direction: column; gap: 6px; }
+.pf-detail-h {
+  display: flex;
+  align-items: baseline;
+  gap: 7px;
+  margin: 0;
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--fg-muted);
+  font-weight: 600;
+}
+.pf-detail-count {
+  text-transform: none;
+  letter-spacing: 0;
+  font-weight: 400;
+  font-size: 0.7rem;
+  color: var(--fg-ghost);
+}
+.pf-detail-hint { margin: 0; font-size: 0.7rem; color: var(--fg-ghost); line-height: 1.4; }
+
+.pf-detail-notes {
+  border: 1px solid var(--border-faint);
+  border-radius: 6px;
+  background: var(--bg-base);
+  font: inherit;
+  font-size: 0.82rem;
+  line-height: 1.5;
+  color: var(--fg-main);
+  padding: 6px 8px;
+  resize: vertical;
+}
+.pf-detail-notes:focus { outline: none; border-color: var(--edge-in); }
+
+.pf-tag-row { display: flex; align-items: center; gap: 5px; flex-wrap: wrap; }
+.pf-tag-input { width: 100%; }
+
+.pf-steps { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 2px; }
+.pf-steps li {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 3px 4px;
+  border-radius: 5px;
+  font-size: 0.82rem;
+}
+.pf-steps li:hover { background: var(--bg-subtle); }
+.pf-steps li.is-done .pf-step-open { text-decoration: line-through; color: var(--fg-muted); }
+.pf-step-open {
+  flex: 1;
+  min-width: 0;
+  text-align: left;
+  border: none;
+  background: transparent;
+  font: inherit;
+  color: var(--fg-main);
+  cursor: pointer;
+  padding: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.pf-step-open:hover { text-decoration: underline; }
+.pf-step-count { flex: none; font-size: 0.7rem; color: var(--fg-ghost); font-variant-numeric: tabular-nums; }
+
+.pf-detail-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding-top: 8px;
+  border-top: 1px solid var(--border-faint);
+}
+.pf-detail-danger {
+  flex: none;
+  border: 1px solid var(--border-base);
+  border-radius: 6px;
+  background: transparent;
+  font: inherit;
+  font-size: 0.76rem;
+  color: var(--destructive);
+  cursor: pointer;
+  padding: 4px 10px;
+}
+.pf-detail-danger:hover { background: var(--destructive-bg); border-color: var(--destructive); }
+
+/* One column on a phone or a narrow iPad split — two 150px columns of dropdowns
+   at 380px wide is a form nobody can fill in. */
+@media (max-width: 480px) {
+  .pf-detail-grid { grid-template-columns: 1fr; }
+  .pf-detail { padding: 12px; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .pf-disclose, .pf-progress-fill { transition: none; }
+}
+
+@media (prefers-color-scheme: dark) {
+  .pf-detail-backdrop { background: oklch(0 0 0 / 58%); }
+  .pf-detail { box-shadow: 0 18px 48px oklch(0 0 0 / 50%); }
+  .pf-tag-vault { background: oklch(1 0 0 / 6%); }
+}

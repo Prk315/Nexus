@@ -18,6 +18,18 @@ query after each.
 | 7 | `20260825120000_job_evaluation.sql` | `job_app_modules`, `job_applications`, `job_matches.module_plan` — **apply before deploying `job-ingest` v4** |
 | 8 | `20260826120000_job_apply.sql` | `job_profiles.approval_threshold`, nine approval/submission columns on `job_applications`, `job_submission_attempts` — **apply before deploying `job-ingest` v5 / `job-approve`** |
 | 9 | `20260827120000_vault_live_coedit.sql` | `vault_ydoc`, `vault_can_coedit()`, two `realtime.messages` policies — **apply before deploying any Vault build that reads `vault_ydoc`, and see §9 for the two manual steps that are not SQL** |
+| 10 | `20260827140000_vault_task_tags.sql` | `vault_task_tags` + `vault_rename_task_tag()` / `vault_delete_task_tag()` — **already applied live on 2026-08-27**; see §10 |
+
+⚠️ **File 10 is the one exception to "not applied by the code that wrote it"** —
+it was applied to `efxmzsdisaymtpebaxlp` at the time it was written, and the file
+is committed so `supabase db push` and a future rebuild stay in step. It is
+re-runnable like every other file here, so applying it again is harmless.
+
+Unlike files 5–9, it has **no deploy-ordering requirement in either direction**.
+Nothing on `main` reads or writes `vault_task_tags`, and the Vault build that
+does treats a missing table as "tags unavailable" rather than an error — see
+`apps/Vault/Vault/src/lib/vaultTaskTags.ts`. A build shipped before the migration
+loses its tag controls and keeps every other part of a task block working.
 
 Files 1–3 are independent of each other and of file 4. File 4 has an **internal**
 ordering requirement (the `ALTER` must precede the index that uses the new
@@ -429,4 +441,56 @@ drop policy if exists vault_doc_broadcast_read on realtime.messages;
 drop policy if exists vault_doc_broadcast_write on realtime.messages;
 drop table if exists public.vault_ydoc;
 drop function if exists public.vault_can_coedit(text);
+```
+
+---
+
+## §10 — Vault task tags (`20260827140000_vault_task_tags.sql`)
+
+Vault-only tags on PathFinder tasks. Applied live on 2026-08-27; recorded here
+so the file is not mistaken for pending work.
+
+### Verify
+
+```sql
+-- RLS on, exactly one owner-scoped policy, and NO anon policy.
+select c.relrowsecurity as rls_on, p.policyname, p.cmd, p.roles::text, p.qual
+  from pg_class c
+  join pg_namespace n on n.oid = c.relnamespace
+  left join pg_policies p on p.schemaname = 'public' and p.tablename = c.relname
+ where n.nspname = 'public' and c.relname = 'vault_task_tags';
+```
+
+Expect one row: `rls_on = t`, `owner_all`, `ALL`, `{public}`,
+`(user_id = ((select auth.uid()))::text)`. **More than one row means someone
+added an anon policy** — this table holds the shape of a private task list and
+the anon key is committed. Remove it rather than working around it.
+
+```sql
+-- The FK must cascade: PathFinder knows nothing about this table and will never
+-- clean up after itself, so a deleted task would otherwise leave orphan tags.
+select pg_get_constraintdef(oid) from pg_constraint
+ where conrelid = 'vault_task_tags'::regclass and contype = 'f';
+```
+
+Expect `FOREIGN KEY (task_id) REFERENCES pf_tasks(id) ON DELETE CASCADE`.
+
+### Two things to know
+
+- **`user_id` is TEXT, not uuid.** Every `pf_*` and `vault_*` table stores it as
+  text with an `(select auth.uid())::text` policy; declaring uuid here would
+  compare cleanly in isolation and fail to join against anything.
+- **Both RPCs are `security invoker`**, stated explicitly in the file. A
+  `security definer` function here would bypass the policy above and let any
+  caller rewrite anyone's tags. Do not "optimise" it.
+
+### Rollback
+
+Nothing on `main` reads this, so dropping it is safe at any time — it costs the
+tags themselves, which exist nowhere else.
+
+```sql
+drop function if exists public.vault_rename_task_tag(text, text);
+drop function if exists public.vault_delete_task_tag(text);
+drop table if exists public.vault_task_tags;
 ```

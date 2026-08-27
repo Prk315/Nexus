@@ -25,7 +25,10 @@ import {
   STAGE_LABELS,
   TASK_TYPES,
   TASK_TYPE_LABELS,
+  TREE_MODES,
   URGENCIES,
+  activeFilterCount,
+  isUnfiltered,
   memberName,
   type BoardAxis,
   type DoneFilter,
@@ -38,7 +41,15 @@ import {
   type SortDir,
   type SortKey,
   type TaskFilter,
+  type TreeMode,
 } from "@nexus/core/pathfinder";
+// ⚠️ `./taskTags`, NEVER `./vaultTaskTags`. This module is part of the note
+// schema — noteExtensions imports it, and noteSchemaGuard builds that schema
+// before any editor or network client exists. `vaultTaskTags` imports
+// `./supabase`, which constructs a client at module load and throws
+// `supabaseUrl is required` wherever Vite's env is absent. It is the same rule
+// PathfinderBlockLazy enforces for the view.
+import { TAG_MODES, normalizeTagList, type TagMode } from "./taskTags";
 
 export type PfBlockView = "list" | "board" | "table";
 
@@ -60,6 +71,7 @@ export const PF_VIEW_ICONS: Record<PfBlockView, string> = {
 export type PfColumn =
   | "done"
   | "title"
+  | "tags"
   | "plan"
   | "goal"
   | "priority"
@@ -71,12 +83,13 @@ export type PfColumn =
   | "assignee";
 
 export const PF_COLUMNS: PfColumn[] = [
-  "done", "title", "plan", "goal", "assignee", "priority", "urgency", "stage", "due", "estimate", "type",
+  "done", "title", "tags", "plan", "goal", "assignee", "priority", "urgency", "stage", "due", "estimate", "type",
 ];
 
 export const PF_COLUMN_LABELS: Record<PfColumn, string> = {
   done: "✓",
   title: "Task",
+  tags: "Tags",
   plan: "Plan",
   goal: "Goal",
   assignee: "Who",
@@ -106,6 +119,28 @@ export interface PfBlockSpec {
   compact: boolean;
   /** Show the per-block filter controls. Persisted so a configured block stays quiet. */
   showFilters: boolean;
+
+  /**
+   * How much of the task hierarchy the list and table render. The board ignores
+   * it — a Kanban card cannot contain another card, so a board shows a subtask
+   * roll-up chip instead of nesting.
+   */
+  tree: TreeMode;
+
+  // ── Vault-only tags ───────────────────────────────────────────────────────
+  //
+  // These axes exist nowhere in PathFinder, which is the whole point: a note can
+  // slice tasks by a vocabulary that means something *here* without pushing it
+  // into PathFinder's own filters, its widgets, or a teammate's copy of a shared
+  // task. They live on the block spec rather than in `TaskFilter` for the same
+  // reason — `@nexus/core/pathfinder` is shared with apps that have no Vault.
+  /** Tag names, already normalized. Empty = no constraint. */
+  tags: string[];
+  tagMode: TagMode;
+  /** Only tasks carrying no Vault tags. A hard gate — see `matchesTags`. */
+  untaggedOnly: boolean;
+  /** Render each row's tags as chips. Off by default: a tagged list gets noisy fast. */
+  showTags: boolean;
 }
 
 export const SPEC_MAX_LIMIT = 200;
@@ -133,6 +168,16 @@ export function defaultSpec(view: PfBlockView): PfBlockSpec {
     // stays however the user left it. Persisted in the doc rather than in React
     // state so a block reads the same on every device.
     showFilters: true,
+    // Nesting is the default, and `matched` rather than `full` is the reason it
+    // can be. It shows the hierarchy where the filter already agrees there is
+    // one, and never drags in rows the block was told to exclude — so turning it
+    // on changes the SHAPE of an existing block's results without changing WHICH
+    // tasks it contains. `full` is one click away on any row that has more.
+    tree: "matched",
+    tags: [],
+    tagMode: "any",
+    untaggedOnly: false,
+    showTags: false,
   };
 }
 
@@ -165,6 +210,13 @@ function freeStrings(v: unknown): string[] {
 function pick<T extends string>(v: unknown, allowed: readonly T[], fallback: T): T {
   return typeof v === "string" && (allowed as readonly string[]).includes(v) ? (v as T) : fallback;
 }
+
+/**
+ * Ceiling on the tag filter, so one block's spec cannot grow without bound and
+ * push the serialized attribute past SPEC_MAX_CHARS — at which point
+ * `serializeSpec` throws the WHOLE configuration away, not just the tags.
+ */
+export const MAX_FILTER_TAGS = 40;
 
 const DUE_WINDOWS: DueWindow[] = ["any", "overdue", "today", "week", "month", "none", "dated"];
 const DONE_FILTERS: DoneFilter[] = ["open", "done", "all"];
@@ -223,6 +275,19 @@ export function parseSpec(raw: string | null | undefined, view: PfBlockView): Pf
     columns: columns.length ? sortColumns(columns) : [...DEFAULT_COLUMNS],
     compact: obj.compact === true,
     showFilters: obj.showFilters !== false,
+    // A block written before hierarchy existed carries no `tree` key, and gets
+    // the default — which nests it. That is the intended migration: the shape of
+    // the result changes, the set of tasks in it does not (see `defaultSpec`).
+    tree: pick(obj.tree, TREE_MODES, base.tree),
+    // Re-normalized on the way in, not trusted. This string is user-editable
+    // text in the document: a paste from a build with different casing rules, or
+    // a hand-edited export, would otherwise put `"Reading"` in a list the store
+    // only ever holds `"reading"` in — and the filter would match nothing while
+    // looking perfectly correct.
+    tags: normalizeTagList(freeStrings(obj.tags)).slice(0, MAX_FILTER_TAGS),
+    tagMode: pick(obj.tagMode, TAG_MODES, base.tagMode),
+    untaggedOnly: obj.untaggedOnly === true,
+    showTags: obj.showTags === true,
   };
 }
 
@@ -263,6 +328,15 @@ export function deriveLabel(
 ): string {
   const f = spec.filter;
   const parts: string[] = [];
+
+  // A tag leads even ownership: it is the most specific thing the user chose,
+  // and it is the axis PathFinder cannot see — a block that exists *because* of
+  // a tag should say the tag's name, not "Open tasks".
+  if (spec.untaggedOnly) parts.push("Untagged");
+  else if (spec.tags.length === 1 && spec.tagMode !== "none") parts.push(`#${spec.tags[0]}`);
+  else if (spec.tags.length > 1 && spec.tagMode !== "none") {
+    parts.push(spec.tags.map((t) => `#${t}`).join(spec.tagMode === "all" ? " + " : " / "));
+  }
 
   // Ownership leads the label. "Josefine · overdue" is a different list from
   // "overdue", and a block that shows someone else's work should say so before
@@ -398,4 +472,70 @@ export function axisWriteField(axis: BoardAxis): AxisWriteField | null {
 export function axisDropValue(axis: BoardAxis, columnKey: string): string | null {
   if (axis === "assignee") return columnKey === "__unassigned__" ? null : columnKey;
   return columnKey;
+}
+
+// ── Hierarchy ───────────────────────────────────────────────────────────────
+
+export const TREE_MODE_LABELS: Record<TreeMode, string> = {
+  off: "Flat list",
+  matched: "Nested",
+  full: "Nested + hidden steps",
+};
+
+export const TREE_MODE_HINTS: Record<TreeMode, string> = {
+  off: "One row per matching task, no indentation.",
+  matched: "Indent matching tasks under their matching parents. A step whose parent is filtered out becomes a top-level row rather than disappearing.",
+  full: "Every step of a matching task, even ones the filter excludes.",
+};
+
+// ── Spec-wide filter state ──────────────────────────────────────────────────
+//
+// `activeFilterCount` and `isUnfiltered` in @nexus/core count PathFinder's axes
+// and cannot count Vault's tags — the shared module has no idea they exist.
+// These wrap them so the badge on the ⚙ button and the "Clear filters" empty
+// state stay honest. Forgetting this is a specific and confusing bug: a block
+// filtered to one tag would show no badge, read "No open tasks", and offer a
+// Clear button that clears everything except the thing actually hiding the rows.
+
+export function specFilterCount(spec: PfBlockSpec): number {
+  let n = activeFilterCount(spec.filter);
+  if (spec.tags.length > 0) n++;
+  if (spec.untaggedOnly) n++;
+  return n;
+}
+
+export function specIsUnfiltered(spec: PfBlockSpec): boolean {
+  return isUnfiltered(spec.filter) && spec.tags.length === 0 && !spec.untaggedOnly;
+}
+
+/**
+ * The spec "Clear filters" resets.
+ *
+ * Deliberately not `done`, `tree`, `columns`, `compact` or `showTags` — those
+ * are how the block is *displayed*, not what it is showing, and resetting them
+ * would make one button undo a different decision than the one it names.
+ */
+export function clearedSpec(spec: PfBlockSpec): PfBlockSpec {
+  return {
+    ...spec,
+    filter: {
+      ...spec.filter,
+      planIds: [],
+      goalIds: [],
+      taskTypes: [],
+      priorities: [],
+      urgencies: [],
+      stages: [],
+      kanbanStatuses: [],
+      due: "any",
+      search: "",
+      rootsOnly: false,
+      excludeQuick: false,
+      scope: "any",
+      teamIds: [],
+      assignee: "any",
+    },
+    tags: [],
+    untaggedOnly: false,
+  };
 }
