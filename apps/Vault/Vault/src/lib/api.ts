@@ -23,8 +23,13 @@ export async function loadGraph(): Promise<VaultGraph> {
   if (colorsRes.error) err(colorsRes.error);
 
   const nodes: Record<string, VaultNode> = {};
+  sharedNodeIds.clear();
   for (const n of nodesRes.data!) {
     nodes[n.id] = { id: n.id, name: n.name, kind: n.kind as NodeKind, tags: n.tags ?? [], team_id: n.team_id ?? null, user_id: n.user_id };
+    // Feeds assertNotCoedited, so the co-editing guard costs a query only on
+    // notes that could actually have CRDT state. team_id is already in the
+    // select, so this is free.
+    if (n.team_id != null) sharedNodeIds.add(n.id);
   }
 
   const edges: Record<string, string[]> = {};
@@ -240,11 +245,26 @@ export class CollabOnlyError extends Error {
   }
 }
 
+// Which nodes are currently shared, refreshed by every loadGraph() (which
+// already selects team_id, so this costs nothing). It exists so the guard below
+// can skip the round trip for the overwhelming majority of saves.
+const sharedNodeIds = new Set<string>();
+
 async function assertNotCoedited(id: string): Promise<void> {
-  // Suffix keys ("<id>_annot", "<id>_hl", …) are never co-edited — CRDT scope
-  // is the note body — so skip the round trip for them. Node ids come from
-  // crypto.randomUUID() and never contain '_', which is what makes this exact.
-  if (id.includes("_")) return;
+  // Only a SHARED note can have CRDT state, so only a shared note is worth a
+  // query. Without this the guard adds a round trip to every autosave of every
+  // private note in the vault, forever, to defend against something that by
+  // construction cannot happen to them.
+  //
+  // Suffix keys ("<id>_annot", "<id>_hl", …) are never co-edited either — CRDT
+  // scope is the note body — and they are excluded for free, since a suffix key
+  // is never a vault_nodes id and so never lands in the set.
+  if (!sharedNodeIds.has(id)) return;
+  // NOTE the deliberately ignored `error`. Before the migration is applied
+  // PostgREST answers PGRST205 ("could not find the table") and `data` is null,
+  // so this fails OPEN and saving keeps working. That is the right direction to
+  // fail — an unapplied migration should not brick the editor — but it does
+  // mean the guard is silently inert until the table exists.
   const { data } = await supabase.from("vault_ydoc").select("node_id").eq("node_id", id).maybeSingle();
   if (data) throw new CollabOnlyError(id);
 }
