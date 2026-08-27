@@ -608,6 +608,18 @@ The two things most likely to be got wrong:
   Actions minutes. It was only ever mitigation against key scraping, and the key
   ships inside the IPA anyway.
 
+## What am I working on — `pf_agent_brief`
+
+Planning happens in PathFinder and Vault; work happens in a terminal. To see the
+current goals, active tasks, what's due and which plans are live, call
+`select pf_agent_brief('<uid>')` — one round trip, ~1600 tokens, facts only.
+**Pass the uid**: the MCP is service-role, where `auth.uid()` is NULL and an
+omitted argument returns an empty brief that looks like "nothing planned".
+
+Everything else — looking a task up by id, reading a Vault note, and the three
+rules you must NOT re-derive — is in the `brief` skill, which loads on demand so
+it costs nothing until it is needed.
+
 ## Supabase: Shared Cloud Backend
 
 All apps that need cloud persistence use the single **NEXUS** Supabase project
