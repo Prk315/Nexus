@@ -950,6 +950,25 @@ plugin's `descendants` walk, both written on the belief that a row cannot
 contain a row — true only because nothing could make one. Both are gone; nesting
 is now offered and every nested row gets its own resize gutters.
 
+**Per-note appearance lives on the DOC node: `width` and `textSize`.** Both are
+properties of the NOTE rather than of a browser — a dense reference note wants
+small text and a journal page wants large, and the iPad is simultaneously where
+you most want bigger text and the device least likely to have set a local
+preference. Text size is a scale on the editor root, never a `font-size` on the
+paragraph: every heading, list and table cell is already sized in `em` relative
+to it, so scaling once keeps the type hierarchy in proportion instead of growing
+body text past its own H3. It is deliberately independent of `width` — coupling
+them would mean choosing large text silently re-flowed the note.
+
+⚠️ **Anything that reads doc attributes must read them ALL, not a named list.**
+`width` was handled by name in three places (the `[content]` effect, the restore
+handle, and the collab seed rescue), and a second attribute would have been
+stale in all three without a single line changing. `applyDocAttrs` and
+`readSeedDocAttrs` now iterate whatever the stored JSON carries. The collab one
+matters most: ySync rebuilds the root with `topNodeType.create(null, …)`, so it
+is the only thing standing between a doc-level setting and Yjs dropping it —
+`textSize` needed no change there, and that property has a test.
+
 **Three things are stored on nodes rather than as structure, and the reason is
 always the same one.** The per-note width lives on the DOC node (`noteDocument.ts`),
 a heading's fold state lives on the HEADING (`headingFold.ts`), and a sketch's

@@ -15,7 +15,7 @@ import { supabase } from "../lib/supabase";
 import * as api from "../lib/api";
 import { noteSchema } from "../extensions/noteExtensions";
 import { toB64, fromB64 } from "./base64";
-import { FRAGMENT, PROVIDER_ORIGIN, buildSeedState, hydrate, readSeedWidth, shouldSeed } from "./seed";
+import { FRAGMENT, PROVIDER_ORIGIN, buildSeedState, hydrate, readSeedDocAttrs, shouldSeed } from "./seed";
 import { docTopic, TIMING } from "./protocol";
 import { SupabaseYjsProvider, type ChannelLike } from "./SupabaseYjsProvider";
 import type { CollabSession, CollabStatus } from "./types";
@@ -155,9 +155,9 @@ export async function startCollabSession(opts: StartOpts): Promise<CollabSession
     status: "live",
     extensions,
     isRemoteTransaction: (tr: Transaction) => isChangeOrigin(tr),
-    // From the same string the CRDT was seeded from, so the width can never
+    // From the same string the CRDT was seeded from, so these can never
     // describe a different document than the content does.
-    seedWidth: readSeedWidth(seedSource),
+    seedDocAttrs: readSeedDocAttrs(seedSource),
     flush: () => {
       provider.flush();
       persistNow();

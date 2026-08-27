@@ -27,7 +27,9 @@ const MENU_GROUPS: BlockGroup[] = ["structure", "callout", "container", "media",
 const TABLE_MENU_GROUPS: BlockGroup[] = ["tableMore"];
 // Page width is a per-note setting rather than an insertable thing, so it gets
 // its own small menu at the end rather than living under "Insert".
-const WIDTH_MENU_GROUPS: BlockGroup[] = ["width", "fold"];
+// Text size joins it: both are per-note appearance settings stored on the doc
+// node, and they are looked for in the same place.
+const WIDTH_MENU_GROUPS: BlockGroup[] = ["width", "textSize", "fold"];
 // Trailing groups, shown inline after the menu.
 const TAIL_GROUPS: BlockGroup[] = ["vault", "history"];
 

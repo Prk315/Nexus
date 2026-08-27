@@ -2,7 +2,7 @@ import { describe, it, expect } from "vitest";
 import * as Y from "yjs";
 import { prosemirrorJSONToYDoc, yDocToProsemirrorJSON } from "@tiptap/y-tiptap";
 import { noteSchema } from "../extensions/noteExtensions";
-import { FRAGMENT, buildSeedState, hydrate, readSeedWidth, shouldSeed } from "./seed";
+import { FRAGMENT, buildSeedState, hydrate, readSeedDocAttrs, shouldSeed } from "./seed";
 import { fromB64 } from "./base64";
 
 const DOC = {
@@ -91,10 +91,34 @@ describe("seed election", () => {
       expect((yDocToProsemirrorJSON(doc, FRAGMENT) as any).attrs?.width).toBeUndefined();
     });
 
-    it("are recoverable from the seed JSON, which is how the width is restored", () => {
-      expect(readSeedWidth(JSON.stringify({ ...DOC, attrs: { width: "wide" } }))).toBe("wide");
-      expect(readSeedWidth(JSON.stringify(DOC))).toBeUndefined();
-      expect(readSeedWidth("<p>not json</p>")).toBeUndefined();
+    it("are recoverable from the seed JSON, which is how they are restored", () => {
+      expect(readSeedDocAttrs(JSON.stringify({ ...DOC, attrs: { width: "wide" } })))
+        .toEqual({ width: "wide" });
+      expect(readSeedDocAttrs(JSON.stringify(DOC))).toEqual({});
+      expect(readSeedDocAttrs("<p>not json</p>")).toEqual({});
+    });
+
+    // ⚠️ Not an enumerated list. This function is the only thing standing
+    // between a doc-level setting and Yjs dropping it, so naming the attributes
+    // means the NEXT one added is silently unrescued — which is how `width`
+    // behaved before anyone noticed. `textSize` arrived after this rescue
+    // existed and needed no change here; that is the property under test.
+    it("rescues every doc attribute, not a named list", () => {
+      const json = JSON.stringify({
+        ...DOC,
+        attrs: { width: "full", textSize: "large", somethingAddedLater: "x" },
+      });
+      expect(readSeedDocAttrs(json)).toEqual({
+        width: "full",
+        textSize: "large",
+        somethingAddedLater: "x",
+      });
+    });
+
+    // Re-applying one is a setDocAttribute of a value the schema may reject.
+    it("skips non-string values rather than replaying them", () => {
+      const json = JSON.stringify({ ...DOC, attrs: { width: "wide", count: 3, on: true, none: null } });
+      expect(readSeedDocAttrs(json)).toEqual({ width: "wide" });
     });
   });
 
