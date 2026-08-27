@@ -9,6 +9,10 @@ import {
   parseSpec,
   serializeSpec,
   sortColumns,
+  listColumns,
+  LIST_COLUMNS,
+  META_PCT_MAX,
+  META_PCT_MIN,
   specFilterCount,
   specIsUnfiltered,
   MAX_FILTER_TAGS,
@@ -272,5 +276,79 @@ describe("deriveLabel", () => {
     spec.filter = { ...spec.filter, planIds: [3] };
     const plans = [{ id: 3, goal_id: null, title: "Thesis", status: "active", deadline: null, team_id: null }];
     expect(deriveLabel(spec, "table", plans, [])).toBe("Thesis");
+  });
+});
+
+describe("listColumns", () => {
+  const withCols = (cols: string[]) =>
+    parseSpec(JSON.stringify({ columns: cols }), "list");
+
+  it("keeps only what a list row can actually draw", () => {
+    const cols = listColumns(withCols(["title", "plan", "assignee", "urgency", "stage"]));
+    expect([...cols].sort()).toEqual(["assignee", "plan", "title"]);
+  });
+
+  // The spec is shared across views by design ("a configured list becomes a
+  // configured board without being rebuilt"), so a table-only column must
+  // survive being invisible in the list rather than be quietly dropped.
+  it("does not discard table-only columns from the spec itself", () => {
+    const spec = withCols(["title", "urgency"]);
+    expect(spec.columns).toContain("urgency");
+    expect(listColumns(spec).has("urgency" as never)).toBe(false);
+  });
+
+  it("never loses the title", () => {
+    // parseSpec puts `title` back even when asked not to.
+    expect(listColumns(withCols(["plan"])).has("title")).toBe(true);
+  });
+
+  it("offers nothing the list cannot draw", () => {
+    for (const c of LIST_COLUMNS) {
+      expect(listColumns(withCols([...LIST_COLUMNS])).has(c)).toBe(true);
+    }
+    expect(LIST_COLUMNS).not.toContain("urgency");
+    expect(LIST_COLUMNS).not.toContain("stage");
+  });
+});
+
+describe("spec.metaPct", () => {
+  const pct = (v: unknown) => parseSpec(JSON.stringify({ metaPct: v }), "list").metaPct;
+
+  it("defaults to 0 — auto width, the behaviour before the split existed", () => {
+    expect(defaultSpec("list").metaPct).toBe(0);
+    expect(parseSpec("{}", "list").metaPct).toBe(0);
+  });
+
+  it("keeps a value inside the band", () => {
+    expect(pct(30)).toBe(30);
+    expect(pct(META_PCT_MIN)).toBe(META_PCT_MIN);
+    expect(pct(META_PCT_MAX)).toBe(META_PCT_MAX);
+  });
+
+  // Neither side of the split may vanish: below the floor a drag becomes a
+  // delete, and the user cannot get the column back because there is nothing
+  // left to grab.
+  it("clamps rather than letting either side vanish", () => {
+    expect(pct(1)).toBe(META_PCT_MIN);
+    expect(pct(99)).toBe(META_PCT_MAX);
+  });
+
+  it("treats 0 and negatives as auto rather than as a tiny column", () => {
+    expect(pct(0)).toBe(0);
+    expect(pct(-20)).toBe(0);
+  });
+
+  it("falls back to auto on anything that is not a finite number", () => {
+    // A hand-edited document, or a paste from a build that stored something else.
+    expect(pct("40%")).toBe(0);
+    expect(pct(null)).toBe(0);
+    expect(pct(NaN)).toBe(0);
+    expect(pct(Infinity)).toBe(0);
+    expect(pct({})).toBe(0);
+  });
+
+  it("survives a serialize/parse round trip", () => {
+    const spec = { ...defaultSpec("list"), metaPct: 42 };
+    expect(parseSpec(serializeSpec(spec), "list").metaPct).toBe(42);
   });
 });

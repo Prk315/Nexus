@@ -33,6 +33,7 @@ import {
   MAX_FILTER_TAGS,
   PF_COLUMNS,
   PF_COLUMN_LABELS,
+  LIST_COLUMNS,
   SPEC_MAX_LIMIT,
   TREE_MODE_HINTS,
   TREE_MODE_LABELS,
@@ -347,8 +348,13 @@ export function PathfinderFilterBar({
           />
         ) : null}
 
-        {view === "table" ? (
+        {/* The list gets one too. It renders a narrower set — a list row is a
+            line of text with chips, not a grid, so `urgency` and `stage` have
+            nowhere to go — and offering a switch that does nothing is worse
+            than offering none. */}
+        {view === "table" || view === "list" ? (
           <ColumnPicker
+            choices={view === "list" ? LIST_COLUMNS : PF_COLUMNS}
             selected={spec.columns}
             onChange={(columns) => set({ columns })}
           />
@@ -691,8 +697,11 @@ function MultiSelect({
 }
 
 function ColumnPicker({
+  choices,
   selected, onChange,
 }: {
+  /** Which columns this view can actually draw — see LIST_COLUMNS. */
+  choices: PfColumn[];
   selected: PfColumn[];
   onChange: (v: PfColumn[]) => void;
 }) {
@@ -706,7 +715,7 @@ function ColumnPicker({
   return (
     <div className="pf-chips" role="group" aria-label="Columns">
       <span className="pf-chips-label">Columns</span>
-      {PF_COLUMNS.map((c) => (
+      {choices.map((c) => (
         <button
           key={c}
           type="button"

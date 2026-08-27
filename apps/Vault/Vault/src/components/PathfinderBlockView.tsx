@@ -598,6 +598,7 @@ export function PathfinderBlockView({ node, updateAttributes, editor, selected }
               tagColor={tagColor}
               tree={treeControls}
               onAdd={addTask}
+              onSpecChange={editable ? commitSpec : undefined}
             />
           ) : view === "board" ? (
             <PfBoardView

@@ -416,16 +416,94 @@
 .pf-list-row:last-of-type { border-bottom: none; }
 .pf-list-row:hover { background: var(--bg-subtle); }
 
-.pf-list-title { flex: 1 1 auto; min-width: 0; color: var(--fg-main); }
+/* ⚠️ The title has a FLOOR and the metadata does not.
+   It used to be the other way round — `.pf-list-title { min-width: 0 }` against
+   `.pf-meta { flex: none }` — which meant the chips took whatever they wanted
+   and the title absorbed the entire deficit. In a note-width column that
+   rendered "Living Room" as one letter per line while the same plan name and the
+   same "Unassigned" sat comfortably beside it on all 27 rows.
+   The title is the content. It yields last. */
+.pf-list-title {
+  flex: 1 1 auto;
+  min-width: 9ch;
+  color: var(--fg-main);
+  /* A single long unbroken word (a URL, a path) must break rather than force
+     the row wider than the note. */
+  overflow-wrap: anywhere;
+}
 .pf-list-row.is-done .pf-list-title { text-decoration: line-through; color: var(--fg-muted); }
 
 .pf-meta {
   display: flex;
   align-items: center;
   gap: 5px;
-  flex: none;
+  /* Shrinkable — this is the half of the fix that matters. */
+  flex: 0 1 auto;
+  min-width: 0;
   flex-wrap: wrap;
   justify-content: flex-end;
+}
+/* Chips ellipsise instead of pushing. `.pf-tag` already has overflow/ellipsis;
+   without `min-width: 0` a flex item refuses to shrink below its content and
+   the ellipsis never engages. */
+.pf-meta > * { min-width: 0; }
+.pf-meta .pf-tag { flex: 0 1 auto; }
+
+/* A dragged split turns the strip into a real column: fixed share of the row,
+   no wrapping, so every row lines up instead of each finding its own width. */
+.pf-list.has-split .pf-meta {
+  flex: 0 0 var(--pf-meta-pct);
+  flex-wrap: nowrap;
+  overflow: hidden;
+}
+
+/* ── The resize grip ─────────────────────────────────────────────────────── */
+
+.pf-list { position: relative; }
+
+.pf-meta-grip {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  /* Sits at the metadata strip's left edge. Without a split it parks at the
+     default share so there is still something to grab. */
+  right: var(--pf-meta-pct, 34%);
+  width: 9px;
+  margin-right: -4px;
+  cursor: col-resize;
+  z-index: 2;
+  opacity: 0;
+  transition: opacity var(--duration, 140ms) var(--ease, ease);
+  /* The visible line is a centred 1px rule; the 9px box is the hit target,
+     because a 1px target is not a target. */
+  background:
+    linear-gradient(var(--border-strong), var(--border-strong)) 50% 0 / 1px 100% no-repeat;
+  touch-action: none;
+}
+.pf-block:hover .pf-meta-grip { opacity: 0.6; }
+.pf-meta-grip:hover,
+.pf-meta-grip:focus-visible { opacity: 1 !important; }
+
+/* A coarse pointer has no hover, so the grip must be visible without one — and
+   that is exactly what makes a full-height one dangerous here. A permanently
+   visible 16px stripe running down the whole block would sit on top of every
+   row beneath it and swallow taps meant for tasks. On touch it becomes a short
+   handle at the TOP of the list instead: reachable, and over nothing.
+
+   With a mouse the full-height rule stays, because it is inert until the block
+   is hovered and it lands in the flex gap between the title and the chips. */
+@media (hover: none) {
+  .pf-meta-grip {
+    opacity: 0.5;
+    width: 22px;
+    margin-right: -11px;
+    bottom: auto;
+    height: 30px;
+    border-radius: 4px;
+    background:
+      linear-gradient(var(--border-strong), var(--border-strong)) 50% 50% / 2px 18px no-repeat,
+      var(--bg-muted);
+  }
 }
 
 .pf-add {

@@ -22,7 +22,7 @@
 // that tried to nest would either hide the steps or turn each column into a
 // second, worse outline.
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   groupTasks,
   memberName,
@@ -43,6 +43,9 @@ import {
   axisWriteField,
   boardColumns,
   PF_COLUMN_LABELS,
+  META_PCT_MAX,
+  META_PCT_MIN,
+  listColumns,
   type PfBlockSpec,
   type PfColumn,
 } from "../lib/pathfinderBlock";
@@ -416,15 +419,64 @@ function InlineAdd({
 // ─── List ───────────────────────────────────────────────────────────────────
 
 export function PfListView({
-  rows, spec, members, actions, today, editable, tagsOf, tagColor, tree, onAdd,
+  rows, spec, members, actions, today, editable, tagsOf, tagColor, tree, onAdd, onSpecChange,
 }: ViewCommon & {
   rows: TaskTreeRow[];
   tree: TreeControls;
   onAdd: (title: string) => void;
+  /** Commits the meta-strip width after a drag. Omitted when not editable. */
+  onSpecChange?: (next: PfBlockSpec) => void;
 }) {
   const [draft, setDraft] = useState("");
   /** Which row currently has an open "add a step" field. One at a time. */
   const [addingUnder, setAddingUnder] = useState<number | null>(null);
+  const cols = useMemo(() => listColumns(spec), [spec]);
+  const listRef = useRef<HTMLDivElement>(null);
+
+  // ── Dragging the title / metadata split ─────────────────────────────────
+  //
+  // The grip writes a CSS custom property straight to the DOM on every
+  // pointermove and commits ONE transaction on release. A transaction per move
+  // would be ~60 document rewrites a second, each waking the note's 400 ms
+  // autosave — the shape of the 2026-08-15 incident, and the same rule the
+  // column-resize plugin in extensions/structural follows.
+  const dragRef = useRef<{ pointerId: number } | null>(null);
+
+  const applyPct = useCallback((pct: number) => {
+    listRef.current?.style.setProperty("--pf-meta-pct", `${pct}%`);
+  }, []);
+
+  const pctFromEvent = useCallback((clientX: number): number => {
+    const el = listRef.current;
+    if (!el) return spec.metaPct || META_PCT_MIN;
+    const box = el.getBoundingClientRect();
+    if (box.width <= 0) return spec.metaPct || META_PCT_MIN;
+    // Measured from the RIGHT edge: the grip sits at the metadata strip's left
+    // boundary, so dragging left widens it.
+    const pct = ((box.right - clientX) / box.width) * 100;
+    return Math.min(META_PCT_MAX, Math.max(META_PCT_MIN, Math.round(pct)));
+  }, [spec.metaPct]);
+
+  const onGripDown = useCallback((e: React.PointerEvent) => {
+    if (!onSpecChange) return;
+    e.preventDefault();
+    e.stopPropagation();
+    (e.target as HTMLElement).setPointerCapture(e.pointerId);
+    dragRef.current = { pointerId: e.pointerId };
+    applyPct(pctFromEvent(e.clientX));
+  }, [onSpecChange, applyPct, pctFromEvent]);
+
+  const onGripMove = useCallback((e: React.PointerEvent) => {
+    if (!dragRef.current) return;
+    applyPct(pctFromEvent(e.clientX));
+  }, [applyPct, pctFromEvent]);
+
+  const onGripUp = useCallback((e: React.PointerEvent) => {
+    if (!dragRef.current) return;
+    dragRef.current = null;
+    try { (e.target as HTMLElement).releasePointerCapture(e.pointerId); } catch { /* already gone */ }
+    onSpecChange?.({ ...spec, metaPct: pctFromEvent(e.clientX) });
+  }, [onSpecChange, pctFromEvent, spec]);
 
   const submit = () => {
     const text = draft.trim();
@@ -434,7 +486,28 @@ export function PfListView({
   };
 
   return (
-    <div className="pf-list">
+    <div
+      className={`pf-list${spec.metaPct ? " has-split" : ""}`}
+      ref={listRef}
+      style={spec.metaPct ? ({ "--pf-meta-pct": `${spec.metaPct}%` } as React.CSSProperties) : undefined}
+    >
+      {/* One grip for the whole block, not one per row: the split is a property
+          of the list, and 27 identical handles would be 27 things to hit by
+          accident. Hidden until the block is hovered — see the CSS. */}
+      {onSpecChange && rows.length > 0 ? (
+        <div
+          className="pf-meta-grip"
+          role="separator"
+          aria-orientation="vertical"
+          aria-label="Drag to resize the metadata column"
+          title="Drag to resize · double-click to reset"
+          onPointerDown={onGripDown}
+          onPointerMove={onGripMove}
+          onPointerUp={onGripUp}
+          onPointerCancel={onGripUp}
+          onDoubleClick={() => onSpecChange({ ...spec, metaPct: 0 })}
+        />
+      ) : null}
       {rows.map((r) => {
         const t = r.task;
         const tags = tagsOf(t.id);
@@ -447,16 +520,18 @@ export function PfListView({
             >
               <Disclosure row={r} onToggle={tree.toggleCollapse} onExpandHidden={tree.expandHidden} />
 
-              <input
-                type="checkbox"
-                className="pf-check"
-                checked={t.done}
-                disabled={busy}
-                aria-label={t.done ? `Mark “${t.title}” not done` : `Mark “${t.title}” done`}
-                onChange={() => actions.toggle(t)}
-              />
+              {cols.has("done") ? (
+                <input
+                  type="checkbox"
+                  className="pf-check"
+                  checked={t.done}
+                  disabled={busy}
+                  aria-label={t.done ? `Mark “${t.title}” not done` : `Mark “${t.title}” done`}
+                  onChange={() => actions.toggle(t)}
+                />
+              ) : null}
 
-              <PriorityDot priority={t.priority} />
+              {cols.has("priority") ? <PriorityDot priority={t.priority} /> : null}
 
               <EditableText
                 value={t.title}
@@ -465,14 +540,20 @@ export function PfListView({
                 onCommit={(title) => actions.patch(t, { title })}
               />
 
+              {/* Every chip below is now opt-out. It used to render
+                  unconditionally, which is how a narrow note column showed the
+                  SAME plan name and the same "Unassigned" on all 27 rows while
+                  the titles were squeezed to one letter per line. The fix is not
+                  to guess which ones matter — it is to let the block say. */}
               <span className="pf-meta">
                 <SubtaskProgress stat={statFor(actions.stats, t.id)} />
                 {spec.showTags ? <TagChips tags={tags} tagColor={tagColor} /> : null}
-                {t.plan_title ? <span className="pf-tag">{t.plan_title}</span> : null}
-                <AssigneeChip task={t} members={members} />
-                {t.task_type !== "task" ? <span className="pf-tag pf-tag-kind">{TASK_TYPE_LABELS[t.task_type]}</span> : null}
-                {t.aggregate_estimate ? <span className="pf-tag pf-tag-est">{fmtEstimate(t.aggregate_estimate)}</span> : null}
-                <DueChip due={t.due_date} today={today} />
+                {cols.has("plan") && t.plan_title ? <span className="pf-tag">{t.plan_title}</span> : null}
+                {cols.has("goal") && t.goal_title ? <span className="pf-tag pf-tag-goal">{t.goal_title}</span> : null}
+                {cols.has("assignee") ? <AssigneeChip task={t} members={members} /> : null}
+                {cols.has("type") && t.task_type !== "task" ? <span className="pf-tag pf-tag-kind">{TASK_TYPE_LABELS[t.task_type]}</span> : null}
+                {cols.has("estimate") && t.aggregate_estimate ? <span className="pf-tag pf-tag-est">{fmtEstimate(t.aggregate_estimate)}</span> : null}
+                {cols.has("due") ? <DueChip due={t.due_date} today={today} /> : null}
               </span>
 
               <span className="pf-row-actions">

@@ -104,6 +104,34 @@ export const PF_COLUMN_LABELS: Record<PfColumn, string> = {
 /** `title` is not optional — a table whose rows have no label is not a table. */
 const REQUIRED_COLUMNS: PfColumn[] = ["title"];
 
+/**
+ * The columns the LIST view can actually draw.
+ *
+ * Narrower than PF_COLUMNS on purpose. `urgency` and `stage` have no place in a
+ * list row — it is a line of text with a few chips, not a grid — and offering a
+ * switch that does nothing is worse than not offering it: the user flips it,
+ * nothing happens, and now they distrust the whole panel.
+ *
+ * `tags` is absent for a different reason: the list already gates them on
+ * `showTags`, which predates this and has its own toggle in the filter bar. Two
+ * switches for one chip is how they end up disagreeing.
+ */
+export const LIST_COLUMNS: PfColumn[] = [
+  "done", "title", "plan", "goal", "assignee", "priority", "due", "estimate", "type",
+];
+
+/**
+ * Column visibility for the list, as a lookup.
+ *
+ * ⚠️ The list used to render every chip unconditionally, which is how a note
+ * column ended up showing "Housewarming Clean/Prep" and "Unassigned" on all 27
+ * rows while the task title itself was squeezed to one letter per line. The
+ * information was not wrong; there was just no way to say "not that one".
+ */
+export function listColumns(spec: PfBlockSpec): Set<PfColumn> {
+  return new Set(spec.columns.filter((c) => LIST_COLUMNS.includes(c)));
+}
+
 const DEFAULT_COLUMNS: PfColumn[] = ["done", "title", "plan", "priority", "due"];
 
 export interface PfBlockSpec {
@@ -141,7 +169,24 @@ export interface PfBlockSpec {
   untaggedOnly: boolean;
   /** Render each row's tags as chips. Off by default: a tagged list gets noisy fast. */
   showTags: boolean;
+
+  /**
+   * List only. How much of the row width the metadata strip may take, as a
+   * PERCENTAGE. 0 means "as much as it needs", the behaviour before this
+   * existed.
+   *
+   * A percentage rather than pixels, and that is not a detail: a Vault note is
+   * 720 px to full-bleed depending on `NoteDocument`'s per-note width, and the
+   * same note opens on an iPad. A width stored in pixels would be right on the
+   * screen it was dragged on and wrong on every other one — the same reasoning
+   * that puts sketch coordinates in a 1000-unit logical space.
+   */
+  metaPct: number;
 }
+
+/** Neither side of the split may vanish; below these a drag becomes a delete. */
+export const META_PCT_MIN = 12;
+export const META_PCT_MAX = 70;
 
 export const SPEC_MAX_LIMIT = 200;
 
@@ -178,6 +223,7 @@ export function defaultSpec(view: PfBlockView): PfBlockSpec {
     tagMode: "any",
     untaggedOnly: false,
     showTags: false,
+    metaPct: 0,
   };
 }
 
@@ -288,7 +334,19 @@ export function parseSpec(raw: string | null | undefined, view: PfBlockView): Pf
     tagMode: pick(obj.tagMode, TAG_MODES, base.tagMode),
     untaggedOnly: obj.untaggedOnly === true,
     showTags: obj.showTags === true,
+    metaPct: clampMetaPct(obj.metaPct),
   };
+}
+
+/**
+ * 0 (auto) or a value inside the band. Anything else — a hand-edited document, a
+ * paste from a future build, NaN — becomes auto rather than a wedged layout.
+ */
+function clampMetaPct(v: unknown): number {
+  if (typeof v !== "number" || !Number.isFinite(v)) return 0;
+  const n = Math.round(v);
+  if (n <= 0) return 0;
+  return Math.min(META_PCT_MAX, Math.max(META_PCT_MIN, n));
 }
 
 function clampLimit(v: unknown, fallback: number): number {
