@@ -25,6 +25,7 @@ export {
   type MailStatus,
 } from "./mail/types";
 export { createMailRulesApi, type MailRulesApi } from "./mail/rulesApi";
+export { createMailApi, type MailApi } from "./mail/api";
 export * from "./components/MailRulesDialog";
 export {
   createMailLoader,
@@ -33,6 +34,45 @@ export {
   type MailLoaderOptions,
   type MailSnapshot,
 } from "./mail/loader";
+export * from "./components/JobsPanel";
+// Narrow, like the mail block above: `jobs/score` also exports band floors,
+// comparators and the marker list, which are the panel's internals rather than
+// package API. Apps need the API factory, the row types and the two limits they
+// might want to reason about.
+export {
+  createJobsApi,
+  REVIEW_LIMIT,
+  MATCH_LIMIT,
+  SENT_LIMIT,
+  PROFILE_LIMIT,
+  ATTEMPT_LIMIT,
+  type JobsApi,
+  type JobsAttention,
+  type JobsSnapshot,
+  type JobProfilePatch,
+} from "./jobs/api";
+export {
+  JOB_APPLICATIONS_TABLE,
+  JOB_ATTEMPTS_TABLE,
+  JOB_MATCHES_TABLE,
+  JOB_MODULES_TABLE,
+  JOB_POSTINGS_TABLE,
+  JOB_PROFILES_TABLE,
+  RESPONSE_STATUS,
+  REVIEW_STATUS,
+  SENT_STATUSES,
+  type JobAppModule,
+  type JobApplication,
+  type JobApplicationItem,
+  type JobApplicationStatus,
+  type JobGateVerdict,
+  type JobMatch,
+  type JobMatchItem,
+  type JobPosting,
+  type JobProfile,
+  type JobProfileFull,
+  type JobSubmissionAttempt,
+} from "./jobs/types";
 export * from "./components/LifeBar";
 export * from "./components/AgentBar";
 export * from "./components/CalendarSidebar";

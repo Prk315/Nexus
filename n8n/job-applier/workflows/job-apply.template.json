@@ -1,0 +1,312 @@
+{
+  "id": "nexus-job-apply",
+  "name": "Job Apply — send approved applications",
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "saveManualExecutions": true
+  },
+  "tags": [],
+  "nodes": [
+    {
+      "id": "trigger",
+      "name": "Every 10 Minutes",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        -620,
+        300
+      ],
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "minutes",
+              "minutesInterval": 10
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "queue",
+      "name": "Fetch Apply Queue",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        -400,
+        300
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.NEXUS_SUPABASE_URL }}/functions/v1/job-ingest",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "X-Job-Key",
+              "value": "={{ $env.JOB_INGEST_KEY }}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={ \"action\": \"apply_queue\", \"user_id\": \"{{ $env.NEXUS_USER_ID }}\", \"limit\": 2 }",
+        "options": {
+          "timeout": 30000
+        }
+      }
+    },
+    {
+      "id": "split",
+      "name": "Split Apply Queue",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -180,
+        300
+      ],
+      "parameters": {
+        "jsCode": "// job-ingest answers with ONE item carrying the whole queue. Fan it out so each\n// application is its own item.\nconst res = $input.first().json;\nif (!res || res.ok !== true) {\n  throw new Error('job-ingest apply_queue failed: ' + JSON.stringify(res).slice(0, 300));\n}\nconst queue = res.queue || [];\nconst skipped = res.skipped || [];\n\n// skipped[] is the server saying it declined to queue something — a guard that\n// held, not an error here. Log it and move on. Acting on it from n8n would mean\n// re-deriving a decision the edge function already made, which is how two copies of\n// a rule start disagreeing (CLAUDE.md keeps the receipts: the stale Garmin bridge,\n// the duplicated BIA constants).\nfor (const s of skipped) {\n  console.log('apply_queue skipped ' + (s && s.application_id) + ': ' + (s && s.reason));\n}\n\n// Empty is the normal steady state: everything approved has already been sent.\nif (queue.length === 0) return [];\n\nreturn queue.map((q) => ({ json: q }));"
+      }
+    },
+    {
+      "id": "prepare",
+      "name": "Prepare Application",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        40,
+        300
+      ],
+      "parameters": {
+        "jsCode": "__NOTIFY_JS__\n\n// --- node body ---\n// The last checkpoint before an email leaves for a real company.\n//\n// Every row here has already been guard-checked server-side and flipped to\n// 'queued'. This node re-checks exactly ONE thing — the recipient — because that is\n// the only field whose failure is unrecoverable. An application sent to the wrong\n// address cannot be recalled, apologised for, or superseded.\n//\n// It transforms the body by nothing at all. No signature, no greeting, no footer,\n// no wrapping: the body is human prose assembled from human-written modules and the\n// closing module IS the sign-off. A second one reads as a bug to the person opening\n// it. If you ever find yourself adding a .replace() below, stop and re-read this.\nconst out = [];\nfor (const item of $input.all()) {\n  const app = item.json || {};\n  const posting = app.posting || {};\n\n  // The recipient is posting.apply_email and nothing else. Not the company domain,\n  // not a guessed info@, not a fallback to the notify inbox — an application\n  // arriving at the wrong company is worse than one that never arrives.\n  const to = validateRecipient(posting.apply_email);\n  const body = typeof app.body === 'string' ? app.body : '';\n\n  let error = null;\n  if (!to) {\n    error =\n      'refused to send: apply_email is missing or is not one plain address (' +\n      String(posting.apply_email).slice(0, 120) +\n      ')';\n  } else if (!body.trim()) {\n    error = 'refused to send: the stored application body is empty';\n  }\n\n  out.push({\n    json: {\n      application_id: app.application_id,\n      // A refusal is reported as a failed attempt rather than dropped. Dropping it\n      // would leave the row 'queued' forever and re-refuse it every 10 minutes in\n      // silence; a recorded failure is a thing a human can see and fix.\n      sendable: error === null,\n      error: error,\n      to: to || '',\n      subject: applySubject(app),\n      body: body,\n      company: (posting && posting.company) || null,\n      title: (posting && posting.title) || null,\n    },\n  });\n}\nreturn out;"
+      }
+    },
+    {
+      "id": "gate",
+      "name": "Sendable?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        280,
+        300
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "sendable",
+              "leftValue": "={{ $json.sendable }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "send",
+      "name": "Send Application",
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.1,
+      "position": [
+        520,
+        200
+      ],
+      "onError": "continueErrorOutput",
+      "parameters": {
+        "resource": "message",
+        "operation": "send",
+        "sendTo": "={{ $json.to }}",
+        "subject": "={{ $json.subject }}",
+        "emailType": "text",
+        "message": "={{ $json.body }}",
+        "options": {
+          "appendAttribution": false
+        }
+      },
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "GMAIL_CREDENTIAL_ID",
+          "name": "Gmail OAuth"
+        }
+      }
+    },
+    {
+      "id": "sent",
+      "name": "Build Sent Result",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        760,
+        140
+      ],
+      "parameters": {
+        "jsCode": "__NOTIFY_JS__\n\n// --- node body ---\n// Reached only from the Gmail node's SUCCESS output.\n//\n// Pairing is by pairedItem, not by position: the error output pulls failed sends\n// out of this stream, so output-0 index i stops being upstream index i as soon as\n// one fails — and here that offset would record \"sent\" against an application that\n// was not sent, to a company that never heard from you.\nconst prepared = $('Prepare Application').all();\n\nconst out = [];\nconst items = $input.all();\nfor (let i = 0; i < items.length; i++) {\n  const sent = items[i].json || {};\n  const src = prepared[pairedSourceIndex(items[i].pairedItem, i)];\n  const applicationId = src && src.json ? src.json.application_id : null;\n  if (!applicationId) continue;\n\n  out.push({\n    json: {\n      action: 'apply_result',\n      user_id: $env.NEXUS_USER_ID,\n      application_id: applicationId,\n      ok: true,\n      // The proof is the whole point of this row: a Gmail message id is the only\n      // durable evidence that an application actually left, and the thread id is\n      // what a reply from the company will arrive on.\n      proof: {\n        gmail_message_id: sent.id || sent.messageId || null,\n        thread_id: sent.threadId || null,\n      },\n    },\n  });\n}\nreturn out;"
+      }
+    },
+    {
+      "id": "failed",
+      "name": "Build Failure Result",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        760,
+        400
+      ],
+      "parameters": {
+        "jsCode": "__NOTIFY_JS__\n\n// --- node body ---\n// Two inputs land here and both mean the same thing: nothing was sent.\n//\n//   1. \"Sendable?\" false — this node refused the row (bad recipient, empty body).\n//   2. the Gmail node's error output — Gmail refused it.\n//\n// n8n runs this node once per incoming branch, so each set is reported on its own.\n// Either way the row is finalized as a failed attempt rather than left 'queued',\n// because a row that silently re-fails every 10 minutes is indistinguishable from\n// one that is working.\nconst prepared = $('Prepare Application').all();\n\nconst out = [];\nconst items = $input.all();\nfor (let i = 0; i < items.length; i++) {\n  const j = items[i].json || {};\n  const src = prepared[pairedSourceIndex(items[i].pairedItem, i)];\n  const meta = (src && src.json) || {};\n  const applicationId = meta.application_id || j.application_id || null;\n  if (!applicationId) continue;\n\n  const raw = j.error || meta.error || 'send failed with no error attached';\n  const message = typeof raw === 'string' ? raw : raw.message || JSON.stringify(raw);\n\n  out.push({\n    json: {\n      action: 'apply_result',\n      user_id: $env.NEXUS_USER_ID,\n      application_id: applicationId,\n      ok: false,\n      error: String(message).slice(0, 500),\n    },\n  });\n}\nreturn out;"
+      }
+    },
+    {
+      "id": "post",
+      "name": "Post Apply Result",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1000,
+        270
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.NEXUS_SUPABASE_URL }}/functions/v1/job-ingest",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "X-Job-Key",
+              "value": "={{ $env.JOB_INGEST_KEY }}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json) }}",
+        "options": {
+          "batching": {
+            "batch": {
+              "batchSize": 1,
+              "batchInterval": 200
+            }
+          }
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Every 10 Minutes": {
+      "main": [
+        [
+          {
+            "node": "Fetch Apply Queue",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch Apply Queue": {
+      "main": [
+        [
+          {
+            "node": "Split Apply Queue",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Split Apply Queue": {
+      "main": [
+        [
+          {
+            "node": "Prepare Application",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare Application": {
+      "main": [
+        [
+          {
+            "node": "Sendable?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Sendable?": {
+      "main": [
+        [
+          {
+            "node": "Send Application",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Build Failure Result",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send Application": {
+      "main": [
+        [
+          {
+            "node": "Build Sent Result",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Build Failure Result",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Sent Result": {
+      "main": [
+        [
+          {
+            "node": "Post Apply Result",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Failure Result": {
+      "main": [
+        [
+          {
+            "node": "Post Apply Result",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  }
+}

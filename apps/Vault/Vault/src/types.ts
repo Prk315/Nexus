@@ -17,6 +17,14 @@ export interface VaultNode {
   name: string;
   kind: NodeKind;
   tags: string[];
+  // Set when this node (or an ancestor folder) was shared — see
+  // shareNode/unshareNode in lib/api.ts. null/undefined = not shared.
+  team_id?: string | null;
+  // Owner's auth uid. Needed to tell "shared BY me" (stays in my own tree)
+  // apart from "shared WITH me" (needs its own sidebar section — see App.tsx
+  // topLevelNodes/sharedRootNodes) since a node shared with me can arrive
+  // with no visible back-edges at all when its real parent isn't shared.
+  user_id: string;
 }
 
 export interface VaultGraph {

@@ -27,6 +27,7 @@ import { BlockHandle } from "./structural/BlockHandle";
 import { NoteDocument } from "./noteDocument";
 import { FoldableHeading } from "./headingFold";
 import { SketchBlock } from "./SketchBlock";
+import { PathfinderBlock } from "./PathfinderBlock";
 import { NoteImage } from "./noteImage";
 import { NoteCodeBlock } from "./noteCodeBlock";
 import TextAlign from "@tiptap/extension-text-align";
@@ -39,10 +40,31 @@ export interface NoteExtensionOpts {
   /** Slash commands and any other pure-behaviour extension. */
   extra?: Extensions;
   placeholder?: string;
+  /**
+   * Collaboration + CollaborationCaret, supplied by the lazily-loaded collab
+   * runtime (src/collab/collabRuntime.ts) for a shared note.
+   *
+   * Passing these ALSO turns StarterKit's undoRedo off, and the fusion is
+   * deliberate: they are one decision, not two. Collaboration ships its own
+   * Y.UndoManager — a shared undo stack is the only correct kind when two
+   * people are typing, since a plain history would let you undo the other
+   * person's sentence — and it warns at runtime if undoRedo is still
+   * registered. Making them one option means no call site can turn on
+   * collaboration and forget the other half.
+   *
+   * Schema-neutral, which is what lets noteSchemaGuard keep working:
+   * Collaboration contributes ySyncPlugin/yUndoPlugin/filterInvalidContent,
+   * CollaborationCaret contributes yCursorPlugin and an awareness listener, and
+   * UndoRedo contributes a plugin — no nodes, no marks, in any of them. So
+   * noteSchema() below, built with NO options, stays byte-identical to the
+   * schema a collaborative editor actually runs. There is a test pinning that;
+   * it is not a claim to take on trust.
+   */
+  collab?: Extensions;
 }
 
 export function buildNoteExtensions(opts: NoteExtensionOpts = {}): Extensions {
-  const { onMathClick, extra = [], placeholder = "Write here… (type / for commands)" } = opts;
+  const { onMathClick, extra = [], placeholder = "Write here… (type / for commands)", collab } = opts;
 
   return [
     NoteDocument,
@@ -63,6 +85,12 @@ export function buildNoteExtensions(opts: NoteExtensionOpts = {}): Extensions {
       // Replaced below by the lowlight version. Leaving StarterKit's plain
       // codeBlock registered too would be a duplicate node name.
       codeBlock: false,
+      // Collaboration brings its own Y.UndoManager and its own Mod-z keymap at
+      // priority 1000. Leaving this one registered gives two undo stacks
+      // competing for the same shortcut — and the local one would happily undo
+      // the other person's edits. Plugin-only on both sides, so the schema is
+      // untouched either way.
+      ...(collab ? { undoRedo: false as const } : {}),
     }),
     // Four levels, matching what the outline renders. `levels` IS a schema
     // option, so it must stay identical to whatever noteSchema() derives — see
@@ -73,6 +101,10 @@ export function buildNoteExtensions(opts: NoteExtensionOpts = {}): Extensions {
     // vault_content row — see SketchBlock.ts for why, and for the size cap
     // that keeps a sketch from taking the note's text down with it.
     SketchBlock,
+    // A live query onto PathFinder's tasks. ONE node type carrying a `view`
+    // attribute, not three — see PathfinderBlock.ts for why the three blocks the
+    // slash menu offers must not be three node types.
+    PathfinderBlock,
     // Storage URLs only — see noteImage.ts for the incident this prevents.
     NoteImage,
     TextAlign.configure({ types: ["heading", "paragraph"] }),
@@ -113,6 +145,8 @@ export function buildNoteExtensions(opts: NoteExtensionOpts = {}): Extensions {
     TableHeader,
     TableCell,
     ...extra,
+    // Last, so ySync's plugins sit outermost. Empty for every private note.
+    ...(collab ?? []),
   ];
 }
 

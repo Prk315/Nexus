@@ -1028,6 +1028,167 @@ root, hence the setup file). The HTML round-trip cases are the highest-value
 ones: a `renderHTML`/`parseHTML` mismatch is invisible to `tsc`, survives every
 manual click-through, and only shows up as content quietly vanishing on paste.
 
+## Vault: sharing, and live co-editing
+
+A node carries `team_id` (→ `pf_teams`, the same seeded two-person team
+PathFinder's Team tab uses) and additive `team_shared_*` RLS sits alongside each
+`vault_*` table's `owner_all`. Sharing a **folder** is the same operation applied
+to its whole reachable subtree — a folder is just a node with children, so
+`shareNode` walks `graph.edges` and there is nothing folder-specific in it.
+`addEdge` propagates `team_id` from parent to child, or a node dropped into a
+shared folder would be invisible to the other person: `team_id` is what RLS
+checks, not the edge.
+
+**DELETE is governed only by USING, never WITH CHECK.** That is why "a teammate
+may edit but not delete" is spelled as separate FOR SELECT/INSERT/UPDATE
+policies, and why no `vault_*` table has a team DELETE policy. And
+`vault_content` / `vault_journals` policies must strip suffix keys with
+`split_part(node_id, '_', 1)`, because `<id>_hl` / `_annot` / `_textannot` /
+`_bookmarks` / `_margins` share those tables — getting that wrong makes a shared
+PDF's annotations invisible to the teammate, as an empty set rather than an
+error.
+
+### Live co-editing is Notes only, shared only, and behind a flag
+
+`VITE_VAULT_COLLAB=1` turns on a Yjs CRDT for shared **Tiptap notes**. Everything
+else — Canvas, PDF ink, Journal, Workbook, Bookshelf, and every private note —
+keeps the sync-on-save path, where `assertContentNotConflicted` compares
+`updated_at` and raises a conflict the user resolves with the Reload button.
+
+```
+vault_ydoc.state   ← base64 Y.encodeStateAsUpdate. THE TRUTH while co-editing.
+vault_content.data ← JSON projection. What noteSchemaGuard audits, PDF export
+                     and WorkbookEditor read, and an old client still sees.
+```
+
+Sync is a **private Supabase Realtime broadcast channel** per note
+(`vault:doc:<nodeId>`) — no collaboration server, so nothing hangs on the Mac
+being awake. Awareness (the carets) rides the same channel under its own event
+rather than using Supabase Presence, which has a 5× smaller quota and would need
+its own RLS branch; y-protocols already expires a stale caret after 30 s.
+
+**Five traps, all of which are silent:**
+
+- **RLS on `realtime.messages` does NOT make a channel private.** Broadcast
+  routes by topic and `private` is a per-client *join flag*, so a client that
+  omits it never has the policies evaluated and receives every delta. The anon
+  key is committed and this repo is public. The actual enforcement is a
+  project-wide dashboard setting — Realtime → Settings → **Allow public access
+  off** — and it is not expressible in a migration. See `APPLY.md` §9.
+- **Two clients seeding a Y.Doc from the same JSON duplicates the note.**
+  `prosemirrorJSONToYDoc` mints *new* operations each call, so two "identical"
+  seeds merge into two copies. Hence the election in `collab/seed.ts`: upsert
+  with `ignoreDuplicates`, then re-read **unconditionally** — winner and loser
+  take the same path, so there is no rarely-taken branch to rot. A client with
+  empty content never enters the election. `seed.test.ts` asserts the *bug* on
+  purpose; if that test ever goes green, read the header before touching
+  anything.
+- **Yjs drops doc-level attributes.** ySync rebuilds the root as
+  `topNodeType.create(null, …)`, so `NoteDocument`'s per-note `width` resets on
+  open. Which means the projection must come from `editor.getJSON()` — never
+  `yDocToProsemirrorJSON`, which would write the default back and lose the
+  layout for good. NoteEditor re-applies the seed width after first render.
+- **An editor cannot gain Collaboration after mount.** `useEditor` builds its
+  extension list once, so EditorPane renders a placeholder until the session
+  resolves, and keys the editor on whether there is one. Mounting early gives a
+  non-collab editor on a co-edited note that happily saves over the other person.
+- **The fragment name is `"default"`.** `Collaboration`'s `field` defaults to
+  `"default"` but `prosemirrorJSONToYDoc`'s third argument defaults to
+  `"prosemirror"`. Mixing them raises nothing — the note just opens blank, and
+  the first keystroke's projection erases it.
+
+`saveContentProjection` is a **separate exported function**, not a flag on
+`saveContent`: a boolean is the kind of thing a refactor drops, and dropping it
+would disable the conflict guard for every private note with no symptom until two
+devices quietly overwrite each other. `forgetContentVersion` is its necessary
+other half — a note unshared mid-session otherwise inherits a stale timestamp and
+shows a permanent, unclearable conflict.
+
+An out-of-date client is a real data-loss vector (it reads a healthy-looking
+projection, edits, and saves the whole document over the CRDT), so `saveContent`
+throws `CollabOnlyError` for any note that has a `vault_ydoc` row. Ship that
+guard a release **before** the writer, iOS first — the iPad installs over a cable
+on ~7-day certs and is the client most likely to be stale. Enable the writer in
+the reverse order, web first, because web rolls back fastest.
+
+**Yjs state grows forever** and there is no safe automatic compaction: rebuilding
+a document mints fresh client ids and re-collides with any live peer, i.e. it
+reintroduces the duplication bug as a scheduled job. Recovery is manual and is
+what `owner_all`'s DELETE exists for — with nobody editing, the owner deletes the
+`vault_ydoc` row and the next open re-seeds from the projection.
+
+Bundle discipline: the entire stack sits behind one dynamic import
+(`collab/loadCollab.ts`), and everything outside `src/collab/` uses `import type`
+only — a single value import of `isChangeOrigin` would pull ~126 kB into the
+eager note bundle for every private-note user and onto the iPad, which is why
+`CollabSession` carries `isRemoteTransaction` as a function instead. `yjs` **must**
+stay in `resolve.dedupe`: two copies make Yjs's internal `instanceof` checks fail
+and `applyUpdate` silently no-ops, so the session looks connected and simply
+never converges. (The `BlockHandle.ts` comment about "an app with no
+collaboration" is now out of date, but its conclusion still holds — the stack is
+lazy, and `@tiptap/extension-drag-handle` would import it eagerly.)
+## Vault: PathFinder task blocks
+
+The slash menu offers **three** blocks — *Task list*, *Task board*, *Task table* —
+that read and write PathFinder's `pf_tasks` live, from inside a note. They are
+**one** ProseMirror node type, `pathfinderBlock`, carrying a `view` attribute.
+
+That is the data-loss rule, not tidiness. An unknown **node type** does not
+degrade: `createNodeFromContent` catches ProseMirror's throw, returns an EMPTY
+document, and the 400 ms autosave writes that blank over the note. An unknown
+**attribute** is dropped in silence, because `Node.fromJSON` iterates the
+*type's* declared attributes and never looks for extras. Three node types would
+be three deploy-everywhere gates and three chances to blank a note; one means a
+fourth view (timeline, gallery) later costs nothing, and switching an existing
+block between views is a one-attribute edit. It is still a new node type — deploy
+web, Mac and iPad (`npm run ios:vault`) before creating a note containing one.
+
+**The data layer is `packages/nexus-core/src/pathfinder/`, reached through the
+`@nexus/core/pathfinder` deep alias** (not the barrel — that pulls in three.js).
+It exists because three hand-written copies of the `pf_tasks` read already
+existed when it was added, and the newest of them
+(`apps/NexusLocal/src/lib/pathfinder/api.ts`) had already dropped the
+`pf_task_planning` embed, so every task it renders reads as default urgency and
+stage. Three invariants live in application code, not the database, and each
+fails silently when another app writes the tables directly:
+
+- **`stage = 'active'` is gated on scheduled calendar minutes.** Only `setStage`
+  enforces it. A card dragged to "active" with a raw UPDATE defeats the one rule
+  the lifecycle exists for. The board surfaces the refusal instead of swallowing it.
+- **A flat patch must be SPLIT across relations** — `urgency`/`stage` live on
+  `pf_task_planning`; writing them onto `pf_tasks` does not error, it just does
+  nothing.
+- **`task_type` is generated and `aggregate_estimate` is trigger-maintained.**
+
+**Team-shared tasks work**, and needed explicit support: every read is broadened
+with the same `user_id.eq.…,team_id.in.(…)` `.or()` fragment PathFinder's
+`getTeamOrFilter` uses, or a task a teammate shared is simply absent —
+indistinguishable from not existing. `isTaskRelevantToMe` is copied verbatim
+from PathFinder's `lib/team.ts`: unclaimed (`null`) and everyone-assigned
+(`"all"`) team work is *mine*, and only a concrete other uid narrows it. If that
+rule drifts, a Vault block and PathFinder's dashboard disagree about whose work
+something is. Boards can group by assignee and reassign by drag; the
+`__unassigned__` column maps to `null`, never to its own key.
+
+Two rules the node view must keep:
+
+- **Data never touches the document.** Refetches, checkboxes and card drags
+  dispatch no transaction; only a CONFIG change calls `updateAttributes`.
+  Otherwise every poll wakes the note's autosave — the 2026-08-15 incident's shape.
+- **The NODE may only import something that imports nothing heavier than React
+  and Tiptap.** `extensions/PathfinderBlock.ts` points at
+  `components/PathfinderBlockLazy.tsx`, which dynamic-imports the real view.
+  Importing it directly would drag `lib/supabase.ts` (a module-scope
+  `createClient`) into the schema graph, so `noteSchemaGuard` — whose job is to
+  run when things are broken — would need a configured network client.
+
+One shared store (`lib/pathfinderStore.ts`) backs every block in the app, so N
+blocks in a note make one round trip and a tick in the list moves the card on the
+board above it. `signedOut`, `loading` and `error` are states distinct from
+"ready with zero rows": `pf_tasks` is `auth.uid()`-scoped, so a session-less read
+returns an **empty set, not an error**, and rendering that as "All done ✓" is the
+same lie as an "Inbox zero" panel that has never run.
+
 ## Scheduled server-side work (pg_cron)
 
 Four jobs run in the database, and this is the pattern for anything that must happen

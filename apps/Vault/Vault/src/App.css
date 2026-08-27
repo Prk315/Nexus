@@ -980,6 +980,14 @@ body {
   padding: 4px 0;
 }
 
+.node-list-section-header {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--fg-ghost);
+  padding: 8px 10px 2px;
+}
+
 .tree-item {
   display: flex;
   align-items: center;
@@ -1127,6 +1135,23 @@ body {
 .tree-item.active .fav-btn { visibility: visible; }
 .fav-btn.fav-active { visibility: visible; color: #f59e0b; }
 .fav-btn:hover { color: #f59e0b; }
+
+.share-btn {
+  background: none;
+  border: none;
+  color: var(--fg-ghost);
+  cursor: pointer;
+  font-size: 12px;
+  padding: 0 4px;
+  line-height: 1;
+  visibility: hidden;
+  box-shadow: none;
+  transition: color var(--duration) var(--ease);
+}
+.tree-item:hover .share-btn,
+.tree-item.active .share-btn { visibility: visible; }
+.share-btn.share-active { visibility: visible; color: #38bdf8; }
+.share-btn:hover { color: #38bdf8; }
 
 .unlink-btn {
   background: none;
@@ -1528,6 +1553,18 @@ body {
 .tiptap-editor .ProseMirror h1 { font-size: 1.7em; }
 .tiptap-editor .ProseMirror h2 { font-size: 1.3em; }
 .tiptap-editor .ProseMirror h3 { font-size: 1.1em; }
+
+/* "Title" is a level-1 heading with the `title` attribute set (headingFold.ts)
+   rather than a fifth level, so it folds and outlines like any other heading —
+   only the type ramp and typeface differ. Reuses the serif stack ParsedViewer
+   already uses for book content, rather than inventing a second display font. */
+.tiptap-editor .ProseMirror h1[data-title="true"] {
+  font-family: "Iowan Old Style", "Palatino Linotype", Palatino, Georgia, serif;
+  font-size: 2.4em;
+  font-weight: 700;
+  letter-spacing: -0.015em;
+  margin-top: 0.2em;
+}
 /* h4 is styled because the outline handles four levels; with no rule it falls
    to the browser default and renders SMALLER than body text. */
 .tiptap-editor .ProseMirror h4 {
@@ -3283,6 +3320,20 @@ body {
   --callout-bg: var(--destructive-bg);
 }
 
+/* A chosen card colour overrides whatever the variant/style picked. Only
+   present when `color` is set to something other than "default" — Callout.ts
+   and Container.ts render no `data-color` at all otherwise, so this never
+   fires and never has to special-case "default" itself. */
+.tiptap-editor .ProseMirror .callout[data-color] {
+  --callout-accent: var(--card-accent);
+  --callout-bg: var(--card-tint);
+}
+
+.tiptap-editor .ProseMirror .container-block[data-color] {
+  background: var(--card-tint);
+  border-color: var(--card-accent);
+}
+
 /* Containers group; they don't mean anything. Deliberately quieter than
    callouts so the two never compete for the same job. */
 .tiptap-editor .ProseMirror .container-block {
@@ -3932,6 +3983,25 @@ body.vault-block-dragging,
 body.vault-block-dragging * {
   cursor: grabbing !important;
   user-select: none !important;
+}
+
+/* Applied to the block itself the instant its handle is pressed — before the
+   drag threshold even fires — so the mute is confirmation the press
+   registered, not a signal that a move already happened. */
+.tiptap-editor .ProseMirror .is-grabbed {
+  opacity: 0.55;
+  transition: opacity 100ms ease;
+}
+
+/* Cmd+Shift-click toggles a block into this set. A different hue from
+   .ProseMirror-selectednode's outline (--edge-in) on purpose — the two mean
+   different things and a Cmd+Shift multi-selection should never read as an
+   ordinary single NodeSelection. */
+.tiptap-editor .ProseMirror .block-multi-selected {
+  outline: 2px solid var(--edge-out);
+  outline-offset: 2px;
+  border-radius: calc(var(--radius) * 0.6);
+  background: color-mix(in oklab, var(--edge-out) 6%, transparent);
 }
 
 /* No formatting UI while a block is in flight — it covers the very drop target
@@ -8142,3 +8212,85 @@ body.vault-block-dragging .tt-bubble {
 
 .confirm-btn-danger:hover { filter: brightness(1.06); }
 .confirm-btn-danger:focus-visible { outline: 2px solid var(--destructive); outline-offset: 2px; }
+
+/* ── Live co-editing: remote carets and selections ─────────────────────────── */
+/* Two different class conventions in one extension, which is easy to miss and
+   leaves half the feature unstyled. CollaborationCaret's default `render`
+   emits .collaboration-carets__caret / __label, while its default
+   `selectionRender` comes from y-tiptap's defaultSelectionBuilder and emits
+   .ProseMirror-yjs-selection. Both are needed.
+
+   Only the colour is set inline, from the user object in awareness — every
+   other property belongs here. Note the extension validates that colour
+   against /^#[0-9a-fA-F]{6}$/ and silently substitutes orange otherwise, which
+   is why @nexus/core/members stores 6-digit hex and not CSS variables. */
+
+.collaboration-carets__caret {
+  position: relative;
+  /* Zero-width so the caret sits between characters instead of displacing
+     them — a remote caret must never reflow the text you are typing. */
+  margin-left: -1px;
+  margin-right: -1px;
+  border-left: 1px solid;
+  border-right: 1px solid;
+  border-color: inherit;
+  word-break: normal;
+  pointer-events: none;
+}
+
+.collaboration-carets__label {
+  position: absolute;
+  top: -1.35em;
+  left: -1px;
+  /* Above the editor's own chrome, below dialogs. */
+  z-index: 20;
+  padding: 1px 5px;
+  border-radius: 3px 3px 3px 0;
+  font-size: 11px;
+  font-style: normal;
+  font-weight: 600;
+  line-height: normal;
+  white-space: nowrap;
+  /* The label sits ON the user's colour, a mid-tone in both themes, so the
+     foreground is pinned light rather than inherited — inherited goes dark in
+     light mode and becomes unreadable on its own background. */
+  color: #fff;
+  user-select: none;
+  -webkit-user-select: none;
+  pointer-events: none;
+}
+
+.ProseMirror-yjs-selection {
+  /* background-color is inline: the user's colour with a "70" alpha suffix.
+     Only the stacking belongs here, so the highlight stays behind the glyphs
+     rather than washing them out. */
+  mix-blend-mode: multiply;
+}
+
+@media (prefers-color-scheme: dark) {
+  /* multiply on a dark background turns the selection into a black smear. */
+  .ProseMirror-yjs-selection { mix-blend-mode: screen; }
+}
+
+/* Connection state for a co-edited note, next to the save status. */
+.collab-status {
+  font-size: 11px;
+  color: var(--fg-ghost);
+  align-self: center;
+  letter-spacing: 0.01em;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+/* The way out of a save conflict. Styled as a link rather than a button so it
+   reads as part of the status sentence it lives inside. */
+.save-status-action {
+  background: none;
+  border: none;
+  padding: 0;
+  font: inherit;
+  color: inherit;
+  text-decoration: underline;
+  cursor: pointer;
+  box-shadow: none;
+}

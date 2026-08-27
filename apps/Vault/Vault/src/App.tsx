@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef, useMemo, Suspense } from "react";
-import { useNexusRegistration, NexusHeader, useNexusAuth, CalendarSidebar, createMailLoader, createMailRulesApi } from "@nexus/core";
+import { useNexusRegistration, NexusHeader, useNexusAuth, CalendarSidebar, createMailLoader, createMailRulesApi, createMailApi, createJobsApi } from "@nexus/core";
 import * as api from "./lib/api";
 import { supabase } from "./lib/supabase";
 import { loadPathfinderDay, entryToEvent, toIsoDate, type PfCalEntry } from "./lib/pathfinderCalendar";
@@ -14,6 +14,7 @@ import { GraphFilterPanel, GraphFilters, DEFAULT_GRAPH_FILTERS } from "./compone
 import { TagsPanel } from "./components/TagsPanel";
 import { EditorPane, EditorPaneHandle } from "./components/EditorPane";
 import { useConfirm } from "./components/ConfirmDialog";
+import { otherMemberName } from "./lib/teamMembers";
 import { lazyWithReload } from "./lib/lazyLoad";
 import "./App.css";
 
@@ -30,6 +31,10 @@ const LearnMode = lazyWithReload(() => import("./learn/LearnMode").then(m => ({ 
 // Authenticated client, module scope — see packages/nexus-core/src/mail/loader.ts.
 const loadMail = createMailLoader(supabase);
 const mailRulesApi = createMailRulesApi(supabase);
+const mailApi = createMailApi(supabase);
+// Same client, same reason — the five `job_*` tables are owner-only with no
+// anon policy, so this must be the authenticated one.
+const jobsApi = createJobsApi(supabase);
 
 // Some WebViews / browsers (hardware accel off, sandboxed GPU) can't create a
 // WebGL context. ForceGraph3D throws synchronously in that case and white-screens
@@ -49,7 +54,7 @@ function detectWebGL(): boolean {
 function App() {
   useNexusRegistration("Vault");
   const { user, signOut } = useNexusAuth();
-  const { graph, graphData, savePositions, loadGraph, createNode, deleteNode, addEdge, removeEdge, addTag, removeTag, setTagColor, createTag, renameTag, deleteTagGlobal } = useGraph();
+  const { graph, graphData, savePositions, loadGraph, createNode, deleteNode, addEdge, removeEdge, addTag, removeTag, setTagColor, createTag, renameTag, deleteTagGlobal, shareNode, unshareNode } = useGraph();
 
   const { confirm, dialog: confirmDialog } = useConfirm();
 
@@ -368,6 +373,38 @@ function App() {
     return true;
   }
 
+  async function handleToggleShare(id: string, isShared: boolean) {
+    const node = graph.nodes[id];
+    if (!node) return;
+    const withName = user ? otherMemberName(user.id) : "your team";
+    const childCount = (graph.edges[id] ?? []).length;
+
+    if (isShared) {
+      const ok = await confirm({
+        title: `Unshare "${node.name}"?`,
+        details: [
+          `${withName} will no longer be able to see or edit this note.`,
+          ...(childCount ? [`${childCount} node${childCount === 1 ? "" : "s"} inside it will be unshared too.`] : []),
+        ],
+        confirmLabel: "Unshare",
+      });
+      if (!ok) return;
+      await unshareNode(id);
+      return;
+    }
+
+    const ok = await confirm({
+      title: `Share "${node.name}" with ${withName}?`,
+      details: [
+        `${withName} will be able to see and edit this note.`,
+        ...(childCount ? [`${childCount} node${childCount === 1 ? "" : "s"} inside it will be shared too.`] : []),
+      ],
+      confirmLabel: "Share",
+    });
+    if (!ok) return;
+    await shareNode(id);
+  }
+
   async function handleDeleteTagGlobal(tag: string) {
     const used = Object.values(graph.nodes).filter(n => n.tags.includes(tag)).length;
     const ok = await confirm({
@@ -402,7 +439,16 @@ function App() {
   }
 
   const nodeList = Object.values(graph.nodes).sort((a, b) => a.name.localeCompare(b.name));
-  const topLevelNodes = nodeList.filter(n => (graph.back_edges[n.id] ?? []).length === 0);
+  // A node shared directly with me (not by me) can arrive with NO visible
+  // back-edges at all: team_shared_select on vault_edges follows the FROM
+  // node's team, so an edge from an unshared parent into a shared child is
+  // invisible to me even though the child itself is. Lumping that child into
+  // my own top-level list would make it indistinguishable from something I
+  // actually created at the root — split it into its own section instead.
+  const isRoot = (n: typeof nodeList[number]) => (graph.back_edges[n.id] ?? []).length === 0;
+  const isSharedWithMe = (n: typeof nodeList[number]) => n.team_id != null && n.user_id !== user?.id;
+  const topLevelNodes = nodeList.filter(n => isRoot(n) && !isSharedWithMe(n));
+  const sharedRootNodes = nodeList.filter(n => isRoot(n) && isSharedWithMe(n));
   const searchResults = searchQuery.trim()
     ? nodeList.filter(n => n.name.toLowerCase().includes(searchQuery.toLowerCase()))
     : nodeList;
@@ -459,6 +505,11 @@ function App() {
         // loader so the button falls back rather than claiming "no mail".
         loadMail={user ? loadMail : undefined}
             mailRulesApi={user ? mailRulesApi : undefined}
+            mailApi={user ? mailApi : undefined}
+        // Withheld when signed out for the same reason, with one difference: the
+        // Jobs button still renders and says "sign in", having no legacy
+        // plain-button fallback to degrade to.
+        jobsApi={user ? jobsApi : undefined}
         center={
           <div className="app-mode-toggle">
             <button className={appMode === "vault" ? "active" : ""} onClick={() => setAppMode("vault")}>Vault</button>
@@ -670,9 +721,34 @@ function App() {
                   onCreateChild={handleCreateChild}
                   onUnlink={async (parentId, childId) => removeEdge(parentId, childId)}
                   onToggleFavorite={(id, isFav) => isFav ? removeTag(id, "favorite") : addTag(id, "favorite")}
+                  onToggleShare={handleToggleShare}
                 />
               ))}
             </ul>
+            {sharedRootNodes.length > 0 && (
+              <>
+                <div className="node-list-section-header">Shared with you</div>
+                <ul className="node-list">
+                  {sharedRootNodes.map(node => (
+                    <TreeRow
+                      key={node.id}
+                      nodeId={node.id}
+                      graph={graph}
+                      selectedId={selectedId}
+                      expanded={expandedNodes}
+                      depth={0}
+                      onSelect={selectNode}
+                      onDelete={handleDeleteNode}
+                      onToggle={toggleExpanded}
+                      onCreateChild={handleCreateChild}
+                      onUnlink={async (parentId, childId) => removeEdge(parentId, childId)}
+                      onToggleFavorite={(id, isFav) => isFav ? removeTag(id, "favorite") : addTag(id, "favorite")}
+                      onToggleShare={handleToggleShare}
+                    />
+                  ))}
+                </ul>
+              </>
+            )}
           </>
         ) : sidebarView === "tags" ? (
           <TagsPanel

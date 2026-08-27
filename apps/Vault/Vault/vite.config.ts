@@ -12,13 +12,29 @@ export default defineConfig(async () => ({
   resolve: {
     alias: {
       "@": path.resolve(__dirname, "./src"),
+      // Deep aliases, deliberately listed BEFORE the barrel so they win the
+      // prefix match. Vite matches alias keys in order, so the bare
+      // "@nexus/core" entry below would otherwise swallow both of these and
+      // resolve them to the barrel — which re-exports AppGraph3D and therefore
+      // three.js, and neither a note-editor block nor a two-entry member map
+      // has any business pulling that into its chunk. Same reason
+      // `@nexus/core/coverage` exists in PathFinder and NexusLocal.
+      "@nexus/core/pathfinder": path.resolve(__dirname, "../../../packages/nexus-core/src/pathfinder/index.ts"),
+      "@nexus/core/members": path.resolve(__dirname, "../../../packages/nexus-core/src/members.ts"),
       "@nexus/core": path.resolve(__dirname, "../../../packages/nexus-core/src/index.ts"),
     },
     // Force a single `three` instance. App.tsx + @nexus/core import three from
     // source while react-force-graph-3d ships its own pre-bundled three; without
     // dedupe you get two THREE globals and three-forcegraph crashes inside
     // tickFrame ("Cannot read properties of undefined (reading 'tick')").
-    dedupe: ["three", "react", "react-dom"],
+    //
+    // `yjs` is here for the identical reason and it is not optional: Yjs uses
+    // `instanceof` internally (Y.Doc, Y.XmlFragment, the AbstractType
+    // hierarchy), so two copies make Y.applyUpdate silently no-op rather than
+    // throw — live co-editing would look connected and simply never converge.
+    // `@tiptap/core` joins it because the collaboration packages pin it to an
+    // exact version while some of Vault's own tiptap deps use ranges.
+    dedupe: ["three", "react", "react-dom", "yjs", "@tiptap/core"],
   },
   // @nexus/core is aliased to source, so Vite has to discover its heavy
   // transitive deps (three / drei / fiber). Pre-bundle them upfront so Vite
@@ -37,6 +53,16 @@ export default defineConfig(async () => ({
       '@react-three/drei',
       '@tiptap/react',
       '@tiptap/starter-kit',
+      // The live co-editing stack. These only ever load behind the dynamic
+      // import in src/collab/loadCollab.ts, so without pre-bundling the FIRST
+      // time anyone opens a shared note Vite kicks off an on-demand
+      // re-optimize and full page reload — mid-edit, and exactly the
+      // half-written-chunk window the comment above warns about.
+      'yjs',
+      'y-protocols/awareness',
+      '@tiptap/y-tiptap',
+      '@tiptap/extension-collaboration',
+      '@tiptap/extension-collaboration-caret',
     ],
   },
 

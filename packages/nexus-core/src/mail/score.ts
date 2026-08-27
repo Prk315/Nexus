@@ -193,8 +193,42 @@ export type MailBucketGroup = {
 };
 
 /**
+ * Sink `importance: 'low'` ("Not important") to the bottom of a bucket
+ * without disturbing anything else's order.
+ *
+ * A stable partition, not a re-sort: everything *above* the line keeps
+ * exactly the order `compareMail` gave it, and everything *below* the line
+ * does too — de-prioritising a message changes its standing, not its
+ * identity relative to its other de-prioritised neighbours. It operates
+ * within one bucket (one `groupByBucket` group, i.e. one score band) rather
+ * than across the whole list, which is what keeps `compareMail` itself
+ * untouched: that comparator mirrors `mail_messages_user_score`'s SQL
+ * ordering exactly (see its own docstring), and folding importance into it
+ * would make the client-side order diverge from the index it is meant to
+ * restate.
+ *
+ * A `null` or unset importance is *not* sunk — only an explicit `'low'`
+ * verdict is a demotion. `medium` and `high` are unaffected, same as `null`.
+ */
+export function sinkLowImportance(messages: readonly MailMessage[]): MailMessage[] {
+  const kept: MailMessage[] = [];
+  const sunk: MailMessage[] = [];
+  for (const m of messages) {
+    (m.importance === "low" ? sunk : kept).push(m);
+  }
+  return [...kept, ...sunk];
+}
+
+/**
  * Group into priority buckets in `SCORE_BUCKETS` order. Empty buckets are
  * dropped — a heading with nothing under it reads as a loading failure.
+ *
+ * Within each bucket, `'Not important'` mail sinks to the bottom via
+ * `sinkLowImportance` — "below unset/medium/high within the same score
+ * band", per the triage-action design. It is applied per-bucket rather than
+ * to the flat list so a low-importance `urgent` message still sorts above a
+ * merely-unset `normal` one; sinking is relative to peers at the same
+ * urgency, not an absolute demotion to the very end of the inbox.
  */
 export function groupByBucket(messages: readonly MailMessage[]): MailBucketGroup[] {
   const byBucket = new Map<ScoreBucket, MailMessage[]>();
@@ -207,7 +241,7 @@ export function groupByBucket(messages: readonly MailMessage[]): MailBucketGroup
   return SCORE_BUCKETS.filter((b) => byBucket.has(b)).map((bucket) => ({
     bucket,
     label: BUCKET_LABEL[bucket],
-    messages: byBucket.get(bucket)!,
+    messages: sinkLowImportance(byBucket.get(bucket)!),
   }));
 }
 

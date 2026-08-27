@@ -2,6 +2,7 @@ import { useState, useMemo, useRef } from "react";
 import { VaultGraph } from "../types";
 import { buildKind } from "../nodeUtils";
 import * as api from "../lib/api";
+import { invalidateContentCache } from "../components/EditorPane";
 
 export function useGraph() {
   const [graph, setGraph] = useState<VaultGraph>({ nodes: {}, edges: {}, back_edges: {}, tag_colors: {} });
@@ -85,5 +86,32 @@ export function useGraph() {
     setGraph(g);
   }
 
-  return { graph, graphData, savePositions, loadGraph, createNode, deleteNode, addEdge, removeEdge, addTag, removeTag, setTagColor, createTag, renameTag, deleteTagGlobal };
+  // Both of these change which save path a node takes, so the pane's cached
+  // copy of its content — and api.ts's cached updated_at for it — have to go.
+  // Sharing switches a note onto the CRDT path, where the cached copy would
+  // become the seed; unsharing switches it back onto the guarded path, where a
+  // timestamp that went stale during the co-editing session produces a
+  // permanent, unclearable "conflict" on a note nobody else is touching.
+  //
+  // The whole subtree, because share/unshare are subtree operations.
+  function forgetSubtreeContent(rootId: string) {
+    for (const id of api.collectDescendants(rootId, graph)) {
+      invalidateContentCache(id);
+      api.forgetContentVersion(id);
+    }
+  }
+
+  async function shareNode(id: string) {
+    forgetSubtreeContent(id);
+    const g = await api.shareNode(id, graph);
+    setGraph(g);
+  }
+
+  async function unshareNode(id: string) {
+    forgetSubtreeContent(id);
+    const g = await api.unshareNode(id, graph);
+    setGraph(g);
+  }
+
+  return { graph, graphData, savePositions, loadGraph, createNode, deleteNode, addEdge, removeEdge, addTag, removeTag, setTagColor, createTag, renameTag, deleteTagGlobal, shareNode, unshareNode };
 }

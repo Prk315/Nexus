@@ -183,7 +183,15 @@ export function JournalEditor({ nodeId }: Props) {
   function scheduleSave(d: JournalData) {
     clearTimeout(saveTimerRef.current);
     saveTimerRef.current = setTimeout(() => {
-      api.saveJournal(nodeId, JSON.stringify(d));
+      // Fire-and-forget, matching the pre-existing pattern here — but a
+      // conflict (or a give-up after backoff) must not become an unhandled
+      // rejection. No save-status UI exists in this editor yet to surface it
+      // more visibly than a console warning.
+      api.saveJournal(nodeId, JSON.stringify(d)).catch((e) => {
+        if (e instanceof api.ContentConflictError) {
+          console.warn(`[vault] journal ${nodeId} was changed elsewhere — reload before drawing more.`);
+        }
+      });
     }, 600);
   }
 

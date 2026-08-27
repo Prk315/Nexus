@@ -11,8 +11,10 @@ Gmail alerts ─┘                                                             
                                     NexusHeader / JobsPanel <──── reads ─────────────┘
 ```
 
-**Status: phase 1 (ingestion) is the agreed scope.** Submission autonomy is
-deliberately undecided until there is a real queue of scored jobs to look at.
+**Status: phases 1–3 are built.** Ingestion (§4), Qwen scoring and modular
+assembly (§6), and the decision-email / send loop (§7). Autonomy landed where §6
+guessed it would: email-channel jobs only, every send preceded by a human approval,
+and no auto-approve threshold at any score.
 
 ---
 
@@ -268,7 +270,13 @@ pipeline.** Run `node harvest-dryrun.mjs` after any extractor change.
 
 ---
 
-## 6. Phase 2 sketch — not agreed, do not build yet
+## 6. Phase 2 — modules and assembly (built; sketch kept for the record)
+
+> The sketch below was written as "not agreed, do not build yet". It was
+> subsequently built — `job_app_modules`, `evaluate.js`, `job-evaluate.json`,
+> `EVALUATION.md` and `MODULES.md`. It reads accurately as a description of what
+> shipped, with one correction: assembly happens **server-side in `job-ingest`**,
+> not in n8n, because the module prose never leaves Supabase.
 
 Modules (`job_modules`: kind, language, tags, text, word budget) + deterministic
 assembly: pick a covering set of modules for the required skills under a length
@@ -278,8 +286,128 @@ looking at a real scored queue.
 
 ---
 
-## 7. Open questions
+## 7. Phase 3 — the decision loop, and the one irreversible step
+
+Phase 1 discovers, phase 2 scores and assembles a draft. Phase 3 is the part that
+touches the outside world: it asks a human, and then it sends.
+
+Two n8n workflows, deliberately not one:
+
+| | `job-notify` | `job-apply` |
+|---|---|---|
+| Every | 15 min | 10 min |
+| Asks | `notify_queue`, limit 5 | `apply_queue`, limit 2 |
+| Mails | **you** | **a company** |
+| Body | HTML, built by `buildDecisionEmail` | the stored draft, plain text, verbatim |
+| Reports | `notify_result` (success only) | `apply_result` (success **and** failure) |
+
+Splitting them is not tidiness. They have different blast radii, different
+schedules, different failure semantics and different activation gates, and one
+workflow doing both would mean a single misrouted expression could send the
+decision email's HTML — score, reasoning, "missing skills" — to the employer.
+
+### The state machine
+
+```
+                    job-evaluate assembles
+                             │
+                             ▼
+                          draft
+                             │  job-notify: buildDecisionEmail → Gmail → your inbox
+                             │  (notify_result posted ONLY if Gmail accepted it)
+                             ▼
+                      needs_approval
+                             │  you press "Review & decide" → confirm page → Approve
+                             ▼
+                        approved
+                             │  job-apply claims it; every guard is re-checked
+                             │  server-side and the row flips to 'queued' there
+                             ▼
+                         queued
+                    ┌────────┴────────┐
+         Gmail ok   │                 │  refused / Gmail error
+                    ▼                 ▼
+                  sent              failed
+        (+ gmail_message_id,   (+ error string; a human
+           thread_id)            has to look at it)
+```
+
+Every arrow out of `draft` and out of `queued` is driven by a *report* from n8n,
+never by n8n's own assumption. A send that fails posts nothing at all from
+`job-notify` — the row stays `draft` and the next 15-minute pass retries it. That
+**is** the retry; a second one inside the workflow would double-send the day Gmail
+returns an error after having accepted the message.
+
+`job-apply` is the opposite: a failure is recorded. A `queued` row that silently
+re-refuses every ten minutes is indistinguishable from one that is working, and
+that is the failure mode this repo keeps designing against.
+
+### The trap: a link that approves is a link a mail scanner clicks
+
+The decision email contains **one** link to the review page and no one-click
+approve/reject links, and that is a security decision rather than a UX one.
+
+Mail scanners, corporate link-rewriters, Gmail's image proxy and every "link
+preview" bot fetch URLs found in a message *before a human has opened it*. A GET
+that approves is therefore a GET an antivirus appliance can fire on your behalf at
+03:00 — and the terminal action in this pipeline is emailing a stranger. So no GET
+in that email may change state: it links to a confirm page, and approval happens
+behind a POST that a person pressed a button for.
+
+This is the same shape as the rest of the repo's "fail toward the safe state"
+rules (`blocking_state` is never seeded; `score` is nullable; mail `priority` sorts
+`nulls first`). Here the safe state is *not sent*.
+
+`notify.test.js` pins it: the generated HTML must contain exactly two hrefs — the
+ad and the confirm page. If someone adds a third, that test fails.
+
+### The guards, and where each one lives
+
+| Guard | Where | Why there |
+|---|---|---|
+| every approval is human | the confirm page | the only step that cannot be automated by design |
+| eligibility (approved? not already sent? gaps resolved? channel is email?) | **`job-ingest` server-side**, before `apply_queue` returns a row | one implementation; n8n re-deriving it is how two copies of a rule start disagreeing |
+| recipient is one plain address | `validateRecipient` in `notify.js`, re-checked in n8n | the only field whose failure is unrecoverable — checked twice on purpose |
+| no CC, no BCC | the Gmail node has no `ccList`/`bccList` key at all | an absent key cannot be populated by an expression that goes wrong |
+| body is not transformed | `job-apply` passes `body` through untouched | it is human prose; the closing module IS the sign-off |
+| n8n's attribution footer is off | `appendAttribution: false` on both Gmail nodes | default-on, and "sent automatically with n8n" in a job application is a decision nobody made |
+| CV/portfolio stubs cannot ship | `enabled = false` + a visible `[GAP: …]` in the draft | a gap that is visibly a gap beats a paragraph that is invisibly a lie |
+
+⚠️ **One seeded module escapes that last row.** `closing_en` is seeded
+`enabled = true` and its content still carries a `[TODO: portfolio/GitHub link …]`
+marker, so unlike the disabled stubs nothing stops it shipping verbatim. Fix or
+disable it before `job-apply` is activated for the first time.
+
+### What stays human-only, permanently
+
+- **Approving.** No auto-approve threshold, not even for a score of 100. The whole
+  point of a decision email is that a person read the draft.
+- **Writing prose.** Unchanged from phase 2: Qwen scores and selects, it does not
+  write. Nothing in an outbound email came from a model.
+- **LinkedIn / Indeed / any ATS.** Ingest-only, forever (§2). `apply_channel` must
+  be `email` for a row to be queueable; anything else is assemble-and-prefill at
+  best, and the human presses submit.
+- **Filling the CV and portfolio links.** They are `[TODO]` stubs on purpose. A
+  fabricated CV link is the single worst thing this pipeline could emit.
+- **Deciding when a run of failures means stop.** There is no circuit breaker.
+  `job-apply` sends at most two per pass and records every failure; noticing a
+  pattern is a person's job.
+
+### Rollout order
+
+Import harvest → evaluate → notify → apply; activate notify only after reading a
+real decision email, and activate apply only after one manual `n8n execute --id
+nexus-job-apply` whose result you checked in Gmail → Sent. `n8n/job-applier/README.md`
+has the step-by-step. Step 5 there is the only irreversible one in the entire
+pipeline.
+
+---
+
+## 8. Open questions
 
 1. Which Jobindex saved searches per profile — exact query strings?
 2. Is n8n's Gmail credential actually authenticated? (blocks the `gmail_alert` discoverer only)
 3. Anything to replace Jobnet's DK-wide coverage, or is Jobindex enough?
+4. Where does the confirm page live — a Vercel route, or a `NexusHeader` panel
+   deep-link? The workflows only ever render the `review_url` the server hands
+   them, so this can be settled without touching n8n.

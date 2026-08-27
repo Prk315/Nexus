@@ -4,6 +4,6 @@
   "type": "module",
   "description": "Job-post extraction for the n8n job applier. Deliberately outside the npm workspace globs (apps/*, packages/*) so it has no dependencies and cannot break an app build.",
   "scripts": {
-    "test": "node --test extract.test.js"
+    "test": "node --test extract.test.js evaluate.test.js notify.test.js"
   }
 }
