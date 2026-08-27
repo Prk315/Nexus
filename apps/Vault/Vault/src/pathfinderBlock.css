@@ -616,7 +616,21 @@
 
 .pf-table-wrap { overflow-x: auto; }
 
-.pf-table { width: 100%; border-collapse: collapse; font-size: 0.8rem; }
+/* `table-layout: fixed` is what makes the <colgroup> percentages authoritative.
+   In `auto` the browser sizes columns from their CONTENT and treats a width as
+   a suggestion — so a dragged column would spring back the moment a long task
+   title arrived, which reads as the drag not having worked. */
+.pf-table {
+  width: 100%;
+  table-layout: fixed;
+  border-collapse: collapse;
+  font-size: 0.8rem;
+}
+
+/* Fixed layout will not grow a cell to fit, so every cell must be told what to
+   do with content that does not fit. Without this, text simply spills across
+   the column boundary and the table looks broken rather than narrow. */
+.pf-table th, .pf-table td { overflow: hidden; text-overflow: ellipsis; }
 .pf-block.is-compact .pf-table { font-size: 0.75rem; }
 
 .pf-th {
@@ -635,8 +649,52 @@
   top: 0;
   z-index: 1;
 }
-.pf-th-act, .pf-th-done { cursor: default; width: 1%; }
+/* Width comes from the <colgroup> now; `width: 1%` here would fight it. */
+.pf-th-act, .pf-th-done { cursor: default; }
 .pf-sort { margin-left: 3px; color: var(--fg-primary); }
+
+/* ── Column resize + reorder ─────────────────────────────────────────────── */
+
+.pf-th { position: relative; touch-action: none; }
+.pf-th-label {
+  display: inline-block;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  vertical-align: bottom;
+}
+
+.pf-col-grip {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  right: 0;
+  width: 9px;
+  margin-right: -4px;
+  cursor: col-resize;
+  z-index: 1;
+  opacity: 0;
+  background:
+    linear-gradient(var(--border-strong), var(--border-strong)) 50% 0 / 1px 100% no-repeat;
+  touch-action: none;
+}
+.pf-table:hover .pf-col-grip { opacity: 0.55; }
+.pf-col-grip:hover { opacity: 1; }
+
+/* No hover to reveal it, and a header row is short enough that an always-on
+   grip covers nothing but its own header. Unlike the list's full-height grip,
+   this one cannot sit on top of rows. */
+@media (hover: none) {
+  .pf-col-grip { opacity: 0.5; width: 18px; margin-right: -9px; }
+}
+
+/* Reordering. The dragged header dims; the one it would land on gets a bar on
+   the side the column is coming from, so the result is visible before release
+   rather than only after. */
+.pf-table.is-reordering { user-select: none; -webkit-user-select: none; }
+.pf-table.is-reordering .pf-th { cursor: grabbing; }
+.pf-th.is-dragging { opacity: 0.45; }
+.pf-th.is-drop { box-shadow: inset 2px 0 0 var(--edge-in); }
 
 .pf-td {
   padding: 5px 8px;

@@ -46,6 +46,11 @@ import {
   META_PCT_MAX,
   META_PCT_MIN,
   listColumns,
+  columnWidths,
+  columnWeight,
+  moveColumn,
+  COL_WEIGHT_MAX,
+  COL_WEIGHT_MIN,
   type PfBlockSpec,
   type PfColumn,
 } from "../lib/pathfinderBlock";
@@ -872,6 +877,121 @@ export function PfTableView({
   onSpecChange: (next: PfBlockSpec) => void;
 }) {
   const cols = spec.columns;
+  const widths = useMemo(() => columnWidths(cols, spec.colWeights), [cols, spec.colWeights]);
+  const tableRef = useRef<HTMLTableElement>(null);
+
+  // ── Resizing ────────────────────────────────────────────────────────────
+  //
+  // A grip on each column's right edge transfers weight between it and its
+  // neighbour, so the total stays put and the table never grows past its
+  // container. The last data column has no grip: to its right is the actions
+  // column, which is not the user's to size — widen the one before it instead,
+  // which is what every table does.
+  //
+  // Widths are written straight onto the <col> elements during the drag and
+  // committed as ONE transaction on release. Per-move transactions would be
+  // ~60 document rewrites a second, each waking the note's 400ms autosave.
+  const resizeRef = useRef<{ i: number; startX: number; a: number; b: number; width: number } | null>(null);
+
+  const paintWidths = useCallback((data: number[], actions: number) => {
+    const el = tableRef.current;
+    if (!el) return;
+    const colEls = el.querySelectorAll("col");
+    data.forEach((pct, i) => {
+      const c = colEls[i] as HTMLElement | undefined;
+      if (c) c.style.width = `${pct}%`;
+    });
+    const last = colEls[data.length] as HTMLElement | undefined;
+    if (last) last.style.width = `${actions}%`;
+  }, []);
+
+  const onResizeDown = useCallback((e: React.PointerEvent, i: number) => {
+    if (!editable) return;
+    e.preventDefault();
+    e.stopPropagation();
+    const width = tableRef.current?.getBoundingClientRect().width ?? 0;
+    if (width <= 0) return;
+    (e.target as HTMLElement).setPointerCapture(e.pointerId);
+    resizeRef.current = {
+      i,
+      startX: e.clientX,
+      a: columnWeight(spec.colWeights, cols[i]),
+      b: columnWeight(spec.colWeights, cols[i + 1]),
+      width,
+    };
+  }, [editable, spec.colWeights, cols]);
+
+  /** The weights this drag would produce, clamped so neither side collapses. */
+  const resizeTo = useCallback((clientX: number): Record<string, number> | null => {
+    const r = resizeRef.current;
+    if (!r) return null;
+    const total = cols.reduce((sum, c) => sum + columnWeight(spec.colWeights, c), 0);
+    // Pixels → weight, in the same units the column already uses.
+    const delta = ((clientX - r.startX) / r.width) * total;
+    const pair = r.a + r.b;
+    const a = Math.min(Math.max(r.a + delta, COL_WEIGHT_MIN), pair - COL_WEIGHT_MIN);
+    return {
+      ...spec.colWeights,
+      [cols[r.i]]: Math.round(Math.min(a, COL_WEIGHT_MAX) * 100) / 100,
+      [cols[r.i + 1]]: Math.round(Math.min(pair - a, COL_WEIGHT_MAX) * 100) / 100,
+    };
+  }, [cols, spec.colWeights]);
+
+  const onResizeMove = useCallback((e: React.PointerEvent) => {
+    const next = resizeTo(e.clientX);
+    if (!next) return;
+    const w = columnWidths(cols, next);
+    paintWidths(w.data, w.actions);
+  }, [resizeTo, cols, paintWidths]);
+
+  const onResizeUp = useCallback((e: React.PointerEvent) => {
+    const next = resizeTo(e.clientX);
+    resizeRef.current = null;
+    try { (e.target as HTMLElement).releasePointerCapture(e.pointerId); } catch { /* gone */ }
+    if (next) onSpecChange({ ...spec, colWeights: next });
+  }, [resizeTo, onSpecChange, spec]);
+
+  // ── Reordering ──────────────────────────────────────────────────────────
+  //
+  // Pointer-based rather than HTML5 drag-and-drop: this table lives inside a
+  // ProseMirror node view, and a native dragstart there competes with the
+  // editor's own drag handling. Same reason BlockHandle is hand-rolled.
+  const [dragCol, setDragCol] = useState<PfColumn | null>(null);
+  const [dropCol, setDropCol] = useState<PfColumn | null>(null);
+
+  const onHeadDown = useCallback((e: React.PointerEvent, c: PfColumn) => {
+    if (!editable) return;
+    (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
+    setDragCol(c);
+  }, [editable]);
+
+  const onHeadMove = useCallback((e: React.PointerEvent) => {
+    if (!dragCol) return;
+    // Which header is under the pointer? Read the DOM rather than tracking
+    // offsets: the row reflows as columns move, so cached geometry goes stale.
+    const ths = tableRef.current?.querySelectorAll<HTMLElement>("th[data-col]");
+    if (!ths) return;
+    for (const th of ths) {
+      const b = th.getBoundingClientRect();
+      if (e.clientX >= b.left && e.clientX <= b.right) {
+        setDropCol((th.dataset.col as PfColumn) ?? null);
+        return;
+      }
+    }
+  }, [dragCol]);
+
+  const onHeadUp = useCallback((e: React.PointerEvent) => {
+    try { (e.currentTarget as HTMLElement).releasePointerCapture(e.pointerId); } catch { /* gone */ }
+    // A press that never moved to another column is a CLICK, and a click on a
+    // header sorts. Only an actual move reorders.
+    if (dragCol && dropCol && dragCol !== dropCol) {
+      onSpecChange({ ...spec, columns: moveColumn(cols, dragCol, dropCol) });
+    } else if (dragCol) {
+      sortBy(dragCol);
+    }
+    setDragCol(null);
+    setDropCol(null);
+  }, [dragCol, dropCol, cols, spec, onSpecChange]);
 
   const sortBy = (key: PfColumn) => {
     const map: Partial<Record<PfColumn, PfBlockSpec["sort"]["key"]>> = {
@@ -892,18 +1012,61 @@ export function PfTableView({
     // Wide content scrolls inside its own container — the note body must never
     // scroll horizontally.
     <div className="pf-table-wrap">
-      <table className="pf-table">
+      <table className={`pf-table${dragCol ? " is-reordering" : ""}`} ref={tableRef}>
+        {/* Proportional widths, so the table keeps its shape across the
+            720px-to-full-bleed range a note can be, and on the iPad. The
+            actions column is in the same total rather than a fixed px width —
+            mixing px and % under `table-layout: fixed` leaves the browser to
+            reconcile them. */}
+        <colgroup>
+          {cols.map((c, i) => <col key={c} style={{ width: `${widths.data[i]}%` }} />)}
+          <col style={{ width: `${widths.actions}%` }} />
+        </colgroup>
         <thead>
           <tr>
-            {cols.map((c) => (
+            {cols.map((c, i) => (
               <th
                 key={c}
-                className={`pf-th pf-th-${c}`}
+                data-col={c}
+                className={
+                  `pf-th pf-th-${c}` +
+                  (dragCol === c ? " is-dragging" : "") +
+                  (dropCol === c && dragCol && dragCol !== c ? " is-drop" : "")
+                }
                 scope="col"
-                onClick={() => sortBy(c)}
+                // Sorting happens on pointer-UP when the press did not move to
+                // another column — see onHeadUp. An onClick here as well would
+                // fire after a reorder and sort by whatever was dropped.
+                onPointerDown={(e) => onHeadDown(e, c)}
+                onPointerMove={onHeadMove}
+                onPointerUp={onHeadUp}
+                onPointerCancel={onHeadUp}
               >
-                {c === "done" ? "" : PF_COLUMN_LABELS[c]}
-                {sortIndicator(spec, c)}
+                <span className="pf-th-label">
+                  {c === "done" ? "" : PF_COLUMN_LABELS[c]}
+                  {sortIndicator(spec, c)}
+                </span>
+                {editable && i < cols.length - 1 ? (
+                  <span
+                    className="pf-col-grip"
+                    role="separator"
+                    aria-orientation="vertical"
+                    aria-label={`Resize the ${PF_COLUMN_LABELS[c]} column`}
+                    onPointerDown={(e) => onResizeDown(e, i)}
+                    onPointerMove={onResizeMove}
+                    onPointerUp={onResizeUp}
+                    onPointerCancel={onResizeUp}
+                    onDoubleClick={(e) => {
+                      e.stopPropagation();
+                      // Reset this pair to equal shares rather than to 1/1 —
+                      // the rest of the table keeps whatever it was given.
+                      const w = { ...spec.colWeights };
+                      delete w[cols[i]];
+                      delete w[cols[i + 1]];
+                      onSpecChange({ ...spec, colWeights: w });
+                    }}
+                  />
+                ) : null}
               </th>
             ))}
             <th className="pf-th pf-th-act" scope="col" aria-label="Actions" />
