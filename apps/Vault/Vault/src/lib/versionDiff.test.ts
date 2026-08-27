@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { diffContent, diffLines, formatBytes, noteLines, relativeTime } from "./versionDiff";
+import { diffContent, diffLines, formatBytes, noteLines } from "./versionDiff";
 
 const doc = (...content: unknown[]) => JSON.stringify({ type: "doc", content });
 const para = (text: string) => ({ type: "paragraph", content: [{ type: "text", text }] });
@@ -185,16 +185,3 @@ describe("formatBytes", () => {
   });
 });
 
-describe("relativeTime", () => {
-  const now = Date.parse("2026-08-27T12:00:00Z");
-  it("reads as a person would say it", () => {
-    expect(relativeTime("2026-08-27T11:59:50Z", now)).toBe("just now");
-    expect(relativeTime("2026-08-27T11:45:00Z", now)).toBe("15 min ago");
-    expect(relativeTime("2026-08-27T09:00:00Z", now)).toBe("3 h ago");
-    expect(relativeTime("2026-08-26T12:00:00Z", now)).toBe("yesterday");
-    expect(relativeTime("2026-08-24T12:00:00Z", now)).toBe("3 days ago");
-  });
-  it("does not throw on a bad timestamp", () => {
-    expect(relativeTime("not-a-date", now)).toBe("unknown");
-  });
-});

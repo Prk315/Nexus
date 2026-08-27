@@ -17,6 +17,9 @@ import type { VaultGraph } from "../types";
 import type { NoteDocHandle } from "./NoteEditor";
 import { lazyWithReload } from "../lib/lazyLoad";
 import { useCollabSession } from "../collab/useCollabSession";
+import { relativeTime } from "../lib/timestamps";
+import { memberName } from "@nexus/core/members";
+import { useNexusAuth } from "@nexus/core";
 
 // Every editor below pulls a heavy transitive dependency (TipTap, pdfjs-dist,
 // katex, sql.js, smiles-drawer, react-force-graph-2d, …) that has no business
@@ -164,6 +167,9 @@ export const EditorPane = forwardRef<EditorPaneHandle, EditorPaneProps>(
     },
     ref
   ) {
+    // Only to answer "was that me?" in the saved-by line. `useNexusAuth` is
+    // already mounted above every pane, so this adds no provider and no fetch.
+    const myUserId = useNexusAuth().user?.id ?? null;
     const [selectedId, setSelectedId] = useState<string | null>(null);
     const [content, setContent] = useState("");
     const [openTabs, setOpenTabs] = useState<string[]>([]);
@@ -217,6 +223,31 @@ export const EditorPane = forwardRef<EditorPaneHandle, EditorPaneProps>(
       lastChangeRemoteRef.current = !!meta?.remote;
       setContent(next);
     }
+
+    // ── Last-saved line ───────────────────────────────────────────────────────
+    // What the toolbar shows when nothing is happening. `saveStatus` is a
+    // transient — it says "Saving…", then "Saved" for 1.5 s, then nothing — so
+    // for all but a couple of seconds a minute the pane said NOTHING about
+    // whether the work was safe. "No news is good news" is the wrong default for
+    // a surface whose whole failure mode is a save that quietly did not happen.
+    const [lastSaved, setLastSaved] = useState<api.ContentMeta | null>(null);
+
+    // Read by the save callback, which captured its node id at arm time and so
+    // cannot use `selectedId` from its own closure to ask "is this still the
+    // note on screen?".
+    const selectedIdRef = useRef<string | null>(null);
+    selectedIdRef.current = selectedId;
+
+    // Relative times go stale in place. Without this, "just now" stays "just
+    // now" for an hour, which is worse than showing no time at all — it is a
+    // wrong time. 30 s is under the resolution relativeTime() renders, so the
+    // label never skips a step.
+    const [, setClockTick] = useState(0);
+    useEffect(() => {
+      if (!selectedId) return;
+      const t = setInterval(() => setClockTick((n) => n + 1), 30_000);
+      return () => clearInterval(t);
+    }, [selectedId]);
 
     // ── History ───────────────────────────────────────────────────────────────
     const [showHistory, setShowHistory] = useState(false);
@@ -323,6 +354,7 @@ export const EditorPane = forwardRef<EditorPaneHandle, EditorPaneProps>(
         await api.overwriteContent(id, content);
         persistedContent.set(id, content);
         globalContentCache.set(id, content);
+        setLastSaved(api.getContentMeta(id));
         setSaveStatus("saved");
         setTimeout(() => setSaveStatus(""), 1500);
       } catch (e) {
@@ -463,6 +495,10 @@ export const EditorPane = forwardRef<EditorPaneHandle, EditorPaneProps>(
           // the merge authority there, so there is nothing to protect.
           await (projection ? api.saveContentProjection : api.saveContent)(id, text);
           persistedContent.set(id, text);
+          // Refreshed even when `report` is false: a flush that lands after the
+          // pane moved on must not report a STATUS for the wrong note, but the
+          // meta it produced is about `id` and is only read when `id` is shown.
+          if (id === selectedIdRef.current) setLastSaved(api.getContentMeta(id));
           if (!report) return;
           setSaveStatus("saved");
           setTimeout(() => setSaveStatus(""), 1500);
@@ -616,6 +652,10 @@ export const EditorPane = forwardRef<EditorPaneHandle, EditorPaneProps>(
       setOpenTabs((prev) => (prev.includes(id) ? prev : [...prev, id]));
       setSelectedId(id);
       setContent(text);
+      // Null when this node was served from cache and never read this session —
+      // the line simply does not render, which is honest. It fills in on the
+      // first save.
+      setLastSaved(api.getContentMeta(id));
       setShowHomeState(false);
     }
 
@@ -631,6 +671,12 @@ export const EditorPane = forwardRef<EditorPaneHandle, EditorPaneProps>(
     async function reloadCurrent() {
       const id = selectedId;
       if (!id) return;
+      // Preserve what is on screen BEFORE replacing it with the server's copy.
+      // Reload discards everything typed since the last successful save, and it
+      // is offered in precisely the situation where the user does not yet know
+      // which copy is the good one — so pressing it must be recoverable rather
+      // than final. It lands in History as "your unsaved copy".
+      await api.snapshotLocalContent(id, content, "discarded");
       invalidateContentCache(id);
       api.forgetContentVersion(id);
       const text = await api.readContent(id);
@@ -639,6 +685,7 @@ export const EditorPane = forwardRef<EditorPaneHandle, EditorPaneProps>(
       // NoteEditor's [content] effect performs the actual setContent, because
       // the server value differs from what it last emitted.
       setContent(text);
+      setLastSaved(api.getContentMeta(id));
       setSaveStatus("");
     }
 
@@ -805,7 +852,15 @@ export const EditorPane = forwardRef<EditorPaneHandle, EditorPaneProps>(
                       : saveStatus === "collab-only" ? "Not saved — this note is being co-edited; update Vault to edit it"
                       : saveStatus === "conflict" ? (
                         <>
-                          Changed by the other user —{" "}
+                          {/* Name the actual situation. A private note has no
+                              "other user" — saying so on a note nobody else can
+                              even see made a real conflict read as a glitch, and
+                              trained the reflex to dismiss it. Whoever wrote the
+                              row is the only thing we know, so say only that. */}
+                          {selectedNode?.team_id != null
+                            ? "Changed by the other user"
+                            : "Changed on another device"}{" "}
+                          —{" "}
                           {/* Three exits, and offering fewer is what made this
                               status a dead end. "Reload" used to be the only
                               one, so keeping your own version meant copying it
@@ -845,6 +900,35 @@ export const EditorPane = forwardRef<EditorPaneHandle, EditorPaneProps>(
                         </>
                       )
                       : "Saved"}
+                  </span>
+                )}
+                {/* The resting state. `saveStatus` is transient by design — it
+                    says "Saving…", then "Saved" for 1.5 s, then nothing — so
+                    without this the pane spent almost all of its time saying
+                    nothing at all about whether the work was safe. For a
+                    surface whose whole failure mode is a save that quietly did
+                    not happen, silence is the wrong default.
+
+                    "who" is shown only on a shared note. On a private one the
+                    answer is always "you", and a byline that can only ever say
+                    one thing is noise standing where a useful word could be. */}
+                {!saveStatus && lastSaved?.updatedAt && (
+                  <span
+                    className="save-status save-status-resting"
+                    title={new Date(lastSaved.updatedAt).toLocaleString()}
+                  >
+                    Saved{" "}
+                    {selectedNode?.team_id != null && (
+                      <>
+                        by{" "}
+                        {lastSaved.updatedBy
+                          ? lastSaved.updatedBy === myUserId
+                            ? "you"
+                            : memberName(lastSaved.updatedBy)
+                          : "someone"}{" "}
+                      </>
+                    )}
+                    {relativeTime(lastSaved.updatedAt)}
                   </span>
                 )}
                 {supportsHistory && (

@@ -72,10 +72,15 @@ create table if not exists vault_content_versions (
   -- content — copied from the vault_content row rather than from auth.uid(),
   -- which would name whoever happened to trigger the overwrite.
   user_id    text        not null default '',
+  -- Descriptive, NOT constrained — deliberately no CHECK, so a client can add a
+  -- kind of snapshot without a schema change against a live database. ('discarded'
+  -- was added exactly that way, after this file had been applied.)
+  --
   -- autosave  — the periodic trigger below
   -- conflict  — captured before one client saved over another's newer row
   -- restore   — captured before an older version was restored over the current
   -- overwrite — captured before "keep mine" replaced the server copy
+  -- discarded — the on-screen document, captured before Reload replaced it
   -- manual    — the user asked for a checkpoint
   origin     text        not null default 'autosave',
   created_at timestamptz not null default now()

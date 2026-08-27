@@ -20,6 +20,7 @@ query after each.
 | 9 | `20260827120000_vault_live_coedit.sql` | `vault_ydoc`, `vault_can_coedit()`, two `realtime.messages` policies — **apply before deploying any Vault build that reads `vault_ydoc`, and see §9 for the two manual steps that are not SQL** |
 | 10 | `20260827140000_vault_task_tags.sql` | `vault_task_tags` + `vault_rename_task_tag()` / `vault_delete_task_tag()` — **already applied live on 2026-08-27**; see §10 |
 | 11 | `20260827160000_vault_content_versions.sql` | `vault_content_versions` + a snapshot trigger on `vault_content` and a byte-budgeted retention trigger — Vault's note history. **Already applied live on 2026-08-27**; the only file here that adds a trigger to an existing hot write path — see §11 |
+| 12 | `20260827180000_vault_updated_by.sql` | `updated_by` on `vault_content` / `vault_journals` / `vault_content_versions`, stamped from `auth.uid()` — who actually wrote a document last. **Already applied live on 2026-08-27**; see §12 |
 
 ⚠️ **File 10 is the one exception to "not applied by the code that wrote it"** —
 it was applied to `efxmzsdisaymtpebaxlp` at the time it was written, and the file
@@ -612,3 +613,124 @@ drop table if exists public.vault_content_versions;
 Dropping only `vault_content_snapshot_trg` is the lighter option if the concern
 is write throughput rather than the feature: the panel keeps working and simply
 stops gaining new entries.
+
+---
+
+## §12 — Who wrote it last (`20260827180000_vault_updated_by.sql`)
+
+Adds `updated_by` to `vault_content`, `vault_journals` and
+`vault_content_versions`. Depends on file 11 (for the versions table) and on
+20260826150000_vault_teams (for the trigger it works alongside).
+
+**Applied and verified live on 2026-08-27.**
+
+### The column that looked right and was not
+
+`vault_content.user_id` looks like the author. It is not, and nothing in the
+schema said so. `vault_content_force_owner()` — correct, and it must stay —
+rewrites it on **every** insert and update:
+
+```sql
+NEW.user_id := <owner of the parent vault_nodes row>
+```
+
+So it answers "who owns this note", on every row, forever. Josefine editing
+Bastian's shared note leaves `user_id = Bastian`.
+
+That is why the History panel shipped in file 11 was displaying the **owner's**
+name against every version, including versions the owner did not write —
+confidently wrong on exactly the screen you consult to decide whose work to
+keep. This file is the fix for that as much as it is a new feature.
+
+### Stamped server-side, never sent by the client
+
+A separate `BEFORE` trigger, not an extra line inside `force_owner()`: that
+function's contract is *ownership follows the node*, and ownership and
+authorship are now different questions. Both triggers touch different columns,
+so their firing order does not matter.
+
+`vault_stamp_updated_by()` is **SECURITY INVOKER** (the default), which is the
+opposite of the choice made for the snapshot trigger and is deliberate:
+`auth.uid()` must resolve against the caller's JWT. It would on Supabase under
+`SECURITY DEFINER` too — the claim lives in a request setting, not the session
+role — but relying on that is relying on an implementation detail for a value
+whose entire purpose is to be attributable.
+
+It `coalesce`s rather than assigning outright, so a write with no JWT (a
+service-role job, a future edge function) leaves a known author alone instead of
+stamping NULL over it.
+
+### Nullable, no backfill — on purpose
+
+Every row written before this migration has an author nobody recorded, and NULL
+says that honestly. Backfilling from `user_id` would manufacture precisely the
+false attribution the file exists to remove. Clients render NULL as
+**"unknown author"**, never as the owner.
+
+### Verify
+
+```sql
+-- Three columns, all nullable.
+select table_name, column_name, is_nullable
+from information_schema.columns
+where table_schema = 'public' and column_name = 'updated_by'
+  and table_name in ('vault_content','vault_journals','vault_content_versions')
+order by table_name;
+
+-- Both stamp triggers, alongside the pre-existing force_owner ones.
+select tgrelid::regclass::text, tgname from pg_trigger
+where tgrelid in ('public.vault_content'::regclass, 'public.vault_journals'::regclass)
+  and not tgisinternal
+order by 1, 2;
+```
+
+End to end, with a simulated JWT — this is the check that matters, because the
+service-role connection the dashboard and MCP use has `auth.uid() = NULL` and
+would show nothing:
+
+```sql
+do $$
+declare
+  owner  constant text := '<a user id>';
+  editor constant text := '<a DIFFERENT user id>';
+  got_owner text; got_author text;
+begin
+  insert into vault_nodes (id, name, kind, tags, user_id)
+  values ('zztest-updatedby', 'scratch', '{"type":"Note"}'::jsonb, '{}', owner);
+
+  perform set_config('request.jwt.claims', json_build_object('sub', owner)::text, true);
+  insert into vault_content (node_id, data, user_id) values ('zztest-updatedby', 'first', owner);
+
+  perform set_config('request.jwt.claims', json_build_object('sub', editor)::text, true);
+  update vault_content set data = 'edited by the teammate' where node_id = 'zztest-updatedby';
+
+  select user_id, updated_by into got_owner, got_author
+  from vault_content where node_id = 'zztest-updatedby';
+
+  -- Raising rolls the whole block back, so the scratch rows clean themselves up.
+  raise exception 'owner=% author=% owner_ok=% author_ok=%',
+    got_owner, got_author, (got_owner = owner), (got_author = editor);
+end $$;
+```
+
+Expect `owner_ok=t author_ok=t` — the owner unchanged by a teammate's write, and
+the author naming the teammate. Both were `t` when this was applied.
+
+### Rolling back
+
+Additive; a rollback costs only the attribution.
+
+```sql
+drop trigger if exists vault_content_stamp_updated_by_trg on public.vault_content;
+drop trigger if exists vault_journals_stamp_updated_by_trg on public.vault_journals;
+drop function if exists public.vault_stamp_updated_by();
+alter table public.vault_content          drop column if exists updated_by;
+alter table public.vault_journals         drop column if exists updated_by;
+alter table public.vault_content_versions drop column if exists updated_by;
+```
+
+⚠️ Dropping the columns requires the clients to stop selecting them **first** —
+PostgREST answers a missing column with an error, not an empty value, so the
+save path would fail outright. This is the ordered-removal rule from the top of
+this file, and it applies to this one where it did not apply to files 11 and 12
+going in.
