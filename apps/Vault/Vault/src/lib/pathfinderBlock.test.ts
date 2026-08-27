@@ -9,6 +9,9 @@ import {
   parseSpec,
   serializeSpec,
   sortColumns,
+  normalizeStatuses,
+  boardStatuses,
+  MAX_STATUSES,
   withColumn,
   withoutColumn,
   moveColumn,
@@ -465,5 +468,57 @@ describe("column widths", () => {
     const { data, actions } = columnWidths([], {});
     expect(data).toEqual([]);
     expect(actions).toBeGreaterThan(0);
+  });
+});
+
+describe("board statuses", () => {
+  const spec = (statuses: unknown) => parseSpec(JSON.stringify({ statuses }), "board");
+
+  it("falls back to the built-in four when the block sets none", () => {
+    expect(boardStatuses(defaultSpec("board"))).toEqual(["backlog", "todo", "doing", "done"]);
+    expect(boardColumns("kanban_status", [], [], boardStatuses(defaultSpec("board"))).map((c) => c.key))
+      .toEqual(["backlog", "todo", "doing", "done"]);
+  });
+
+  it("uses the block's own list when it has one", () => {
+    const s = spec(["triage", "review"]);
+    expect(boardStatuses(s)).toEqual(["triage", "review"]);
+    expect(boardColumns("kanban_status", [], [], boardStatuses(s)).map((c) => c.label))
+      .toEqual(["Triage", "Review"]);
+  });
+
+  // The key is matched against pf_tasks.kanban_status by exact string equality,
+  // and every one of the 543 rows in the database is lower-case. A column
+  // labelled "Doing" that does not hold the "doing" tasks looks like an empty
+  // board rather than like a mismatch.
+  it("lower-cases and trims so the key can match the data", () => {
+    expect(normalizeStatuses(["  In Review  "])).toEqual(["in review"]);
+  });
+
+  it("drops blanks and duplicates", () => {
+    expect(normalizeStatuses(["todo", "  ", "TODO", "done", ""])).toEqual(["todo", "done"]);
+  });
+
+  it("bounds the list and the length of each entry", () => {
+    expect(normalizeStatuses(Array.from({ length: 40 }, (_, i) => `s${i}`)))
+      .toHaveLength(MAX_STATUSES);
+    expect(normalizeStatuses(["x".repeat(200)])[0]).toHaveLength(24);
+  });
+
+  it("ignores junk rather than rendering a broken board", () => {
+    expect(normalizeStatuses(null)).toEqual([]);
+    expect(normalizeStatuses("todo")).toEqual([]);
+    expect(normalizeStatuses([1, true, null, "ok"])).toEqual(["ok"]);
+  });
+
+  it("survives a serialize/parse round trip", () => {
+    const s = { ...defaultSpec("board"), statuses: ["triage", "review"] };
+    expect(parseSpec(serializeSpec(s), "board").statuses).toEqual(["triage", "review"]);
+  });
+
+  // Every other axis has a closed domain, so an override must not leak into one.
+  it("does not affect other axes", () => {
+    expect(boardColumns("priority", [], [], ["triage"]).map((c) => c.key))
+      .not.toContain("triage");
   });
 });
