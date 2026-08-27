@@ -342,6 +342,12 @@ export interface QueryResult {
  * as a whole one is the same lie as an empty panel that means "never loaded" —
  * the footer says "showing 50 of 214" so the number on screen is never mistaken
  * for the number that exists.
+ *
+ * `extra` bolts on a predicate this module knows nothing about — Vault's own
+ * task tags, for one, which are a Vault concept with no place in PathFinder's
+ * filter type. It runs HERE rather than over the result because `limit` is
+ * applied last: filtering afterwards would let a block render an empty list
+ * while matching rows sat just past the window.
  */
 export function runQuery(
   tasks: PfTask[],
@@ -350,8 +356,11 @@ export function runQuery(
   limit: number,
   today: string,
   myUid: string | null = null,
+  extra?: (task: PfTask) => boolean,
 ): QueryResult {
-  const matched = tasks.filter((t) => matchesFilter(t, filter, today, myUid));
+  const matched = tasks.filter(
+    (t) => matchesFilter(t, filter, today, myUid) && (extra ? extra(t) : true),
+  );
   const sorted = sortTasks(matched, sort.key, sort.dir);
   const capped = limit > 0 ? sorted.slice(0, limit) : sorted;
   return { tasks: capped, matched: matched.length, truncated: capped.length < matched.length };

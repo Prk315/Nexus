@@ -7,6 +7,7 @@
 
 export * from "./types";
 export * from "./filter";
+export * from "./tree";
 export {
   createPathfinderApi,
   mapTask,
