@@ -73,6 +73,12 @@ export async function deleteNode(id: string): Promise<VaultGraph> {
     // The CRDT state for a live co-edited note. Keyed by the real node id, never
     // a "<id>_suffix" key — co-editing covers the note body only.
     supabase.from("vault_ydoc").delete().eq("node_id", id),
+    // Content history, for the node body and every suffix key above. `like` is
+    // safe to use as a prefix match here because ids are crypto.randomUUID() —
+    // hex and dashes only, so neither '%' nor '_' can appear in `id` itself and
+    // there is nothing to escape.
+    supabase.from("vault_content_versions").delete().eq("node_id", id),
+    supabase.from("vault_content_versions").delete().like("node_id", `${id}\\_%`),
   ]);
   const { error } = await supabase.from("vault_nodes").delete().eq("id", id);
   if (error) err(error);
@@ -335,6 +341,119 @@ export const saveContentProjection: (id: string, content: string) => Promise<voi
 // A missing entry passes the guard, via its `known &&` short-circuit.
 export function forgetContentVersion(id: string): void {
   lastKnownContentUpdatedAt.delete(id);
+}
+
+// ── Content history ──────────────────────────────────────────────────────────
+// See supabase/migrations/20260827160000_vault_content_versions.sql. Snapshots
+// of the PREVIOUS document are taken by a trigger on vault_content, at most one
+// per node per five minutes; everything here either reads them or adds an
+// explicit one before a destructive action.
+
+export type VersionOrigin = "autosave" | "conflict" | "restore" | "overwrite" | "manual";
+
+export interface ContentVersion {
+  id: number;
+  node_id: string;
+  byte_len: number;
+  user_id: string;
+  origin: VersionOrigin;
+  created_at: string;
+}
+
+/**
+ * The history list — deliberately WITHOUT `data`.
+ *
+ * Forty versions of a note is forty whole documents; selecting the payload to
+ * render a list of timestamps would pull megabytes to draw a sidebar, and would
+ * do it every time the panel opened. The body is fetched one version at a time,
+ * when one is actually chosen.
+ */
+export async function listContentVersions(nodeId: string, limit = 40): Promise<ContentVersion[]> {
+  const { data, error } = await supabase.from("vault_content_versions")
+    .select("id, node_id, byte_len, user_id, origin, created_at")
+    .eq("node_id", nodeId)
+    .order("created_at", { ascending: false })
+    .order("id", { ascending: false })
+    .limit(limit);
+  if (error) err(error);
+  return (data ?? []) as ContentVersion[];
+}
+
+export async function readContentVersion(versionId: number): Promise<string> {
+  const { data, error } = await supabase.from("vault_content_versions")
+    .select("data").eq("id", versionId).maybeSingle();
+  if (error) err(error);
+  return data?.data ?? "";
+}
+
+/**
+ * Snapshot whatever the server currently holds, bypassing the trigger's
+ * five-minute gate.
+ *
+ * Called before every action that replaces the stored document with something
+ * other than the natural next edit — restoring an old version, or resolving a
+ * conflict in your favour. The gate is right for autosaves and wrong here: the
+ * whole risk of those two actions is that they discard a document somebody
+ * still wants, and "we already took a snapshot four minutes ago" does not
+ * describe the thing about to be destroyed.
+ *
+ * Returns the stored text it preserved, or null when there was nothing to
+ * preserve. Never throws: a failed snapshot must not block the user's action,
+ * but the caller may want to say the safety net was missing.
+ */
+export async function snapshotCurrentContent(
+  nodeId: string,
+  origin: VersionOrigin
+): Promise<string | null> {
+  try {
+    const { data } = await supabase.from("vault_content")
+      .select("data, user_id").eq("node_id", nodeId).maybeSingle();
+    const text: string = data?.data ?? "";
+    if (!text) return null;
+    // No byte_len: it is a generated column, and sending it is an error rather
+    // than a redundancy.
+    const { error } = await supabase.from("vault_content_versions").insert({
+      node_id: nodeId,
+      data: text,
+      user_id: data?.user_id ?? "",
+      origin,
+    });
+    if (error) throw error;
+    return text;
+  } catch (e) {
+    console.error("[vault] could not snapshot content before overwriting it", e);
+    return null;
+  }
+}
+
+/**
+ * "Keep mine": replace the server's copy with this client's document.
+ *
+ * The deliberate ordering is snapshot → refresh the guard → write. Refreshing
+ * `lastKnownContentUpdatedAt` from the row we just read is what makes the write
+ * pass assertContentNotConflicted, and doing it AFTER the snapshot means a
+ * snapshot that fails leaves the conflict standing rather than clearing the
+ * guard for a write with no safety net behind it.
+ *
+ * This is the only sanctioned way past the conflict guard. It is a separate
+ * exported name rather than a `force` flag on saveContent for the same reason
+ * saveContentProjection is: a boolean parameter is the kind of thing a refactor
+ * defaults, and defaulting this one would disable conflict detection for every
+ * note in the vault with no symptom until two devices quietly overwrote each
+ * other.
+ */
+export async function overwriteContent(nodeId: string, content: string): Promise<void> {
+  const preserved = await snapshotCurrentContent(nodeId, "overwrite");
+  if (preserved === null) {
+    // Nothing on the server (or the snapshot failed). Re-reading still refreshes
+    // the guard; an empty row means there was nothing to lose anyway.
+    await readContent(nodeId);
+  } else {
+    const { data } = await supabase.from("vault_content")
+      .select("updated_at").eq("node_id", nodeId).maybeSingle();
+    if (data?.updated_at) lastKnownContentUpdatedAt.set(nodeId, data.updated_at);
+  }
+  await saveContent(nodeId, content);
 }
 
 // ── CRDT state for live co-edited notes ──────────────────────────────────────

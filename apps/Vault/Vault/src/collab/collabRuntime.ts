@@ -22,7 +22,14 @@ import type { CollabSession, CollabStatus } from "./types";
 
 export interface StartOpts {
   nodeId: string;
-  /** The stored vault_content.data for this note — the seed input. */
+  /**
+   * The caller's copy of this note's stored vault_content.data.
+   *
+   * A FALLBACK, not the seed input — see the seed election below. Seeding is
+   * the one irreversible act in this whole feature, and the caller's copy is
+   * the one input to it that lives in React state and can therefore describe
+   * the wrong note (it did, and duplicated notes end to end: see collab/slot.ts).
+   */
   seedJson: string;
   user: { name: string; color: string };
   onStatus: (s: CollabStatus) => void;
@@ -47,10 +54,26 @@ export async function startCollabSession(opts: StartOpts): Promise<CollabSession
   await supabase.auth.getSession();
 
   // ── Seed election (see seed.ts for why a naive hydrate duplicates the note)
+  //
+  // The seed is re-read from the server BY NODE ID rather than taken from the
+  // caller, and that is a deliberate second lock on the same door slot.ts fixes.
+  // The caller's `seedJson` arrives from React state that is necessarily one
+  // render behind the node id during a tab switch; a value fetched here cannot
+  // be about a different note, whatever the caller believes. The extra round
+  // trip happens at most once per note in the vault's lifetime — only on the
+  // branch where no CRDT row exists yet — and it buys the elimination of an
+  // entire failure class whose blast radius is "the wrong document becomes this
+  // note's authoritative state, permanently".
+  //
+  // It falls back to the caller's copy only when the server has nothing, which
+  // covers a note whose first-ever content has not finished autosaving.
   let authoritative = await api.readYdoc(nodeId);
+  let seedSource = seedJson;
   if (authoritative == null) {
-    authoritative = shouldSeed(seedJson)
-      ? await api.seedYdoc(nodeId, buildSeedState(parseContent(seedJson), noteSchema()))
+    const stored = await api.readContent(nodeId);
+    if (shouldSeed(stored)) seedSource = stored;
+    authoritative = shouldSeed(seedSource)
+      ? await api.seedYdoc(nodeId, buildSeedState(parseContent(seedSource), noteSchema()))
       : "";
   }
   const doc = hydrate(authoritative);
@@ -132,7 +155,9 @@ export async function startCollabSession(opts: StartOpts): Promise<CollabSession
     status: "live",
     extensions,
     isRemoteTransaction: (tr: Transaction) => isChangeOrigin(tr),
-    seedWidth: readSeedWidth(seedJson),
+    // From the same string the CRDT was seeded from, so the width can never
+    // describe a different document than the content does.
+    seedWidth: readSeedWidth(seedSource),
     flush: () => {
       provider.flush();
       persistNow();

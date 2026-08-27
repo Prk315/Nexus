@@ -162,11 +162,28 @@ interface Props {
    */
   collab?: CollabSession | null;
   /**
+   * Filled with a handle for pushing a document INTO this editor — restoring an
+   * old version, and nothing else so far.
+   *
+   * A ref rather than a `restoreContent` prop because a prop would go through
+   * the `content` path, and the `content` path is exactly what must not carry a
+   * restore under collaboration (see the effect that installs this). Null
+   * whenever no editor is mounted, which includes the schema-guard case — the
+   * caller must have a route that does not need the editor, because "the stored
+   * content will not parse" is precisely when someone reaches for history.
+   */
+  docRef?: React.MutableRefObject<NoteDocHandle | null>;
+  /**
    * "embedded" drops the outline. WorkbookEditor renders one NoteEditor per
    * linked note, and N stacked outlines in a column of cards is noise, not
    * navigation.
    */
   variant?: "full" | "embedded";
+}
+
+export interface NoteDocHandle {
+  /** Replace the whole document. Returns false if no live editor took it. */
+  replaceDocument(json: unknown): boolean;
 }
 
 const OUTLINE_OPEN_KEY = "nexus.note.outlineOpen";
@@ -240,7 +257,7 @@ export function NoteEditor(props: Props) {
   return <NoteEditorInner {...props} />;
 }
 
-function NoteEditorInner({ content, onChange, nodeId, graph, variant = "full", collab }: Props) {
+function NoteEditorInner({ content, onChange, nodeId, graph, variant = "full", collab, docRef }: Props) {
   const isCollab = !!collab;
   // Read inside effects/callbacks that must not re-run when the session
   // identity changes. `collab` is stable for the life of a mount (EditorPane
@@ -473,6 +490,54 @@ function NoteEditorInner({ content, onChange, nodeId, graph, variant = "full", c
       clearTimeout(id);
     };
   }, [collab, editor]);
+
+  // ── Restoring an old version ───────────────────────────────────────────────
+  // The one sanctioned way to push a document INTO this editor from outside.
+  //
+  // It exists because the [content] effect above cannot do it: under
+  // collaboration that effect returns early, deliberately and correctly, since
+  // a prop-driven setContent on a shared document is a mutual-annihilation loop
+  // with the other person's typing. But a restore is not the prop echoing back —
+  // it is a deliberate, user-initiated edit, and under a CRDT it MUST go through
+  // the editor so ySync turns it into operations the other person receives.
+  // Writing the restored JSON straight to vault_content instead would be
+  // invisible to the Y.Doc and the next projection flush would undo it.
+  //
+  // The same call is right for a private note, where it simply behaves like a
+  // very large paste: onUpdate fires and EditorPane's autosave persists it.
+  useEffect(() => {
+    if (!docRef) return;
+    docRef.current = {
+      replaceDocument(json: unknown): boolean {
+        // Same guard as everywhere else in this file, and for the same reason:
+        // a destroyed editor is truthy, and this handle is held by a component
+        // that outlives the editor.
+        if (!editor || editor.isDestroyed) return false;
+        try {
+          // emitUpdate: true — unlike the [content] effect, which suppresses it
+          // because that content already came FROM the server. This one has to
+          // emit or nothing would ever save it.
+          editor.commands.setContent(json as never, { emitUpdate: true });
+          // setContent replaces the content RANGE, not the doc node, so the
+          // restored version's width would otherwise be silently ignored — the
+          // same trap the [content] effect documents.
+          const width = json && typeof json === "object" ? (json as any).attrs?.width : undefined;
+          if (width !== undefined && editor.state.doc.attrs?.width !== width) {
+            editor.view.dispatch(
+              editor.state.tr.setDocAttribute("width", width).setMeta("addToHistory", false)
+            );
+          }
+          return true;
+        } catch (e) {
+          console.error("[vault] could not apply the restored version to the editor", e);
+          return false;
+        }
+      },
+    };
+    return () => {
+      docRef.current = null;
+    };
+  }, [editor, docRef]);
 
   // Load this note's highlighter categories; seed defaults on first use.
   useEffect(() => {

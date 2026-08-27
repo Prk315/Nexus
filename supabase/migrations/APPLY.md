@@ -19,6 +19,7 @@ query after each.
 | 8 | `20260826120000_job_apply.sql` | `job_profiles.approval_threshold`, nine approval/submission columns on `job_applications`, `job_submission_attempts` — **apply before deploying `job-ingest` v5 / `job-approve`** |
 | 9 | `20260827120000_vault_live_coedit.sql` | `vault_ydoc`, `vault_can_coedit()`, two `realtime.messages` policies — **apply before deploying any Vault build that reads `vault_ydoc`, and see §9 for the two manual steps that are not SQL** |
 | 10 | `20260827140000_vault_task_tags.sql` | `vault_task_tags` + `vault_rename_task_tag()` / `vault_delete_task_tag()` — **already applied live on 2026-08-27**; see §10 |
+| 11 | `20260827160000_vault_content_versions.sql` | `vault_content_versions` + a snapshot trigger on `vault_content` and a byte-budgeted retention trigger — Vault's note history. **Already applied live on 2026-08-27**; the only file here that adds a trigger to an existing hot write path — see §11 |
 
 ⚠️ **File 10 is the one exception to "not applied by the code that wrote it"** —
 it was applied to `efxmzsdisaymtpebaxlp` at the time it was written, and the file
@@ -494,3 +495,120 @@ drop function if exists public.vault_rename_task_tag(text, text);
 drop function if exists public.vault_delete_task_tag(text);
 drop table if exists public.vault_task_tags;
 ```
+
+---
+
+## §11 — Vault note history (`20260827160000_vault_content_versions.sql`)
+
+Gives `vault_content` the history it has never had, and gives a sync conflict a
+second exit. Depends on `20260826150000_vault_teams.sql` (for
+`pf_is_team_member`); independent of files 9 and 10.
+
+**Applied and verified live on 2026-08-27.** Like file 10, recorded here so it is
+not mistaken for pending work.
+
+### Ordering — genuinely relaxed, unlike files 5–9
+
+Either order is safe, and it is worth saying why because most entries above say
+the opposite. The History panel is the only reader, and it catches the missing
+table and renders *"History is unavailable"* naming the file — visible, scoped to
+a panel, and touching no save path. In the other direction the trigger records
+history for clients that know nothing about it, which is strictly what you want.
+
+### ⚠️ The only trigger this repo puts on a hot write path
+
+`vault_content` is rewritten on a 400 ms debounce by every open editor, and every
+2 s by *both* clients of a co-edited note, so the `BEFORE UPDATE` trigger runs
+thousands of times a day. Three properties keep that cheap, and all three are
+load-bearing:
+
+* It returns early on `NEW.data is not distinct from OLD.data` — a no-op write
+  costs one comparison.
+* It skips documents over 2 MB, the app's own `MAX_CONTENT_BYTES`. Those are
+  frozen: the client refuses to write them at all.
+* The five-minute gate is an `EXISTS` covered exactly by
+  `vault_content_versions_node_idx`. Without that index it would be a sequential
+  scan of every version of every note on every keystroke.
+
+**If note saving ever becomes slow, that index is the first thing to check.**
+
+### Retention is byte-budgeted, and the live data is why
+
+A plain "keep the newest 40" is the obvious rule and it was wrong here. Measured
+on this database before applying, against a 96 MB total:
+
+| rows | size band | 40 versions each |
+|---|---|---|
+| 87 | under 10 kB | ≈ 3.8 MB |
+| 16 | 10–100 kB | ≈ 20 MB |
+| 4 | 100 kB – 2 MB | ≈ 94 MB |
+| 3 | over the 2 MB app cap (frozen Canvases) | ≈ 791 MB |
+
+No single count serves a distribution that wide, and one low enough for the 2 MB
+documents would leave the 5 kB notes — the ones edited all day, and the ones the
+feature is for — with almost no history. So the prune keeps the newest entries
+while their cumulative `byte_len` stays under **8 MB per node**, capped at 40 and
+floored at 2. The floor matters: without it a document bigger than the whole
+budget would prune away the snapshot just taken.
+
+### Verify
+
+```sql
+-- Expect exactly 3: owner_all (ALL), team_shared_insert, team_shared_select.
+-- NO update policy for anyone — a version is a fact about what the document once
+-- was, and an editable history is not a history. No team DELETE either: a
+-- teammate must not be able to erase the evidence of an overwrite.
+select policyname, roles::text, cmd from pg_policies
+where schemaname = 'public' and tablename = 'vault_content_versions'
+order by policyname;
+
+-- Expect vault_content_snapshot_trg (alongside the pre-existing
+-- vault_content_force_owner_trg) and vault_content_versions_prune_trg.
+select tgrelid::regclass::text, tgname from pg_trigger
+where tgrelid in ('public.vault_content'::regclass,
+                  'public.vault_content_versions'::regclass)
+  and not tgisinternal
+order by 1, 2;
+```
+
+Behaviour was verified end to end against a scratch node, which was then removed:
+a real change snapshots the PREVIOUS document; a second change within five
+minutes does not; a no-op write does not; a 3 MB → 3 MB change is skipped; six
+2 MB entries prune to four (7813 kB, under the 8 MB budget); and a single 10 MB
+entry survives on the floor of 2.
+
+### A note on the security advisor
+
+`get_advisors` flags `vault_content_snapshot()` and
+`vault_content_versions_prune()` under *"Public Can Execute SECURITY DEFINER
+Function"*. It is a **false positive for trigger functions**, and it already
+fires for eight pre-existing ones here (`vault_content_force_owner`,
+`pf_tasks_sync_subtype`, `pf_task_subtype_guard`, …). Verified rather than
+assumed — invoking one directly returns:
+
+```
+trigger functions can only be called as triggers
+```
+
+Postgres refuses before permissions are even consulted, so there is nothing to
+revoke. Do not "fix" it by switching them to `security invoker`: that would
+subject the snapshot insert to the versions table's own RLS, and the failure
+direction becomes "the write succeeded but nothing was preserved" — exactly what
+the table exists to prevent.
+
+### Rolling back
+
+Purely additive; a rollback costs only the history itself.
+
+```sql
+-- destructive: this is the history
+drop trigger if exists vault_content_snapshot_trg on public.vault_content;
+drop trigger if exists vault_content_versions_prune_trg on public.vault_content_versions;
+drop function if exists public.vault_content_snapshot();
+drop function if exists public.vault_content_versions_prune();
+drop table if exists public.vault_content_versions;
+```
+
+Dropping only `vault_content_snapshot_trg` is the lighter option if the concern
+is write throughput rather than the feature: the panel keeps working and simply
+stops gaining new entries.
