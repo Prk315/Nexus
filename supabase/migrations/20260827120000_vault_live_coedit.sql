@@ -41,6 +41,12 @@
 -- answers a missing table with an error, so an un-migrated database would turn
 -- every shared-note open into a hard failure rather than a degraded one — the
 -- same ordering trap APPLY.md records for job-ingest v5.
+--
+-- APPLIED 2026-08-27 to efxmzsdisaymtpebaxlp, and verified live: 4 vault_ydoc
+-- policies (no team DELETE), 2 realtime.messages policies both scoped to
+-- `authenticated`, vault_can_coedit('does-not-exist') = false, and PostgREST
+-- serving /rest/v1/vault_ydoc with 200 rather than PGRST205. "Allow public
+-- access to channels" was turned off in the dashboard beforehand.
 
 -- ── 1. Who may co-edit ───────────────────────────────────────────────────────
 -- One definition, consulted by both the storage policies (section 2) and the
