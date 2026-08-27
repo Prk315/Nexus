@@ -8,6 +8,7 @@
 export * from "./types";
 export * from "./filter";
 export * from "./tree";
+export * from "./reorder";
 export {
   createPathfinderApi,
   mapTask,

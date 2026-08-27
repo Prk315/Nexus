@@ -1298,6 +1298,36 @@ invisible in-session because `globalContentCache` still held the right thing.
   now, which sets `isLoading` and commits only once the content is in hand.
 ## Vault: PathFinder task blocks
 
+### The board: dragging within a column writes a GLOBAL order
+
+Cross-column drag writes the axis field; same-column drag reorders. The slot
+arithmetic is `insertionIndexFromPointer` / `reorderedIds` in
+`@nexus/core/pathfinder` — promoted out of PathFinder rather than copied,
+because two copies of a drop rule disagree about the edges (the no-op slots
+either side of the dragged card are exactly what one copy gets right and the
+other does not) and only one would have had the tests.
+
+⚠️ **`pf_tasks.sort_order` is ONE order per task, not one per view.** It is a
+plain `integer` with default 0 — and today 405 of 543 tasks sit at 0, so manual
+order is undefined for most of them and ties break by id. A kanban column is a
+subset, so reordering inside it necessarily writes into the same order a
+manually-sorted list reads. That is inherent to the column rather than to the
+implementation, and it is the right meaning: "this task comes before that one"
+should hold wherever the two are seen together. `reorderTasks` assigns
+`sort_order = index` over precisely the ids passed, so always hand it the
+COMPLETE group — a partial list renumbers a few tasks into the middle of
+everyone else.
+
+Reorder is offered **only under manual sort**. Under any other key the board
+recomputes the order from the data, so the drag would write a value nothing
+displays — a gesture that appears to do nothing, which is worse than one that
+is visibly refused.
+
+Geometry is read from the DOM at the moment it is needed, never cached at
+pointerdown: the board reflows during a drag (a column highlights, the drop
+line appears), and a cached rect lands the card in the wrong gap without ever
+looking wrong on screen.
+
 ### The table: column order is the ARRAY order
 
 ⚠️ **`parseSpec` must not sort `spec.columns`.** It used to, and that single call
