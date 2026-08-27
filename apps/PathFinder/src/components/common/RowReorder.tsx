@@ -9,7 +9,8 @@
 // One hook instance per sibling group (a parent's direct children) — the
 // spec is reorder-within-parent only, so scoping the gesture to the group
 // makes cross-parent moves structurally impossible rather than merely
-// rejected. All insertion math is pure and tested in lib/reorderDrag.ts.
+// rejected. All insertion math is pure and tested in @nexus/core/pathfinder
+// (reorder.ts), which Vault's kanban board shares rather than reimplements.
 //
 // Gesture contract: pointerdown on the grip arms it; 4px of movement makes
 // it a drag (below that, nothing happens — the grip has no click action
@@ -21,7 +22,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { GripVertical } from "lucide-react";
 import { cn } from "../../lib/utils";
-import { insertionIndexFromPointer, reorderedIds } from "../../lib/reorderDrag";
+import { insertionIndexFromPointer, reorderedIds } from "@nexus/core/pathfinder";
 
 const REORDER_THRESHOLD_PX = 4;
 
