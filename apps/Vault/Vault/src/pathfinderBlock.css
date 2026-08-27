@@ -1155,6 +1155,31 @@
   .pf-tag-vault { background: oklch(1 0 0 / 6%); }
 }
 
+/* ── Board column editor ─────────────────────────────────────────────────── */
+
+.pf-chip-status { display: inline-flex; align-items: center; gap: 3px; }
+.pf-chip-status .pf-tag-x:disabled { opacity: 0.25; cursor: default; }
+
+.pf-chip-input {
+  font: inherit;
+  font-size: 0.72rem;
+  padding: 2px 8px;
+  border-radius: 999px;
+  border: 1px dashed var(--border-strong);
+  background: transparent;
+  color: var(--fg-main);
+  /* Sized to the placeholder rather than stretching: it sits in a wrapping row
+     of chips, and a full-width input would push every chip onto its own line. */
+  width: 10ch;
+  min-width: 0;
+}
+.pf-chip-input:focus {
+  outline: none;
+  border-style: solid;
+  border-color: var(--edge-in);
+  width: 14ch;
+}
+
 /* ── Kanban drop indicator ───────────────────────────────────────────────────
    The gap a dragged card would land in. A line rather than a moving placeholder
    gap: a gap that opens and closes as the pointer crosses midpoints makes every

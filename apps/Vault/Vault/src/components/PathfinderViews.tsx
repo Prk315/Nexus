@@ -44,6 +44,7 @@ import {
   axisDropValue,
   axisWriteField,
   boardColumns,
+  boardStatuses,
   PF_COLUMN_LABELS,
   META_PCT_MAX,
   META_PCT_MIN,
@@ -635,7 +636,7 @@ export function PfBoardView({
   onSpecChange: (next: PfBlockSpec) => void;
 }) {
   const axis = spec.groupBy;
-  const columns = boardColumns(axis, plans, members);
+  const columns = boardColumns(axis, plans, members, boardStatuses(spec));
   const groups = groupTasks(tasks, axis, columns, axis === "assignee" ? "Personal" : "Other");
   const writeField = axisWriteField(axis);
 

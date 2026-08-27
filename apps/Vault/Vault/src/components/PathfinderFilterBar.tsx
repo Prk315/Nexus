@@ -34,6 +34,8 @@ import {
   PF_COLUMNS,
   PF_COLUMN_LABELS,
   LIST_COLUMNS,
+  boardStatuses,
+  normalizeStatuses,
   SPEC_MAX_LIMIT,
   TREE_MODE_HINTS,
   TREE_MODE_LABELS,
@@ -352,6 +354,17 @@ export function PathfinderFilterBar({
             line of text with chips, not a grid, so `urgency` and `stage` have
             nowhere to go — and offering a switch that does nothing is worse
             than offering none. */}
+        {/* Only on the axis whose values are free text. Every other axis has a
+            closed domain — you cannot invent a priority — so offering to edit
+            its columns would promise something the model cannot keep. */}
+        {view === "board" && spec.groupBy === "kanban_status" ? (
+          <StatusEditor
+            statuses={boardStatuses(spec)}
+            isCustom={spec.statuses.length > 0}
+            onChange={(statuses) => set({ statuses })}
+          />
+        ) : null}
+
         {view === "table" || view === "list" ? (
           <ColumnPicker
             choices={view === "list" ? LIST_COLUMNS : PF_COLUMNS}
@@ -691,6 +704,76 @@ function MultiSelect({
             </>
           )}
         </div>
+      ) : null}
+    </div>
+  );
+}
+
+/**
+ * Add, remove and reset the board's status columns.
+ *
+ * Removing a column does NOT touch the tasks in it — they keep their status and
+ * appear in the board's "Other" bucket, which is deliberately not a drop target.
+ * Deleting a column that silently rewrote every card in it would be a bulk edit
+ * disguised as a layout change.
+ */
+function StatusEditor({
+  statuses, isCustom, onChange,
+}: {
+  statuses: string[];
+  isCustom: boolean;
+  onChange: (v: string[]) => void;
+}) {
+  const [draft, setDraft] = useState("");
+
+  const add = () => {
+    const next = normalizeStatuses([...statuses, draft]);
+    setDraft("");
+    // normalizeStatuses drops blanks, duplicates and anything past the cap, so
+    // a no-op add is simply a list that did not grow.
+    if (next.length !== statuses.length) onChange(next);
+  };
+
+  return (
+    <div className="pf-chips" role="group" aria-label="Board columns">
+      <span className="pf-chips-label">Columns</span>
+      {statuses.map((s) => (
+        <span key={s} className="pf-chip is-on pf-chip-status">
+          {s.charAt(0).toUpperCase() + s.slice(1)}
+          <button
+            type="button"
+            className="pf-tag-x"
+            aria-label={`Remove the ${s} column`}
+            title="Remove this column — the tasks in it keep their status and move to Other"
+            // The last column cannot go: a board with no columns has nowhere to
+            // show anything and no way back except editing the document.
+            disabled={statuses.length <= 1}
+            onClick={() => onChange(statuses.filter((x) => x !== s))}
+          >×</button>
+        </span>
+      ))}
+      <input
+        className="pf-chip-input"
+        value={draft}
+        placeholder="Add column…"
+        aria-label="Add a board column"
+        maxLength={24}
+        onChange={(e) => setDraft(e.target.value)}
+        onKeyDown={(e) => {
+          if (e.key === "Enter") { e.preventDefault(); add(); }
+          // The block lives inside a ProseMirror node view; an un-stopped key
+          // reaches the editor and types into the note.
+          e.stopPropagation();
+        }}
+        onBlur={add}
+      />
+      {isCustom ? (
+        <button
+          type="button"
+          className="pf-chip"
+          title="Back to Backlog / Todo / Doing / Done"
+          onClick={() => onChange([])}
+        >Reset</button>
       ) : null}
     </div>
   );

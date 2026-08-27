@@ -1298,6 +1298,24 @@ invisible in-session because `globalContentCache` still held the right thing.
   now, which sets `isLoading` and commits only once the content is in hand.
 ## Vault: PathFinder task blocks
 
+### Board columns are editable on ONE axis, and only that one
+
+`spec.statuses` overrides the built-in four, and only for `kanban_status` — the
+one board axis whose values are free text on the task. Every other axis has a
+closed domain (you cannot invent a priority), so offering to edit its columns
+would promise something the model cannot keep. There is a test for that.
+
+Stored **per block**, not globally: a status is not owned by anything, so one
+note can track a review pipeline and another a shipping one without either
+becoming the definition. Keys are lower-cased, because a key is matched against
+`pf_tasks.kanban_status` by exact string equality — a column labelled "Doing"
+that does not hold the "doing" tasks reads as an empty board rather than as a
+mismatch. All 543 rows in the database are already lower-case.
+
+Removing a column **does not touch the tasks in it**. They keep their status and
+surface in the `__other__` bucket, which stays a non-drop-target because
+dropping there would have to invent a value. A delete that silently rewrote
+every card in the column would be a bulk edit disguised as a layout change.
 ### The board: dragging within a column writes a GLOBAL order
 
 Cross-column drag writes the axis field; same-column drag reorders. The slot
