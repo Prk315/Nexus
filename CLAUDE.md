@@ -893,7 +893,9 @@ have.
 ⚠️ **An unknown node type does not get dropped — it blanks the whole note.**
 `@tiptap/core`'s `createNodeFromContent` catches ProseMirror's "Unknown node
 type" and returns `createNodeFromContent("")`, i.e. an empty document. The first
-keystroke then autosaves that blank, and `vault_content` keeps no history. Web,
+keystroke then autosaves that blank, and the note history below is a five-minute
+snapshot, not an undo log — it can get you back to the previous *iteration*, not
+to the keystroke before the blank. Web,
 Mac and iPad update independently, so from the moment one note holds one new
 block type the race is live. That is what the guard exists for: it names the
 unknown types and refuses to mount an editor. **Deploy a schema addition
@@ -1092,6 +1094,21 @@ its own RLS branch; y-protocols already expires a stale caret after 30 s.
   extension list once, so EditorPane renders a placeholder until the session
   resolves, and keys the editor on whether there is one. Mounting early gives a
   non-collab editor on a co-edited note that happily saves over the other person.
+- ⚠️ **Anything derived from starting a session must carry the node id it was
+  resolved FOR.** Starting one is async, so React state describing it lags the
+  `nodeId` prop by at least one render — and in that render `nodeId` is already
+  note B while `session` is still note A's. `useCollabSession` originally kept
+  `session`/`status`/`loading` as three plain useStates and froze the seed on
+  `session ? keep : take`, which meant **note B's CRDT got seeded from note A's
+  document**: with no `vault_ydoc` row for B yet, A's text became B's
+  authoritative state and the projection wrote it into B's `vault_content`. Two
+  notes, one document, no undo. The same lag handed A's about-to-be-destroyed
+  session to the editor mounted for B, and `loading` could not cover the gap
+  because it was state too. The hook now holds **one** state — a slot stamped
+  with its node id — and derives everything through `collab/slot.ts`, which is
+  where the rule and its tests live. `startCollabSession` re-reads the seed from
+  the server by node id as a second, independent lock on the same door: the
+  caller's copy is the one input that can be about the wrong note.
 - **The fragment name is `"default"`.** `Collaboration`'s `field` defaults to
   `"default"` but `prosemirrorJSONToYDoc`'s third argument defaults to
   `"prosemirror"`. Mixing them raises nothing — the note just opens blank, and
@@ -1127,6 +1144,72 @@ and `applyUpdate` silently no-ops, so the session looks connected and simply
 never converges. (The `BlockHandle.ts` comment about "an app with no
 collaboration" is now out of date, but its conclusion still holds — the stack is
 lazy, and `@tiptap/extension-drag-handle` would import it eagerly.)
+
+### Note history, and the second exit from a conflict
+
+`vault_content` used to keep none, which is why several comments in this repo
+warn about how much one bad write costs. `vault_content_versions`
+(`20260827160000`, `APPLY.md` §10) is the other half of those fixes: they prevent
+the write, this survives it.
+
+Snapshots are taken by a **BEFORE UPDATE trigger on `vault_content`**, capturing
+`OLD.data` — not by the client. Two reasons, both load-bearing:
+
+- A client saving "a copy alongside each save" records the NEW document, so the
+  state you actually want back (what it looked like when you opened it) is the
+  one never recorded.
+- The rule then covers every writer at once: web, Mac, iPad, the JSON projection
+  written by the co-editing runtime, and anything added later.
+
+It is rate-limited to **one snapshot per node per five minutes** and retained at
+**40 per node**. That makes it a history, not an undo log — and under co-editing
+that gate is not optional: `vault_content` is rewritten every couple of seconds
+by *both* clients. It is also the only trigger this repo puts on a hot write
+path, so `vault_content_versions_node_idx` is what keeps the gate's `EXISTS` from
+becoming a sequential scan on every keystroke.
+
+The panel (`components/VersionHistory.tsx`) **never mounts an editor on an old
+version** — it renders a flat line projection and a diff (`lib/versionDiff.ts`,
+pure and tested). That is a safety property, not a shortcut: an editor that
+exists can emit, and one emit autosaves the old document over the current one. It
+also means a version whose schema this build cannot parse is still viewable,
+which is exactly when history is most needed.
+
+Restoring goes **through the editor**, via `NoteEditor`'s `docRef` handle. Under
+a CRDT a restore written straight to `vault_content` is invisible to the Y.Doc
+and the next projection flush undoes it; `setContent` makes ySync turn it into
+operations the other person receives. There is a direct-write fallback for when
+no editor is mounted (the schema guard is showing, or a non-Tiptap kind), and it
+deliberately refuses on a co-edited note rather than appearing to work.
+
+A conflict now has three exits instead of one — **Reload**, **Keep mine**, and
+**Compare**. "Keep mine" (`api.overwriteContent`) is only safe to offer because
+it snapshots the server's copy first, so the person being overwritten can
+recover from this same panel. Order is snapshot → refresh the guard → write, so a
+failed snapshot leaves the conflict standing rather than clearing the guard for
+a write with no safety net. Like `saveContentProjection`, it is a separate
+exported name rather than a `force` flag — the one sanctioned way past
+`assertContentNotConflicted`.
+
+### Two more ways a note could be written over another, both in EditorPane
+
+Neither involved collaboration, and both had the same tell: the damage was
+invisible in-session because `globalContentCache` still held the right thing.
+
+- **A tab switch inside the autosave debounce cancelled the pending write.**
+  `selectedId` is a dependency of the autosave effect, so its cleanup cleared the
+  timer — the edit survived in the cache (so reopening the tab showed it) and was
+  lost on reload, on closing the tab, or to any other device. The armed save now
+  lives in `pendingSaveRef` and a node change **flushes** it. A flush that lands
+  after the pane has moved on reports nothing into the save status: that status
+  describes what is on screen, and a conflict attributed to the wrong note sends
+  you to reload the wrong document.
+- **Closing a tab could blank the tab it fell back to.** `closeTab` set the next
+  node id next to `content = ""` and only *then* started reading, with no
+  `persistedContent` entry to mark it unloaded — so the autosave effect could not
+  tell that from "the user deleted everything" and wrote the empty string 400 ms
+  later over a note that had never been opened. It routes through `selectNode`
+  now, which sets `isLoading` and commits only once the content is in hand.
 ## Vault: PathFinder task blocks
 
 The slash menu offers **three** blocks — *Task list*, *Task board*, *Task table* —

@@ -18,6 +18,7 @@ query after each.
 | 7 | `20260825120000_job_evaluation.sql` | `job_app_modules`, `job_applications`, `job_matches.module_plan` — **apply before deploying `job-ingest` v4** |
 | 8 | `20260826120000_job_apply.sql` | `job_profiles.approval_threshold`, nine approval/submission columns on `job_applications`, `job_submission_attempts` — **apply before deploying `job-ingest` v5 / `job-approve`** |
 | 9 | `20260827120000_vault_live_coedit.sql` | `vault_ydoc`, `vault_can_coedit()`, two `realtime.messages` policies — **apply before deploying any Vault build that reads `vault_ydoc`, and see §9 for the two manual steps that are not SQL** |
+| 10 | `20260827160000_vault_content_versions.sql` | `vault_content_versions` + a snapshot trigger on `vault_content` and a retention trigger — Vault's note history. **Safe in either order relative to its client**, and the only file here that adds a trigger to an existing hot write path — see §10 |
 
 Files 1–3 are independent of each other and of file 4. File 4 has an **internal**
 ordering requirement (the `ALTER` must precede the index that uses the new
@@ -430,3 +431,93 @@ drop policy if exists vault_doc_broadcast_write on realtime.messages;
 drop table if exists public.vault_ydoc;
 drop function if exists public.vault_can_coedit(text);
 ```
+
+## §10 — Vault note history (`20260827160000_vault_content_versions.sql`)
+
+File 10 gives `vault_content` the history it has never had, and gives a sync
+conflict a second exit. It depends on `20260826150000_vault_teams.sql` (for
+`pf_is_team_member`) and on nothing else; it is independent of file 9.
+
+### Ordering — this one is genuinely relaxed, unlike files 5–9
+
+Apply it before or after the Vault build that reads it; both directions are safe,
+and it is worth saying why, because every other entry in this file says the
+opposite.
+
+* **Client first.** The History panel is the only reader. PostgREST answers a
+  missing table with an error, the panel catches it and renders *"History is
+  unavailable"* naming this file — so the failure is visible, scoped to a panel
+  nobody has opened yet, and touches no save path. Contrast `job-ingest` v5,
+  where the missing column failed a background job with no UI to report it.
+* **Migration first.** The trigger records history for writes from clients that
+  know nothing about it, which is strictly what you want: history that starts
+  accumulating before the feature ships is history you already have when you
+  first need it.
+
+### ⚠️ It adds a trigger to the busiest write path in Vault
+
+This is the only file here that does. `vault_content` is rewritten on a 400 ms
+debounce by every open editor, and every 2 s by *both* clients of a co-edited
+note. The `BEFORE UPDATE` trigger therefore runs thousands of times a day, so
+two properties are load-bearing rather than nice:
+
+* It returns early on `NEW.data is not distinct from OLD.data` — a no-op write
+  costs one comparison.
+* The five-minute gate is an `EXISTS` against
+  `vault_content_versions (node_id, created_at desc, id desc)`, which the index
+  in section 1 covers exactly. Without that index this would be a sequential
+  scan of every version of every note on every keystroke.
+
+If note saving ever becomes slow after applying this, that index is the first
+thing to check.
+
+### Verify
+
+```sql
+-- Expect 3 policies: owner_all (ALL), team_shared_select, team_shared_insert.
+-- There must be NO update policy for anyone — a version is a fact about what
+-- the document once was, and an editable history is not a history. There is
+-- deliberately no team DELETE either: a teammate must not be able to erase the
+-- evidence of an overwrite, which is most of the point of the table.
+select policyname, roles::text, cmd from pg_policies
+where schemaname = 'public' and tablename = 'vault_content_versions'
+order by policyname;
+
+-- Both triggers present.
+select tgname from pg_trigger
+where tgrelid in ('public.vault_content'::regclass,
+                  'public.vault_content_versions'::regclass)
+  and not tgisinternal
+order by tgname;
+
+-- The gate's index. Expect vault_content_versions_node_idx.
+select indexname from pg_indexes
+where schemaname = 'public' and tablename = 'vault_content_versions';
+```
+
+End-to-end, on a note you own and do not mind editing — the trigger snapshots
+the PREVIOUS document, so the first edit after applying is what creates row one:
+
+```sql
+-- 0 before, 1 after you edit that note in Vault and let it save.
+select count(*), max(created_at) from public.vault_content_versions
+where node_id = '<a node id>';
+```
+
+### Rolling back
+
+Purely additive, so a rollback loses only the history itself. Nothing else reads
+the table, and no other trigger or policy references it.
+
+```sql
+-- destructive: this is the history
+drop trigger if exists vault_content_snapshot_trg on public.vault_content;
+drop trigger if exists vault_content_versions_prune_trg on public.vault_content_versions;
+drop function if exists public.vault_content_snapshot();
+drop function if exists public.vault_content_versions_prune();
+drop table if exists public.vault_content_versions;
+```
+
+Dropping only the trigger (keeping the table) is the lighter option if the
+concern is write throughput rather than the feature: the panel keeps working and
+simply stops gaining new entries.

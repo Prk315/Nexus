@@ -1,0 +1,349 @@
+/* ── Version history ────────────────────────────────────────────────────────
+   The panel that answers "what did this note used to be, and can I have it
+   back". Two columns, because the list alone answers nothing: a timestamp and a
+   byte count do not distinguish two versions four minutes apart. The diff is
+   the primary surface and the list is navigation for it.
+
+   It renders a flat text projection, never an editor — see
+   components/VersionHistory.tsx for why that is a safety property rather than a
+   shortcut.
+
+   Its own file, like pathfinderBlock.css, and imported AFTER App.css: every
+   custom property below is declared on :root there. */
+
+.vh-backdrop {
+  position: fixed;
+  inset: 0;
+  /* One below .confirm-backdrop (10000): restoring a version opens a
+     confirmation ON TOP of this panel, and a confirmation rendered behind the
+     thing it is confirming is worse than none. */
+  z-index: 9998;
+  background: oklch(0 0 0 / 32%);
+  backdrop-filter: blur(6px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+}
+
+.vh-panel {
+  background: var(--bg-base);
+  border: 1px solid var(--border-base);
+  border-radius: calc(var(--radius) * 1.5);
+  box-shadow: var(--shadow-lg);
+  width: min(1080px, 100%);
+  height: min(720px, 88vh);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  animation: confirm-pop var(--duration) var(--ease);
+}
+
+.vh-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 18px 20px 14px;
+  border-bottom: 1px solid var(--border-faint);
+}
+
+.vh-title {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--fg-main);
+  letter-spacing: -0.01em;
+}
+
+.vh-subtitle {
+  font-size: 12px;
+  color: var(--fg-muted);
+  margin-top: 2px;
+  max-width: 60ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.vh-close {
+  background: none;
+  border: none;
+  font-size: 15px;
+  line-height: 1;
+  color: var(--fg-subdued);
+  cursor: pointer;
+  padding: 6px 8px;
+  border-radius: 8px;
+}
+.vh-close:hover { background: var(--bg-subtle); color: var(--fg-main); }
+
+.vh-body {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+}
+
+/* ── Left: the iterations ─────────────────────────────────────────────────── */
+
+.vh-list {
+  width: 264px;
+  flex: none;
+  border-right: 1px solid var(--border-faint);
+  overflow-y: auto;
+  background: var(--bg-subtle);
+  padding-bottom: 12px;
+}
+
+.vh-list-head {
+  position: sticky;
+  top: 0;
+  background: var(--bg-subtle);
+  padding: 10px 14px 8px;
+  font-size: 10.5px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--fg-ghost);
+  border-bottom: 1px solid var(--border-faint);
+}
+
+.vh-row {
+  display: block;
+  width: 100%;
+  text-align: left;
+  background: none;
+  border: none;
+  border-bottom: 1px solid var(--border-faint);
+  padding: 10px 14px;
+  cursor: pointer;
+  font: inherit;
+  color: inherit;
+}
+.vh-row:hover { background: var(--bg-base); }
+.vh-row-active { background: var(--bg-base); box-shadow: inset 3px 0 0 var(--fg-soft); }
+
+/* "Now" is the baseline every diff is measured against, not a choice — so it
+   must not look clickable. */
+.vh-row-current { cursor: default; }
+.vh-row-current:hover { background: none; }
+
+.vh-row-main {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.vh-row-when {
+  font-size: 12.5px;
+  font-weight: 550;
+  color: var(--fg-main);
+}
+
+.vh-row-badge {
+  font-size: 10px;
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: var(--sticky-border);
+  color: var(--fg-primary);
+  letter-spacing: 0.01em;
+}
+
+.vh-row-badge-live {
+  background: var(--success-bg);
+  border: 1px solid var(--success-border);
+  color: var(--success);
+}
+
+.vh-row-meta {
+  font-size: 11px;
+  color: var(--fg-muted);
+  margin-top: 3px;
+}
+
+.vh-empty {
+  padding: 16px 14px;
+  font-size: 11.5px;
+  line-height: 1.5;
+  color: var(--fg-muted);
+}
+
+/* ── Right: the comparison ────────────────────────────────────────────────── */
+
+.vh-detail {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.vh-detail-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 18px;
+  border-bottom: 1px solid var(--border-faint);
+}
+
+.vh-detail-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--fg-main);
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+}
+
+.vh-detail-abs {
+  font-size: 11px;
+  font-weight: 400;
+  color: var(--fg-ghost);
+}
+
+.vh-detail-stats { display: flex; gap: 6px; }
+
+.vh-chip {
+  font-size: 11px;
+  font-weight: 600;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Green/red carry the sign here, but they are never the ONLY carrier: every
+   line also has a leading + or −, and the chips are labelled. Red-green
+   colour blindness must not make a restore a guess. */
+.vh-chip-add  { background: var(--success-bg);     color: var(--success);     border: 1px solid var(--success-border); }
+.vh-chip-del  { background: var(--destructive-bg); color: var(--destructive); border: 1px solid var(--destructive-border); }
+.vh-chip-warn { background: var(--bg-raised);      color: var(--warning);     border: 1px solid var(--border-base); }
+
+.vh-diff {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: 10px 0;
+  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospace;
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+.vh-line {
+  display: flex;
+  gap: 8px;
+  padding: 0 18px;
+  white-space: pre-wrap;
+  /* A long unbroken line (a pasted URL, a base64 leftover) wraps inside the
+     panel rather than making the whole dialog scroll sideways. */
+  overflow-wrap: anywhere;
+}
+
+.vh-line-sign {
+  flex: none;
+  width: 1ch;
+  color: var(--fg-ghost);
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+.vh-line-same { color: var(--fg-secondary); }
+.vh-line-add  { background: var(--success-bg);     color: var(--fg-main); }
+.vh-line-add  .vh-line-sign { color: var(--success); }
+.vh-line-del  { background: var(--destructive-bg); color: var(--fg-main); }
+.vh-line-del  .vh-line-sign { color: var(--destructive); }
+
+.vh-placeholder {
+  padding: 28px 24px;
+  font-size: 12.5px;
+  line-height: 1.6;
+  color: var(--fg-muted);
+  max-width: 56ch;
+}
+.vh-placeholder-dim { color: var(--fg-subdued); margin-top: 10px; }
+
+.vh-error {
+  padding: 24px;
+  font-size: 12.5px;
+  line-height: 1.6;
+  color: var(--destructive);
+}
+.vh-error-detail {
+  margin-top: 6px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 11px;
+  color: var(--fg-secondary);
+  overflow-wrap: anywhere;
+}
+.vh-error-hint { margin-top: 10px; color: var(--fg-muted); }
+.vh-error-hint code { font-size: 11px; }
+
+.vh-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 12px;
+  padding: 12px 18px;
+  border-top: 1px solid var(--border-faint);
+}
+
+.vh-actions-note {
+  font-size: 11px;
+  color: var(--fg-muted);
+  margin-right: auto;
+}
+
+.vh-btn {
+  font: inherit;
+  font-size: 12.5px;
+  padding: 7px 14px;
+  border-radius: 10px;
+  border: 1px solid var(--border-base);
+  background: var(--bg-base);
+  color: var(--fg-main);
+  cursor: pointer;
+}
+.vh-btn:hover:not(:disabled) { background: var(--bg-subtle); }
+.vh-btn:disabled { opacity: 0.5; cursor: default; }
+
+.vh-btn-primary {
+  background: var(--fg-soft);
+  border-color: var(--fg-soft);
+  color: var(--bg-base);
+}
+.vh-btn-primary:hover:not(:disabled) { background: var(--fg-bright); border-color: var(--fg-bright); }
+
+/* The way in, in the editor toolbar next to the save status. Quiet by default:
+   it sits beside a note title on every note in the vault, and a button that
+   competes with the title for attention on every screen is a tax paid all day
+   for something reached occasionally. */
+.editor-history-btn {
+  font: inherit;
+  font-size: 11px;
+  letter-spacing: 0.01em;
+  padding: 3px 9px;
+  border-radius: 999px;
+  border: 1px solid var(--border-base);
+  background: var(--bg-base);
+  color: var(--fg-muted);
+  cursor: pointer;
+  align-self: center;
+  white-space: nowrap;
+  user-select: none;
+  -webkit-user-select: none;
+}
+.editor-history-btn:hover {
+  background: var(--bg-subtle);
+  color: var(--fg-main);
+  border-color: var(--border-strong);
+}
+
+/* On a narrow window the two columns cannot both be useful; the list becomes a
+   short scrolling strip above the diff. */
+@media (max-width: 720px) {
+  .vh-body { flex-direction: column; }
+  .vh-list {
+    width: auto;
+    max-height: 34%;
+    border-right: none;
+    border-bottom: 1px solid var(--border-faint);
+  }
+}

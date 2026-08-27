@@ -11,8 +11,10 @@ import React, {
 import * as api from "../lib/api";
 import { TagBar } from "./TagBar";
 import { HomePage } from "./HomePage";
+import { VersionHistory } from "./VersionHistory";
 import { nodeIcon } from "../nodeUtils";
 import type { VaultGraph } from "../types";
+import type { NoteDocHandle } from "./NoteEditor";
 import { lazyWithReload } from "../lib/lazyLoad";
 import { useCollabSession } from "../collab/useCollabSession";
 
@@ -215,6 +217,119 @@ export const EditorPane = forwardRef<EditorPaneHandle, EditorPaneProps>(
       lastChangeRemoteRef.current = !!meta?.remote;
       setContent(next);
     }
+
+    // ── History ───────────────────────────────────────────────────────────────
+    const [showHistory, setShowHistory] = useState(false);
+    // The live NoteEditor's handle, when one is mounted. Null while the schema
+    // guard is showing, and for every kind that renders a different editor —
+    // restoreVersion has a route that does not need it.
+    const noteDocRef = useRef<NoteDocHandle | null>(null);
+
+    // Everything whose document lives in vault_content, which is what the
+    // history trigger watches. Journals are the one content-backed kind that
+    // does not (vault_journals), folders/PDF/video/database have no document of
+    // their own to version.
+    const supportsHistory =
+      !!selectedId &&
+      !isFolderSelected &&
+      !isPdfSelected &&
+      !isVideoSelected &&
+      !isDatabaseSelected &&
+      selectedNode?.kind.type !== "Journal";
+
+    useEffect(() => {
+      // A panel left open across a tab switch would be showing one note's
+      // history above another note's document, and its Restore button would
+      // then write the wrong thing.
+      setShowHistory(false);
+    }, [selectedId]);
+
+    /**
+     * Put an older version back.
+     *
+     * Order matters: snapshot FIRST, so a restore is itself reversible and a
+     * mis-click is one more trip through this same panel rather than a loss.
+     *
+     * Then prefer the editor. Under live co-editing that is not a preference —
+     * a restore written straight to vault_content would be invisible to the
+     * Y.Doc, and the next projection flush from either client would silently
+     * undo it. Going through `setContent` makes ySync turn the restore into
+     * operations the other person actually receives.
+     */
+    async function restoreVersion(data: string): Promise<void> {
+      const id = selectedId;
+      if (!id) return;
+      // Snapshots the SERVER's copy, which is the thing about to be replaced —
+      // and in the case that matters most, a note sitting in "conflict", that is
+      // the other person's newer document rather than the one on screen.
+      await api.snapshotCurrentContent(id, "restore");
+
+      // Restoring IS a deliberate decision to overwrite, and the snapshot above
+      // is what makes it a reversible one — so clear the conflict guard rather
+      // than let it reject the save that carries the restore. Without this,
+      // restoring while a conflict is showing silently does nothing: the editor
+      // updates, the autosave throws ContentConflictError, and the note reverts
+      // on the next reload.
+      api.forgetContentVersion(id);
+
+      let parsed: unknown = data;
+      try { parsed = JSON.parse(data); } catch { /* legacy HTML/plain text */ }
+
+      if (noteDocRef.current?.replaceDocument(parsed)) {
+        // The editor emitted; the autosave effect (or the CRDT, under collab)
+        // carries it from here. Keep the caches honest in the meantime.
+        globalContentCache.set(id, data);
+        setSaveStatus("");
+        return;
+      }
+
+      if (collabSession) {
+        // No mounted editor to route through, and writing around the CRDT would
+        // be undone by the next flush. Refusing loudly beats a restore that
+        // appears to work and reverts a few seconds later.
+        throw new Error(
+          "This note is being co-edited — open it in the editor before restoring a version."
+        );
+      }
+
+      // No live editor: the schema guard is showing, or this kind renders a
+      // non-Tiptap editor that takes `content` as a prop. Write it directly.
+      await api.saveContent(id, data);
+      persistedContent.set(id, data);
+      globalContentCache.set(id, data);
+      setContent(data);
+      setSaveStatus("");
+    }
+
+    /**
+     * The other half of a conflict, and the half that was missing.
+     *
+     * "Reload" discards your edit in favour of theirs. Until this existed there
+     * was no button for the opposite choice — the only way to keep your own
+     * version was to copy it out by hand, which nobody does, so in practice a
+     * conflict always resolved the same way regardless of which document was
+     * worth more.
+     *
+     * It is safe to offer because it is no longer destructive:
+     * overwriteContent snapshots the server's copy into the history first, so
+     * the person being overwritten can get their version back from this same
+     * panel.
+     */
+    async function keepMine(): Promise<void> {
+      const id = selectedId;
+      if (!id) return;
+      setSaveStatus("saving");
+      try {
+        await api.overwriteContent(id, content);
+        persistedContent.set(id, content);
+        globalContentCache.set(id, content);
+        setSaveStatus("saved");
+        setTimeout(() => setSaveStatus(""), 1500);
+      } catch (e) {
+        console.error("[vault] could not overwrite the server copy", e);
+        setSaveStatus("error");
+      }
+    }
     const edgeChildren = selectedId
       ? (graph.edges[selectedId] ?? []).filter((id) => graph.nodes[id])
       : [];
@@ -280,6 +395,27 @@ export const EditorPane = forwardRef<EditorPaneHandle, EditorPaneProps>(
       // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [isFolderSelected, selectedId, edgeChildren.join(","), graph]);
 
+    // The save that is armed but has not fired yet.
+    //
+    // The autosave effect's cleanup clears its timer, and `selectedId` is one of
+    // its dependencies — so switching tabs inside the debounce window used to
+    // CANCEL the pending write rather than perform it. In memory it looked fine
+    // (globalContentCache still held the edit, so reopening the tab showed it),
+    // which is what hid the bug: the edit was only lost on reload, or on closing
+    // the tab, or when a second device read the note. Holding the armed save
+    // here lets the switch flush it instead of dropping it.
+    const pendingSaveRef = useRef<{ id: string; run: (report: boolean) => Promise<void> } | null>(null);
+
+    function flushPendingSave() {
+      const p = pendingSaveRef.current;
+      if (!p) return;
+      pendingSaveRef.current = null;
+      // Deliberately NOT awaited by the callers: a tab switch must not wait on
+      // a network round trip. Ordering is safe because saveQueue is
+      // single-flight per node and coalescing.
+      void p.run(false);
+    }
+
     // Auto-save
     useEffect(() => {
       if (!selectedId || isFolderSelected || isPdfSelected || isVideoSelected || isDatabaseSelected)
@@ -288,19 +424,35 @@ export const EditorPane = forwardRef<EditorPaneHandle, EditorPaneProps>(
       // right after selectNode loaded it, not an edit. Writing it back burns a
       // round-trip per node open and, worse, makes a genuinely blocked/blank
       // editor look like a legitimate save.
-      if (persistedContent.get(selectedId) === content) return;
+      if (persistedContent.get(selectedId) === content) {
+        // Also disarm: an edit typed and then undone back to the stored value
+        // would otherwise leave the typed version armed, and a later flush would
+        // reinstate exactly what the user just took back.
+        if (pendingSaveRef.current?.id === selectedId) pendingSaveRef.current = null;
+        return;
+      }
       // A co-editor's keystroke is not ours to persist. Both clients write the
       // projection, but only for their own changes — otherwise every character
       // typed by either person would be written twice, and the 2s debounce
       // would never settle while the other person was mid-sentence.
-      if (collabSession && lastChangeRemoteRef.current) return;
-      setSaveStatus("saving");
-      // Under collaboration vault_content is a derived projection, not the
-      // truth (vault_ydoc is), and it is re-derived on every keystroke from
-      // either side — so it can afford to be lazier than the 400ms an
-      // authoritative save needs.
-      const delay = collabSession ? 2000 : 400;
-      const timer = setTimeout(async () => {
+      if (collabSession && lastChangeRemoteRef.current) {
+        if (pendingSaveRef.current?.id === selectedId) pendingSaveRef.current = null;
+        return;
+      }
+
+      // Captured, not read from state at fire time. This save is about THIS
+      // node and THIS document; by the time it runs the pane may be showing
+      // something else, and reading `selectedId` then is how one note's text
+      // gets written into another note's row.
+      const id = selectedId;
+      const text = content;
+      const projection = !!collabSession;
+
+      // `report` is false for a flush that happens after the pane has moved on:
+      // the status line describes whatever is on screen now, and telling the
+      // user their *current* note hit a conflict when it was the previous one
+      // would send them to reload the wrong document.
+      const run = async (report: boolean) => {
         try {
           // Queued in api.ts: single-flight per node, coalescing, backoff.
           // Resolves once this content (or something newer) is persisted.
@@ -309,11 +461,16 @@ export const EditorPane = forwardRef<EditorPaneHandle, EditorPaneProps>(
           // would otherwise fire constantly: on a co-edited note the row
           // legitimately changes under us several times a minute. The CRDT is
           // the merge authority there, so there is nothing to protect.
-          await (collabSession ? api.saveContentProjection : api.saveContent)(selectedId, content);
-          persistedContent.set(selectedId, content);
+          await (projection ? api.saveContentProjection : api.saveContent)(id, text);
+          persistedContent.set(id, text);
+          if (!report) return;
           setSaveStatus("saved");
           setTimeout(() => setSaveStatus(""), 1500);
         } catch (e) {
+          if (!report) {
+            console.error(`[vault] a pending save for node ${id} could not be flushed`, e);
+            return;
+          }
           if (e instanceof api.CollabOnlyError) {
             // This note has live co-editing state but this build isn't
             // participating — either it predates the feature or the flag is
@@ -323,7 +480,8 @@ export const EditorPane = forwardRef<EditorPaneHandle, EditorPaneProps>(
           } else if (e instanceof api.ContentConflictError) {
             // Someone else's newer save is on the server — do NOT clear this
             // status on a timer like "saved": it needs to stay until the note
-            // is reloaded, or the next autosave would just overwrite them.
+            // is reloaded or deliberately overwritten, or the next autosave
+            // would just silently bury them.
             setSaveStatus("conflict");
           } else {
             // The queue gave up after backoff — say so instead of lying "Saved";
@@ -331,9 +489,26 @@ export const EditorPane = forwardRef<EditorPaneHandle, EditorPaneProps>(
             setSaveStatus("error");
           }
         }
-      }, delay);
+      };
+
+      setSaveStatus("saving");
+      pendingSaveRef.current = { id, run };
+      // Under collaboration vault_content is a derived projection, not the
+      // truth (vault_ydoc is), and it is re-derived on every keystroke from
+      // either side — so it can afford to be lazier than the 400ms an
+      // authoritative save needs.
+      const timer = setTimeout(() => {
+        // Only disarm if this is still the armed save; a newer edit may have
+        // replaced it while this timer was queued.
+        if (pendingSaveRef.current?.run === run) pendingSaveRef.current = null;
+        void run(true);
+      }, projection ? 2000 : 400);
       return () => clearTimeout(timer);
     }, [content, selectedId, collabSession]);
+
+    // A pane closed (or the app navigated) with a save still armed is the same
+    // silent loss as a tab switch, one level up.
+    useEffect(() => () => flushPendingSave(), []);
 
     // Keep global cache in sync with in-memory edits so other panes benefit.
     useEffect(() => {
@@ -412,6 +587,9 @@ export const EditorPane = forwardRef<EditorPaneHandle, EditorPaneProps>(
 
       if (selectedId && selectedId !== id) {
         globalContentCache.set(selectedId, content);
+        // Write it out too. The cache keeps the edit visible in this session,
+        // which is exactly why losing it here went unnoticed for so long.
+        flushPendingSave();
       }
 
       let text: string;
@@ -465,35 +643,33 @@ export const EditorPane = forwardRef<EditorPaneHandle, EditorPaneProps>(
     }
 
     function closeTab(id: string) {
-      setOpenTabs((prev) => {
-        const idx = prev.indexOf(id);
-        if (idx === -1) return prev;
-        const next = prev.filter((t) => t !== id);
+      const idx = openTabs.indexOf(id);
+      if (idx === -1) return;
+      const next = openTabs.filter((t) => t !== id);
+      // Global cache is intentionally kept — other panes or future re-opens benefit from it.
+      setOpenTabs(next);
+      if (selectedId !== id) return;
 
-        if (selectedId === id) {
-          const nextId = next[idx] ?? next[idx - 1] ?? null;
-          if (nextId) {
-            const nextNode = graph.nodes[nextId];
-            const isFolder = nextNode?.kind.type === "Folder";
-            const cached = globalContentCache.get(nextId);
-            setSelectedId(nextId);
-            setContent(cached ?? "");
-            if (!isFolder && cached === undefined) {
-              api.readContent(nextId).then((t) => {
-                globalContentCache.set(nextId, t);
-                persistedContent.set(nextId, t);
-                setContent(t);
-              });
-            }
-          } else {
-            setSelectedId(null);
-            setContent("");
-            setShowHomeState(true);
-          }
-        }
-        // Global cache is intentionally kept — other panes or future re-opens benefit from it.
-        return next;
-      });
+      flushPendingSave();
+
+      const nextId = next[idx] ?? next[idx - 1] ?? null;
+      if (!nextId) {
+        setSelectedId(null);
+        setContent("");
+        setShowHomeState(true);
+        return;
+      }
+
+      // Routed through selectNode rather than reimplemented, and that is a bug
+      // fix rather than tidying. The old inline version did
+      // `setSelectedId(nextId); setContent(cached ?? "")` and only THEN started
+      // the read for an uncached node — so for one render the pane held the new
+      // node id next to an EMPTY document, with no `persistedContent` entry to
+      // recognise it as unloaded. The autosave effect could not tell that from
+      // "the user deleted everything", and 400 ms later it wrote the empty
+      // string over a note that had never been opened. selectNode sets
+      // `isLoading` and only commits once the content is in hand.
+      void selectNode(nextId);
     }
 
     useImperativeHandle(ref, () => ({
@@ -508,6 +684,7 @@ export const EditorPane = forwardRef<EditorPaneHandle, EditorPaneProps>(
       //
       reloadCurrent,
       showHome() {
+        flushPendingSave();
         setShowHomeState(true);
         setSelectedId(null);
         setContent("");
@@ -629,8 +806,14 @@ export const EditorPane = forwardRef<EditorPaneHandle, EditorPaneProps>(
                       : saveStatus === "conflict" ? (
                         <>
                           Changed by the other user —{" "}
-                          {/* The status used to end at "reload this note to see
-                              it" with nothing anywhere that could reload it. */}
+                          {/* Three exits, and offering fewer is what made this
+                              status a dead end. "Reload" used to be the only
+                              one, so keeping your own version meant copying it
+                              out by hand; in practice the conflict always
+                              resolved the same way whichever document was worth
+                              more. "Keep mine" is only safe to offer because it
+                              snapshots theirs into the history first, and
+                              "Compare" is how you decide which is which. */}
                           <button
                             type="button"
                             className="save-status-action"
@@ -638,13 +821,55 @@ export const EditorPane = forwardRef<EditorPaneHandle, EditorPaneProps>(
                           >
                             Reload
                           </button>
+                          {" · "}
+                          <button
+                            type="button"
+                            className="save-status-action"
+                            title="Overwrite the server copy with what is on screen. Theirs is kept in History."
+                            onClick={() => { void keepMine(); }}
+                          >
+                            Keep mine
+                          </button>
+                          {supportsHistory && (
+                            <>
+                              {" · "}
+                              <button
+                                type="button"
+                                className="save-status-action"
+                                onClick={() => setShowHistory(true)}
+                              >
+                                Compare
+                              </button>
+                            </>
+                          )}
                         </>
                       )
                       : "Saved"}
                   </span>
                 )}
+                {supportsHistory && (
+                  <button
+                    type="button"
+                    className="editor-history-btn"
+                    onClick={() => setShowHistory(true)}
+                    title="Earlier iterations of this note"
+                  >
+                    History
+                  </button>
+                )}
               </div>
             </div>
+
+            {showHistory && selectedId && (
+              <VersionHistory
+                nodeId={selectedId}
+                nodeName={selectedNode.name}
+                currentContent={content}
+                collab={!!collabSession}
+                onRestore={restoreVersion}
+                onClose={() => setShowHistory(false)}
+              />
+            )}
 
             <TagBar
               nodeId={selectedId!}
@@ -792,6 +1017,7 @@ export const EditorPane = forwardRef<EditorPaneHandle, EditorPaneProps>(
                   nodeId={selectedId ?? undefined}
                   graph={graph}
                   collab={collabSession}
+                  docRef={noteDocRef}
                 />
               </EditorErrorBoundary>
             )}
