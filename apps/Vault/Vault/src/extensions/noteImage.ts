@@ -13,12 +13,24 @@
 
 import { Image } from "@tiptap/extension-image";
 import { Plugin, PluginKey } from "@tiptap/pm/state";
-import * as api from "../lib/api";
 
 export const imageUploadKey = new PluginKey("vaultNoteImageUpload");
 
 async function uploadAndInsert(editor: any, file: File | Blob, at?: number) {
   try {
+    // ⚠️ Imported HERE, not at module scope, and it is not about bundle size.
+    //
+    // This module is on the note SCHEMA path — noteExtensions imports it, and
+    // the schema guard builds the schema to decide whether a stored note is
+    // safe to open. `lib/api` reaches `lib/supabase`, which calls
+    // `createClient()` at module scope and throws "supabaseUrl is required"
+    // when the env is absent. A static import therefore made "is this note
+    // safe?" depend on a configured network client — backwards, since the
+    // guard exists to run when things are broken.
+    //
+    // Deferring costs nothing: this runs on a real paste or drop, long after
+    // any schema has been built. `lib/schemaPath.test.ts` asserts the rule.
+    const api = await import("../lib/api");
     const url = await api.uploadCanvasImage(file);
     // The upload is a network round trip, so the note can easily be closed
     // before it lands. A destroyed editor is still a truthy object whose
