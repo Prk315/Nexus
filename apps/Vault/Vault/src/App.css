@@ -8488,3 +8488,31 @@ body.vault-block-dragging .tt-bubble {
   line-height: 1.45;
   color: var(--fg-ghost);
 }
+
+/* ─── Canvas rich-text blocks ───────────────────────────────────────────────
+   The note editor inside a canvas block. It scrolls within the block's own
+   box rather than growing it: a block has a size the user set by dragging,
+   and text that resized it would move every arrow attached to it. */
+
+.canvas-block-rich {
+  height: 100%;
+  overflow: auto;
+  padding: 2px 4px;
+  /* The canvas pans on drag; the editor must own its own pointer events, and
+     text selection inside it must not start a marquee. */
+  cursor: text;
+  user-select: text;
+  -webkit-user-select: text;
+}
+.canvas-block-rich .ProseMirror {
+  min-height: 100%;
+  outline: none;
+  padding: 0;
+}
+/* The note editor's own page chrome has no meaning at block scale. */
+.canvas-block-rich .note-editor-shell,
+.canvas-block-rich .note-toolbar-spacer {
+  padding: 0;
+  border: 0;
+  background: none;
+}
