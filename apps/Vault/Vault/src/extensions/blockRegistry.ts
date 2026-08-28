@@ -12,6 +12,7 @@
 // declaring what it contains. Adding a block type is then one entry here.
 
 import type { Editor, Range } from "@tiptap/core";
+import { newShareId } from "../lib/sharedBlocks";
 import type { ChainedCommands } from "@tiptap/core";
 import type { HighlighterCategory } from "../types";
 import { CALLOUT_VARIANTS, CALLOUT_LABELS, CALLOUT_ICONS } from "./structural/Callout";
@@ -32,6 +33,27 @@ export const STRUCTURAL_CONTAINERS = ["calloutBlock", "containerBlock"] as const
 
 export type BlockSurface = "slash" | "toolbar" | "bubble";
 
+/** Container types that can carry a share id. Columns are excluded: a shared
+ *  ROW would have to keep its children's widths in step across notes of
+ *  different widths, which the flexGrow model has no way to express. */
+const SHAREABLE = ["containerBlock", "calloutBlock", "toggleBlock"] as const;
+
+function activeContainerType(e: any): string | null {
+  return SHAREABLE.find((t) => e.isActive(t)) ?? null;
+}
+
+function isShareable(e: any): boolean {
+  return activeContainerType(e) !== null;
+}
+
+/** The share id on the innermost shareable container at the caret, or null. */
+function shareIdAt(e: any): string | null {
+  const type = activeContainerType(e);
+  if (!type) return null;
+  const v = e.getAttributes(type)?.shareId;
+  return typeof v === "string" && v ? v : null;
+}
+
 export type BlockGroup =
   | "format"     // inline marks
   | "text"       // paragraph / headings
@@ -40,6 +62,7 @@ export type BlockGroup =
   | "callout"    // admonition boxes
   | "container"  // generic grouping panels
   | "cardColor"  // background tint for a callout/container
+  | "share"      // make a container the same container in another note
   | "fontSize"   // inline text size, bubble only
   | "math"
   | "table"       // insert a table
@@ -362,6 +385,60 @@ export function buildBlockRegistry(opts: BlockRegistryOptions = {}): BlockAction
         e.chain().focus().updateAttributes(type, { color }).run();
       },
     })),
+
+    // ── Sharing ─────────────────────────────────────────────────────────────
+    //
+    // Three actions rather than a toggle, because "stop sharing" and "share
+    // this one too" are different intentions and a toggle can only express one
+    // of them. Copying the id is what makes the second note possible at all:
+    // the same id in two notes IS the link — there is no separate registry to
+    // fall out of step with the documents.
+    {
+      id: "share:start",
+      title: "Share this block",
+      icon: "⇄",
+      group: "share",
+      surfaces: ["toolbar"],
+      isAvailable: (e) => isShareable(e) && shareIdAt(e) === null,
+      isActive: () => false,
+      run: (e) => {
+        const type = activeContainerType(e);
+        if (!type) return;
+        e.chain().focus().updateAttributes(type, { shareId: newShareId() }).run();
+      },
+    },
+    {
+      id: "share:copy",
+      title: "Copy the share id",
+      icon: "⧉",
+      group: "share",
+      surfaces: ["toolbar"],
+      isAvailable: (e) => shareIdAt(e) !== null,
+      isActive: () => false,
+      run: (e) => {
+        const id = shareIdAt(e);
+        // No await and no error path: a clipboard write can be refused by the
+        // browser, and there is nothing useful to do about it here.
+        if (id) void navigator.clipboard?.writeText(id);
+      },
+    },
+    {
+      id: "share:stop",
+      title: "Stop sharing this block",
+      icon: "⇸",
+      group: "share",
+      surfaces: ["toolbar"],
+      isAvailable: (e) => shareIdAt(e) !== null,
+      isActive: () => false,
+      run: (e) => {
+        const type = activeContainerType(e);
+        if (!type) return;
+        // Clears the id HERE only. The row and every other note holding it are
+        // untouched — unsharing your copy must not empty someone's dashboard,
+        // and the content stays because it is in this document too.
+        e.chain().focus().updateAttributes(type, { shareId: null }).run();
+      },
+    },
 
     // ── Columns ─────────────────────────────────────────────────────────────
     ...([2, 3, 4] as const).map((count): BlockAction => ({
@@ -787,6 +864,7 @@ export const GROUP_LABELS: Record<BlockGroup, string> = {
   callout: "Callout",
   container: "Group",
   cardColor: "Card colour",
+  share: "Shared block",
   fontSize: "Text size",
   math: "Math",
   media: "Media",

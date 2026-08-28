@@ -8338,6 +8338,30 @@ body.vault-block-dragging .tt-bubble {
   box-shadow: none;
 }
 
+/* ─── Shared containers ─────────────────────────────────────────────────────
+   A block that is the same block in another note needs to LOOK different, or
+   editing one is indistinguishable from editing a private copy — and the whole
+   surprise of the feature is that a change here lands over there. A left rule
+   rather than a badge: it survives nesting, costs no layout, and does not
+   collide with the block handle or the drag gutter. */
+
+.ProseMirror .is-shared {
+  position: relative;
+}
+.ProseMirror .is-shared::before {
+  content: "";
+  position: absolute;
+  /* Outside the block's own padding so a card colour is not clipped by it. */
+  left: -7px;
+  top: 2px;
+  bottom: 2px;
+  width: 2px;
+  border-radius: 1px;
+  background: var(--edge-in);
+  opacity: 0.55;
+  pointer-events: none;
+}
+.ProseMirror .is-shared:hover::before { opacity: 0.9; }
 /* ─── Colour scheme panel ───────────────────────────────────────────────────
    Every control writes straight to the live document; there is no preview
    swatch, because a colour scheme cannot be judged in a 40px square. The
