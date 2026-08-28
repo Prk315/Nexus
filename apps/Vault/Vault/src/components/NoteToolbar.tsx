@@ -9,6 +9,7 @@ import { useEffect, useRef, useState } from "react";
 import { useEditorState } from "@tiptap/react";
 import type { Editor } from "@tiptap/core";
 import { actionsFor, GROUP_LABELS, type BlockAction, type BlockGroup } from "../extensions/blockRegistry";
+import { ActionIcon } from "./ActionIcon";
 
 // Groups shown as bare buttons, in this order.
 //
@@ -88,7 +89,7 @@ export function NoteToolbar({ editor, registry, swatches, trailing }: Props) {
         aria-pressed={a.isActive ? flags[a.id]?.active ?? false : undefined}
       >
         {swatch && <span className="tt-hl-swatch" style={{ background: swatch }} />}
-        {a.short ?? a.icon}
+        <ActionIcon action={a} size={15} />
       </button>
     );
   };
@@ -212,7 +213,7 @@ function ToolbarMenu({
                     setOpen(false);
                   }}
                 >
-                  <span className="tt-menu-icon">{a.icon}</span>
+                  <span className="tt-menu-icon"><ActionIcon action={a} size={16} /></span>
                   <span className="tt-menu-label">{a.title}</span>
                   {a.shortcut && <span className="tt-menu-shortcut">{a.shortcut}</span>}
                 </button>

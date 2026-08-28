@@ -12,6 +12,7 @@
 // declaring what it contains. Adding a block type is then one entry here.
 
 import type { Editor, Range } from "@tiptap/core";
+import type { IconName } from "./icons";
 import { newShareId } from "../lib/sharedBlocks";
 import type { ChainedCommands } from "@tiptap/core";
 import type { HighlighterCategory } from "../types";
@@ -173,6 +174,16 @@ export interface BlockActionContext {
 }
 
 export interface BlockAction {
+  /**
+   * The SVG icon this action draws. See extensions/icons.tsx.
+   *
+   * ⚠️ Required in practice: `iconCoverage.test.ts` asserts every action has
+   * one. A missing name falls back to the legacy `icon` string, which renders a
+   * Unicode glyph next to a set of SVGs — one bad icon set is better than two
+   * at once, so the test refuses the mixed state rather than the fallback
+   * quietly appearing.
+   */
+  iconName?: IconName;
   /** Stable across renames — used as a React key and a future settings key. */
   id: string;
   /** Menu label. */
@@ -241,32 +252,32 @@ export function buildBlockRegistry(opts: BlockRegistryOptions = {}): BlockAction
   const actions: BlockAction[] = [
     // ── Inline marks ────────────────────────────────────────────────────────
     {
-      id: "bold", title: "Bold", icon: "B", short: "B", group: "format",
+      id: "bold", title: "Bold", iconName: "bold", icon: "B", short: "B", group: "format",
       surfaces: ["toolbar", "bubble"], shortcut: "⌘B",
       run: (e) => e.chain().focus().toggleBold().run(),
       isActive: (e) => e.isActive("bold"),
     },
     {
-      id: "italic", title: "Italic", icon: "I", short: "I", group: "format",
+      id: "italic", title: "Italic", iconName: "italic", icon: "I", short: "I", group: "format",
       surfaces: ["toolbar", "bubble"], shortcut: "⌘I",
       run: (e) => e.chain().focus().toggleItalic().run(),
       isActive: (e) => e.isActive("italic"),
     },
     {
-      id: "underline", title: "Underline", icon: "U", short: "U", group: "format",
+      id: "underline", title: "Underline", iconName: "underline", icon: "U", short: "U", group: "format",
       surfaces: ["toolbar", "bubble"], shortcut: "⌘U",
       // StarterKit v3 ships Underline; it simply had no button until now.
       run: (e) => e.chain().focus().toggleUnderline().run(),
       isActive: (e) => e.isActive("underline"),
     },
     {
-      id: "strike", title: "Strikethrough", icon: "S", short: "S", group: "format",
+      id: "strike", title: "Strikethrough", iconName: "strike", icon: "S", short: "S", group: "format",
       surfaces: ["toolbar", "bubble"],
       run: (e) => e.chain().focus().toggleStrike().run(),
       isActive: (e) => e.isActive("strike"),
     },
     {
-      id: "code", title: "Inline code", icon: "‹›", short: "‹›", group: "format",
+      id: "code", title: "Inline code", iconName: "code", icon: "‹›", short: "‹›", group: "format",
       surfaces: ["toolbar", "bubble"], keywords: ["monospace"],
       run: (e) => e.chain().focus().toggleCode().run(),
       isActive: (e) => e.isActive("code"),
@@ -274,7 +285,7 @@ export function buildBlockRegistry(opts: BlockRegistryOptions = {}): BlockAction
 
     // ── Text blocks ─────────────────────────────────────────────────────────
     {
-      id: "paragraph", title: "Text", icon: "¶", group: "text",
+      id: "paragraph", title: "Text", iconName: "paragraph", icon: "¶", group: "text",
       surfaces: ["slash"], keywords: ["paragraph", "body", "plain"],
       run: atCursor((c) => c.setParagraph()),
       isActive: (e) => e.isActive("paragraph"),
@@ -282,6 +293,7 @@ export function buildBlockRegistry(opts: BlockRegistryOptions = {}): BlockAction
     ...([1, 2, 3, 4] as const).map((level): BlockAction => ({
       id: `heading${level}`,
       title: `Heading ${level}`,
+      iconName: `h${level}` as IconName,
       icon: `H${level}`,
       short: `H${level}`,
       group: "text",
@@ -300,6 +312,7 @@ export function buildBlockRegistry(opts: BlockRegistryOptions = {}): BlockAction
     // outlines exactly like any other heading — only its CSS differs.
     {
       id: "title",
+      iconName: "title",
       title: "Title",
       icon: "Tt",
       short: "Tt",
@@ -319,19 +332,19 @@ export function buildBlockRegistry(opts: BlockRegistryOptions = {}): BlockAction
 
     // ── Lists ───────────────────────────────────────────────────────────────
     {
-      id: "bulletList", title: "Bullet List", icon: "•", short: "•", group: "lists",
+      id: "bulletList", title: "Bullet List", iconName: "bulletList", icon: "•", short: "•", group: "lists",
       surfaces: ["slash", "toolbar"], keywords: ["unordered", "ul"],
       run: (e, ctx) => atCursor((c) => c.toggleBulletList())(e, ctx),
       isActive: (e) => e.isActive("bulletList"),
     },
     {
-      id: "orderedList", title: "Numbered List", icon: "1.", short: "1.", group: "lists",
+      id: "orderedList", title: "Numbered List", iconName: "orderedList", icon: "1.", short: "1.", group: "lists",
       surfaces: ["slash", "toolbar"], keywords: ["ordered", "ol", "numbered"],
       run: (e, ctx) => atCursor((c) => c.toggleOrderedList())(e, ctx),
       isActive: (e) => e.isActive("orderedList"),
     },
     {
-      id: "taskList", title: "To-do List", icon: "☑", short: "☑", group: "lists",
+      id: "taskList", title: "To-do List", iconName: "taskList", icon: "☑", short: "☑", group: "lists",
       surfaces: ["slash", "toolbar"],
       keywords: ["todo", "task", "checkbox", "checklist", "check"],
       run: (e, ctx) => atCursor((c) => c.toggleTaskList())(e, ctx),
@@ -340,25 +353,26 @@ export function buildBlockRegistry(opts: BlockRegistryOptions = {}): BlockAction
 
     // ── Structure ───────────────────────────────────────────────────────────
     {
-      id: "blockquote", title: "Quote", icon: "❝", short: "❝", group: "structure",
+      id: "blockquote", title: "Quote", iconName: "quote", icon: "❝", short: "❝", group: "structure",
       surfaces: ["slash", "toolbar"], keywords: ["citation", "blockquote"],
       run: (e, ctx) => atCursor((c) => c.toggleBlockquote())(e, ctx),
       isActive: (e) => e.isActive("blockquote"),
     },
     {
-      id: "codeBlock", title: "Code Block", icon: "<>", short: "<>", group: "structure",
+      id: "codeBlock", title: "Code Block", iconName: "codeBlock", icon: "<>", short: "<>", group: "structure",
       surfaces: ["slash", "toolbar"], keywords: ["pre", "snippet"],
       run: (e, ctx) => atCursor((c) => c.toggleCodeBlock())(e, ctx),
       isActive: (e) => e.isActive("codeBlock"),
     },
     {
-      id: "divider", title: "Divider", icon: "—", group: "structure",
+      id: "divider", title: "Divider", iconName: "divider", icon: "—", group: "structure",
       surfaces: ["slash", "toolbar"], keywords: ["hr", "rule", "separator", "line"],
       run: atCursor((c) => c.setHorizontalRule()),
     },
 
     {
       id: "toggle",
+      iconName: "toggle",
       title: "Toggle list",
       icon: "▶",
       group: "structure",
@@ -382,6 +396,8 @@ export function buildBlockRegistry(opts: BlockRegistryOptions = {}): BlockAction
     ...CALLOUT_VARIANTS.map((variant): BlockAction => ({
       id: `callout:${variant}`,
       title: CALLOUT_LABELS[variant],
+      iconName: (variant === "info" ? "info" : variant === "warn" ? "warn"
+        : variant === "success" ? "success" : variant === "danger" ? "danger" : "note") as IconName,
       icon: CALLOUT_ICONS[variant],
       group: "callout",
       surfaces: ["slash", "toolbar"],
@@ -400,6 +416,7 @@ export function buildBlockRegistry(opts: BlockRegistryOptions = {}): BlockAction
     // ── Containers ──────────────────────────────────────────────────────────
     ...CONTAINER_STYLES.map((style): BlockAction => ({
       id: `container:${style}`,
+      iconName: "container",
       title: CONTAINER_LABELS[style],
       icon: "▭",
       group: "container",
@@ -422,6 +439,7 @@ export function buildBlockRegistry(opts: BlockRegistryOptions = {}): BlockAction
     // container has none, so this is the only way it gets one.
     ...CARD_COLORS.map((c): BlockAction => ({
       id: `cardColor:${c.id}`,
+      iconName: "swatch",
       title: c.label,
       icon: "●",
       group: "cardColor",
@@ -448,6 +466,7 @@ export function buildBlockRegistry(opts: BlockRegistryOptions = {}): BlockAction
     // fall out of step with the documents.
     {
       id: "share:start",
+      iconName: "share",
       title: "Share this block",
       icon: "⇄",
       group: "share",
@@ -462,6 +481,7 @@ export function buildBlockRegistry(opts: BlockRegistryOptions = {}): BlockAction
     },
     {
       id: "share:copy",
+      iconName: "copy",
       title: "Copy the share id",
       icon: "⧉",
       group: "share",
@@ -477,6 +497,7 @@ export function buildBlockRegistry(opts: BlockRegistryOptions = {}): BlockAction
     },
     {
       id: "share:stop",
+      iconName: "unshare",
       title: "Stop sharing this block",
       icon: "⇸",
       group: "share",
@@ -496,6 +517,7 @@ export function buildBlockRegistry(opts: BlockRegistryOptions = {}): BlockAction
     // ── Columns ─────────────────────────────────────────────────────────────
     ...([2, 3, 4] as const).map((count): BlockAction => ({
       id: `columns:${count}`,
+      iconName: "columns",
       title: `${count} columns`,
       icon: "▥",
       group: "container",
@@ -517,6 +539,7 @@ export function buildBlockRegistry(opts: BlockRegistryOptions = {}): BlockAction
     })),
     {
       id: "columnAdd",
+      iconName: "columnAdd",
       title: "Add column",
       icon: "+▥",
       group: "container",
@@ -529,6 +552,7 @@ export function buildBlockRegistry(opts: BlockRegistryOptions = {}): BlockAction
     },
     {
       id: "columnDelete",
+      iconName: "columnRemove",
       title: "Delete column",
       icon: "−▥",
       group: "container",
@@ -549,6 +573,7 @@ export function buildBlockRegistry(opts: BlockRegistryOptions = {}): BlockAction
     // explicit route. Every path uploads to Storage first — see noteImage.ts.
     {
       id: "image",
+      iconName: "image",
       title: "Image",
       icon: "🖼",
       group: "media",
@@ -564,6 +589,7 @@ export function buildBlockRegistry(opts: BlockRegistryOptions = {}): BlockAction
     ...(["left", "center", "right"] as const).map((align): BlockAction => ({
       id: `align:${align}`,
       title: `Align ${align}`,
+      iconName: (align === "left" ? "alignLeft" : align === "center" ? "alignCenter" : "alignRight") as IconName,
       icon: align === "left" ? "⇤" : align === "center" ? "↔" : "⇥",
       group: "align",
       surfaces: ["toolbar"],
@@ -575,6 +601,7 @@ export function buildBlockRegistry(opts: BlockRegistryOptions = {}): BlockAction
     // ── Text colour ─────────────────────────────────────────────────────────
     ...FONT_FAMILIES.map((f): BlockAction => ({
       id: `font:${f.id}`,
+      iconName: "font",
       title: f.label,
       // The icon IS the face, so the button shows what it does rather than
       // naming it — the one place a glyph beats a word here.
@@ -591,6 +618,7 @@ export function buildBlockRegistry(opts: BlockRegistryOptions = {}): BlockAction
 
     ...TEXT_COLORS.map((c): BlockAction => ({
       id: `color:${c.id}`,
+      iconName: "textColor",
       title: c.label,
       icon: "A",
       group: "color",
@@ -610,6 +638,7 @@ export function buildBlockRegistry(opts: BlockRegistryOptions = {}): BlockAction
     ...INLINE_TEXT_SIZES.map((z): BlockAction => ({
       id: `textSizeInline:${z.id}`,
       title: `${z.label} text`,
+      iconName: (z.id === "small" ? "textSmall" : z.id === "large" ? "textLarge" : "textNormal") as IconName,
       icon: z.id === "small" ? "A⁻" : z.id === "large" ? "A⁺" : "A",
       short: z.id === "small" ? "A⁻" : z.id === "large" ? "A⁺" : "A",
       group: "fontSize",
@@ -626,6 +655,7 @@ export function buildBlockRegistry(opts: BlockRegistryOptions = {}): BlockAction
     // Backspace-at-start does the same thing; this is the discoverable route.
     {
       id: "unwrapContainer",
+      iconName: "unwrap",
       title: "Remove surrounding box",
       icon: "⤴",
       group: "container",
@@ -643,7 +673,7 @@ export function buildBlockRegistry(opts: BlockRegistryOptions = {}): BlockAction
 
     // ── Math ────────────────────────────────────────────────────────────────
     {
-      id: "inlineMath", title: "Inline Math", icon: "√x", group: "math",
+      id: "inlineMath", title: "Inline Math", iconName: "mathInline", icon: "√x", group: "math",
       surfaces: ["slash", "toolbar"], keywords: ["latex", "equation", "formula", "katex"],
       run: (e, ctx) => {
         if (ctx?.range) e.chain().focus().deleteRange(ctx.range).run();
@@ -651,7 +681,7 @@ export function buildBlockRegistry(opts: BlockRegistryOptions = {}): BlockAction
       },
     },
     {
-      id: "blockMath", title: "Math Block", icon: "∑", group: "math",
+      id: "blockMath", title: "Math Block", iconName: "mathBlock", icon: "∑", group: "math",
       surfaces: ["slash", "toolbar"], keywords: ["latex", "equation", "display", "katex"],
       run: (e, ctx) => {
         if (ctx?.range) e.chain().focus().deleteRange(ctx.range).run();
@@ -661,7 +691,7 @@ export function buildBlockRegistry(opts: BlockRegistryOptions = {}): BlockAction
 
     // ── Table ───────────────────────────────────────────────────────────────
     {
-      id: "table", title: "Table", icon: "⊞", short: "+ Table", group: "table",
+      id: "table", title: "Table", iconName: "table", icon: "⊞", short: "+ Table", group: "table",
       surfaces: ["slash", "toolbar"], keywords: ["grid", "rows", "columns"],
       run: atCursor((c) => c.insertTable({ rows: 3, cols: 3, withHeaderRow: true })),
       // The toolbar used to swap this button set imperatively; expressing it as
@@ -673,27 +703,28 @@ export function buildBlockRegistry(opts: BlockRegistryOptions = {}): BlockAction
     // table group. These only exist while the caret is in a table, and when
     // you're in one they're the whole point — burying row/column editing two
     // clicks deep in an insert menu made the table feel read-only.
-    { id: "tableRowBefore", title: "Insert row above", icon: "⤒row", group: "tableOps", surfaces: ["toolbar"], isAvailable: inTable, run: (e) => e.chain().focus().addRowBefore().run() },
-    { id: "tableRowAfter", title: "Insert row below", icon: "⤓row", group: "tableOps", surfaces: ["toolbar"], isAvailable: inTable, run: (e) => e.chain().focus().addRowAfter().run() },
-    { id: "tableRowDelete", title: "Delete row", icon: "−row", group: "tableOps", surfaces: ["toolbar"], isAvailable: inTable, danger: true, run: (e) => e.chain().focus().deleteRow().run() },
-    { id: "tableColBefore", title: "Insert column left", icon: "⇤col", group: "tableOps", surfaces: ["toolbar"], isAvailable: inTable, run: (e) => e.chain().focus().addColumnBefore().run() },
-    { id: "tableColAfter", title: "Insert column right", icon: "⇥col", group: "tableOps", surfaces: ["toolbar"], isAvailable: inTable, run: (e) => e.chain().focus().addColumnAfter().run() },
-    { id: "tableColDelete", title: "Delete column", icon: "−col", group: "tableOps", surfaces: ["toolbar"], isAvailable: inTable, danger: true, run: (e) => e.chain().focus().deleteColumn().run() },
+    { id: "tableRowBefore", title: "Insert row above", iconName: "rowAbove", icon: "⤒row", group: "tableOps", surfaces: ["toolbar"], isAvailable: inTable, run: (e) => e.chain().focus().addRowBefore().run() },
+    { id: "tableRowAfter", title: "Insert row below", iconName: "rowBelow", icon: "⤓row", group: "tableOps", surfaces: ["toolbar"], isAvailable: inTable, run: (e) => e.chain().focus().addRowAfter().run() },
+    { id: "tableRowDelete", title: "Delete row", iconName: "rowRemove", icon: "−row", group: "tableOps", surfaces: ["toolbar"], isAvailable: inTable, danger: true, run: (e) => e.chain().focus().deleteRow().run() },
+    { id: "tableColBefore", title: "Insert column left", iconName: "colBefore", icon: "⇤col", group: "tableOps", surfaces: ["toolbar"], isAvailable: inTable, run: (e) => e.chain().focus().addColumnBefore().run() },
+    { id: "tableColAfter", title: "Insert column right", iconName: "colAfter", icon: "⇥col", group: "tableOps", surfaces: ["toolbar"], isAvailable: inTable, run: (e) => e.chain().focus().addColumnAfter().run() },
+    { id: "tableColDelete", title: "Delete column", iconName: "colRemove", icon: "−col", group: "tableOps", surfaces: ["toolbar"], isAvailable: inTable, danger: true, run: (e) => e.chain().focus().deleteColumn().run() },
 
     // The rest live behind a "Table ▾" menu that also only appears inside a
     // table — useful, but not worth six more permanent buttons in a toolbar
     // that already doesn't wrap.
-    { id: "tableHeaderRow", title: "Toggle header row", icon: "▤", group: "tableMore", surfaces: ["toolbar"], isAvailable: inTable, run: (e) => e.chain().focus().toggleHeaderRow().run() },
-    { id: "tableHeaderCol", title: "Toggle header column", icon: "▥", group: "tableMore", surfaces: ["toolbar"], isAvailable: inTable, run: (e) => e.chain().focus().toggleHeaderColumn().run() },
-    { id: "tableMergeSplit", title: "Merge / split cells", icon: "⿴", group: "tableMore", surfaces: ["toolbar"], isAvailable: inTable, run: (e) => e.chain().focus().mergeOrSplit().run() },
-    { id: "tableFix", title: "Repair table", icon: "⚒", group: "tableMore", surfaces: ["toolbar"], keywords: ["fix", "repair"], isAvailable: inTable, run: (e) => e.chain().focus().fixTables().run() },
-    { id: "tableDelete", title: "Delete table", icon: "⌫", group: "tableMore", surfaces: ["toolbar"], isAvailable: inTable, danger: true, run: (e) => e.chain().focus().deleteTable().run() },
+    { id: "tableHeaderRow", title: "Toggle header row", iconName: "headerRow", icon: "▤", group: "tableMore", surfaces: ["toolbar"], isAvailable: inTable, run: (e) => e.chain().focus().toggleHeaderRow().run() },
+    { id: "tableHeaderCol", title: "Toggle header column", iconName: "headerCol", icon: "▥", group: "tableMore", surfaces: ["toolbar"], isAvailable: inTable, run: (e) => e.chain().focus().toggleHeaderColumn().run() },
+    { id: "tableMergeSplit", title: "Merge / split cells", iconName: "merge", icon: "⿴", group: "tableMore", surfaces: ["toolbar"], isAvailable: inTable, run: (e) => e.chain().focus().mergeOrSplit().run() },
+    { id: "tableFix", title: "Repair table", iconName: "repair", icon: "⚒", group: "tableMore", surfaces: ["toolbar"], keywords: ["fix", "repair"], isAvailable: inTable, run: (e) => e.chain().focus().fixTables().run() },
+    { id: "tableDelete", title: "Delete table", iconName: "trash", icon: "⌫", group: "tableMore", surfaces: ["toolbar"], isAvailable: inTable, danger: true, run: (e) => e.chain().focus().deleteTable().run() },
   ];
 
   // ── Link ──────────────────────────────────────────────────────────────────
   if (opts.onEditLink) {
     actions.push({
       id: "link",
+      iconName: "link",
       title: "Link",
       icon: "🔗",
       short: "🔗",
@@ -708,7 +739,7 @@ export function buildBlockRegistry(opts: BlockRegistryOptions = {}): BlockAction
 
   // ── Vault-specific ────────────────────────────────────────────────────────
   actions.push({
-    id: "unsetHighlight", title: "Clear highlight", icon: "🖊", short: "🖊", group: "vault",
+    id: "unsetHighlight", title: "Clear highlight", iconName: "unhighlight", icon: "🖊", short: "🖊", group: "vault",
     surfaces: ["toolbar"],
     run: (e) => e.chain().focus().unsetHighlight().run(),
     isActive: (e) => e.isActive("highlight"),
@@ -717,6 +748,7 @@ export function buildBlockRegistry(opts: BlockRegistryOptions = {}): BlockAction
   for (const cat of opts.highlighters ?? []) {
     actions.push({
       id: `highlight:${cat.name}`,
+      iconName: "highlighter",
       title: cat.name,
       icon: "▮",
       group: "vault",
@@ -727,7 +759,7 @@ export function buildBlockRegistry(opts: BlockRegistryOptions = {}): BlockAction
 
   if (opts.onEditHighlighters) {
     actions.push({
-      id: "editHighlighters", title: "Edit highlighters", icon: "✎", group: "vault",
+      id: "editHighlighters", title: "Edit highlighters", iconName: "palette", icon: "✎", group: "vault",
       surfaces: ["toolbar"],
       run: () => opts.onEditHighlighters!(),
     });
@@ -736,6 +768,7 @@ export function buildBlockRegistry(opts: BlockRegistryOptions = {}): BlockAction
   if (opts.onDatabaseInsert) {
     actions.push({
       id: "databaseInsert",
+      iconName: "database",
       title: "Insert from Database",
       icon: "◉",
       short: "◉ DB",
@@ -755,6 +788,7 @@ export function buildBlockRegistry(opts: BlockRegistryOptions = {}): BlockAction
     const value = lang.value === "plaintext" ? null : lang.value;
     actions.push({
       id: `codeLang:${lang.value}`,
+      iconName: "language",
       title: lang.label,
       icon: "⌗",
       group: "code",
@@ -772,6 +806,7 @@ export function buildBlockRegistry(opts: BlockRegistryOptions = {}): BlockAction
     actions.push({
       id: `noteWidth:${w}`,
       title: NOTE_WIDTH_LABELS[w],
+      iconName: (w === "auto" ? "widthAuto" : w === "wide" ? "widthWide" : "widthFull") as IconName,
       icon: w === "auto" ? "▯" : w === "wide" ? "▭" : "▬",
       group: "width",
       surfaces: ["toolbar"],
@@ -793,6 +828,11 @@ export function buildBlockRegistry(opts: BlockRegistryOptions = {}): BlockAction
     actions.push({
       id: `noteText:${t}`,
       title: NOTE_TEXT_LABELS[t],
+      // A page outline, NOT the plain letters used for inline text size. The
+      // two are different features and shared three icons until the coverage
+      // test named the collision. Four sizes on a three-icon scale: xlarge
+      // shares `pageTextLarge` and is told apart by its label.
+      iconName: (t === "small" ? "pageTextSmall" : t === "normal" ? "pageTextNormal" : "pageTextLarge") as IconName,
       icon: t === "small" ? "ᴀ" : t === "normal" ? "A" : t === "large" ? "𝖠" : "𝗔",
       group: "textSize",
       surfaces: ["toolbar"],
@@ -811,6 +851,7 @@ export function buildBlockRegistry(opts: BlockRegistryOptions = {}): BlockAction
   // ── Sketch ────────────────────────────────────────────────────────────────
   actions.push({
     id: "sketch",
+    iconName: "sketch",
     title: "Sketch",
     // Not ✎ — the Note callout and the highlighter-categories button already
     // use it, and three identical pencils in one menu is a coin toss.
@@ -832,6 +873,7 @@ export function buildBlockRegistry(opts: BlockRegistryOptions = {}): BlockAction
   actions.push(
     {
       id: "pf:list",
+      iconName: "listView",
       title: "Task list",
       icon: "☑",
       group: "pathfinder",
@@ -841,6 +883,7 @@ export function buildBlockRegistry(opts: BlockRegistryOptions = {}): BlockAction
     },
     {
       id: "pf:board",
+      iconName: "boardView",
       title: "Task board",
       icon: "▦",
       group: "pathfinder",
@@ -850,6 +893,7 @@ export function buildBlockRegistry(opts: BlockRegistryOptions = {}): BlockAction
     },
     {
       id: "pf:table",
+      iconName: "tableView",
       title: "Task table",
       icon: "▤",
       group: "pathfinder",
@@ -865,6 +909,7 @@ export function buildBlockRegistry(opts: BlockRegistryOptions = {}): BlockAction
   actions.push(
     {
       id: "fold:toggle",
+      iconName: "foldOne",
       title: "Fold section",
       icon: "⌄",
       group: "fold",
@@ -883,6 +928,7 @@ export function buildBlockRegistry(opts: BlockRegistryOptions = {}): BlockAction
     },
     {
       id: "fold:all",
+      iconName: "foldAll",
       title: "Fold all sections",
       icon: "⌃",
       group: "fold",
@@ -892,6 +938,7 @@ export function buildBlockRegistry(opts: BlockRegistryOptions = {}): BlockAction
     },
     {
       id: "fold:none",
+      iconName: "unfoldAll",
       title: "Expand all sections",
       icon: "⌄",
       group: "fold",
@@ -903,8 +950,8 @@ export function buildBlockRegistry(opts: BlockRegistryOptions = {}): BlockAction
 
   // ── History ───────────────────────────────────────────────────────────────
   actions.push(
-    { id: "undo", title: "Undo", icon: "↩", group: "history", surfaces: ["toolbar"], shortcut: "⌘Z", run: (e) => e.chain().focus().undo().run() },
-    { id: "redo", title: "Redo", icon: "↪", group: "history", surfaces: ["toolbar"], shortcut: "⇧⌘Z", run: (e) => e.chain().focus().redo().run() }
+    { id: "undo", title: "Undo", iconName: "undo", icon: "↩", group: "history", surfaces: ["toolbar"], shortcut: "⌘Z", run: (e) => e.chain().focus().undo().run() },
+    { id: "redo", title: "Redo", iconName: "redo", icon: "↪", group: "history", surfaces: ["toolbar"], shortcut: "⇧⌘Z", run: (e) => e.chain().focus().redo().run() }
   );
 
   return actions;

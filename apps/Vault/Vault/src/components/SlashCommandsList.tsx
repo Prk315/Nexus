@@ -1,4 +1,5 @@
 import { useEffect, useLayoutEffect, useRef, useState, type MutableRefObject } from "react";
+import { ActionIcon } from "./ActionIcon";
 import { createPortal } from "react-dom";
 import type { SlashMenuState } from "../extensions/SlashCommands";
 import { GROUP_LABELS } from "../extensions/blockRegistry";
@@ -91,7 +92,7 @@ export function SlashCommandsList({ items, command, rect, keyHandlerRef }: Props
               }}
               onMouseEnter={() => setSelectedIndex(index)}
             >
-              <span className="slash-icon">{item.icon}</span>
+              <span className="slash-icon"><ActionIcon action={item} size={17} /></span>
               <span className="slash-label">{item.title}</span>
               {item.shortcut && <span className="slash-shortcut">{item.shortcut}</span>}
             </button>

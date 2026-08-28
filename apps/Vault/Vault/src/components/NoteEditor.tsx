@@ -7,6 +7,7 @@ import { useEffect, useMemo, useRef, useState, Fragment } from "react";
 import katex from "katex";
 import { createSlashCommandsExtension, type SlashMenuState } from "../extensions/SlashCommands";
 import { buildBlockRegistry, actionsFor, FONT_FAMILIES, TEXT_COLORS, type BlockAction } from "../extensions/blockRegistry";
+import { ActionIcon } from "./ActionIcon";
 import { buildNoteExtensions, noteSchema } from "../extensions/noteExtensions";
 import { auditNoteContent, parseNoteContent } from "../lib/noteSchemaGuard";
 import { NoteSchemaError } from "./NoteSchemaError";
@@ -956,7 +957,7 @@ function NoteEditorInner({ content, onChange, nodeId, graph, variant = "full", c
               onClick={() => a.run(editor)}
             >
               {swatches[a.id] && <span className="tt-hl-swatch" style={{ background: swatches[a.id] }} />}
-              {a.short ?? a.icon}
+              <ActionIcon action={a} size={15} />
             </button>
             </Fragment>
           ))}
