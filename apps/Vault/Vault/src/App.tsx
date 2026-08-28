@@ -4,6 +4,7 @@ import * as api from "./lib/api";
 import { supabase } from "./lib/supabase";
 import { loadPathfinderDay, entryToEvent, toIsoDate, type PfCalEntry } from "./lib/pathfinderCalendar";
 import { CalendarBlockEditor, type CalEditorState } from "./components/CalendarBlockEditor";
+import { ThemePanel, useTheme } from "./components/ThemePanel";
 import { markdownToParsedHtml, blockifyDisplayMath } from "./lib/parsedImport";
 import { useResizableWidth } from "./hooks/useResizableWidth";
 import { useGraph } from "./hooks/useGraph";
@@ -61,6 +62,9 @@ function App() {
   const [newName, setNewName] = useState("");
   const [newKind, setNewKind] = useState("Note");
   const [sidebarView, setSidebarView] = useState<"list" | "graph" | "tags">("list");
+  const [themeOpen, setThemeOpen] = useState(false);
+  // Applied to <html> on mount, before anything renders a colour — see useTheme.
+  const [theme, setTheme] = useTheme();
   const [fullGraph, setFullGraph] = useState(false);
   const [searchOpen, setSearchOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
@@ -645,8 +649,20 @@ function App() {
               <button className={sidebarView === "graph" ? "active" : ""} onClick={() => setSidebarView("graph")}>Graph</button>
               <button className={sidebarView === "tags" ? "active" : ""} onClick={() => setSidebarView("tags")}>Tags</button>
             </div>
+            {/* Not a fourth tab: the theme is judged against the app behind it,
+                so replacing the tree with a settings pane while tuning it hides
+                the very thing being tuned. */}
+            <button
+              className={`sidebar-theme-btn${themeOpen ? " active" : ""}`}
+              onClick={() => setThemeOpen((v) => !v)}
+              title="Colour scheme"
+              aria-label="Colour scheme"
+              aria-pressed={themeOpen}
+            >◐</button>
           </div>
         </div>
+
+        {themeOpen ? <ThemePanel theme={theme} onChange={setTheme} /> : null}
 
         {sidebarView === "list" ? (
           <>

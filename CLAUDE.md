@@ -1536,6 +1536,49 @@ An invalid expression is **kept**, not dropped: the column shows an error, which
 is recoverable, whereas discarding it loses whatever was being written with no
 explanation for the disappearance.
 
+### The colour scheme is derived, not stored
+
+`lib/theme.ts` turns **six numbers** into every `:root` colour token. A theme
+could have been 62 stored token values — that is what "custom colour scheme"
+usually means, and it is a trap: every token added to `:root` afterwards is one
+every stored theme lacks, so themes rot silently as the app grows. A derived
+theme has no such surface.
+
+It only works because the palette is **OKLCH**. Lightness there is perceptual, so
+"one step darker" is a subtraction that means the same thing at every hue; the
+same arithmetic in hex or HSL gives an uneven ramp whose contrast depends on hue.
+
+⚠️ **No theme can make text unreadable, by construction.** Foregrounds move away
+from the surface and the direction flips at `DARK_BELOW = 0.5`. Because that
+threshold is the **midpoint** of the range, the far end is never closer than
+~0.48 from either side. A user dragging a lightness slider passes through "text
+the same colour as the background"; an app that renders that state has lost its
+own settings panel. Tests sweep the whole range.
+
+⚠️ **The direction flip is what makes dark mode work rather than merely be
+dark.** On a dark surface "raised" must be *lighter* — otherwise every input and
+border is darker than a page that is already nearly black, i.e. invisible.
+
+**`MIN_TEXT_DL` is an assertion, not the mechanism.** Making it the mechanism put
+the default theme's black body text at a mid grey: 0.34 is the floor of
+legibility, nowhere near where body text sits. `TEXT_DL` is a table of distances
+that reproduces the existing palette **exactly** at the default — the engine must
+be a no-op against the stylesheet it replaces, or shipping it invalidates every
+colour judgement made so far. Pinned by a test.
+
+**Two things a theme may not do.** Recolour a semantic accent — a delete button
+that is not red because you chose a green scheme is a theme changing what a
+control *means*; only their lightness follows the surface. And touch motion,
+z-index or shadow geometry, which are not colours and whose change would be a
+theme that can break layout.
+
+**130 colour literals still sit outside `:root`** and do not follow a theme —
+that is where a dark scheme shows seams. `cssTokens.test.ts` ratchets the count
+so it can only fall; naming them is a design decision per colour, not a cleanup.
+
+Stored in **localStorage, per device**. A Mac in a lit room and an iPad in bed
+want different schemes, so per-account would be the wrong shape, not a better one.
+
 ### Summary figures share the column pipeline, deliberately
 
 A stat card is compile-once → evaluate-per-row → aggregate, the same chain a
