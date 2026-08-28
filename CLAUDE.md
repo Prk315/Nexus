@@ -1536,6 +1536,58 @@ An invalid expression is **kept**, not dropped: the column shows an error, which
 is recoverable, whereas discarding it loses whatever was being written with no
 explanation for the disappearance.
 
+### Summary figures share the column pipeline, deliberately
+
+A stat card is compile-once → evaluate-per-row → aggregate, the same chain a
+computed column runs, reduced to one number. Sharing it buys two things that a
+separate implementation would lose:
+
+- **A stat works in list and board view**, where there is nowhere to put a
+  column. It needs no column because it is one figure.
+- **A stat and a column can never disagree** about what `sum(estimate)` means.
+  Two implementations of the same arithmetic drift; this one cannot.
+
+The editor shares the vocabulary for the same reason — one formula language,
+not two. `none` is the single difference: a stat IS an aggregate, so a card
+carrying it would have no figure to show, and `STAT_AGGS` omits it.
+
+⚠️ **Statistics are over the tasks the block is SHOWING**, not over everything
+that matched. That is the honest reading of a figure sitting on a filtered list,
+but it means tightening a filter changes every number — so each card states how
+many rows contributed rather than implying it measured the whole plan.
+
+`percent` scales its bar against 100, not the card's `max`: a percent card with
+`max: 8` would otherwise read 12.5% full at 100%.
+
+### Meters: an empty bar is not zero
+
+A computed column can draw itself as a bar or a ring (`display`, `max`). One
+mechanism covers both "custom" and "premade" measures, because a premade one —
+`subtasksDone / subtasks * 100` — was always expressible; only the drawing was
+missing.
+
+⚠️ **A null value renders as a dash, never as an empty meter.** An empty bar is
+indistinguishable from 0%, so a task with no estimate would read as "0% done"
+rather than "not measured". This is the same rule `aggregate` follows by
+skipping nulls and `coerceField` by returning null for an empty stored value —
+three places now, one idea: *absent is not zero*.
+
+**The number stays beside the meter.** A bar is a comparison and cannot say
+"130% of target"; the value is clamped for drawing, so replacing the number with
+the bar would silently lose the overshoot. Clamped rather than overflowing,
+because a bar longer than its track escapes the cell.
+
+**A scale of zero is "no scale", not "full".** It yields null and the cell falls
+back to the number, rather than dividing into the Infinity the formula language
+already refuses — same for `max: "auto"` when every visible row is null.
+
+⚠️ **Auto scales to what is ON SCREEN**, so filtering the table changes every bar
+in it. Occasionally what you want, never what you expect: 100 is the default and
+auto is opt-in.
+
+The ring's radius is `100/2π`, so its circumference is exactly 100 units and the
+dash array *is* the percentage — no arithmetic to get subtly wrong at the wrap.
+
 ### Stored columns: the definition is in the note, the values are in Postgres
 
 A custom column is two halves, and which half holds what is the whole design.

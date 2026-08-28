@@ -54,6 +54,8 @@ import {
   fmtFormulaValue,
   formulaContext,
   formulaFieldNames,
+  meterFraction,
+  type FormulaColumn,
   type FieldColumn,
   columnWeight,
   moveColumn,
@@ -1005,6 +1007,78 @@ function useCardDrag({
  *  and would defeat every memo keyed on the field list. */
 const EMPTY_FIELDS_LIST: FieldColumn[] = [];
 
+// ─── Stats ──────────────────────────────────────────────────────────────────
+
+/**
+ * A strip of summary figures above the view.
+ *
+ * The same pipeline as a computed column — compile once, evaluate per row,
+ * aggregate — reduced to one number. Sharing it is what lets a stat work in
+ * LIST and BOARD view, where there is nowhere to put a column, and is why a
+ * stat and a column can never disagree about what `sum(estimate)` means.
+ *
+ * ⚠️ Statistics are over the tasks the block is SHOWING, not over everything
+ * that matched. That is the honest reading of a figure sitting on top of a
+ * filtered list — but it does mean tightening a filter changes every number,
+ * so each card says how many rows contributed rather than implying it measured
+ * the whole plan.
+ */
+export function PfStatsStrip({
+  tasks, spec, actions, today,
+}: {
+  tasks: PfTask[];
+  spec: PfBlockSpec;
+  actions: TaskActions;
+  today: string;
+}) {
+  const names = useMemo(() => formulaFieldNames(spec.fields), [spec.fields]);
+
+  const cards = useMemo(() => spec.stats.map((c) => {
+    const prog = compile(c.expr, names);
+    if (!prog.ok) return { card: c, error: prog.error, value: null, n: 0 };
+    const values = tasks.map((t) => prog.run(formulaContext(
+      t, statFor(actions.stats, t.id), today,
+      { bag: actions.fieldsOf(t.id), cols: spec.fields },
+    )));
+    const { value, n } = aggregate(c.agg, values);
+    return { card: c, error: null, value, n };
+  }), [spec.stats, spec.fields, names, tasks, actions.stats, actions.fieldsOf, today]);
+
+  if (cards.length === 0) return null;
+
+  return (
+    <div className="pf-stats" role="group" aria-label="Summary">
+      {cards.map(({ card, error, value, n }) => {
+        // A meter needs a fraction of a scale; `percent` already IS one, so it
+        // scales against 100 rather than against the card's max — otherwise a
+        // percent card with max 8 would read 12.5% full at 100%.
+        const f = card.display === "number" || value === null
+          ? null
+          : meterFraction(value, card.agg === "percent" ? 100 : card.max, []);
+        const text = value === null ? "—"
+          : card.agg === "percent" ? `${fmtFormulaValue(value)}%`
+          : fmtFormulaValue(value);
+        return (
+          <div key={card.id} className={`pf-stat${error ? " is-bad" : ""}`}
+               title={error ? `${card.expr} — ${error}` : `${card.agg} over ${n} row${n === 1 ? "" : "s"} with a value`}>
+            <span className="pf-stat-label">{card.label || card.expr}</span>
+            <span className="pf-stat-value">{error ? "—" : text}</span>
+            {f !== null ? (
+              <span className="pf-stat-bar" role="meter" aria-valuenow={Math.round(f * 100)}
+                    aria-valuemin={0} aria-valuemax={100} aria-label={card.label || card.expr}>
+                <span className="pf-bar-fill" style={{ width: `${Math.round(f * 100)}%` }} />
+              </span>
+            ) : null}
+            {/* Nulls are skipped, so say what was actually measured rather than
+                letting the figure imply it saw every row. */}
+            <span className="pf-stat-n">{error ? error : `${n} of ${tasks.length}`}</span>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
 // ─── Table ──────────────────────────────────────────────────────────────────
 
 export function PfTableView({
@@ -1295,7 +1369,8 @@ export function PfTableView({
               {compiled.map(({ col, prog }) => (
                 <td key={col.id} className="pf-td pf-td-formula">
                   {prog.ok
-                    ? fmtFormulaValue(computed.get(col.id)?.[ri] ?? null)
+                    ? <MeterCell col={col} value={computed.get(col.id)?.[ri] ?? null}
+                                 column={computed.get(col.id) ?? []} />
                     : <span className="pf-formula-err" title={prog.error}>—</span>}
                 </td>
               ))}
@@ -1369,6 +1444,68 @@ function sortIndicator(spec: PfBlockSpec, col: PfColumn) {
  * all would have each keystroke overwritten by the in-flight refresh. Focused:
  * the user owns the text. Not focused: the store does.
  */
+/**
+ * One computed cell: a number, or a bar or ring scaled against the column's max.
+ *
+ * ⚠️ A null value renders as a DASH, never as an empty meter. An empty bar is
+ * indistinguishable from 0%, so a task with no estimate would read as "0% done"
+ * rather than "not measured" — the same distinction `aggregate` preserves by
+ * skipping nulls instead of counting them as zero.
+ *
+ * The number is kept beside the meter rather than replaced by it. A bar is a
+ * comparison; it cannot say "130% of target", and clamping without the number
+ * would silently lose that.
+ */
+function MeterCell({
+  col, value, column,
+}: {
+  col: FormulaColumn;
+  value: FormulaValue;
+  column: readonly FormulaValue[];
+}) {
+  const text = fmtFormulaValue(value);
+  if (col.display === "number") return <>{text}</>;
+
+  const f = meterFraction(value, col.max, column);
+  // No scale, or nothing to scale. Falls back to the number rather than drawing
+  // a meter that means nothing — including when max is "auto" and every visible
+  // row is null.
+  if (f === null) return <span className="pf-meter-none">{text}</span>;
+
+  const pct = Math.round(f * 100);
+  const label = `${text}${col.max === "auto" ? "" : ` of ${col.max}`}`;
+
+  if (col.display === "ring") {
+    // A stroked circle with a dash gap. r is chosen so the circumference is a
+    // round 100 units, which makes the dash array the percentage directly —
+    // no arithmetic to get subtly wrong at the wrap point.
+    const R = 100 / (2 * Math.PI);
+    const D = (R + 2) * 2;
+    return (
+      <span className="pf-meter pf-meter-ring" role="meter" aria-valuenow={pct}
+            aria-valuemin={0} aria-valuemax={100} aria-label={label} title={label}>
+        <svg viewBox={`0 0 ${D} ${D}`} width="18" height="18" aria-hidden="true">
+          <circle cx={D / 2} cy={D / 2} r={R} className="pf-ring-track" />
+          <circle cx={D / 2} cy={D / 2} r={R} className="pf-ring-fill"
+                  strokeDasharray={`${pct} 100`}
+                  transform={`rotate(-90 ${D / 2} ${D / 2})`} />
+        </svg>
+        <span className="pf-meter-text">{text}</span>
+      </span>
+    );
+  }
+
+  return (
+    <span className="pf-meter pf-meter-bar" role="meter" aria-valuenow={pct}
+          aria-valuemin={0} aria-valuemax={100} aria-label={label} title={label}>
+      <span className="pf-bar-track">
+        <span className="pf-bar-fill" style={{ width: `${pct}%` }} />
+      </span>
+      <span className="pf-meter-text">{text}</span>
+    </span>
+  );
+}
+
 function FieldCell({
   col, taskId, value, editable, onCommit,
 }: {

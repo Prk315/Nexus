@@ -78,7 +78,7 @@ import {
 import { setTaskField, normalizeFieldKey } from "../lib/vaultTaskFields";
 import { PathfinderFilterBar } from "./PathfinderFilterBar";
 import { PathfinderTaskDetail } from "./PathfinderTaskDetail";
-import { PfBoardView, PfListView, PfTableView } from "./PathfinderViews";
+import { PfBoardView, PfListView, PfTableView, PfStatsStrip } from "./PathfinderViews";
 import { useConfirm } from "./ConfirmDialog";
 import {
   HOST_ATTR, nextHostId, registerHost, unregisterHost, type BlockHost,
@@ -743,6 +743,14 @@ export function PathfinderBlock({
           onDeleteTag={deleteTag}
           onChange={commitSpec}
         />
+      ) : null}
+
+      {/* Above PfBody, and above the view rather than inside it: a stat is
+          the same figure in list, board and table, and putting it in each view
+          would be three copies of one pipeline to drift apart. It measures the
+          tasks the block is SHOWING — see PfStatsStrip. */}
+      {spec.stats.length > 0 && snap.status === "ready" ? (
+        <PfStatsStrip tasks={query.tasks} spec={spec} actions={actions} today={today} />
       ) : null}
 
       <div className="pf-body">

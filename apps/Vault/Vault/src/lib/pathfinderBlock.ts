@@ -234,7 +234,33 @@ export interface PfBlockSpec {
    * same key differently. See the migration header.
    */
   fields: FieldColumn[];
+
+  /**
+   * Summary figures shown above the view.
+   *
+   * The same pipeline as a computed column — compile once, evaluate per row,
+   * aggregate — but reduced to ONE number instead of a column of them. That is
+   * what makes a stat work in list and board view too, where there is nowhere
+   * to put a column.
+   */
+  stats: StatCard[];
 }
+
+export interface StatCard {
+  id: string;
+  label: string;
+  /** Evaluated per row, exactly like a column formula. */
+  expr: string;
+  /** How the per-row values collapse to one. `none` is not offered — a stat
+   *  IS an aggregate, so there is nothing for it to mean. */
+  agg: Exclude<FormulaAgg, "none">;
+  display: MeterDisplay;
+  max: number | "auto";
+}
+
+/** A strip, not a dashboard. */
+export const MAX_STATS = 4;
+
 
 export interface FieldColumn {
   /** Normalised; this IS the storage key, so case and spacing are collapsed. */
@@ -254,9 +280,30 @@ export interface FormulaColumn {
   expr: string;
   /** Footer aggregate over the visible rows, or none. */
   agg: FormulaAgg;
+  /** How the cell draws the value. See METER_DISPLAYS. */
+  display: MeterDisplay;
+  /**
+   * What counts as full, for `bar` and `ring`.
+   *
+   * A NUMBER is an absolute scale — 100 for a percentage, 8 for a story-point
+   * column. `"auto"` scales to the largest value among the visible rows.
+   *
+   * ⚠️ Auto is relative to what is ON SCREEN, so filtering the table changes
+   * every bar in it. That is occasionally what you want and is never what you
+   * expect, which is why 100 is the default and auto is opt-in.
+   */
+  max: number | "auto";
 }
 
+export const METER_DISPLAYS = ["number", "bar", "ring"] as const;
+export type MeterDisplay = (typeof METER_DISPLAYS)[number];
+
+/** A scale of zero has no meaning, and dividing by it would give Infinity. */
+export const METER_MAX_MIN = 0.0001;
+
 export const FORMULA_AGGS = ["none", "sum", "count", "percent", "avg"] as const;
+/** A stat IS an aggregate, so `none` has nothing to mean there. */
+export const STAT_AGGS = ["sum", "count", "percent", "avg"] as const;
 export type FormulaAgg = (typeof FORMULA_AGGS)[number];
 
 /** A block may hold a handful, not a spreadsheet. The spec is size-capped. */
@@ -353,6 +400,7 @@ export function defaultSpec(view: PfBlockView): PfBlockSpec {
     statuses: [],
     formulas: [],
     fields: [],
+    stats: [],
   };
 }
 
@@ -472,6 +520,7 @@ export function parseSpec(raw: string | null | undefined, view: PfBlockView): Pf
     statuses: normalizeStatuses(obj.statuses),
     formulas: parseFormulas(obj.formulas),
     fields: parseFields(obj.fields),
+    stats: parseStats(obj.stats),
   };
 }
 
@@ -581,6 +630,29 @@ function parseWeights(v: unknown): Record<string, number> {
  * column not existing. The editor refuses it up front too, so this is the
  * backstop for a hand-edited or pasted document.
  */
+/** Validate stored stat cards. Shares the meter rules with a formula column —
+ *  see parseFormulas; the only difference is that `none` is not an aggregate. */
+function parseStats(v: unknown): StatCard[] {
+  if (!Array.isArray(v)) return [];
+  const out: StatCard[] = [];
+  for (const raw of v) {
+    if (!raw || typeof raw !== "object") continue;
+    const o = raw as Record<string, unknown>;
+    out.push({
+      id: typeof o.id === "string" && o.id ? o.id.slice(0, 16) : `s${out.length}`,
+      label: typeof o.label === "string" ? o.label.slice(0, 40) : "",
+      expr: typeof o.expr === "string" ? o.expr.slice(0, MAX_FORMULA_CHARS) : "",
+      agg: pick(o.agg, STAT_AGGS, "sum"),
+      display: pick(o.display, METER_DISPLAYS, "number"),
+      max: o.max === "auto" ? "auto"
+        : typeof o.max === "number" && Number.isFinite(o.max) && o.max >= METER_MAX_MIN ? o.max
+        : 100,
+    });
+    if (out.length >= MAX_STATS) break;
+  }
+  return out;
+}
+
 function parseFields(v: unknown): FieldColumn[] {
   if (!Array.isArray(v)) return [];
   const out: FieldColumn[] = [];
@@ -617,6 +689,12 @@ function parseFormulas(v: unknown): FormulaColumn[] {
       label: typeof o.label === "string" ? o.label.slice(0, 40) : "",
       expr,
       agg: pick(o.agg, FORMULA_AGGS, "none"),
+      display: pick(o.display, METER_DISPLAYS, "number"),
+      // An old document has no `max`, and 100 is the only sane default: the
+      // overwhelming majority of these columns are percentages.
+      max: o.max === "auto" ? "auto"
+        : typeof o.max === "number" && Number.isFinite(o.max) && o.max >= METER_MAX_MIN ? o.max
+        : 100,
     });
     if (out.length >= MAX_FORMULAS) break;
   }
@@ -1068,4 +1146,44 @@ export function clearedSpec(spec: PfBlockSpec): PfBlockSpec {
     tags: [],
     untaggedOnly: false,
   };
+}
+
+/**
+ * A cell's value as a 0..1 fraction of full, or null when it cannot be drawn.
+ *
+ * ⚠️ Null in, null out — and the caller must render that as a dash, NOT as an
+ * empty bar. An empty bar is indistinguishable from 0%, so a task with no
+ * estimate would read as "0% done" rather than "not measured". This is the same
+ * rule `aggregate` follows by skipping nulls, and the reason `coerceField`
+ * returns null for an empty stored value.
+ */
+export function meterFraction(
+  value: FormulaValue,
+  max: number | "auto",
+  /** Every value in the column — only consulted when max is "auto". */
+  column: readonly FormulaValue[] = [],
+): number | null {
+  const n = typeof value === "boolean" ? (value ? 1 : 0) : value;
+  if (typeof n !== "number" || !Number.isFinite(n)) return null;
+
+  const scale = max === "auto" ? autoMax(column) : max;
+  // A zero or absent scale is not "everything is full", it is "there is no
+  // scale" — so the cell falls back to the number rather than drawing a bar
+  // that means nothing.
+  if (scale === null || scale < METER_MAX_MIN) return null;
+
+  // Clamped, not wrapped: 130% of a target is a full bar, and the NUMBER beside
+  // it is what says by how much it was beaten. A bar longer than its track
+  // would just overflow the cell.
+  return Math.min(Math.max(n / scale, 0), 1);
+}
+
+/** The largest finite value in a column, or null when it has none. */
+function autoMax(column: readonly FormulaValue[]): number | null {
+  let best: number | null = null;
+  for (const v of column) {
+    const n = typeof v === "boolean" ? (v ? 1 : 0) : v;
+    if (typeof n === "number" && Number.isFinite(n) && (best === null || n > best)) best = n;
+  }
+  return best !== null && best >= METER_MAX_MIN ? best : null;
 }
