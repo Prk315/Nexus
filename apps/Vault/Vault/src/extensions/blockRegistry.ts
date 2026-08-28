@@ -40,6 +40,7 @@ export type BlockGroup =
   | "callout"    // admonition boxes
   | "container"  // generic grouping panels
   | "cardColor"  // background tint for a callout/container
+  | "fontSize"   // inline text size, bubble only
   | "math"
   | "table"       // insert a table
   | "tableOps"    // row/column editing, inline, only inside a table
@@ -63,6 +64,24 @@ export type BlockGroup =
  * restyled later. These are the app's own semantic hues, so coloured text
  * matches the callouts and the rest of Vault.
  */
+/**
+ * Inline text size, for a run of text rather than a whole note.
+ *
+ * Values are in `em`, never `px`, and that is the whole design. The note
+ * already has its own size (NoteDocument's `textSize`), and the same note opens
+ * on an iPad — a run pinned to 11px would ignore both. In `em` "small" stays
+ * proportionally small whatever the note is set to.
+ *
+ * Three sizes, not a spectrum. This is for a caption or an aside; a size picker
+ * with nine entries invites people to lay out documents by eye, and headings
+ * already exist for structure.
+ */
+export const INLINE_TEXT_SIZES: Array<{ id: string; label: string; value: string | null }> = [
+  { id: "small", label: "Small", value: "0.85em" },
+  { id: "normal", label: "Normal", value: null },
+  { id: "large", label: "Large", value: "1.25em" },
+];
+
 export const TEXT_COLORS: Array<{ id: string; label: string; value: string | null }> = [
   { id: "default", label: "Default", value: null },
   { id: "muted", label: "Muted", value: "oklch(0.55 0 0)" },
@@ -437,6 +456,26 @@ export function buildBlockRegistry(opts: BlockRegistryOptions = {}): BlockAction
       isActive: (e) => (c.value ? e.isActive("textStyle", { color: c.value }) : false),
     })),
 
+    // ── Inline text size ────────────────────────────────────────────────────
+    // Bubble only, like colour, and for the same reason: it applies to the
+    // selection. It also means no toolbar group list has to know about it —
+    // the bubble menu renders every bubble action without filtering by group,
+    // which is exactly the trap that made card colours unreachable.
+    ...INLINE_TEXT_SIZES.map((z): BlockAction => ({
+      id: `textSizeInline:${z.id}`,
+      title: `${z.label} text`,
+      icon: z.id === "small" ? "A⁻" : z.id === "large" ? "A⁺" : "A",
+      short: z.id === "small" ? "A⁻" : z.id === "large" ? "A⁺" : "A",
+      group: "fontSize",
+      surfaces: ["bubble"],
+      keywords: ["size", "small", "large", "caption", "aside", "font"],
+      run: (e) =>
+        z.value
+          ? e.chain().focus().setFontSize(z.value).run()
+          : e.chain().focus().unsetFontSize().run(),
+      isActive: (e) => (z.value ? e.isActive("textStyle", { fontSize: z.value }) : false),
+    })),
+
     // Offered only from inside one, because "unwrap" has no meaning outside.
     // Backspace-at-start does the same thing; this is the discoverable route.
     {
@@ -748,6 +787,7 @@ export const GROUP_LABELS: Record<BlockGroup, string> = {
   callout: "Callout",
   container: "Group",
   cardColor: "Card colour",
+  fontSize: "Text size",
   math: "Math",
   media: "Media",
   align: "Align",
