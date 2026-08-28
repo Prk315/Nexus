@@ -29,6 +29,7 @@ import {
   EMPTY_TAG_INDEX,
   type TaskTagIndex,
 } from "./vaultTaskTags";
+import { loadTaskFields, EMPTY_FIELDS } from "./vaultTaskFields";
 
 export const pathfinderApi = createPathfinderApi(supabase, () => {
   try {
@@ -78,6 +79,11 @@ export interface PfSnapshot {
    * empty tag picker that silently never fills.
    */
   tagsAvailable: boolean;
+  /** taskId → key → raw stored text, for the block's custom columns. */
+  fields: Map<number, Record<string, string>>;
+  /** False when vault_task_fields does not exist yet — a state of its own, so
+   *  the block hides its custom columns rather than showing every task blank. */
+  fieldsAvailable: boolean;
   /** tag (lowercased) → colour, from `vault_tag_colors` — shared with note tags. */
   tagColors: Record<string, string>;
 
@@ -105,6 +111,8 @@ const EMPTY: PfSnapshot = {
   tags: new Map(),
   allTags: [],
   tagsAvailable: true,
+  fields: new Map(),
+  fieldsAvailable: true,
   tagColors: {},
   stats: new Map(),
 };
@@ -177,7 +185,7 @@ export async function refresh(force = false): Promise<void> {
 
   inFlight = (async () => {
     try {
-      const [tasks, plans, goals, teams, tagIndex, tagColors] = await Promise.all([
+      const [tasks, plans, goals, teams, tagIndex, fieldIndex, tagColors] = await Promise.all([
         pathfinderApi.loadTasks(),
         pathfinderApi.loadPlans(),
         pathfinderApi.loadGoals(),
@@ -194,6 +202,9 @@ export async function refresh(force = false): Promise<void> {
         // missing table as `available: false`; this catch covers everything
         // else, because no tag problem is worth losing the task list over.
         loadTaskTags().catch(() => ({ ...EMPTY_TAG_INDEX, available: false })),
+        // Same shape as tags: a failure here degrades ONE feature rather
+        // than rejecting the whole snapshot along with the tasks.
+        loadTaskFields().catch(() => EMPTY_FIELDS),
         // Colours are cosmetic — a failure here must not cost the task list, and
         // an uncoloured chip is a perfectly readable chip.
         loadTagColors().catch(() => ({}) as Record<string, string>),
@@ -212,6 +223,8 @@ export async function refresh(force = false): Promise<void> {
         tags: tagIndex.byTask,
         allTags: tagIndex.all,
         tagsAvailable: tagIndex.available,
+        fields: fieldIndex.byTask,
+        fieldsAvailable: fieldIndex.available,
         tagColors,
         stats: subtreeStats(tasks.tasks),
       };

@@ -1333,6 +1333,31 @@ invisible in-session because `globalContentCache` still held the right thing.
   tell that from "the user deleted everything" and wrote the empty string 400 ms
   later over a note that had never been opened. It routes through `selectNode`
   now, which sets `isLoading` and commits only once the content is in hand.
+## ⚠️ The note SCHEMA path must never reach a Supabase client
+
+`lib/noteSchemaGuard.ts` decides whether a stored note is safe to open, and it
+does that by building the schema from `buildNoteExtensions()`. `lib/supabase.ts`
+calls `createClient()` at MODULE SCOPE and throws "supabaseUrl is required" when
+the env vars are absent — so one import anywhere in that graph makes "is this
+note safe?" depend on a configured network client. Backwards: the guard exists
+to run when things are broken.
+
+This had been worked around by hand twice (`lib/taskTags.ts` and
+`lib/taskFields.ts` are each "the pure half" of a module whose other half talks
+to the network) and stated in a comment at the top of `PathfinderBlockLazy.tsx`
+— and it was **still broken**, through
+`noteExtensions → noteImage → lib/api → lib/supabase`. Nothing pointed at it:
+the app runs fine, and only the guard fails, only when the env is missing.
+
+`lib/schemaPath.test.ts` now walks the import graph from three entry points and
+asserts it. It follows STATIC imports only — a dynamic `import()` is precisely
+the escape hatch used to reach the data layer from a node view, so `noteImage`
+defers its `lib/api` import into the upload handler, which runs on a real paste
+long after any schema is built.
+
+The test also asserts that its own walk finds a known importer, because a broken
+walk would make every other assertion pass vacuously.
+
 ## Vault: PathFinder task blocks
 
 ### One block, two hosts — the note and the canvas
