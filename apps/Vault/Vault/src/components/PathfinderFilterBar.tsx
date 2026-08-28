@@ -39,6 +39,9 @@ import {
   FORMULA_AGGS,
   FORMULA_FIELDS,
   RESERVED_FIELD_KEYS,
+  METER_DISPLAYS,
+  METER_MAX_MIN,
+  type MeterDisplay,
   formulaFieldNames,
   MAX_FIELDS,
   type FieldColumn,
@@ -958,6 +961,35 @@ function FormulaEditor({
                 <option key={a} value={a}>{a === "none" ? "no total" : a}</option>
               ))}
             </select>
+            <select
+              className="pf-formula-agg"
+              value={f.display}
+              aria-label="How the cell is drawn"
+              onChange={(e) => patch(f.id, { display: e.target.value as MeterDisplay })}
+            >
+              {METER_DISPLAYS.map((d) => (
+                <option key={d} value={d}>{d}</option>
+              ))}
+            </select>
+            {/* The scale only exists for a meter. Showing it beside a plain
+                number column would be a control with nothing to control. */}
+            {f.display !== "number" ? (
+              <input
+                className="pf-formula-max"
+                value={f.max === "auto" ? "auto" : String(f.max)}
+                aria-label="What counts as full"
+                title={'A number, or "auto" to scale to the largest visible row'}
+                onKeyDown={(e) => e.stopPropagation()}
+                onChange={(e) => {
+                  const raw = e.target.value.trim().toLowerCase();
+                  if (raw === "auto") return patch(f.id, { max: "auto" });
+                  const n = Number(raw);
+                  // Anything unparseable is ignored rather than reset to a
+                  // default: the user is mid-typing "1" of "150".
+                  if (Number.isFinite(n) && n >= METER_MAX_MIN) patch(f.id, { max: n });
+                }}
+              />
+            ) : null}
             <button
               type="button"
               className="pf-tag-x"
@@ -978,7 +1010,7 @@ function FormulaEditor({
             // crypto.randomUUID is used for node ids elsewhere in Vault; a
             // stable id is what lets a column keep its width and position
             // across edits to its own label.
-            { id: crypto.randomUUID().slice(0, 8), label: "", expr: "estimate / 60", agg: "none" },
+            { id: crypto.randomUUID().slice(0, 8), label: "", expr: "estimate / 60", agg: "none", display: "number", max: 100 },
           ])}
         >+ column</button>
       ) : null}

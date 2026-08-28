@@ -54,6 +54,8 @@ import {
   fmtFormulaValue,
   formulaContext,
   formulaFieldNames,
+  meterFraction,
+  type FormulaColumn,
   type FieldColumn,
   columnWeight,
   moveColumn,
@@ -1295,7 +1297,8 @@ export function PfTableView({
               {compiled.map(({ col, prog }) => (
                 <td key={col.id} className="pf-td pf-td-formula">
                   {prog.ok
-                    ? fmtFormulaValue(computed.get(col.id)?.[ri] ?? null)
+                    ? <MeterCell col={col} value={computed.get(col.id)?.[ri] ?? null}
+                                 column={computed.get(col.id) ?? []} />
                     : <span className="pf-formula-err" title={prog.error}>—</span>}
                 </td>
               ))}
@@ -1369,6 +1372,68 @@ function sortIndicator(spec: PfBlockSpec, col: PfColumn) {
  * all would have each keystroke overwritten by the in-flight refresh. Focused:
  * the user owns the text. Not focused: the store does.
  */
+/**
+ * One computed cell: a number, or a bar or ring scaled against the column's max.
+ *
+ * ⚠️ A null value renders as a DASH, never as an empty meter. An empty bar is
+ * indistinguishable from 0%, so a task with no estimate would read as "0% done"
+ * rather than "not measured" — the same distinction `aggregate` preserves by
+ * skipping nulls instead of counting them as zero.
+ *
+ * The number is kept beside the meter rather than replaced by it. A bar is a
+ * comparison; it cannot say "130% of target", and clamping without the number
+ * would silently lose that.
+ */
+function MeterCell({
+  col, value, column,
+}: {
+  col: FormulaColumn;
+  value: FormulaValue;
+  column: readonly FormulaValue[];
+}) {
+  const text = fmtFormulaValue(value);
+  if (col.display === "number") return <>{text}</>;
+
+  const f = meterFraction(value, col.max, column);
+  // No scale, or nothing to scale. Falls back to the number rather than drawing
+  // a meter that means nothing — including when max is "auto" and every visible
+  // row is null.
+  if (f === null) return <span className="pf-meter-none">{text}</span>;
+
+  const pct = Math.round(f * 100);
+  const label = `${text}${col.max === "auto" ? "" : ` of ${col.max}`}`;
+
+  if (col.display === "ring") {
+    // A stroked circle with a dash gap. r is chosen so the circumference is a
+    // round 100 units, which makes the dash array the percentage directly —
+    // no arithmetic to get subtly wrong at the wrap point.
+    const R = 100 / (2 * Math.PI);
+    const D = (R + 2) * 2;
+    return (
+      <span className="pf-meter pf-meter-ring" role="meter" aria-valuenow={pct}
+            aria-valuemin={0} aria-valuemax={100} aria-label={label} title={label}>
+        <svg viewBox={`0 0 ${D} ${D}`} width="18" height="18" aria-hidden="true">
+          <circle cx={D / 2} cy={D / 2} r={R} className="pf-ring-track" />
+          <circle cx={D / 2} cy={D / 2} r={R} className="pf-ring-fill"
+                  strokeDasharray={`${pct} 100`}
+                  transform={`rotate(-90 ${D / 2} ${D / 2})`} />
+        </svg>
+        <span className="pf-meter-text">{text}</span>
+      </span>
+    );
+  }
+
+  return (
+    <span className="pf-meter pf-meter-bar" role="meter" aria-valuenow={pct}
+          aria-valuemin={0} aria-valuemax={100} aria-label={label} title={label}>
+      <span className="pf-bar-track">
+        <span className="pf-bar-fill" style={{ width: `${pct}%` }} />
+      </span>
+      <span className="pf-meter-text">{text}</span>
+    </span>
+  );
+}
+
 function FieldCell({
   col, taskId, value, editable, onCommit,
 }: {

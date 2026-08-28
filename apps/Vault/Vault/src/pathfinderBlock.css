@@ -1355,3 +1355,70 @@
 .pf-td-field-check { text-align: center; }
 
 .pf-th-field { font-style: italic; }
+
+/* ─── Meters ────────────────────────────────────────────────────────────────
+   A computed column drawn as a bar or a ring. The NUMBER stays beside it: a
+   meter is a comparison and cannot say "130% of target", and the value is
+   clamped for drawing, so without the number that overshoot is invisible. */
+
+.pf-meter {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+.pf-meter-text {
+  font-variant-numeric: tabular-nums;
+  font-size: 0.72rem;
+  color: var(--fg-muted);
+  white-space: nowrap;
+}
+/* No scale to draw against — the number alone, styled like every other cell. */
+.pf-meter-none { font-variant-numeric: tabular-nums; }
+
+.pf-bar-track {
+  flex: 1 1 auto;
+  min-width: 24px;
+  height: 6px;
+  border-radius: 3px;
+  background: var(--bg-muted);
+  overflow: hidden;
+}
+.pf-bar-fill {
+  display: block;
+  height: 100%;
+  border-radius: 3px;
+  background: var(--edge-in);
+  /* The width is written every render as rows recompute; a transition makes a
+     filter change read as movement rather than a jump. Short enough that it
+     never lags behind typing in a cell that feeds the formula. */
+  transition: width 140ms ease-out;
+}
+
+.pf-meter-ring svg { flex: 0 0 auto; display: block; }
+.pf-ring-track {
+  fill: none;
+  stroke: var(--bg-muted);
+  stroke-width: 3;
+}
+.pf-ring-fill {
+  fill: none;
+  stroke: var(--edge-in);
+  stroke-width: 3;
+  stroke-linecap: round;
+  transition: stroke-dasharray 140ms ease-out;
+}
+
+.pf-formula-max {
+  font: inherit;
+  font-size: 0.75rem;
+  padding: 2px 6px;
+  border-radius: 5px;
+  border: 1px solid var(--border-faint);
+  background: var(--bg-base);
+  color: var(--fg-main);
+  flex: 0 1 6ch;
+  min-width: 0;
+  text-align: right;
+}
+.pf-formula-max:focus { outline: none; border-color: var(--edge-in); }
