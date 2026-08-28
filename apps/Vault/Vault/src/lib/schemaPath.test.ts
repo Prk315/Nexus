@@ -81,6 +81,25 @@ describe("the note schema path stays client-free", () => {
     });
   }
 
+  // A second invariant on the same walk, added when shared blocks put the first
+  // VALUE import from a co-editing-adjacent module into NoteEditor.
+  //
+  // NoteEditor imports from `collab/` as TYPES ONLY so that yjs and both Tiptap
+  // collaboration packages stay out of the eager note bundle — a comment at the
+  // top of the file says so, and a comment is not a mechanism. `useSharedBlocks`
+  // deliberately lives in `lib/` for this reason; the failure it prevents is a
+  // future refactor tidying it back into `collab/` and silently adding the whole
+  // CRDT stack to every note open.
+  it("NoteEditor cannot statically reach yjs", () => {
+    const entry = resolve(SRC, "components/NoteEditor.tsx");
+    expect(existsSync(entry)).toBe(true);
+    const reached = walk(entry);
+    const offender = [...reached.keys()].find((f) =>
+      /\b(yjs|y-prosemirror|Collaboration)\b/.test(readFileSync(f, "utf8").match(/from\s*["'][^"']+["']/g)?.join(" ") ?? ""));
+    const trail = offender ? reached.get(offender)!.map((f) => f.replace(SRC + "/", "")).join("\n  → ") : "";
+    expect(offender, `NoteEditor reaches the CRDT stack:\n  ${trail}`).toBeUndefined();
+  });
+
   it("the walk actually works — a known importer IS caught", () => {
     // Without this, a broken walk would make every assertion above pass
     // vacuously, which is the failure mode a test like this really has.

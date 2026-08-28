@@ -8370,4 +8370,119 @@ body.vault-block-dragging .tt-bubble {
 .ProseMirror .sheet-cell.is-editing {
   outline: 1px solid var(--edge-in);
   outline-offset: -1px;
+/* ─── Shared containers ─────────────────────────────────────────────────────
+   A block that is the same block in another note needs to LOOK different, or
+   editing one is indistinguishable from editing a private copy — and the whole
+   surprise of the feature is that a change here lands over there. A left rule
+   rather than a badge: it survives nesting, costs no layout, and does not
+   collide with the block handle or the drag gutter. */
+
+.ProseMirror .is-shared {
+  position: relative;
+}
+.ProseMirror .is-shared::before {
+  content: "";
+  position: absolute;
+  /* Outside the block's own padding so a card colour is not clipped by it. */
+  left: -7px;
+  top: 2px;
+  bottom: 2px;
+  width: 2px;
+  border-radius: 1px;
+  background: var(--edge-in);
+  opacity: 0.55;
+  pointer-events: none;
+}
+.ProseMirror .is-shared:hover::before { opacity: 0.9; }
+/* ─── Colour scheme panel ───────────────────────────────────────────────────
+   Every control writes straight to the live document; there is no preview
+   swatch, because a colour scheme cannot be judged in a 40px square. The
+   derivation guarantees no setting produces unreadable text, which is what
+   makes applying live safe here in a way free colour pickers would not be. */
+
+.sidebar-theme-btn {
+  background: transparent;
+  border: 1px solid var(--border-base);
+  border-radius: 6px;
+  color: var(--fg-muted);
+  cursor: pointer;
+  font-size: 13px;
+  line-height: 1;
+  padding: 4px 7px;
+  margin-left: 6px;
+}
+.sidebar-theme-btn:hover { background: var(--bg-subtle); color: var(--fg-main); }
+.sidebar-theme-btn.active {
+  background: var(--bg-muted);
+  color: var(--fg-main);
+  border-color: var(--border-strong);
+}
+
+.theme-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  padding: 10px 12px 12px;
+  border-bottom: 1px solid var(--border-base);
+  background: var(--bg-subtle);
+}
+
+.theme-presets {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+.theme-swatch {
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  border: 2px solid;
+  cursor: pointer;
+  padding: 0;
+  display: grid;
+  place-items: center;
+  /* The swatch paints the preset's own surface and accent, produced by the
+     same derivation the app uses — so it cannot advertise a scheme it does
+     not render. */
+}
+.theme-swatch.is-active { outline: 2px solid var(--fg-muted); outline-offset: 2px; }
+.theme-swatch-dot { width: 9px; height: 9px; border-radius: 50%; display: block; }
+
+.theme-reset {
+  margin-left: auto;
+  background: transparent;
+  border: 1px solid var(--border-base);
+  border-radius: 5px;
+  color: var(--fg-muted);
+  cursor: pointer;
+  font-size: 11px;
+  padding: 3px 8px;
+}
+.theme-reset:hover { color: var(--fg-main); background: var(--bg-base); }
+
+.theme-slider { display: flex; flex-direction: column; gap: 2px; }
+.theme-slider.is-disabled { opacity: 0.45; }
+.theme-slider-label {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 10.5px;
+  color: var(--fg-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.theme-slider-label em { font-style: normal; text-transform: none; letter-spacing: 0; }
+.theme-slider input[type="range"] {
+  width: 100%;
+  /* accent-color is what makes the track and thumb follow the theme without a
+     hand-built slider; the tokens are already on <html>. */
+  accent-color: var(--edge-in);
+}
+
+.theme-note {
+  margin: 2px 0 0;
+  font-size: 10.5px;
+  line-height: 1.45;
+  color: var(--fg-ghost);
 }

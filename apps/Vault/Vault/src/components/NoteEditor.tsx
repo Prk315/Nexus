@@ -23,6 +23,7 @@ import type { VaultGraph, HighlighterCategory, VaultRecord } from "../types";
 // Types only — see collab/types.ts. A VALUE import from collab/ here would drag
 // yjs and both Tiptap collaboration packages into the eager note bundle.
 import type { CollabSession } from "../collab/types";
+import { useSharedBlocks } from "../lib/useSharedBlocks";
 import { KATEX_OPTS } from "../lib/katexShared";
 import "katex/dist/katex.min.css";
 import "katex/contrib/mhchem";
@@ -425,6 +426,16 @@ function NoteEditorInner({ content, onChange, nodeId, graph, variant = "full", c
     },
     onTransaction: () => forceUpdate((n) => n + 1),
   });
+
+  // Shared containers, kept in step with their own `share:{id}` rows.
+  //
+  // Off under collaboration: on a co-edited note the Y.Doc is already the
+  // authority for the whole document, and a second mechanism replacing ranges
+  // inside it would be two writers on one buffer with no ordering between them.
+  // A shared block inside a co-edited note therefore syncs through the CRDT for
+  // that note's participants and does not publish to its share row — narrower
+  // than ideal, and far better than the two fighting.
+  useSharedBlocks(editor, !isCollab);
 
   useEffect(() => {
     // `!editor` is NOT a sufficient guard, and this is the bug that white-screened

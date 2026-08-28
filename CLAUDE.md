@@ -1576,6 +1576,91 @@ note's table is tens of cells, and an incremental recompute is where spreadsheet
 bugs live (a stale cell that is right until you delete a row).
 
 Adds no node type and no attribute, so there is no deployment ordering.
+### Shared containers: an attribute, not a node type
+
+Any callout, container or toggle can carry a `shareId`, making it the **same
+block** in more than one note, editable from either side. Content lives in its
+own `vault_content` row, `share:{id}` — the idiom already used for `{id}_annot`
+and `{id}_margins`.
+
+⚠️ **`shareId` is an ATTRIBUTE and that is the whole design.** ProseMirror drops
+an unknown attribute and *blanks the document* on an unknown node type. A
+`sharedBlock` node would have required deploying Mac and iPad before anyone could
+create one — and would have wiped notes if that order slipped. As an attribute, a
+note holding a shared block opens fine on an older build and merely does not
+sync. It also makes **copy-paste the linking mechanism**: the attribute travels
+through the HTML clipboard, and the same id in two documents *is* the link. No
+registry to fall out of step with the notes. The round-trip test is the
+high-value one — a renderHTML/parseHTML mismatch is invisible to `tsc`.
+
+**The blocks stay in each note as well as in the row.** That duplication is the
+point: the note remains self-contained, renders offline, exports whole, and a
+failed share read degrades to "you see your last copy" rather than a hole. On
+open the **row wins**; a missing row is **seeded from the note**, which makes
+sharing an existing block a no-op rather than a wipe.
+
+⚠️ **The write loop.** Apply → transaction → save → write back what was just
+received. Two independent guards, because either alone has a hole: the apply
+path marks its transaction and the save path skips it (precise, but only knows
+about transactions this code produced); and every write is gated on the payload
+actually differing from what was last seen (covers unmarked transactions).
+
+Three rules with tests named after them: `parseShare` returns **null, never
+`[]`**, for an unusable read — `[]` legitimately means "the shared block is
+empty", and returning it for a failure would clear every copy and save that. An
+**empty block is never seeded** (`block+` cannot be childless, so empty is one
+empty paragraph, and seeding from it publishes emptiness). Shares are **keyed by
+id, not position** — the same share may appear twice in one note.
+
+**Off under live co-editing.** The Y.Doc is already authoritative for the whole
+document; a second mechanism replacing ranges inside it is two writers on one
+buffer with no ordering between them.
+
+`useSharedBlocks` lives in `lib/`, not `collab/`: NoteEditor imports `collab/` as
+**types only** to keep yjs out of the eager note bundle, and this is a value
+import. `schemaPath.test.ts` asserts it rather than trusting the comment.
+### The colour scheme is derived, not stored
+
+`lib/theme.ts` turns **six numbers** into every `:root` colour token. A theme
+could have been 62 stored token values — that is what "custom colour scheme"
+usually means, and it is a trap: every token added to `:root` afterwards is one
+every stored theme lacks, so themes rot silently as the app grows. A derived
+theme has no such surface.
+
+It only works because the palette is **OKLCH**. Lightness there is perceptual, so
+"one step darker" is a subtraction that means the same thing at every hue; the
+same arithmetic in hex or HSL gives an uneven ramp whose contrast depends on hue.
+
+⚠️ **No theme can make text unreadable, by construction.** Foregrounds move away
+from the surface and the direction flips at `DARK_BELOW = 0.5`. Because that
+threshold is the **midpoint** of the range, the far end is never closer than
+~0.48 from either side. A user dragging a lightness slider passes through "text
+the same colour as the background"; an app that renders that state has lost its
+own settings panel. Tests sweep the whole range.
+
+⚠️ **The direction flip is what makes dark mode work rather than merely be
+dark.** On a dark surface "raised" must be *lighter* — otherwise every input and
+border is darker than a page that is already nearly black, i.e. invisible.
+
+**`MIN_TEXT_DL` is an assertion, not the mechanism.** Making it the mechanism put
+the default theme's black body text at a mid grey: 0.34 is the floor of
+legibility, nowhere near where body text sits. `TEXT_DL` is a table of distances
+that reproduces the existing palette **exactly** at the default — the engine must
+be a no-op against the stylesheet it replaces, or shipping it invalidates every
+colour judgement made so far. Pinned by a test.
+
+**Two things a theme may not do.** Recolour a semantic accent — a delete button
+that is not red because you chose a green scheme is a theme changing what a
+control *means*; only their lightness follows the surface. And touch motion,
+z-index or shadow geometry, which are not colours and whose change would be a
+theme that can break layout.
+
+**130 colour literals still sit outside `:root`** and do not follow a theme —
+that is where a dark scheme shows seams. `cssTokens.test.ts` ratchets the count
+so it can only fall; naming them is a design decision per colour, not a cleanup.
+
+Stored in **localStorage, per device**. A Mac in a lit room and an iPad in bed
+want different schemes, so per-account would be the wrong shape, not a better one.
 
 ### Summary figures share the column pipeline, deliberately
 
