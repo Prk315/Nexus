@@ -73,3 +73,27 @@ describe("App.css colour tokens", () => {
     expect(literals.length).toBeLessThanOrEqual(130);
   });
 });
+
+// ─── The ratchet the theme engine needs ─────────────────────────────────────
+//
+// `lib/theme.ts` derives every `:root` token from six numbers, so a theme is a
+// no-op for anything that reads a token — and does NOTHING for a colour written
+// literally in a rule. Those literals are exactly the spots that will look
+// wrong on a dark scheme: a `#fff` panel on a near-black page.
+//
+// The count is pinned rather than driven to zero. Naming the remainder is a
+// design decision per colour, not a cleanup — the note above explains why a
+// token used once is a rename rather than an abstraction. What this does buy is
+// that the number can only go DOWN, so a dark theme gets better with every
+// literal that is named and can never quietly get worse.
+
+const LITERAL = /#[0-9a-fA-F]{3,8}\b|rgba?\([^)]*\)|oklch\([^)]*\)|hsla?\([^)]*\)/g;
+
+describe("colour literals outside :root", () => {
+  it("never increases", () => {
+    const found = outsideRoot(CSS).match(LITERAL) ?? [];
+    // Measured 2026-08-28, when the theme engine landed. Lower this when you
+    // name some; never raise it.
+    expect(found.length).toBeLessThanOrEqual(130);
+  });
+});
