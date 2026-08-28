@@ -1693,6 +1693,39 @@ buffer with no ordering between them.
 `useSharedBlocks` lives in `lib/`, not `collab/`: NoteEditor imports `collab/` as
 **types only** to keep yjs out of the eager note bundle, and this is a value
 import. `schemaPath.test.ts` asserts it rather than trusting the comment.
+### ⚠️ A colour round trip cannot be asserted in this repo
+
+**happy-dom's `CSSStyleDeclaration` silently drops any value it cannot parse,
+and it cannot parse `oklch()` or `var()`.** Hex, `rgb()` and named colours
+survive; measured, with a test pinning it in `extensions/typography.test.ts`.
+
+Tiptap's Color mark serialises to `style="color: …"` and parses back out of
+`element.style.color`, so **every one of Vault's colours round-trips to `""` in
+tests** while working correctly in every browser that ships oklch — which is all
+of them. No production impact, but it is a blind spot in exactly the test
+category that is otherwise the highest-value one here.
+
+The direct consequence: **do not store `var(--token, …)` as a mark colour** so
+that text colours follow the theme. It is untestable by the same mechanism, and
+the failure mode is every coloured span silently losing its colour on reload.
+
+**Text colours are tuned to a lightness band instead** (`TEXT_COLOR_L`, asserted).
+A colour mark stores a literal in the document and cannot follow the theme, so
+at L≈0.62 it sits ~0.38 from a white page and ~0.48 from the dark theme's
+surface — legible against both. The band is asserted so nobody "improves" a
+colour back to a light-theme-only value. Documents written before the retune keep
+their old literals.
+
+**Fonts are system stacks, never webfonts.** Vault runs in a Tauri WebView, as a
+Vercel page and as an iPad PWA: a webfont is either megabytes in every build or a
+CDN call the offline story dislikes. `FontFamily` is an **attribute** on the
+TextStyle mark, like Color and FontSize, so a note using it opens on an older
+build in the default face — a new mark type would not be safe that way.
+
+**The bubble renders every bubble action flat in one row** and is the iPad's only
+formatting surface. There is a test capping its length; adding more colours or
+faces needs the bubble to group or collapse first.
+
 ### The colour scheme is derived, not stored
 
 `lib/theme.ts` turns **six numbers** into every `:root` colour token. A theme

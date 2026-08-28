@@ -8570,3 +8570,14 @@ body.vault-block-dragging .tt-bubble {
   border: 0;
   background: none;
 }
+
+/* A hairline between bubble groups. The bubble renders every bubble action
+   flat in one row, and with fonts and colours in it that row is long — this
+   makes it scannable without costing a tap. */
+.tt-bubble-sep {
+  width: 1px;
+  align-self: stretch;
+  margin: 2px 3px;
+  background: var(--border-base);
+  flex: 0 0 auto;
+}

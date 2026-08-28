@@ -72,6 +72,7 @@ export type BlockGroup =
   | "textSize"   // per-note text size, a sibling of "width"
   | "align"
   | "color"
+  | "font"       // inline font family, bubble only
   | "code"       // code-block language, only inside one
   | "width"      // per-note page width
   | "fold"       // collapse / expand heading sections
@@ -105,13 +106,65 @@ export const INLINE_TEXT_SIZES: Array<{ id: string; label: string; value: string
   { id: "large", label: "Large", value: "1.25em" },
 ];
 
+/**
+ * The lightness band a text colour must sit in to read on BOTH a light and a
+ * dark surface.
+ *
+ * ⚠️ A colour mark stores a literal value in the document, so it cannot follow
+ * the theme the way a token does. The obvious fix — storing
+ * `var(--note-red, …)` so the theme defines it — was measured and rejected:
+ * `style.color = "var(…)"` yields an empty string in the test environment, so
+ * the HTML round trip cannot be PROVEN, and the failure mode is every coloured
+ * span silently losing its colour on reload. An untestable fix to a cosmetic
+ * problem is a bad trade.
+ *
+ * Instead the palette is tuned to a band that works either way. With the theme
+ * engine's light surface at L=1 and its darkest at L≈0.14, a colour at L≈0.62
+ * is ~0.38 from white and ~0.48 from near-black — legible against both.
+ */
+export const TEXT_COLOR_L = { min: 0.55, max: 0.7 } as const;
+
+/**
+ * Text colours, and background tints for the same hues.
+ *
+ * Older documents keep whatever literal they were written with, so text
+ * coloured before this palette was retuned stays light-theme-tuned. There is no
+ * way around that short of rewriting stored documents, which is not worth doing
+ * to a colour.
+ */
 export const TEXT_COLORS: Array<{ id: string; label: string; value: string | null }> = [
   { id: "default", label: "Default", value: null },
-  { id: "muted", label: "Muted", value: "oklch(0.55 0 0)" },
-  { id: "red", label: "Red", value: "oklch(0.577 0.245 27.325)" },
-  { id: "amber", label: "Amber", value: "oklch(0.55 0.12 82)" },
-  { id: "green", label: "Green", value: "oklch(0.50 0.15 140)" },
-  { id: "blue", label: "Blue", value: "oklch(0.40 0.10 265)" },
+  { id: "muted", label: "Muted", value: "oklch(0.62 0 0)" },
+  { id: "red", label: "Red", value: "oklch(0.62 0.21 25)" },
+  { id: "orange", label: "Orange", value: "oklch(0.66 0.16 55)" },
+  { id: "amber", label: "Amber", value: "oklch(0.68 0.14 85)" },
+  { id: "green", label: "Green", value: "oklch(0.62 0.15 145)" },
+  { id: "blue", label: "Blue", value: "oklch(0.60 0.15 260)" },
+  { id: "violet", label: "Violet", value: "oklch(0.60 0.18 300)" },
+];
+
+// Eight, not the twelve that were briefly here. The bubble menu renders every
+// bubble action FLAT in one row, and it is the iPad's only formatting surface —
+// a row of thirty 13px targets is not a palette, it is a wall. Adding colours
+// past this needs the bubble to group or collapse first.
+
+/**
+ * Font families, as SYSTEM STACKS rather than webfonts.
+ *
+ * Vault runs in a Tauri WebView, as a Vercel page and as a PWA on an iPad.
+ * A webfont there is either bundled — megabytes in every build, for a
+ * typographic choice — or fetched from a CDN, which the offline story and the
+ * artifact CSP both dislike. A system stack costs nothing, is already cached,
+ * and renders instantly with no layout shift.
+ *
+ * The cost is that the exact face differs by platform. For "make a document
+ * feel different" — which is what this is for — that is the right trade.
+ */
+export const FONT_FAMILIES: Array<{ id: string; label: string; value: string | null }> = [
+  { id: "default", label: "Default", value: null },
+  { id: "serif", label: "Serif", value: "ui-serif, Georgia, 'Times New Roman', serif" },
+  { id: "mono", label: "Mono", value: "ui-monospace, SFMono-Regular, Menlo, monospace" },
+  { id: "rounded", label: "Rounded", value: "ui-rounded, 'SF Pro Rounded', 'Nunito', system-ui, sans-serif" },
 ];
 
 export interface BlockActionContext {
@@ -520,6 +573,22 @@ export function buildBlockRegistry(opts: BlockRegistryOptions = {}): BlockAction
     })),
 
     // ── Text colour ─────────────────────────────────────────────────────────
+    ...FONT_FAMILIES.map((f): BlockAction => ({
+      id: `font:${f.id}`,
+      title: f.label,
+      // The icon IS the face, so the button shows what it does rather than
+      // naming it — the one place a glyph beats a word here.
+      icon: "Aa",
+      group: "font",
+      surfaces: ["bubble"],
+      keywords: ["font", "family", "serif", "mono", "typeface"],
+      run: (e) =>
+        f.value
+          ? e.chain().focus().setFontFamily(f.value).run()
+          : e.chain().focus().unsetFontFamily().run(),
+      isActive: (e) => (f.value ? e.isActive("textStyle", { fontFamily: f.value }) : false),
+    })),
+
     ...TEXT_COLORS.map((c): BlockAction => ({
       id: `color:${c.id}`,
       title: c.label,
@@ -870,6 +939,7 @@ export const GROUP_LABELS: Record<BlockGroup, string> = {
   media: "Media",
   align: "Align",
   color: "Colour",
+  font: "Font",
   code: "Language",
   width: "Note width",
   textSize: "Text size",
