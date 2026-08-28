@@ -1,6 +1,6 @@
 ---
 name: brief
-description: Read what Bastian is currently working on — goals, active tasks, what is due, plans — from PathFinder and Vault. Use at the start of any session where the work relates to a task, plan or goal, or when the user refers to something they planned ("the thing I put in PathFinder", "pf-412", "the note about X") rather than describing it in full.
+description: Read what Bastian is currently working on — goals, active tasks, what is due, plans — from PathFinder and Vault. Always reads task trees recursively to depth 4 and counts leaves rather than nodes. Use at the start of any session where the work relates to a task, plan or goal, or when the user refers to something they planned ("the thing I put in PathFinder", "pf-412", "the note about X") rather than describing it in full.
 ---
 
 # What am I working on
@@ -42,24 +42,64 @@ What comes back:
 | `plans` | only plans with open work, with counts |
 | `systems` | recurring commitments, **raw** — see the warning below |
 
-## One task, in full
+## One task, in full — ALWAYS to depth 4
 
-When the user names a task ("pf-412", "the migration task"), fetch just it.
-`pf_tasks` is a supertype: the planning fields live in `pf_task_planning` and a
-read without the embed silently yields default urgency and stage.
+⚠️ **Never read one level of children.** A single-level read looks complete and
+is not: the interesting work sits in the grandchildren, and the parents are
+usually just headings. Read the subtree recursively, to depth 4.
+
+This is not hypothetical. Reading the Vault plan one level down produced a
+backlog that was wrong in two ways at once — it missed that three tasks in
+different branches described the same feature, and it counted nine headings
+("UX", "Schema customisability", "Database/table view") as work.
+
+`pf_tasks` is also a supertype: the planning fields live in `pf_task_planning`
+and a read without the embed silently yields default urgency and stage.
 
 ```sql
-select t.*, row_to_json(p) as planning
-from pf_tasks t
-left join pf_task_planning p on p.task_id = t.id
-where t.id = 412;
+with recursive tree as (
+  select t.id, t.parent_id, t.title, t.done, t.kanban_status, 0 as depth
+  from pf_tasks t where t.id = 412
+  union all
+  select c.id, c.parent_id, c.title, c.done, c.kanban_status, tree.depth + 1
+  from pf_tasks c join tree on c.parent_id = tree.id
+  where tree.depth < 4
+)
+select repeat('    ', tree.depth)
+       || (case when tree.done then '[x] ' else '[ ] ' end)
+       || tree.id || '  ' || tree.title              as outline,
+       tree.kanban_status,
+       p.stage, p.urgency,
+       not exists (select 1 from pf_tasks c where c.parent_id = tree.id) as is_leaf
+from tree
+left join pf_task_planning p on p.task_id = tree.id
+order by tree.depth, tree.id;
 ```
 
-Its children, for a task that has been broken down:
+**Count leaves, not nodes.** `is_leaf` is in the query above because it changes
+the answer: a plan of 29 "tasks" was 20 leaves and 9 containers, so the real
+backlog was 13 open items rather than 22. Reporting the node count overstates
+the work every time.
+
+### A whole plan, the same way
 
 ```sql
-select id, title, done, kanban_status from pf_tasks where parent_id = 412 order by sort_order;
+with recursive tree as (
+  select t.id, t.parent_id, t.title, t.done, 0 as depth
+  from pf_tasks t where t.plan_id = 98 and t.parent_id is null
+  union all
+  select c.id, c.parent_id, c.title, c.done, tree.depth + 1
+  from pf_tasks c join tree on c.parent_id = tree.id
+  where tree.depth < 4
+)
+select * from tree order by depth, parent_id, id;
 ```
+
+⚠️ Walk by `parent_id` from the roots, and **check the two counts agree**: a
+subtask does not necessarily carry its parent's `plan_id`, so filtering on
+`plan_id` alone can silently miss a whole branch. Compare
+`count(*)` from the recursive walk against `count(*) where plan_id = <n>`
+before trusting either.
 
 ## A note from Vault
 
