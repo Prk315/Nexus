@@ -1536,6 +1536,46 @@ An invalid expression is **kept**, not dropped: the column shows an error, which
 is recoverable, whereas discarding it loses whatever was being written with no
 explanation for the disappearance.
 
+### Sheet formulas reuse the expression parser by rewriting, not extending
+
+A table cell starting with `=` computes, on `lib/formula.ts` — the same
+hand-written parser the task blocks use, with no `eval`. That matters more here:
+a table lives in a note, and a note can be shared and pasted from elsewhere, so
+a formula is a string another person can put in your document.
+
+Ranges are handled by **rewriting the source** before it reaches the parser:
+`sum(A1:A3)` → `(A1 + A3)` with A2 empty, `avg` divides by the filled count,
+`min`/`max` fold into nested binary calls. So the evaluator stays a pure
+expression language with a fixed function list, and spreadsheet semantics stay
+out of the module the task blocks also depend on.
+
+⚠️ **An empty cell is dropped from an aggregate, never counted as zero** — the
+fourth place this rule appears. Only `count` returns 0, where zero is the honest
+answer. An aggregate over an entirely empty range is null.
+
+⚠️ **Cycles.** `A1 = B1` / `B1 = A1` is one keystroke away, and unbounded
+recursion inside a ProseMirror plugin is a blank white page, not an error. Two
+things the tests forced: the cycle error **propagates** rather than being
+swallowed into a null (swallowing flagged only one cell of a symmetric pair, so
+the other rendered a bare dash with no explanation), and **a range containing its
+own cell is a real cycle** — `A4: =sum(A1:A4)` is exactly how a user writes a
+column total.
+
+**References match on word boundaries.** "A1" is a substring of "A12", so a
+substring test resolves A1 for a formula mentioning only A12 — and reports a
+cycle through a cell nobody referenced.
+
+**An empty cell inside the table reads as null, not an error**; only a reference
+outside it is named. Otherwise half of every sheet under construction is red.
+
+**The formula stays the document's content** and the value is a decoration —
+replacing the text would mean the document no longer holds the formula, and
+every sync, export and older client would see a frozen number. Same reasoning as
+folding being decorations. The whole sheet re-evaluates on any doc change: a
+note's table is tens of cells, and an incremental recompute is where spreadsheet
+bugs live (a stale cell that is right until you delete a row).
+
+Adds no node type and no attribute, so there is no deployment ordering.
 ### Shared containers: an attribute, not a node type
 
 Any callout, container or toggle can carry a `shareId`, making it the **same

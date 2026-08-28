@@ -8338,6 +8338,40 @@ body.vault-block-dragging .tt-bubble {
   box-shadow: none;
 }
 
+/* ─── Sheet formulas ────────────────────────────────────────────────────────
+   The computed value is drawn from a data attribute rather than inserted into
+   the cell: the formula stays the document's content, so nothing here can be
+   saved, exported or undone away. */
+
+.ProseMirror td.sheet-cell, .ProseMirror th.sheet-cell {
+  position: relative;
+}
+/* The raw `=…` text is hidden — not removed — while the caret is elsewhere. */
+.ProseMirror .sheet-cell:not(.is-editing) > * {
+  visibility: hidden;
+}
+.ProseMirror .sheet-cell:not(.is-editing)::after {
+  content: attr(data-value);
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  padding: 4px 8px;
+  font-variant-numeric: tabular-nums;
+  pointer-events: none;
+}
+.ProseMirror .sheet-cell.is-bad:not(.is-editing)::after {
+  color: var(--destructive);
+  justify-content: center;
+}
+/* A formula cell is marked even while being edited, so it is clear the `=` is
+   doing something rather than being literal text. */
+.ProseMirror .sheet-cell.is-editing {
+  outline: 1px solid var(--edge-in);
+  outline-offset: -1px;
+}
+
 /* ─── Shared containers ─────────────────────────────────────────────────────
    A block that is the same block in another note needs to LOOK different, or
    editing one is indistinguishable from editing a private copy — and the whole
