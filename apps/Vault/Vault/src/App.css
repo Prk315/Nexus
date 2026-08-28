@@ -8370,6 +8370,8 @@ body.vault-block-dragging .tt-bubble {
 .ProseMirror .sheet-cell.is-editing {
   outline: 1px solid var(--edge-in);
   outline-offset: -1px;
+}
+
 /* ─── Shared containers ─────────────────────────────────────────────────────
    A block that is the same block in another note needs to LOOK different, or
    editing one is indistinguishable from editing a private copy — and the whole
