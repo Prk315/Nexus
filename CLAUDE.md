@@ -1612,6 +1612,44 @@ Three things its tests forced:
 disappeared would read as "this connection was deleted". Both ends in the same
 folded frame means it is internal, so it goes.
 
+### Canvas text blocks are Tiptap, and `content` changed MEANING not format
+
+A canvas text block was a textarea holding markdown; it is now the full note
+editor. The whole difficulty is that a canvas is **one JSON blob** in
+`vault_content`, so the block's stored shape is read by older builds.
+
+⚠️ **`content` must stay a readable string.** An older Mac or iPad build renders
+it in a textarea *and saves it back* — raw ProseMirror JSON there is data loss on
+the next save, not a display glitch. So the block gained fields instead:
+
+| field | what |
+|---|---|
+| `rich` | the Tiptap document, same JSON form `vault_content` holds |
+| `md` | the ORIGINAL markdown, written once at conversion, **never overwritten** |
+| `content` | now a plain-text **projection** of `rich` — degraded, not corrupt |
+
+An unknown *field* on a JSON blob is carried or dropped, never fatal — unlike an
+unknown ProseMirror *node type*, which blanks a document. Same asymmetry that
+made `shareId` an attribute.
+
+**`lib/mdToHtml.ts` is deliberately partial**, and `md` is what makes that a
+trade rather than a loss: an unsupported construct arrives as literal text with
+the source still on the block. Two bugs its tests caught:
+
+- It emitted `<h5>`/`<h6>`. `FoldableHeading` is configured `levels: [1,2,3,4]`
+  and **`levels` is a schema option** — unrecognised tags silently become
+  paragraphs, so the heading turns into body text with no error. Levels are
+  clamped to `MAX_HEADING`.
+- `a * b * c` in prose became italics. Guarding the character *after* the closing
+  star does not help — there it is a space and passes. Emphasis may not open or
+  close on whitespace, which is the actual markdown rule.
+
+**Two canvas-specific traps.** Key events are stopped at the block: the canvas
+listens on its container and Delete removes the *selected block*, so without it
+Backspace in a paragraph deletes the block you are typing into. And the editor is
+**uncontrolled after mount, keyed by block id** — feeding the projection back in
+as `content` is a loop that moves the caret to the end on every keystroke.
+
 ### Shared containers: an attribute, not a node type
 
 Any callout, container or toggle can carry a `shareId`, making it the **same

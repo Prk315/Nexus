@@ -1,6 +1,7 @@
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { MatrixBlockContent, MatrixBlockData } from "./MatrixBlock";
+import { NoteEditor } from "./NoteEditor";
 import { GraphBlockContent, GraphBlockData } from "./GraphBlock";
 import { GridBlockContent, GridBlockData } from "./GridBlock";
 import { invoke } from "@tauri-apps/api/core";
@@ -11,6 +12,7 @@ import { readText as clipboardReadText } from "@tauri-apps/plugin-clipboard-mana
 import { isTauri } from "../lib/platform";
 import * as api from "../lib/api";
 import { hiddenBlockIds, visibleAnchor, foldedRect, firstLine, FOLDED_FRAME_HEIGHT } from "../lib/canvasFrames";
+import { editorContent, afterEdit, isConverted } from "../lib/canvasRichText";
 import Markdown from "react-markdown";
 import remarkMath from "remark-math";
 import rehypeKatex from "rehype-katex";
@@ -28,7 +30,18 @@ import { CanvasPathfinderBlock } from "./CanvasPathfinderBlock";
 interface BaseBlock { id: string; x: number; y: number; width: number; height: number; }
 interface TextBlock extends BaseBlock {
   type: "text";
+  /**
+   * A plain-text projection once the block has been converted; the original
+   * markdown before that. Deliberately still a STRING either way — an older
+   * build renders this in a textarea and saves it back, so ProseMirror JSON
+   * here would be data loss rather than a display glitch. See lib/canvasRichText.
+   */
   content: string;
+  /** The Tiptap document, in the same JSON form vault_content holds. */
+  rich?: string;
+  /** The markdown this block held before conversion. Written once, never
+   *  overwritten — it is what makes a partial markdown converter safe. */
+  md?: string;
   preview?: boolean;
   /** Collapsed to its first line. Like a folded frame, this hides and never
    *  moves — the content is untouched and unfolding is a flag flip. */
@@ -971,6 +984,44 @@ async function handleNativePaste(e: React.ClipboardEvent<HTMLTextAreaElement>) {
 }
 
 // ── MathContent ───────────────────────────────────────────────────────────────
+
+/**
+ * A canvas text block, edited in the note editor.
+ *
+ * ⚠️ Two things about the canvas make this more than dropping a component in.
+ *
+ * `stopPropagation` on pointer and key events: the canvas listens on the
+ * container for panning, marquee selection and its own keyboard shortcuts
+ * (Delete removes the selected BLOCK). Without this, typing Backspace in a
+ * paragraph would delete the block you are typing into.
+ *
+ * The editor is UNCONTROLLED after mount — `content` is passed once, keyed by
+ * block id, and afterwards the block's fields are written from `onChange`.
+ * Feeding the projection back in as `content` would be a loop: every keystroke
+ * writes `content`, which re-renders, which pushes a document into the editor
+ * and moves the caret to the end. The `key` is what makes "load once" honest
+ * rather than a stale-prop bug.
+ */
+function RichTextContent({ block, onUpdate }: { block: TextBlock; onUpdate: (id: string, p: Patch) => void }) {
+  // Read once per block, so a later projection write does not reload the editor.
+  const initial = useRef(editorContent(block));
+
+  return (
+    <div
+      className="canvas-block-rich"
+      onPointerDown={e => e.stopPropagation()}
+      onDoubleClick={e => e.stopPropagation()}
+      onKeyDown={e => e.stopPropagation()}
+    >
+      <NoteEditor
+        key={block.id}
+        content={initial.current}
+        variant="embedded"
+        onChange={(rich) => onUpdate(block.id, { ...afterEdit(block, rich) })}
+      />
+    </div>
+  );
+}
 
 function MathContent({ block, onUpdate }: { block: MathBlock; onUpdate: (id: string, p: Patch) => void }) {
   // Local to this block's own MathContent instance — BlockView is memoized
@@ -2210,8 +2261,11 @@ function renderHeaderPure(block: CanvasBlock, api: React.MutableRefObject<BlockA
         onPointerDown={e => e.stopPropagation()}
         onClick={e => { e.stopPropagation(); api.current.updateBlock(block.id, { folded: !tb.folded }); }}
       >{tb.folded ? "▸" : "▾"}</button>
-      {/* The preview toggle has nothing to show while the block is folded. */}
-      {tb.folded ? null : previewToggle(tb, api)}
+      {/* Two independent reasons there is nothing to preview: the block is
+          folded, so nothing is shown at all; or it is a Tiptap document, where
+          the editor IS the rendering and "Preview" would toggle between a thing
+          and itself. */}
+      {tb.folded || isConverted(tb) ? null : previewToggle(tb, api)}
       {closeBtn(block.id, api)}
     </div>
   );
@@ -2235,6 +2289,11 @@ function renderContentPure(block: CanvasBlock, api: React.MutableRefObject<Block
     return <MathContent block={block} onUpdate={api.current.updateBlock} />;
   }
   if (block.type === "text") {
+    // Folded wins over both other modes: a folded block shows its first line
+    // and nothing else, whether or not it has been converted.
+    //
+    // ⚠️ `content` is the plain-text projection once converted, so the title
+    // works for both kinds of block without reaching into the document.
     if (block.folded) {
       const title = firstLine(block.content);
       return (
@@ -2246,19 +2305,17 @@ function renderContentPure(block: CanvasBlock, api: React.MutableRefObject<Block
         </div>
       );
     }
-    if (block.preview) {
+    // The markdown preview is kept, and only for an UNCONVERTED block. Once the
+    // block is a Tiptap document the editor is already the rendering, so a
+    // second "preview" of it would be a toggle between a thing and itself.
+    if (block.preview && !isConverted(block)) {
       return (
         <div className="canvas-block-md-preview" onPointerDown={e => e.stopPropagation()}>
           <Markdown remarkPlugins={[remarkMath]} rehypePlugins={[[rehypeKatex, KATEX_OPTS]]}>{block.content}</Markdown>
         </div>
       );
     }
-    return (
-      <textarea className="canvas-block-text" value={block.content} placeholder="Markdown supported…"
-        onChange={e => api.current.updateBlock(block.id, { content: e.target.value })}
-        onPaste={handleNativePaste}
-        onPointerDown={e => e.stopPropagation()} onDoubleClick={e => e.stopPropagation()} />
-    );
+    return <RichTextContent block={block} onUpdate={api.current.updateBlock} />;
   }
   if (block.type === "sticky") {
     const { accent } = stickyPreset(block.color);
