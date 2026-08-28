@@ -12,6 +12,8 @@ import {
   aggregate,
   formulaContext,
   formulaFieldNames,
+  meterFraction,
+  METER_DISPLAYS,
   MAX_FIELDS,
   FORMULA_FIELD_NAMES,
   MAX_FORMULAS,
@@ -787,5 +789,87 @@ describe("columnWidths with stored columns", () => {
     const none = columnWidths(["title", "due"], {}, 0, 0);
     const some = columnWidths(["title", "due"], {}, 0, 2);
     expect(some.data[0]).toBeLessThan(none.data[0]);
+  });
+});
+
+// ─── Meters ─────────────────────────────────────────────────────────────────
+//
+// A computed column drawn as a bar or a ring. The rule these all circle is that
+// "no value" and "zero" must never look the same.
+
+describe("meterFraction", () => {
+  it("scales against an absolute max", () => {
+    expect(meterFraction(50, 100)).toBe(0.5);
+    expect(meterFraction(4, 8)).toBe(0.5);
+  });
+
+  // ⚠️ The one that matters. Returning 0 here would draw an empty bar, which is
+  // indistinguishable from 0% — so a task with no estimate would read as "0%
+  // done" rather than "not measured". Same rule aggregate follows for nulls.
+  it("returns null for a null value, so the cell can draw a dash not an empty bar", () => {
+    expect(meterFraction(null, 100)).toBeNull();
+    expect(meterFraction(0, 100)).toBe(0); // and a real zero is still a zero
+  });
+
+  it("clamps rather than overflowing, because a bar cannot be longer than its track", () => {
+    expect(meterFraction(130, 100)).toBe(1);
+    expect(meterFraction(-20, 100)).toBe(0);
+  });
+
+  // A zero scale is "there is no scale", not "everything is full" — and
+  // dividing by it would give Infinity, the same trap the formula language
+  // already refuses.
+  it("refuses a scale of zero or less instead of dividing by it", () => {
+    expect(meterFraction(5, 0)).toBeNull();
+    expect(meterFraction(5, -10)).toBeNull();
+    expect(Number.isFinite(meterFraction(5, 0) as number)).toBe(false);
+  });
+
+  it("reads a boolean as 0 or 1, the same way aggregate does", () => {
+    expect(meterFraction(true, 1)).toBe(1);
+    expect(meterFraction(false, 1)).toBe(0);
+  });
+
+  describe("auto scale", () => {
+    it("scales to the largest visible value", () => {
+      const col = [10, 40, null, 20];
+      expect(meterFraction(40, "auto", col)).toBe(1);
+      expect(meterFraction(10, "auto", col)).toBe(0.25);
+    });
+
+    // Nulls are skipped, not counted as zero — otherwise the max is right but
+    // for the wrong reason, and a column of all-nulls would scale against 0.
+    it("falls back to null when the column has nothing to scale against", () => {
+      expect(meterFraction(5, "auto", [null, null])).toBeNull();
+      expect(meterFraction(5, "auto", [])).toBeNull();
+      expect(meterFraction(0, "auto", [0, 0])).toBeNull();
+    });
+  });
+});
+
+describe("meter fields on a formula column", () => {
+  const parse = (formulas: unknown) =>
+    parseSpec(JSON.stringify({ ...defaultSpec("table"), formulas }), "table").formulas;
+
+  // An old document has neither key. 100 is the only sane default: nearly every
+  // such column is a percentage.
+  it("defaults an old column to a plain number scaled to 100", () => {
+    const [f] = parse([{ id: "a", label: "", expr: "1", agg: "none" }]);
+    expect(f.display).toBe("number");
+    expect(f.max).toBe(100);
+  });
+
+  it("keeps a valid display and scale, and survives a round trip", () => {
+    for (const d of METER_DISPLAYS) {
+      expect(parse([{ id: "a", label: "", expr: "1", agg: "none", display: d, max: 8 }])[0].display).toBe(d);
+    }
+    expect(parse([{ id: "a", expr: "1", display: "bar", max: "auto" }])[0].max).toBe("auto");
+  });
+
+  it("falls back rather than storing a scale that cannot be divided by", () => {
+    expect(parse([{ id: "a", expr: "1", display: "bar", max: 0 }])[0].max).toBe(100);
+    expect(parse([{ id: "a", expr: "1", display: "bar", max: -5 }])[0].max).toBe(100);
+    expect(parse([{ id: "a", expr: "1", display: "bar", max: "lots" }])[0].max).toBe(100);
+    expect(parse([{ id: "a", expr: "1", display: "pie" }])[0].display).toBe("number");
   });
 });
