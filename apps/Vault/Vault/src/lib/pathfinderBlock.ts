@@ -18,6 +18,10 @@
 // and iPad builds. A fourth node type could not.
 
 import { MAX_FORMULA_CHARS, type FormulaContext, type FormulaValue } from "./formula";
+// The PURE half only — this module is on the schema path, so it must not
+// reach vaultTaskFields.ts and through it a Supabase client. Asserted by
+// lib/schemaPath.test.ts.
+import { coerceField, normalizeFieldKey, FIELD_TYPES, type FieldType } from "./taskFields";
 import {
   DEFAULT_FILTER,
   KANBAN_STATUSES,
@@ -220,7 +224,26 @@ export interface PfBlockSpec {
    * cache with no invalidation, going stale the moment an estimate is edited.
    */
   formulas: FormulaColumn[];
+
+  /**
+   * Stored custom columns. Table view only.
+   *
+   * The DEFINITION lives here; the values live in `vault_task_fields`. So the
+   * type is a lens the note applies rather than a constraint the database
+   * enforces — changing it never destroys a value, and two notes may read the
+   * same key differently. See the migration header.
+   */
+  fields: FieldColumn[];
 }
+
+export interface FieldColumn {
+  /** Normalised; this IS the storage key, so case and spacing are collapsed. */
+  key: string;
+  label: string;
+  type: FieldType;
+}
+
+export const MAX_FIELDS = 6;
 
 export interface FormulaColumn {
   /** Stable across edits so a column keeps its width and position. */
@@ -260,6 +283,17 @@ export const FORMULA_FIELDS: Array<{ name: string; help: string }> = [
 ];
 
 export const FORMULA_FIELD_NAMES = FORMULA_FIELDS.map((f) => f.name);
+
+/**
+ * The built-in names as a stored key would be written.
+ *
+ * ⚠️ Not the same set: `subtasksDone` normalises to `subtasksdone`, so
+ * comparing a normalised key against the raw names lets a column named
+ * "subtasksDone" through — and it then sits in the field list one character
+ * from the built-in, with no way to tell which a formula means. The key is
+ * normalised, so the collision check must be too.
+ */
+export const RESERVED_FIELD_KEYS = new Set(FORMULA_FIELD_NAMES.map(normalizeFieldKey));
 
 /** A board with thirty columns is not a board, and the spec is size-capped. */
 export const MAX_STATUSES = 12;
@@ -318,6 +352,7 @@ export function defaultSpec(view: PfBlockView): PfBlockSpec {
     colWeights: {},
     statuses: [],
     formulas: [],
+    fields: [],
   };
 }
 
@@ -436,6 +471,7 @@ export function parseSpec(raw: string | null | undefined, view: PfBlockView): Pf
     colWeights: parseWeights(obj.colWeights),
     statuses: normalizeStatuses(obj.statuses),
     formulas: parseFormulas(obj.formulas),
+    fields: parseFields(obj.fields),
   };
 }
 
@@ -537,6 +573,34 @@ function parseWeights(v: unknown): Record<string, number> {
  * lose whatever the user was in the middle of writing, and they would have no
  * idea why the column vanished.
  */
+/**
+ * Validate stored custom-column definitions.
+ *
+ * A key colliding with a built-in formula field is DROPPED: `estimate` meaning
+ * two different things depending on which column you look at is worse than the
+ * column not existing. The editor refuses it up front too, so this is the
+ * backstop for a hand-edited or pasted document.
+ */
+function parseFields(v: unknown): FieldColumn[] {
+  if (!Array.isArray(v)) return [];
+  const out: FieldColumn[] = [];
+  const seen = new Set<string>();
+  for (const raw of v) {
+    if (!raw || typeof raw !== "object") continue;
+    const o = raw as Record<string, unknown>;
+    const key = typeof o.key === "string" ? normalizeFieldKey(o.key) : "";
+    if (!key || seen.has(key) || RESERVED_FIELD_KEYS.has(key)) continue;
+    seen.add(key);
+    out.push({
+      key,
+      label: typeof o.label === "string" ? o.label.slice(0, 40) : "",
+      type: pick(o.type, FIELD_TYPES, "text"),
+    });
+    if (out.length >= MAX_FIELDS) break;
+  }
+  return out;
+}
+
 function parseFormulas(v: unknown): FormulaColumn[] {
   if (!Array.isArray(v)) return [];
   const out: FormulaColumn[] = [];
@@ -573,6 +637,16 @@ export function formulaContext(
   task: PfTask,
   stat: { total: number; done: number } | undefined,
   today: string,
+  /**
+   * The task's stored custom values, and the column definitions that give them
+   * a type. This is the join between the two halves of custom columns: a
+   * stored number column is a NAME A FORMULA CAN READ, which is the whole
+   * reason `budget * 1.25` is possible at all.
+   *
+   * Only number and check columns are exposed — a text column has no numeric
+   * meaning, and `null` for an absent value is what keeps a sum honest.
+   */
+  fields?: { bag: Record<string, string> | undefined; cols: readonly FieldColumn[] },
 ): FormulaContext {
   const due = typeof task.due_date === "string" && /^\d{4}-\d{2}-\d{2}$/.test(task.due_date)
     ? task.due_date
@@ -587,7 +661,35 @@ export function formulaContext(
     urgency: RANK[task.planning?.urgency ?? ""] ?? null,
     overdue: due !== null && !task.done && due < today,
     hasDue: due !== null,
+    ...storedFieldValues(fields),
   };
+}
+
+/**
+ * A task's stored fields as formula bindings.
+ *
+ * A key colliding with a built-in is dropped at parse time (see `parseFields`),
+ * so spreading these after the built-ins cannot shadow `estimate`.
+ */
+function storedFieldValues(
+  fields: { bag: Record<string, string> | undefined; cols: readonly FieldColumn[] } | undefined,
+): Record<string, number | boolean | null> {
+  if (!fields) return {};
+  const out: Record<string, number | boolean | null> = {};
+  for (const c of fields.cols) {
+    if (c.type === "text") continue;
+    const v = coerceField(fields.bag?.[c.key], c.type);
+    // ⚠️ An absent value is null, NOT 0. `sum(budget)` over ten tasks where two
+    // have a budget must be the sum of two, and `avg` must divide by two.
+    out[c.key] = typeof v === "number" || typeof v === "boolean" ? v : null;
+  }
+  return out;
+}
+
+/** Every name a formula in this block may read: built-ins plus numeric stored
+ *  columns. Text columns are deliberately absent — see storedFieldValues. */
+export function formulaFieldNames(fields: readonly FieldColumn[]): string[] {
+  return [...FORMULA_FIELD_NAMES, ...fields.filter((f) => f.type !== "text").map((f) => f.key)];
 }
 
 /**
@@ -693,15 +795,23 @@ export function columnWidths(
   /** How many computed columns follow the standard ones. They share the same
    *  total: leaving them out would let the table claim more than 100%. */
   formulaCount = 0,
-): { data: number[]; formulas: number[]; actions: number } {
+  /** Stored custom columns. They sit between the standard columns and the
+   *  computed ones and, like them, share the same 100%. */
+  fieldCount = 0,
+): { data: number[]; fields: number[]; formulas: number[]; actions: number } {
   const ws = cols.map((c) => columnWeight(weights, c));
+  const dws = Array.from({ length: fieldCount }, () => 1);
   const fws = Array.from({ length: formulaCount }, () => 1);
-  const total = [...ws, ...fws].reduce((a, b) => a + b, 0) + ACTIONS_WEIGHT;
-  if (total <= 0) return { data: cols.map(() => 0), formulas: fws.map(() => 0), actions: 100 };
+  const total = [...ws, ...dws, ...fws].reduce((a, b) => a + b, 0) + ACTIONS_WEIGHT;
+  if (total <= 0) {
+    return { data: cols.map(() => 0), fields: dws.map(() => 0), formulas: fws.map(() => 0), actions: 100 };
+  }
+  const pct = (w: number) => (w / total) * 100;
   return {
-    data: ws.map((w) => (w / total) * 100),
-    formulas: fws.map((w) => (w / total) * 100),
-    actions: (ACTIONS_WEIGHT / total) * 100,
+    data: ws.map(pct),
+    fields: dws.map(pct),
+    formulas: fws.map(pct),
+    actions: pct(ACTIONS_WEIGHT),
   };
 }
 

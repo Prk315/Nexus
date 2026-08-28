@@ -1298,3 +1298,60 @@
   border-radius: 3px;
   padding: 0 3px;
 }
+
+/* ─── Stored custom columns ─────────────────────────────────────────────────
+   Values live in vault_task_fields; the definition lives in the block spec.
+   Styled as a sibling of the computed columns because they read as one control
+   in the bar — the difference is where the number comes from, not what it is. */
+
+.pf-fields { display: flex; flex-direction: column; gap: 4px; width: 100%; }
+
+.pf-field-row {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  flex-wrap: wrap;
+}
+
+.pf-field-label, .pf-field-type, .pf-field-new {
+  font: inherit;
+  font-size: 0.75rem;
+  padding: 2px 6px;
+  border-radius: 5px;
+  border: 1px solid var(--border-faint);
+  background: var(--bg-base);
+  color: var(--fg-main);
+  min-width: 0;
+}
+.pf-field-label { flex: 1 1 12ch; }
+.pf-field-new { flex: 1 1 14ch; }
+.pf-field-label:focus, .pf-field-new:focus { outline: none; border-color: var(--edge-in); }
+
+/* A cell is an input filling the cell, with no chrome until it is touched: a
+   table of forty bordered boxes reads as a form, not as data. The border
+   appears on hover and focus, which is where it carries information. */
+.pf-field-input {
+  font: inherit;
+  font-size: inherit;
+  width: 100%;
+  min-width: 0;
+  padding: 1px 4px;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  background: transparent;
+  color: inherit;
+}
+.pf-field-input:hover { border-color: var(--border-faint); }
+.pf-field-input:focus {
+  outline: none;
+  border-color: var(--edge-in);
+  background: var(--bg-base);
+}
+.pf-field-input:read-only { cursor: default; }
+.pf-field-input:read-only:hover { border-color: transparent; }
+
+/* Numbers right-align so digits line up down the column; text does not. */
+.pf-td-field-num .pf-field-input { text-align: right; font-variant-numeric: tabular-nums; }
+.pf-td-field-check { text-align: center; }
+
+.pf-th-field { font-style: italic; }

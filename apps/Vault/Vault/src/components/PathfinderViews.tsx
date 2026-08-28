@@ -53,7 +53,8 @@ import {
   aggregate,
   fmtFormulaValue,
   formulaContext,
-  FORMULA_FIELD_NAMES,
+  formulaFieldNames,
+  type FieldColumn,
   columnWeight,
   moveColumn,
   COL_WEIGHT_MAX,
@@ -63,6 +64,7 @@ import {
 } from "../lib/pathfinderBlock";
 import type { TaskActions, TreeControls } from "./PathfinderBlockView";
 import { HOST_ATTR, hostAt, type BlockHost } from "../lib/pathfinderHosts";
+import { coerceField, FIELD_VALUE_MAX } from "../lib/taskFields";
 import { compile, type FormulaValue } from "../lib/formula";
 
 /** What every view needs, whatever shape it renders it in. */
@@ -999,6 +1001,10 @@ function useCardDrag({
   return { dragId, overKey, overSlot, handlers: { onPointerDown } };
 }
 
+/** A stable empty list: an inline `[]` would be a new identity every render
+ *  and would defeat every memo keyed on the field list. */
+const EMPTY_FIELDS_LIST: FieldColumn[] = [];
+
 // ─── Table ──────────────────────────────────────────────────────────────────
 
 export function PfTableView({
@@ -1009,15 +1015,27 @@ export function PfTableView({
   onSpecChange: (next: PfBlockSpec) => void;
 }) {
   const cols = spec.columns;
-  const widths = useMemo(() => columnWidths(cols, spec.colWeights, spec.formulas.length), [cols, spec.colWeights, spec.formulas.length]);
+  // Stored columns are hidden entirely when the table does not exist yet, rather
+  // than drawn as a wall of blanks — "unavailable" and "nobody has filled this
+  // in" are different states and must not look the same. Same rule as tags.
+  const fields = actions.fieldsAvailable ? spec.fields : EMPTY_FIELDS_LIST;
+  const widths = useMemo(
+    () => columnWidths(cols, spec.colWeights, spec.formulas.length, fields.length),
+    [cols, spec.colWeights, spec.formulas.length, fields.length],
+  );
 
   // Compiled once per formula, not once per row. 200 rows would otherwise be
   // 200 tokenisations of the same string — and, more to the point, a syntax
   // error is then known before any row is drawn, so the column can say
   // "unknown field: estimat" instead of rendering two hundred blanks.
+  // The names a formula may read include this block's numeric stored columns,
+  // so `budget * 1.25` compiles. Recompiling when the FIELD LIST changes is the
+  // point: renaming a stored column must turn a formula reading it into a named
+  // error, not a silently blank cell.
+  const names = useMemo(() => formulaFieldNames(fields), [fields]);
   const compiled = useMemo(
-    () => spec.formulas.map((f) => ({ col: f, prog: compile(f.expr, FORMULA_FIELD_NAMES) })),
-    [spec.formulas],
+    () => spec.formulas.map((f) => ({ col: f, prog: compile(f.expr, names) })),
+    [spec.formulas, names],
   );
 
   // Every row's value for every formula column, computed once so the cells and
@@ -1026,11 +1044,14 @@ export function PfTableView({
     const out = new Map<string, FormulaValue[]>();
     for (const { col, prog } of compiled) {
       out.set(col.id, prog.ok
-        ? rows.map((r) => prog.run(formulaContext(r.task, statFor(actions.stats, r.task.id), today)))
+        ? rows.map((r) => prog.run(formulaContext(
+            r.task, statFor(actions.stats, r.task.id), today,
+            { bag: actions.fieldsOf(r.task.id), cols: fields },
+          )))
         : []);
     }
     return out;
-  }, [compiled, rows, actions.stats, today]);
+  }, [compiled, rows, actions.stats, actions.fieldsOf, fields, today]);
   const tableRef = useRef<HTMLTableElement>(null);
 
   // ── Resizing ────────────────────────────────────────────────────────────
@@ -1046,16 +1067,18 @@ export function PfTableView({
   // ~60 document rewrites a second, each waking the note's 400ms autosave.
   const resizeRef = useRef<{ i: number; startX: number; a: number; b: number; width: number } | null>(null);
 
-  const paintWidths = useCallback((data: number[], actions: number) => {
-    const el = tableRef.current;
-    if (!el) return;
-    const colEls = el.querySelectorAll("col");
-    data.forEach((pct, i) => {
+  // Every <col> in order, not just the data ones. Writing the actions width at
+  // index `data.length` was correct only while the data columns were the last
+  // ones — with stored and computed columns in between, that index is the first
+  // stored column, so a drag squeezed it to the actions column's share and the
+  // actions column kept a stale width until the next render.
+  const paintWidths = useCallback((all: number[]) => {
+    const colEls = tableRef.current?.querySelectorAll("col");
+    if (!colEls) return;
+    all.forEach((pct, i) => {
       const c = colEls[i] as HTMLElement | undefined;
       if (c) c.style.width = `${pct}%`;
     });
-    const last = colEls[data.length] as HTMLElement | undefined;
-    if (last) last.style.width = `${actions}%`;
   }, []);
 
   const onResizeDown = useCallback((e: React.PointerEvent, i: number) => {
@@ -1093,9 +1116,9 @@ export function PfTableView({
   const onResizeMove = useCallback((e: React.PointerEvent) => {
     const next = resizeTo(e.clientX);
     if (!next) return;
-    const w = columnWidths(cols, next);
-    paintWidths(w.data, w.actions);
-  }, [resizeTo, cols, paintWidths]);
+    const w = columnWidths(cols, next, spec.formulas.length, fields.length);
+    paintWidths([...w.data, ...w.fields, ...w.formulas, w.actions]);
+  }, [resizeTo, cols, spec.formulas.length, fields.length, paintWidths]);
 
   const onResizeUp = useCallback((e: React.PointerEvent) => {
     const next = resizeTo(e.clientX);
@@ -1173,6 +1196,7 @@ export function PfTableView({
             reconcile them. */}
         <colgroup>
           {cols.map((c, i) => <col key={c} style={{ width: `${widths.data[i]}%` }} />)}
+          {fields.map((f, i) => <col key={f.key} style={{ width: `${widths.fields[i]}%` }} />)}
           {spec.formulas.map((f, i) => <col key={f.id} style={{ width: `${widths.formulas[i]}%` }} />)}
           <col style={{ width: `${widths.actions}%` }} />
         </colgroup>
@@ -1223,6 +1247,11 @@ export function PfTableView({
                 ) : null}
               </th>
             ))}
+            {fields.map((f) => (
+              <th key={f.key} className="pf-th pf-th-field" scope="col" title={`${f.label || f.key} — stored ${f.type}`}>
+                <span className="pf-th-label">{f.label || f.key}</span>
+              </th>
+            ))}
             {compiled.map(({ col, prog }) => (
               <th key={col.id} className="pf-th pf-th-formula" scope="col"
                   title={prog.ok ? col.expr : `${col.expr} — ${prog.error}`}>
@@ -1253,6 +1282,16 @@ export function PfTableView({
                   tree={tree}
                 />
               ))}
+              {fields.map((f) => (
+                <FieldCell
+                  key={f.key}
+                  col={f}
+                  taskId={r.task.id}
+                  value={actions.fieldsOf(r.task.id)?.[f.key] ?? ""}
+                  editable={editable}
+                  onCommit={actions.setField}
+                />
+              ))}
               {compiled.map(({ col, prog }) => (
                 <td key={col.id} className="pf-td pf-td-formula">
                   {prog.ok
@@ -1280,6 +1319,11 @@ export function PfTableView({
               {cols.map((c, i) => (
                 <td key={c} className="pf-td pf-tfoot-td">{i === 0 ? "Total" : ""}</td>
               ))}
+              {/* Stored columns carry no footer of their own. Summing one is
+                  what a formula column is FOR — `sum(budget)` is one expression
+                  away, and a second aggregation mechanism would be a second
+                  place for "what does empty mean" to be answered differently. */}
+              {fields.map((f) => <td key={f.key} className="pf-td pf-tfoot-td" />)}
               {compiled.map(({ col, prog }) => {
                 if (!prog.ok || col.agg === "none") {
                   return <td key={col.id} className="pf-td pf-tfoot-td" />;
@@ -1314,6 +1358,79 @@ function sortIndicator(spec: PfBlockSpec, col: PfColumn) {
   };
   if (map[col] !== spec.sort.key) return null;
   return <span className="pf-sort" aria-hidden="true">{spec.sort.dir === "asc" ? "↑" : "↓"}</span>;
+}
+
+/**
+ * One stored custom-field cell.
+ *
+ * ⚠️ The draft only exists WHILE FOCUSED. The block refreshes on a timer and on
+ * every write elsewhere in the note, so a cell that kept a permanent draft would
+ * show a stale value forever after the first edit — and one that had no draft at
+ * all would have each keystroke overwritten by the in-flight refresh. Focused:
+ * the user owns the text. Not focused: the store does.
+ */
+function FieldCell({
+  col, taskId, value, editable, onCommit,
+}: {
+  col: FieldColumn;
+  taskId: number;
+  value: string;
+  editable: boolean;
+  onCommit: (taskId: number, key: string, value: string) => void;
+}) {
+  const [draft, setDraft] = useState<string | null>(null);
+  const shown = draft ?? value;
+
+  if (col.type === "check") {
+    // No draft: a checkbox has nothing to type, so it commits on the click and
+    // the optimistic store update is the feedback.
+    const on = coerceField(value, "check") === true;
+    return (
+      <td className="pf-td pf-td-field pf-td-field-check">
+        <input
+          type="checkbox"
+          checked={on}
+          disabled={!editable}
+          aria-label={col.label || col.key}
+          // "" rather than "0": clearing the box DELETES the row. A stored "0"
+          // and no row at all would both render unchecked, but only one of them
+          // answers "has anyone filled this column in".
+          onChange={(e) => onCommit(taskId, col.key, e.target.checked ? "1" : "")}
+        />
+      </td>
+    );
+  }
+
+  const commit = () => {
+    setDraft(null);
+    if (draft !== null && draft !== value) onCommit(taskId, col.key, draft);
+  };
+
+  return (
+    <td className={`pf-td pf-td-field${col.type === "number" ? " pf-td-field-num" : ""}`}>
+      <input
+        className="pf-field-input"
+        // `text` even for a number column: a number input's spinner and its
+        // locale-dependent parsing of "1,5" both fight the coercion rule, which
+        // already decides what is and is not a number.
+        type="text"
+        inputMode={col.type === "number" ? "decimal" : undefined}
+        value={shown}
+        readOnly={!editable}
+        aria-label={col.label || col.key}
+        maxLength={FIELD_VALUE_MAX}
+        onChange={(e) => setDraft(e.target.value)}
+        onFocus={() => setDraft(value)}
+        onBlur={commit}
+        onKeyDown={(e) => {
+          if (e.key === "Enter") { e.preventDefault(); (e.target as HTMLInputElement).blur(); }
+          // Escape restores what the store has, which is also what a failed
+          // write rolls back to — one meaning of "cancel", not two.
+          else if (e.key === "Escape") { setDraft(null); (e.target as HTMLInputElement).blur(); }
+        }}
+      />
+    </td>
+  );
 }
 
 function Cell({

@@ -64,6 +64,8 @@ import {
   subscribe,
   tagColorFor,
   upsertTask,
+  setCachedTaskField,
+  restoreCachedTaskFields,
 } from "../lib/pathfinderStore";
 import {
   addTaskTag,
@@ -73,6 +75,7 @@ import {
   removeTaskTag,
   renameTaskTag,
 } from "../lib/vaultTaskTags";
+import { setTaskField, normalizeFieldKey } from "../lib/vaultTaskFields";
 import { PathfinderFilterBar } from "./PathfinderFilterBar";
 import { PathfinderTaskDetail } from "./PathfinderTaskDetail";
 import { PfBoardView, PfListView, PfTableView } from "./PathfinderViews";
@@ -104,6 +107,14 @@ export interface TaskActions {
   openDetail: (task: PfTask) => void;
   addTag: (task: PfTask, tag: string) => void;
   removeTag: (task: PfTask, tag: string) => void;
+  /** One task's stored custom values, or undefined when it has none. */
+  fieldsOf: (taskId: number) => Record<string, string> | undefined;
+  /** Write one cell. An empty value clears it — see setTaskField. */
+  setField: (taskId: number, key: string, value: string) => void;
+  /** False when vault_task_fields does not exist yet. The table then hides its
+   *  stored columns rather than drawing every task as blank: "unavailable" and
+   *  "nobody has filled this in" must not look the same. */
+  fieldsAvailable: boolean;
   busy: Set<number>;
   /** Descendant roll-ups, so a row can show "3/12" without walking the tree itself. */
   stats: Map<number, SubtreeStat>;
@@ -510,6 +521,22 @@ export function PathfinderBlock({
           }
         })();
       },
+      fieldsOf: (taskId) => snap.fields.get(taskId),
+      setField: (taskId, key, value) => {
+        const k = normalizeFieldKey(key);
+        if (!k) return;
+        const prev = setCachedTaskField(taskId, k, value);
+        setWriteError(null);
+        void (async () => {
+          try {
+            await setTaskField(taskId, k, value);
+          } catch (e: any) {
+            restoreCachedTaskFields(taskId, prev);
+            setWriteError(e?.message ?? String(e));
+          }
+        })();
+      },
+      fieldsAvailable: snap.fieldsAvailable,
       removeTag: (task, tag) => {
         const current = snap.tags.get(task.id) ?? [];
         const prev = setCachedTaskTags(task.id, current.filter((t) => t !== tag));
@@ -524,7 +551,7 @@ export function PathfinderBlock({
         })();
       },
     }),
-    [busy, confirm, withBusy, snap.stats, snap.tags, spec, today, detailId],
+    [busy, confirm, withBusy, snap.stats, snap.tags, snap.fields, snap.fieldsAvailable, spec, today, detailId],
   );
 
   const treeControls: TreeControls = useMemo(

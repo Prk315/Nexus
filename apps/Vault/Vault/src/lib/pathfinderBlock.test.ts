@@ -11,6 +11,8 @@ import {
   sortColumns,
   aggregate,
   formulaContext,
+  formulaFieldNames,
+  MAX_FIELDS,
   FORMULA_FIELD_NAMES,
   MAX_FORMULAS,
   creationPayload,
@@ -34,6 +36,7 @@ import {
   MAX_FILTER_TAGS,
   SPEC_MAX_LIMIT,
 } from "./pathfinderBlock";
+import { compile } from "./formula";
 import { DEFAULT_FILTER } from "@nexus/core/pathfinder";
 
 describe("parseSpec", () => {
@@ -666,5 +669,123 @@ describe("aggregate", () => {
     expect(aggregate("avg", []).value).toBeNull();
     expect(aggregate("percent", []).value).toBeNull();
     expect(aggregate("none", [1, 2]).value).toBeNull();
+  });
+});
+
+// ─── Stored custom columns ──────────────────────────────────────────────────
+//
+// The definition lives in the spec; the values live in vault_task_fields. These
+// pin the join between the two halves — a stored NUMBER column is a name a
+// formula reads, which is the whole point of building the two together.
+
+describe("parseFields", () => {
+  const parse = (fields: unknown) =>
+    parseSpec(JSON.stringify({ ...defaultSpec("table"), fields }), "table").fields;
+
+  it("defaults to none, on an old document with no such key at all", () => {
+    expect(parseSpec(JSON.stringify({ view: "table" }), "table").fields).toEqual([]);
+    expect(defaultSpec("table").fields).toEqual([]);
+  });
+
+  it("normalises the key, because the key IS the storage key", () => {
+    expect(parse([{ key: "  Story Points ", label: "Story Points", type: "number" }]))
+      .toEqual([{ key: "story_points", label: "Story Points", type: "number" }]);
+  });
+
+  // Two columns whose keys collide would split one column's values across two
+  // headers, and the user would see half their data in each.
+  it("drops a duplicate key", () => {
+    expect(parse([
+      { key: "budget", type: "number" },
+      { key: "BUDGET", type: "text" },
+    ])).toHaveLength(1);
+  });
+
+  // ⚠️ `estimate` meaning both "the task's estimate" and "this stored column"
+  // inside one formula is not resolvable — so the collision is refused at the
+  // door rather than shadowed one way or the other.
+  it("refuses a key that collides with a built-in formula field", () => {
+    for (const name of FORMULA_FIELD_NAMES) {
+      expect(parse([{ key: name, type: "number" }]), name).toEqual([]);
+    }
+  });
+
+  it("bounds the count and falls back to a text column for an unknown type", () => {
+    const many = Array.from({ length: MAX_FIELDS + 4 }, (_, i) => ({ key: `k${i}`, type: "number" }));
+    expect(parse(many)).toHaveLength(MAX_FIELDS);
+    expect(parse([{ key: "a", type: "colour" }])[0].type).toBe("text");
+  });
+
+  it("survives a round trip", () => {
+    const spec = { ...defaultSpec("table"), fields: [{ key: "budget", label: "Budget", type: "number" as const }] };
+    expect(parseSpec(JSON.stringify(spec), "table").fields).toEqual(spec.fields);
+  });
+});
+
+describe("stored fields in a formula", () => {
+  const task = () => ({
+    id: 1, title: "t", done: false, priority: "medium", due_date: null,
+    time_estimate: null, aggregate_estimate: null, planning: null,
+  }) as never;
+  const cols = [
+    { key: "budget", label: "", type: "number" as const },
+    { key: "billed", label: "", type: "check" as const },
+    { key: "owner", label: "", type: "text" as const },
+  ];
+
+  it("binds numeric and check columns, and never text", () => {
+    const ctx = formulaContext(task(), undefined, "2026-08-28",
+      { bag: { budget: "1200", billed: "1", owner: "me" }, cols });
+    expect(ctx.budget).toBe(1200);
+    expect(ctx.billed).toBe(true);
+    // A text column has no numeric meaning. Binding it would make every formula
+    // reading it silently blank instead of failing with a named error.
+    expect(ctx.owner).toBeUndefined();
+    expect(formulaFieldNames(cols)).toEqual([...FORMULA_FIELD_NAMES, "budget", "billed"]);
+  });
+
+  // ⚠️ The rule the whole feature turns on. `sum(budget)` over ten tasks where
+  // two have a budget must be the sum of two — a missing value counted as 0
+  // would drag every average down and look plausible while doing it.
+  it("binds an absent value as null, never as zero or false", () => {
+    const ctx = formulaContext(task(), undefined, "2026-08-28", { bag: undefined, cols });
+    expect(ctx.budget).toBeNull();
+    expect(ctx.billed).toBeNull();
+    const blank = formulaContext(task(), undefined, "2026-08-28", { bag: { budget: "   " }, cols });
+    expect(blank.budget).toBeNull();
+  });
+
+  it("still exposes exactly the built-ins when the block has no stored columns", () => {
+    const ctx = formulaContext(task(), undefined, "2026-08-28", { bag: { x: "1" }, cols: [] });
+    expect(Object.keys(ctx).sort()).toEqual([...FORMULA_FIELD_NAMES].sort());
+  });
+
+  it("compiles an expression over a stored column", () => {
+    const prog = compile("budget * 1.25", formulaFieldNames(cols));
+    expect(prog.ok).toBe(true);
+    expect(prog.ok && prog.run(formulaContext(task(), undefined, "2026-08-28",
+      { bag: { budget: "100" }, cols }))).toBe(125);
+    // And an absent value propagates as null rather than as 0 * 1.25.
+    expect(prog.ok && prog.run(formulaContext(task(), undefined, "2026-08-28",
+      { bag: {}, cols }))).toBeNull();
+  });
+
+  it("names the error when a formula reads a column that has been removed", () => {
+    expect(compile("budget * 2", formulaFieldNames([])).ok).toBe(false);
+  });
+});
+
+describe("columnWidths with stored columns", () => {
+  it("shares the same 100% — the table cannot claim more than its width", () => {
+    const w = columnWidths(["title", "due"], {}, 2, 3);
+    const total = [...w.data, ...w.fields, ...w.formulas, w.actions].reduce((a, b) => a + b, 0);
+    expect(total).toBeCloseTo(100, 6);
+    expect(w.fields).toHaveLength(3);
+  });
+
+  it("narrows the data columns as stored ones are added, rather than overflowing", () => {
+    const none = columnWidths(["title", "due"], {}, 0, 0);
+    const some = columnWidths(["title", "due"], {}, 0, 2);
+    expect(some.data[0]).toBeLessThan(none.data[0]);
   });
 });
