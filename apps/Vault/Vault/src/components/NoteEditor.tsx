@@ -3,10 +3,10 @@ import { BubbleMenu } from "@tiptap/react/menus";
 import { Extension } from "@tiptap/core";
 import type { Editor } from "@tiptap/core";
 import type { EditorState } from "@tiptap/pm/state";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, Fragment } from "react";
 import katex from "katex";
 import { createSlashCommandsExtension, type SlashMenuState } from "../extensions/SlashCommands";
-import { buildBlockRegistry, actionsFor, type BlockAction } from "../extensions/blockRegistry";
+import { buildBlockRegistry, actionsFor, FONT_FAMILIES, TEXT_COLORS, type BlockAction } from "../extensions/blockRegistry";
 import { buildNoteExtensions, noteSchema } from "../extensions/noteExtensions";
 import { auditNoteContent, parseNoteContent } from "../lib/noteSchemaGuard";
 import { NoteSchemaError } from "./NoteSchemaError";
@@ -139,6 +139,22 @@ function MathEditPopover({
       </div>
     </div>
   );
+}
+
+/**
+ * The face or colour a bubble button previews.
+ *
+ * Looked up by ACTION ID rather than passed through the registry: an action is
+ * a `{icon, run}` pair with no notion of appearance, and giving it one so that
+ * four buttons can style themselves would put presentation in a module the
+ * slash menu and the toolbar also read.
+ */
+function fontPreview(actionId: string): string | undefined {
+  return FONT_FAMILIES.find((f) => `font:${f.id}` === actionId)?.value ?? undefined;
+}
+
+function colorPreview(actionId: string): string | undefined {
+  return TEXT_COLORS.find((c) => `color:${c.id}` === actionId)?.value ?? undefined;
 }
 
 interface Props {
@@ -921,11 +937,19 @@ function NoteEditorInner({ content, onChange, nodeId, graph, variant = "full", c
           and miserable with a thumb at the top of the screen. */}
       <BubbleMenu editor={editor} options={BUBBLE_OPTIONS} shouldShow={bubbleShouldShow}>
         <div className="tt-bubble">
-          {actionsFor(registry, "bubble").map((a) => (
+          {actionsFor(registry, "bubble").map((a, i, all) => (
+            <Fragment key={a.id}>
+              {/* A hairline wherever the group changes. The bubble renders every
+                  bubble action flat, and with fonts and colours in it that is a
+                  long undifferentiated row — the separator is what makes it
+                  scannable without adding a single tap. */}
+              {i > 0 && all[i - 1].group !== a.group ? <span className="tt-bubble-sep" /> : null}
             <button
-              key={a.id}
               type="button"
               className={`tt-btn${a.isActive?.(editor) ? " active" : ""}${swatches[a.id] ? " tt-hl-btn" : ""}`}
+              // The colour swatch IS the label, so the face/colour is also the
+              // preview — a button that shows what it does rather than naming it.
+              style={a.group === "font" ? { fontFamily: fontPreview(a.id) } : a.group === "color" ? { color: colorPreview(a.id) } : undefined}
               title={a.shortcut ? `${a.title} (${a.shortcut})` : a.title}
               aria-label={a.title}
               onMouseDown={(e) => e.preventDefault()}
@@ -934,6 +958,7 @@ function NoteEditorInner({ content, onChange, nodeId, graph, variant = "full", c
               {swatches[a.id] && <span className="tt-hl-swatch" style={{ background: swatches[a.id] }} />}
               {a.short ?? a.icon}
             </button>
+            </Fragment>
           ))}
         </div>
       </BubbleMenu>

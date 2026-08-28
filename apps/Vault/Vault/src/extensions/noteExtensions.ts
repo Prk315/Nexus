@@ -32,7 +32,7 @@ import { PathfinderBlock } from "./PathfinderBlock";
 import { NoteImage } from "./noteImage";
 import { NoteCodeBlock } from "./noteCodeBlock";
 import TextAlign from "@tiptap/extension-text-align";
-import { TextStyle, Color, FontSize } from "@tiptap/extension-text-style";
+import { TextStyle, Color, FontSize, FontFamily } from "@tiptap/extension-text-style";
 import { KATEX_OPTS } from "../lib/katexShared";
 
 export interface NoteExtensionOpts {
@@ -114,6 +114,12 @@ export function buildNoteExtensions(opts: NoteExtensionOpts = {}): Extensions {
     // categories, which mean something (they file vault_records rows).
     TextStyle,
     Color,
+    // Like Color and FontSize, an ATTRIBUTE on the TextStyle mark rather than a
+    // mark of its own. ProseMirror builds a mark's attrs from the TYPE's
+    // declared list and ignores extras, so a note using this opens correctly on
+    // a build that predates it — the text simply renders in the default face.
+    // A new MARK type would not be safe that way.
+    FontFamily,
     // Inline size, in `em` rather than `px` — see INLINE_TEXT_SIZES. It rides
     // the same TextStyle mark as Color, so it is a mark ATTRIBUTE: a build
     // without it drops the attribute and renders the text at the normal size,
