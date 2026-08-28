@@ -16,6 +16,7 @@ import StarterKit from "@tiptap/starter-kit";
 import Placeholder from "@tiptap/extension-placeholder";
 import Mathematics from "@tiptap/extension-mathematics";
 import { Table, TableRow, TableHeader, TableCell } from "@tiptap/extension-table";
+import { SheetFormulas } from "./sheetFormulas";
 import { TaskList } from "@tiptap/extension-list/task-list";
 import { TaskItem } from "@tiptap/extension-list/task-item";
 import { CategoryHighlight } from "./CategoryHighlight";
@@ -146,6 +147,10 @@ export function buildNoteExtensions(opts: NoteExtensionOpts = {}): Extensions {
     // Behaviour only, no schema — but it lives with the family it serves.
     BlockHandle,
     Table.configure({ resizable: true }),
+    // Spreadsheet formulas over any table. Decorations only — the formula
+    // stays the document's content, so nothing here can be persisted or
+    // undone away. Adds no node type, so it needs no deployment ordering.
+    SheetFormulas,
     TableRow,
     TableHeader,
     TableCell,
