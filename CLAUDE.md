@@ -1804,6 +1804,38 @@ glyph among sixty SVGs is *more* obviously wrong than sixty inconsistent glyphs.
 ⚠️ **Size is a prop, never a class.** These sit in a 13px button, a menu row and
 the slash list; an icon inheriting `font-size` from three places is three sizes.
 
+### What a card's colour means is a choice, and "no value" has no colour
+
+`spec.colorBy` — tag / priority / urgency / assignee — puts a stripe on every
+board card and list row. A board already shows status as columns and order as
+position; colour is the one free channel left, so what it *says* is worth
+choosing rather than spending on decoration.
+
+⚠️ **A task the dimension says nothing about gets NO stripe.** A grey "unset"
+colour would read as a real category — "the grey ones" — and the board would
+quietly grow a group that does not exist. Absent is not zero, again.
+
+⚠️ **The priority/urgency scale moves in LIGHTNESS as well as hue, and a test
+pins the separation.** Red / amber / green at one lightness is the classic
+deuteranopia failure: first and last are the same stripe. Moving in L means the
+order survives with no colour vision, and the test stops a later "nicer colours"
+pass quietly undoing it.
+
+**Assignee hues are derived from the id on the golden angle**, not configured —
+a palette is one more thing to maintain, and a new teammate would have no colour
+until someone assigned them one. Their lightness is asserted into the same band
+the text palette uses, so a stripe reads on both themes.
+
+Three smaller rules: **one stripe per card** (the first tag with a colour, never
+a blend — a blend is a fourth colour in no legend); **`assigned_to` is
+meaningless when `team_id` is null**, so a personal task gets nothing, and `all`
+is the absence of an assignee rather than a person; and **every stripe carries a
+title saying what it means**, because a colour cannot be read back into a label.
+
+`lib/cardColor.ts` reaches `@nexus/core/pathfinder`, and `lib/pathfinderBlock.ts`
+is on the note schema path — so only the option list and the type are imported
+there. `schemaPath.test.ts` covers it.
+
 ### Summary figures share the column pipeline, deliberately
 
 A stat card is compile-once → evaluate-per-row → aggregate, the same chain a

@@ -11,6 +11,7 @@
 // is the correct granularity for undo — Cmd-Z should step back one decision.
 
 import { normalizeFieldKey, FIELD_TYPES, FIELD_KEY_MAX, type FieldType } from "../lib/taskFields";
+import { COLOR_BY, COLOR_BY_LABELS, type ColorBy } from "../lib/cardColor";
 import { compile, MAX_FORMULA_CHARS } from "../lib/formula";
 import { useEffect, useRef, useState, useMemo } from "react";
 import {
@@ -381,6 +382,20 @@ export function PathfinderFilterBar({
             onChange={(statuses) => set({ statuses })}
           />
         ) : null}
+
+        {/* Every view. Colour is the one channel a board has left once status
+            is columns and order is position, so what it MEANS is a choice. */}
+        <label className="pf-colorby">
+          <span className="pf-chips-label">Colour by</span>
+          <select
+            className="pf-formula-agg"
+            value={spec.colorBy}
+            aria-label="What a card's colour means"
+            onChange={(e) => set({ colorBy: e.target.value as ColorBy })}
+          >
+            {COLOR_BY.map((c) => <option key={c} value={c}>{COLOR_BY_LABELS[c]}</option>)}
+          </select>
+        </label>
 
         {/* Every view: a stat is one figure, so it needs no column to live in.
             This is the only one of the three editors not gated on `table`. */}
