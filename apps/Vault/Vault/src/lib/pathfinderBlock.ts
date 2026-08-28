@@ -17,6 +17,7 @@
 // So: new views, new filter axes and new columns can all ship ahead of the Mac
 // and iPad builds. A fourth node type could not.
 
+import { MAX_FORMULA_CHARS, type FormulaContext, type FormulaValue } from "./formula";
 import {
   DEFAULT_FILTER,
   KANBAN_STATUSES,
@@ -43,6 +44,7 @@ import {
   type TaskFilter,
   type TreeMode,
   creationDefaults,
+  type PfTask,
 } from "@nexus/core/pathfinder";
 // ⚠️ `./taskTags`, NEVER `./vaultTaskTags`. This module is part of the note
 // schema — noteExtensions imports it, and noteSchemaGuard builds that schema
@@ -209,7 +211,55 @@ export interface PfBlockSpec {
    * drop target (dropping there would have to invent a value).
    */
   statuses: string[];
+
+  /**
+   * Computed columns. Table view only — a list row has nowhere to put one.
+   *
+   * The formula is stored, never a value: a column is a QUESTION about a task,
+   * so it stays right when the task changes. Storing computed values would be a
+   * cache with no invalidation, going stale the moment an estimate is edited.
+   */
+  formulas: FormulaColumn[];
 }
+
+export interface FormulaColumn {
+  /** Stable across edits so a column keeps its width and position. */
+  id: string;
+  label: string;
+  /** Source. Validated on parse; an invalid one is kept so it can be fixed
+   *  rather than silently dropped along with the user's work. */
+  expr: string;
+  /** Footer aggregate over the visible rows, or none. */
+  agg: FormulaAgg;
+}
+
+export const FORMULA_AGGS = ["none", "sum", "count", "percent", "avg"] as const;
+export type FormulaAgg = (typeof FORMULA_AGGS)[number];
+
+/** A block may hold a handful, not a spreadsheet. The spec is size-capped. */
+export const MAX_FORMULAS = 6;
+
+/**
+ * The fields a formula may name, and what each means.
+ *
+ * Deliberately numeric or boolean. The language has no string literals, so a
+ * string field could only ever be compared to another field — which is not
+ * worth the parser surface. `priority` and `urgency` arrive as RANKS (1 low,
+ * 2 medium, 3 high) because that is the only form an expression can use.
+ */
+export const FORMULA_FIELDS: Array<{ name: string; help: string }> = [
+  { name: "estimate", help: "this task's own estimate, in minutes" },
+  { name: "rollup", help: "estimate including subtasks (trigger-maintained)" },
+  { name: "done", help: "1 when complete" },
+  { name: "subtasks", help: "number of descendants" },
+  { name: "subtasksDone", help: "how many of them are complete" },
+  { name: "priority", help: "1 low, 2 medium, 3 high" },
+  { name: "urgency", help: "1 low, 2 medium, 3 high" },
+  { name: "overdue", help: "1 when the due date has passed" },
+  { name: "hasDue", help: "1 when the task has a due date at all" },
+];
+
+export const FORMULA_FIELD_NAMES = FORMULA_FIELDS.map((f) => f.name);
 
 /** A board with thirty columns is not a board, and the spec is size-capped. */
 export const MAX_STATUSES = 12;
@@ -267,6 +317,7 @@ export function defaultSpec(view: PfBlockView): PfBlockSpec {
     metaPct: 0,
     colWeights: {},
     statuses: [],
+    formulas: [],
   };
 }
 
@@ -384,6 +435,7 @@ export function parseSpec(raw: string | null | undefined, view: PfBlockView): Pf
     metaPct: clampMetaPct(obj.metaPct),
     colWeights: parseWeights(obj.colWeights),
     statuses: normalizeStatuses(obj.statuses),
+    formulas: parseFormulas(obj.formulas),
   };
 }
 
@@ -477,6 +529,99 @@ function parseWeights(v: unknown): Record<string, number> {
  * database today is already lower-case, so this agrees with the data as well as
  * with itself. Display capitalisation is applied at render time.
  */
+/**
+ * Validate stored formula columns.
+ *
+ * An INVALID expression is kept rather than dropped. The column will show an
+ * error instead of a value, which is recoverable; silently discarding it would
+ * lose whatever the user was in the middle of writing, and they would have no
+ * idea why the column vanished.
+ */
+function parseFormulas(v: unknown): FormulaColumn[] {
+  if (!Array.isArray(v)) return [];
+  const out: FormulaColumn[] = [];
+  const seen = new Set<string>();
+  for (const raw of v) {
+    if (!raw || typeof raw !== "object") continue;
+    const o = raw as Record<string, unknown>;
+    const id = typeof o.id === "string" && o.id ? o.id.slice(0, 32) : "";
+    const expr = typeof o.expr === "string" ? o.expr.slice(0, MAX_FORMULA_CHARS) : "";
+    if (!id || seen.has(id) || !expr.trim()) continue;
+    seen.add(id);
+    out.push({
+      id,
+      label: typeof o.label === "string" ? o.label.slice(0, 40) : "",
+      expr,
+      agg: pick(o.agg, FORMULA_AGGS, "none"),
+    });
+    if (out.length >= MAX_FORMULAS) break;
+  }
+  return out;
+}
+
+const RANK: Record<string, number> = { low: 1, medium: 2, high: 3 };
+
+/**
+ * One task as a set of numbers a formula can use.
+ *
+ * `today` is passed rather than read from the clock so the same row computes
+ * the same way for every column, and so this stays testable without freezing
+ * time. Dates compare as text — `pf_tasks.due_date` is TEXT and ISO-8601 sorts
+ * lexicographically in date order.
+ */
+export function formulaContext(
+  task: PfTask,
+  stat: { total: number; done: number } | undefined,
+  today: string,
+): FormulaContext {
+  const due = typeof task.due_date === "string" && /^\d{4}-\d{2}-\d{2}$/.test(task.due_date)
+    ? task.due_date
+    : null;
+  return {
+    estimate: task.time_estimate ?? null,
+    rollup: task.aggregate_estimate ?? null,
+    done: task.done,
+    subtasks: stat?.total ?? 0,
+    subtasksDone: stat?.done ?? 0,
+    priority: RANK[task.priority] ?? null,
+    urgency: RANK[task.planning?.urgency ?? ""] ?? null,
+    overdue: due !== null && !task.done && due < today,
+    hasDue: due !== null,
+  };
+}
+
+/**
+ * A column's footer value over the rows on screen.
+ *
+ * Nulls are SKIPPED, not counted as zero — a task with no estimate has no
+ * estimate, and averaging it in as 0 would quietly drag every mean down. The
+ * count of contributing rows is returned alongside so the UI can say "4 of 12"
+ * rather than implying the whole column was measured.
+ */
+export function aggregate(agg: FormulaAgg, values: FormulaValue[]): { value: number | null; n: number } {
+  const nums = values
+    .map((v) => (typeof v === "boolean" ? (v ? 1 : 0) : v))
+    .filter((v): v is number => typeof v === "number" && Number.isFinite(v));
+
+  switch (agg) {
+    case "sum":
+      return { value: nums.reduce((a, b) => a + b, 0), n: nums.length };
+    case "avg":
+      return nums.length ? { value: nums.reduce((a, b) => a + b, 0) / nums.length, n: nums.length } : { value: null, n: 0 };
+    // "count" counts rows where the formula is TRUTHY, which is what makes
+    // `done` or `overdue` useful as a column — not how many rows exist, which
+    // the block already shows.
+    case "count":
+      return { value: nums.filter((v) => v !== 0).length, n: nums.length };
+    case "percent":
+      return nums.length
+        ? { value: (100 * nums.filter((v) => v !== 0).length) / nums.length, n: nums.length }
+        : { value: null, n: 0 };
+    default:
+      return { value: null, n: 0 };
+  }
+}
+
 export function normalizeStatuses(v: unknown): string[] {
   if (!Array.isArray(v)) return [];
   const out: string[] = [];
@@ -545,14 +690,32 @@ export function columnWeight(weights: Record<string, number>, c: PfColumn): numb
 export function columnWidths(
   cols: PfColumn[],
   weights: Record<string, number>,
-): { data: number[]; actions: number } {
+  /** How many computed columns follow the standard ones. They share the same
+   *  total: leaving them out would let the table claim more than 100%. */
+  formulaCount = 0,
+): { data: number[]; formulas: number[]; actions: number } {
   const ws = cols.map((c) => columnWeight(weights, c));
-  const total = ws.reduce((a, b) => a + b, 0) + ACTIONS_WEIGHT;
-  if (total <= 0) return { data: cols.map(() => 0), actions: 100 };
+  const fws = Array.from({ length: formulaCount }, () => 1);
+  const total = [...ws, ...fws].reduce((a, b) => a + b, 0) + ACTIONS_WEIGHT;
+  if (total <= 0) return { data: cols.map(() => 0), formulas: fws.map(() => 0), actions: 100 };
   return {
     data: ws.map((w) => (w / total) * 100),
+    formulas: fws.map((w) => (w / total) * 100),
     actions: (ACTIONS_WEIGHT / total) * 100,
   };
+}
+
+/** How a computed value reads in a cell. */
+export function fmtFormulaValue(v: FormulaValue): string {
+  if (v === null) return "—";
+  if (typeof v === "boolean") return v ? "✓" : "";
+  if (typeof v === "number") {
+    if (!Number.isFinite(v)) return "—";
+    // Integers stay integers; anything else gets two places. A column of
+    // "2.0000000000000004" is arithmetic showing through the UI.
+    return Number.isInteger(v) ? String(v) : v.toFixed(2);
+  }
+  return v;
 }
 
 export function serializeSpec(spec: PfBlockSpec): string {

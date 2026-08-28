@@ -50,6 +50,10 @@ import {
   META_PCT_MIN,
   listColumns,
   columnWidths,
+  aggregate,
+  fmtFormulaValue,
+  formulaContext,
+  FORMULA_FIELD_NAMES,
   columnWeight,
   moveColumn,
   COL_WEIGHT_MAX,
@@ -59,6 +63,7 @@ import {
 } from "../lib/pathfinderBlock";
 import type { TaskActions, TreeControls } from "./PathfinderBlockView";
 import { HOST_ATTR, hostAt, type BlockHost } from "../lib/pathfinderHosts";
+import { compile, type FormulaValue } from "../lib/formula";
 
 /** What every view needs, whatever shape it renders it in. */
 interface ViewCommon {
@@ -1004,7 +1009,28 @@ export function PfTableView({
   onSpecChange: (next: PfBlockSpec) => void;
 }) {
   const cols = spec.columns;
-  const widths = useMemo(() => columnWidths(cols, spec.colWeights), [cols, spec.colWeights]);
+  const widths = useMemo(() => columnWidths(cols, spec.colWeights, spec.formulas.length), [cols, spec.colWeights, spec.formulas.length]);
+
+  // Compiled once per formula, not once per row. 200 rows would otherwise be
+  // 200 tokenisations of the same string — and, more to the point, a syntax
+  // error is then known before any row is drawn, so the column can say
+  // "unknown field: estimat" instead of rendering two hundred blanks.
+  const compiled = useMemo(
+    () => spec.formulas.map((f) => ({ col: f, prog: compile(f.expr, FORMULA_FIELD_NAMES) })),
+    [spec.formulas],
+  );
+
+  // Every row's value for every formula column, computed once so the cells and
+  // the footer agree and neither recomputes the other's work.
+  const computed = useMemo(() => {
+    const out = new Map<string, FormulaValue[]>();
+    for (const { col, prog } of compiled) {
+      out.set(col.id, prog.ok
+        ? rows.map((r) => prog.run(formulaContext(r.task, statFor(actions.stats, r.task.id), today)))
+        : []);
+    }
+    return out;
+  }, [compiled, rows, actions.stats, today]);
   const tableRef = useRef<HTMLTableElement>(null);
 
   // ── Resizing ────────────────────────────────────────────────────────────
@@ -1147,6 +1173,7 @@ export function PfTableView({
             reconcile them. */}
         <colgroup>
           {cols.map((c, i) => <col key={c} style={{ width: `${widths.data[i]}%` }} />)}
+          {spec.formulas.map((f, i) => <col key={f.id} style={{ width: `${widths.formulas[i]}%` }} />)}
           <col style={{ width: `${widths.actions}%` }} />
         </colgroup>
         <thead>
@@ -1196,11 +1223,18 @@ export function PfTableView({
                 ) : null}
               </th>
             ))}
+            {compiled.map(({ col, prog }) => (
+              <th key={col.id} className="pf-th pf-th-formula" scope="col"
+                  title={prog.ok ? col.expr : `${col.expr} — ${prog.error}`}>
+                <span className="pf-th-label">{col.label || col.expr}</span>
+                {!prog.ok ? <span className="pf-th-bad" aria-label="invalid formula">!</span> : null}
+              </th>
+            ))}
             <th className="pf-th pf-th-act" scope="col" aria-label="Actions" />
           </tr>
         </thead>
         <tbody>
-          {rows.map((r) => (
+          {rows.map((r, ri) => (
             <tr
               key={r.task.id}
               className={`${r.task.done ? "is-done" : ""}${actions.busy.has(r.task.id) ? " is-busy" : ""}${r.depth > 0 ? " is-step" : ""}`}
@@ -1219,6 +1253,13 @@ export function PfTableView({
                   tree={tree}
                 />
               ))}
+              {compiled.map(({ col, prog }) => (
+                <td key={col.id} className="pf-td pf-td-formula">
+                  {prog.ok
+                    ? fmtFormulaValue(computed.get(col.id)?.[ri] ?? null)
+                    : <span className="pf-formula-err" title={prog.error}>—</span>}
+                </td>
+              ))}
               <td className="pf-td pf-td-act">
                 <span className="pf-row-actions">
                   <DetailButton onClick={() => actions.openDetail(r.task)} title={r.task.title} />
@@ -1230,6 +1271,37 @@ export function PfTableView({
             </tr>
           ))}
         </tbody>
+
+        {/* Only when something is actually aggregated. An empty footer row is a
+            border and a gap that say nothing. */}
+        {compiled.some(({ col }) => col.agg !== "none") ? (
+          <tfoot>
+            <tr className="pf-tfoot">
+              {cols.map((c, i) => (
+                <td key={c} className="pf-td pf-tfoot-td">{i === 0 ? "Total" : ""}</td>
+              ))}
+              {compiled.map(({ col, prog }) => {
+                if (!prog.ok || col.agg === "none") {
+                  return <td key={col.id} className="pf-td pf-tfoot-td" />;
+                }
+                const { value, n } = aggregate(col.agg, computed.get(col.id) ?? []);
+                return (
+                  <td key={col.id} className="pf-td pf-tfoot-td"
+                      // Nulls are skipped rather than counted as zero, so say how
+                      // many rows actually contributed instead of implying the
+                      // whole column was measured.
+                      title={`${col.agg} over ${n} row${n === 1 ? "" : "s"} with a value`}>
+                    {value === null ? "—" : col.agg === "percent"
+                      ? `${fmtFormulaValue(value)}%`
+                      : fmtFormulaValue(value)}
+                    <span className="pf-tfoot-n">{n}</span>
+                  </td>
+                );
+              })}
+              <td className="pf-td pf-tfoot-td" />
+            </tr>
+          </tfoot>
+        ) : null}
       </table>
     </div>
   );

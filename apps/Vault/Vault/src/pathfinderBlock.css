@@ -1224,3 +1224,77 @@
    where it was would reflow the list under the pointer. */
 .pf-list-row.is-dragging { opacity: 0.4; }
 .pf-list-row { touch-action: pan-y; }
+
+/* ── Computed columns ────────────────────────────────────────────────────── */
+
+.pf-th-formula { font-style: italic; }
+.pf-th-bad {
+  margin-left: 4px;
+  color: var(--destructive);
+  font-weight: 700;
+}
+.pf-td-formula { font-variant-numeric: tabular-nums; text-align: right; }
+.pf-formula-err { color: var(--fg-ghost); }
+
+.pf-tfoot-td {
+  border-top: 2px solid var(--border-base);
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+.pf-tfoot-td:first-child { text-align: left; color: var(--fg-muted); font-weight: 500; }
+/* How many rows actually had a value. Nulls are skipped rather than counted as
+   zero, so the total is over a subset and the UI must not imply otherwise. */
+.pf-tfoot-n {
+  margin-left: 5px;
+  font-size: 0.68rem;
+  font-weight: 400;
+  color: var(--fg-ghost);
+}
+.pf-tfoot-n::before { content: "/"; margin-right: 2px; }
+
+/* ── The editor ──────────────────────────────────────────────────────────── */
+
+.pf-formulas { display: flex; flex-direction: column; gap: 4px; width: 100%; }
+
+.pf-formula-row {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  flex-wrap: wrap;
+}
+
+.pf-formula-label, .pf-formula-expr, .pf-formula-agg {
+  font: inherit;
+  font-size: 0.75rem;
+  padding: 2px 6px;
+  border-radius: 5px;
+  border: 1px solid var(--border-faint);
+  background: var(--bg-base);
+  color: var(--fg-main);
+  min-width: 0;
+}
+.pf-formula-label { flex: 0 1 9ch; }
+.pf-formula-expr {
+  flex: 1 1 18ch;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+.pf-formula-expr.is-bad { border-color: var(--destructive); }
+.pf-formula-label:focus, .pf-formula-expr:focus { outline: none; border-color: var(--edge-in); }
+
+/* The error takes the whole next line rather than squeezing the inputs: it is a
+   sentence, and a sentence in a 12ch box is unreadable. */
+.pf-formula-msg {
+  flex: 1 0 100%;
+  font-size: 0.7rem;
+  color: var(--destructive);
+}
+
+.pf-formula-help { font-size: 0.7rem; color: var(--fg-muted); }
+.pf-formula-help summary { cursor: pointer; }
+.pf-formula-help ul { margin: 4px 0 0; padding-left: 16px; line-height: 1.6; }
+.pf-formula-help code {
+  background: var(--bg-muted);
+  border-radius: 3px;
+  padding: 0 3px;
+}

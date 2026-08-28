@@ -1477,6 +1477,40 @@ list is a different question — a list is a tree, so "dropped on that row" is
 ambiguous between "before it" and "inside it" — and answering it by accident
 would be worse than not answering it.
 
+### Computed columns: a hand-written parser, never `new Function`
+
+⚠️ A formula lives in the block spec, which lives in the NOTE — and a note can
+be shared, co-edited and pasted from elsewhere. `new Function(src)` would be
+arbitrary code execution driven by a document another person can edit, in a tab
+holding a Supabase session. There is no `eval` or `new Function` anywhere in
+Vault; `lib/formula.ts` does not get to be the first. It has no property access,
+no globals, and no calls outside a fixed list.
+
+⚠️ **`FUNCTIONS` is a Map, and that is not stylistic.** As an object literal,
+`FUNCTIONS["constructor"]` resolves up the PROTOTYPE CHAIN to
+`Object.prototype.constructor` — truthy — so `constructor(1)` sailed past the
+"unknown function" check. Every inherited member was reachable as a function
+name the same way. A test caught it. Field lookup uses `hasOwnProperty` for the
+same reason.
+
+**Parse once, evaluate per row.** 200 rows would otherwise be 200 tokenisations
+of one string — but the real reason is that a syntax error is then known before
+any row is drawn, so the column says "unknown field: estimat" instead of
+rendering two hundred blanks. Fields are known at compile time precisely so a
+typo is one legible error.
+
+**Division by zero yields null, never Infinity.** An Infinity propagates into
+the column sum and turns the footer into "∞", losing every other row's
+contribution to one empty estimate. Same for a missing field: null, and
+`aggregate` SKIPS nulls rather than counting them as zero — a task with no
+estimate has no estimate, and averaging it in as 0 quietly drags every mean
+down. The footer shows how many rows contributed so it never implies it measured
+the whole column.
+
+An invalid expression is **kept**, not dropped: the column shows an error, which
+is recoverable, whereas discarding it loses whatever was being written with no
+explanation for the disappearance.
+
 ### The table: column order is the ARRAY order
 
 ⚠️ **`parseSpec` must not sort `spec.columns`.** It used to, and that single call
