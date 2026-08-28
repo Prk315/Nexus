@@ -234,7 +234,33 @@ export interface PfBlockSpec {
    * same key differently. See the migration header.
    */
   fields: FieldColumn[];
+
+  /**
+   * Summary figures shown above the view.
+   *
+   * The same pipeline as a computed column — compile once, evaluate per row,
+   * aggregate — but reduced to ONE number instead of a column of them. That is
+   * what makes a stat work in list and board view too, where there is nowhere
+   * to put a column.
+   */
+  stats: StatCard[];
 }
+
+export interface StatCard {
+  id: string;
+  label: string;
+  /** Evaluated per row, exactly like a column formula. */
+  expr: string;
+  /** How the per-row values collapse to one. `none` is not offered — a stat
+   *  IS an aggregate, so there is nothing for it to mean. */
+  agg: Exclude<FormulaAgg, "none">;
+  display: MeterDisplay;
+  max: number | "auto";
+}
+
+/** A strip, not a dashboard. */
+export const MAX_STATS = 4;
+
 
 export interface FieldColumn {
   /** Normalised; this IS the storage key, so case and spacing are collapsed. */
@@ -276,6 +302,8 @@ export type MeterDisplay = (typeof METER_DISPLAYS)[number];
 export const METER_MAX_MIN = 0.0001;
 
 export const FORMULA_AGGS = ["none", "sum", "count", "percent", "avg"] as const;
+/** A stat IS an aggregate, so `none` has nothing to mean there. */
+export const STAT_AGGS = ["sum", "count", "percent", "avg"] as const;
 export type FormulaAgg = (typeof FORMULA_AGGS)[number];
 
 /** A block may hold a handful, not a spreadsheet. The spec is size-capped. */
@@ -372,6 +400,7 @@ export function defaultSpec(view: PfBlockView): PfBlockSpec {
     statuses: [],
     formulas: [],
     fields: [],
+    stats: [],
   };
 }
 
@@ -491,6 +520,7 @@ export function parseSpec(raw: string | null | undefined, view: PfBlockView): Pf
     statuses: normalizeStatuses(obj.statuses),
     formulas: parseFormulas(obj.formulas),
     fields: parseFields(obj.fields),
+    stats: parseStats(obj.stats),
   };
 }
 
@@ -600,6 +630,29 @@ function parseWeights(v: unknown): Record<string, number> {
  * column not existing. The editor refuses it up front too, so this is the
  * backstop for a hand-edited or pasted document.
  */
+/** Validate stored stat cards. Shares the meter rules with a formula column —
+ *  see parseFormulas; the only difference is that `none` is not an aggregate. */
+function parseStats(v: unknown): StatCard[] {
+  if (!Array.isArray(v)) return [];
+  const out: StatCard[] = [];
+  for (const raw of v) {
+    if (!raw || typeof raw !== "object") continue;
+    const o = raw as Record<string, unknown>;
+    out.push({
+      id: typeof o.id === "string" && o.id ? o.id.slice(0, 16) : `s${out.length}`,
+      label: typeof o.label === "string" ? o.label.slice(0, 40) : "",
+      expr: typeof o.expr === "string" ? o.expr.slice(0, MAX_FORMULA_CHARS) : "",
+      agg: pick(o.agg, STAT_AGGS, "sum"),
+      display: pick(o.display, METER_DISPLAYS, "number"),
+      max: o.max === "auto" ? "auto"
+        : typeof o.max === "number" && Number.isFinite(o.max) && o.max >= METER_MAX_MIN ? o.max
+        : 100,
+    });
+    if (out.length >= MAX_STATS) break;
+  }
+  return out;
+}
+
 function parseFields(v: unknown): FieldColumn[] {
   if (!Array.isArray(v)) return [];
   const out: FieldColumn[] = [];

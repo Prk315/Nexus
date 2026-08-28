@@ -14,6 +14,8 @@ import {
   formulaFieldNames,
   meterFraction,
   METER_DISPLAYS,
+  MAX_STATS,
+  STAT_AGGS,
   MAX_FIELDS,
   FORMULA_FIELD_NAMES,
   MAX_FORMULAS,
@@ -871,5 +873,45 @@ describe("meter fields on a formula column", () => {
     expect(parse([{ id: "a", expr: "1", display: "bar", max: -5 }])[0].max).toBe(100);
     expect(parse([{ id: "a", expr: "1", display: "bar", max: "lots" }])[0].max).toBe(100);
     expect(parse([{ id: "a", expr: "1", display: "pie" }])[0].display).toBe("number");
+  });
+});
+
+// ─── Summary figures ────────────────────────────────────────────────────────
+
+describe("parseStats", () => {
+  const parse = (stats: unknown) =>
+    parseSpec(JSON.stringify({ ...defaultSpec("table"), stats }), "table").stats;
+
+  it("defaults to none, and an old document has none", () => {
+    expect(defaultSpec("table").stats).toEqual([]);
+    expect(parseSpec(JSON.stringify({ view: "table" }), "table").stats).toEqual([]);
+  });
+
+  // A stat IS an aggregate, so "none" has nothing to mean — a card carrying it
+  // would have no figure to show.
+  it("never stores `none` as an aggregate", () => {
+    expect(STAT_AGGS).not.toContain("none");
+    expect(parse([{ id: "a", expr: "1", agg: "none" }])[0].agg).toBe("sum");
+    expect(parse([{ id: "a", expr: "1", agg: "median" }])[0].agg).toBe("sum");
+  });
+
+  it("shares the meter rules with a computed column", () => {
+    expect(parse([{ id: "a", expr: "1", display: "bar", max: 0 }])[0].max).toBe(100);
+    expect(parse([{ id: "a", expr: "1", display: "pie" }])[0].display).toBe("number");
+    expect(parse([{ id: "a", expr: "1", display: "bar", max: "auto" }])[0].max).toBe("auto");
+  });
+
+  it("keeps an invalid expression so it can be fixed, and bounds the count", () => {
+    // Same reasoning as parseFormulas: dropping it loses whatever was being
+    // written, with no explanation for the disappearance.
+    expect(parse([{ id: "a", expr: "estimate +" }])[0].expr).toBe("estimate +");
+    expect(parse(Array.from({ length: MAX_STATS + 3 }, (_, i) => ({ id: `s${i}`, expr: "1" }))))
+      .toHaveLength(MAX_STATS);
+  });
+
+  it("survives a round trip", () => {
+    const stats = [{ id: "a", label: "Hours", expr: "estimate / 60", agg: "sum" as const,
+                     display: "bar" as const, max: 40 }];
+    expect(parseSpec(JSON.stringify({ ...defaultSpec("table"), stats }), "table").stats).toEqual(stats);
   });
 });

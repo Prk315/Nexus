@@ -1422,3 +1422,61 @@
   text-align: right;
 }
 .pf-formula-max:focus { outline: none; border-color: var(--edge-in); }
+
+/* ─── Summary strip ─────────────────────────────────────────────────────────
+   Above the view, not inside it — one figure means the same thing in list,
+   board and table, and three copies of it would drift. */
+
+.pf-stats {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 8px 10px 0;
+}
+.pf-stat {
+  flex: 1 1 100px;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 6px 8px;
+  border: 1px solid var(--border-faint);
+  border-radius: 7px;
+  background: var(--bg-muted);
+}
+.pf-stat.is-bad { border-color: var(--destructive); }
+
+.pf-stat-label {
+  font-size: 0.68rem;
+  color: var(--fg-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  /* One line: a wrapped label pushes the number out of alignment with its
+     neighbours, and a row of cards that do not line up reads as broken. */
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.pf-stat-value {
+  font-size: 1.15rem;
+  line-height: 1.15;
+  font-variant-numeric: tabular-nums;
+  color: var(--fg-main);
+}
+.pf-stat-bar {
+  display: block;
+  height: 4px;
+  border-radius: 2px;
+  background: var(--bg-base);
+  overflow: hidden;
+}
+/* The contributing-row count, small and quiet: it qualifies the figure rather
+   than competing with it, but it is never omitted — a figure that skipped
+   nulls must say so. */
+.pf-stat-n {
+  font-size: 0.62rem;
+  color: var(--fg-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
