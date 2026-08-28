@@ -1007,6 +1007,78 @@ function useCardDrag({
  *  and would defeat every memo keyed on the field list. */
 const EMPTY_FIELDS_LIST: FieldColumn[] = [];
 
+// ─── Stats ──────────────────────────────────────────────────────────────────
+
+/**
+ * A strip of summary figures above the view.
+ *
+ * The same pipeline as a computed column — compile once, evaluate per row,
+ * aggregate — reduced to one number. Sharing it is what lets a stat work in
+ * LIST and BOARD view, where there is nowhere to put a column, and is why a
+ * stat and a column can never disagree about what `sum(estimate)` means.
+ *
+ * ⚠️ Statistics are over the tasks the block is SHOWING, not over everything
+ * that matched. That is the honest reading of a figure sitting on top of a
+ * filtered list — but it does mean tightening a filter changes every number,
+ * so each card says how many rows contributed rather than implying it measured
+ * the whole plan.
+ */
+export function PfStatsStrip({
+  tasks, spec, actions, today,
+}: {
+  tasks: PfTask[];
+  spec: PfBlockSpec;
+  actions: TaskActions;
+  today: string;
+}) {
+  const names = useMemo(() => formulaFieldNames(spec.fields), [spec.fields]);
+
+  const cards = useMemo(() => spec.stats.map((c) => {
+    const prog = compile(c.expr, names);
+    if (!prog.ok) return { card: c, error: prog.error, value: null, n: 0 };
+    const values = tasks.map((t) => prog.run(formulaContext(
+      t, statFor(actions.stats, t.id), today,
+      { bag: actions.fieldsOf(t.id), cols: spec.fields },
+    )));
+    const { value, n } = aggregate(c.agg, values);
+    return { card: c, error: null, value, n };
+  }), [spec.stats, spec.fields, names, tasks, actions.stats, actions.fieldsOf, today]);
+
+  if (cards.length === 0) return null;
+
+  return (
+    <div className="pf-stats" role="group" aria-label="Summary">
+      {cards.map(({ card, error, value, n }) => {
+        // A meter needs a fraction of a scale; `percent` already IS one, so it
+        // scales against 100 rather than against the card's max — otherwise a
+        // percent card with max 8 would read 12.5% full at 100%.
+        const f = card.display === "number" || value === null
+          ? null
+          : meterFraction(value, card.agg === "percent" ? 100 : card.max, []);
+        const text = value === null ? "—"
+          : card.agg === "percent" ? `${fmtFormulaValue(value)}%`
+          : fmtFormulaValue(value);
+        return (
+          <div key={card.id} className={`pf-stat${error ? " is-bad" : ""}`}
+               title={error ? `${card.expr} — ${error}` : `${card.agg} over ${n} row${n === 1 ? "" : "s"} with a value`}>
+            <span className="pf-stat-label">{card.label || card.expr}</span>
+            <span className="pf-stat-value">{error ? "—" : text}</span>
+            {f !== null ? (
+              <span className="pf-stat-bar" role="meter" aria-valuenow={Math.round(f * 100)}
+                    aria-valuemin={0} aria-valuemax={100} aria-label={card.label || card.expr}>
+                <span className="pf-bar-fill" style={{ width: `${Math.round(f * 100)}%` }} />
+              </span>
+            ) : null}
+            {/* Nulls are skipped, so say what was actually measured rather than
+                letting the figure imply it saw every row. */}
+            <span className="pf-stat-n">{error ? error : `${n} of ${tasks.length}`}</span>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
 // ─── Table ──────────────────────────────────────────────────────────────────
 
 export function PfTableView({

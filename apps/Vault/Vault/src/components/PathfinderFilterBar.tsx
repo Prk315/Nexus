@@ -40,6 +40,9 @@ import {
   FORMULA_FIELDS,
   RESERVED_FIELD_KEYS,
   METER_DISPLAYS,
+  STAT_AGGS,
+  MAX_STATS,
+  type StatCard,
   METER_MAX_MIN,
   type MeterDisplay,
   formulaFieldNames,
@@ -378,6 +381,10 @@ export function PathfinderFilterBar({
             onChange={(statuses) => set({ statuses })}
           />
         ) : null}
+
+        {/* Every view: a stat is one figure, so it needs no column to live in.
+            This is the only one of the three editors not gated on `table`. */}
+        <StatEditor stats={spec.stats} onChange={(stats) => set({ stats })} />
 
         {/* Table only, and stored before computed — that is the order they are
             drawn in, and the order the dependency runs: a formula may read a
@@ -828,6 +835,89 @@ function StatusEditor({
  * from THIS note only; the values stay, because the same key is very often a
  * column in another note too.
  */
+/**
+ * Summary cards above the view.
+ *
+ * Deliberately the same controls as a computed column, minus the aggregate's
+ * "none" — a stat IS an aggregate. Sharing the vocabulary is the point: someone
+ * who has written one column formula can write a stat without learning a second
+ * language, and the two can never disagree about what `sum(estimate)` means.
+ */
+function StatEditor({
+  stats, onChange,
+}: {
+  stats: StatCard[];
+  onChange: (v: StatCard[]) => void;
+}) {
+  const patch = (id: string, part: Partial<StatCard>) =>
+    onChange(stats.map((c) => (c.id === id ? { ...c, ...part } : c)));
+
+  return (
+    <div className="pf-formulas" role="group" aria-label="Summary figures">
+      <span className="pf-chips-label">Summary</span>
+
+      {stats.map((c) => (
+        <span key={c.id} className="pf-formula-row">
+          <input
+            className="pf-formula-label"
+            value={c.label}
+            placeholder="Name"
+            maxLength={40}
+            aria-label="Figure name"
+            onKeyDown={(e) => e.stopPropagation()}
+            onChange={(e) => patch(c.id, { label: e.target.value })}
+          />
+          <input
+            className="pf-formula-expr"
+            value={c.expr}
+            placeholder="estimate / 60"
+            maxLength={MAX_FORMULA_CHARS}
+            aria-label="Expression"
+            onKeyDown={(e) => e.stopPropagation()}
+            onChange={(e) => patch(c.id, { expr: e.target.value })}
+          />
+          <select
+            className="pf-formula-agg"
+            value={c.agg}
+            aria-label="How the rows collapse to one figure"
+            onChange={(e) => patch(c.id, { agg: e.target.value as StatCard["agg"] })}
+          >
+            {STAT_AGGS.map((a) => <option key={a} value={a}>{a}</option>)}
+          </select>
+          <select
+            className="pf-formula-agg"
+            value={c.display}
+            aria-label="How the figure is drawn"
+            onChange={(e) => patch(c.id, { display: e.target.value as MeterDisplay })}
+          >
+            {/* A ring is not offered: a card is wide and short, and a ring in it
+                is a small circle beside a large number saying the same thing. */}
+            <option value="number">number</option>
+            <option value="bar">bar</option>
+          </select>
+          <button
+            type="button"
+            className="pf-tag-x"
+            aria-label={`Remove the ${c.label || c.expr} figure`}
+            onClick={() => onChange(stats.filter((x) => x.id !== c.id))}
+          >×</button>
+        </span>
+      ))}
+
+      {stats.length < MAX_STATS ? (
+        <button
+          type="button"
+          className="pf-chip"
+          onClick={() => onChange([
+            ...stats,
+            { id: crypto.randomUUID().slice(0, 8), label: "", expr: "estimate", agg: "sum", display: "number", max: 100 },
+          ])}
+        >+ figure</button>
+      ) : null}
+    </div>
+  );
+}
+
 function FieldEditor({
   fields, onChange,
 }: {
