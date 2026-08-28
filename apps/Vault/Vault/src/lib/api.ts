@@ -1,4 +1,5 @@
 import { supabase, getUserId } from "./supabase";
+import { shareKey } from "./sharedBlocks";
 import { makeSaver } from "./saveQueue";
 import { sameInstant } from "./timestamps";
 import { VaultGraph, VaultNode, NodeKind, VaultRecord, HighlighterCategory } from "../types";
@@ -352,6 +353,46 @@ export const saveContent: (id: string, content: string) => Promise<void> =
     }
     await assertContentNotConflicted(id);
     return queuedSaveContent(id, content);
+  };
+
+/**
+ * Read one shared block's content row, or null when it has never been written.
+ *
+ * ⚠️ Null and "" mean different things here and the distinction is the whole
+ * safety of the feature: null is "no row", which seeds from the note, while ""
+ * would be "the shared block is empty" and would clear every copy of it. The
+ * raw column is `not null default ''`, so this maps the absent ROW — not an
+ * absent string — to null.
+ */
+export async function readSharedBlock(shareId: string): Promise<string | null> {
+  const { data } = await supabase.from("vault_content")
+    .select("data").eq("node_id", shareKey(shareId)).maybeSingle();
+  return data ? (data.data ?? "") : null;
+}
+
+/**
+ * Write one shared block.
+ *
+ * A separate exported name rather than a flag on saveContent, for the reason
+ * stated below saveContentProjection: a boolean parameter is what a later
+ * refactor drops, and dropping it here would apply the conflict guard to shares
+ * — where "the row changed since I read it" is the NORMAL case. Two notes
+ * holding the same block both write it; that is the feature, not a conflict.
+ *
+ * Last-writer-wins, consistent with everything else in Vault, and bounded by
+ * the same size cap for the same reason: a share is stored in its own row AND
+ * inside every note that holds it, so an oversized one would stop those notes
+ * saving their text too.
+ */
+export const saveSharedBlock: (shareId: string, content: string) => Promise<void> =
+  async (shareId, content) => {
+    if (content.length > MAX_CONTENT_BYTES) {
+      throw new Error(
+        `[vault] refusing to save ${(content.length / 1024 / 1024).toFixed(1)} MB to share ${shareId} ` +
+        `(cap ${MAX_CONTENT_BYTES / 1_000_000} MB). Images belong in Storage via uploadCanvasImage(), not inline.`
+      );
+    }
+    return queuedSaveContent(shareKey(shareId), content);
   };
 
 // The write path for a note that is being live co-edited.

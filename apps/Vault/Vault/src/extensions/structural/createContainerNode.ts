@@ -64,7 +64,25 @@ export function createContainerNode(spec: ContainerNodeSpec) {
     defining: true,
 
     addAttributes() {
-      return spec.attrs ?? {};
+      // `shareId` is on EVERY member of the family, not on a new node type, and
+      // that is the load-bearing decision behind shared blocks.
+      //
+      // ⚠️ ProseMirror drops an attribute it does not know and BLANKS a document
+      // whose node type it does not know. As an attribute, a note containing a
+      // shared block opens correctly on a Mac or iPad build that predates the
+      // feature — the block is simply not synced there, because its content is
+      // also stored in the note. As a `sharedBlock` node type it would have
+      // wiped the note. That is the whole difference between shipping this
+      // today and having to deploy every client first.
+      return {
+        shareId: {
+          default: null as string | null,
+          parseHTML: (el: HTMLElement) => el.getAttribute("data-share") || null,
+          renderHTML: (attrs: Record<string, any>) =>
+            attrs.shareId ? { "data-share": attrs.shareId } : {},
+        },
+        ...(spec.attrs ?? {}),
+      };
     },
 
     parseHTML() {
@@ -78,7 +96,9 @@ export function createContainerNode(spec: ContainerNodeSpec) {
         tag,
         mergeAttributes(HTMLAttributes, spec.extraHTML?.(node.attrs) ?? {}, {
           "data-type": spec.dataType,
-          class: spec.className?.(node.attrs),
+          class: [spec.className?.(node.attrs), node.attrs.shareId ? "is-shared" : null]
+            .filter(Boolean)
+            .join(" ") || undefined,
         }),
         0,
       ];

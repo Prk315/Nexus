@@ -33,7 +33,7 @@ export const TABLE_MENU_GROUPS: BlockGroup[] = ["tableMore"];
 // arrays, so the toolbar — which renders BY GROUP — never drew them. The
 // feature was complete, correct and unreachable. `groupCoverage.test.ts` now
 // fails if any toolbar-surfaced group is left out again.
-export const CARD_MENU_GROUPS: BlockGroup[] = ["cardColor"];
+export const CARD_MENU_GROUPS: BlockGroup[] = ["cardColor", "share"];
 // Page width is a per-note setting rather than an insertable thing, so it gets
 // its own small menu at the end rather than living under "Insert".
 // Text size joins it: both are per-note appearance settings stored on the doc

@@ -1536,6 +1536,50 @@ An invalid expression is **kept**, not dropped: the column shows an error, which
 is recoverable, whereas discarding it loses whatever was being written with no
 explanation for the disappearance.
 
+### Shared containers: an attribute, not a node type
+
+Any callout, container or toggle can carry a `shareId`, making it the **same
+block** in more than one note, editable from either side. Content lives in its
+own `vault_content` row, `share:{id}` — the idiom already used for `{id}_annot`
+and `{id}_margins`.
+
+⚠️ **`shareId` is an ATTRIBUTE and that is the whole design.** ProseMirror drops
+an unknown attribute and *blanks the document* on an unknown node type. A
+`sharedBlock` node would have required deploying Mac and iPad before anyone could
+create one — and would have wiped notes if that order slipped. As an attribute, a
+note holding a shared block opens fine on an older build and merely does not
+sync. It also makes **copy-paste the linking mechanism**: the attribute travels
+through the HTML clipboard, and the same id in two documents *is* the link. No
+registry to fall out of step with the notes. The round-trip test is the
+high-value one — a renderHTML/parseHTML mismatch is invisible to `tsc`.
+
+**The blocks stay in each note as well as in the row.** That duplication is the
+point: the note remains self-contained, renders offline, exports whole, and a
+failed share read degrades to "you see your last copy" rather than a hole. On
+open the **row wins**; a missing row is **seeded from the note**, which makes
+sharing an existing block a no-op rather than a wipe.
+
+⚠️ **The write loop.** Apply → transaction → save → write back what was just
+received. Two independent guards, because either alone has a hole: the apply
+path marks its transaction and the save path skips it (precise, but only knows
+about transactions this code produced); and every write is gated on the payload
+actually differing from what was last seen (covers unmarked transactions).
+
+Three rules with tests named after them: `parseShare` returns **null, never
+`[]`**, for an unusable read — `[]` legitimately means "the shared block is
+empty", and returning it for a failure would clear every copy and save that. An
+**empty block is never seeded** (`block+` cannot be childless, so empty is one
+empty paragraph, and seeding from it publishes emptiness). Shares are **keyed by
+id, not position** — the same share may appear twice in one note.
+
+**Off under live co-editing.** The Y.Doc is already authoritative for the whole
+document; a second mechanism replacing ranges inside it is two writers on one
+buffer with no ordering between them.
+
+`useSharedBlocks` lives in `lib/`, not `collab/`: NoteEditor imports `collab/` as
+**types only** to keep yjs out of the eager note bundle, and this is a value
+import. `schemaPath.test.ts` asserts it rather than trusting the comment.
+
 ### Summary figures share the column pipeline, deliberately
 
 A stat card is compile-once → evaluate-per-row → aggregate, the same chain a
