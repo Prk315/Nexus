@@ -42,6 +42,7 @@ import {
   type SortKey,
   type TaskFilter,
   type TreeMode,
+  creationDefaults,
 } from "@nexus/core/pathfinder";
 // ⚠️ `./taskTags`, NEVER `./vaultTaskTags`. This module is part of the note
 // schema — noteExtensions imports it, and noteSchemaGuard builds that schema
@@ -490,6 +491,39 @@ export function normalizeStatuses(v: unknown): string[] {
 }
 
 /** The statuses a board actually shows: the block's own, or the built-in four. */
+/**
+ * What a task created from inside a block inherits.
+ *
+ * The filter doubles as the creation context: a block showing plan "Thesis"
+ * creates tasks in "Thesis", and a block showing today's work dates them today.
+ * Only unambiguous single-value constraints carry over — see `creationDefaults`.
+ */
+export function creationPayload(spec: PfBlockSpec, today: string): Record<string, unknown> {
+  const raw = creationDefaults(spec.filter) as Record<string, unknown> & { __dueToday?: boolean };
+  const { __dueToday, ...rest } = raw;
+  return __dueToday ? { ...rest, due_date: today } : rest;
+}
+
+/**
+ * What a task dragged INTO a block inherits. The creation payload minus one
+ * field.
+ *
+ * ⚠️ `category` is excluded, and that is the whole difference. It is the ISA
+ * discriminator: re-typing a `task` to a sparse kind DROPS its planning row —
+ * urgency, stage, completion mode, notes — and the demotion is lossy by
+ * construction. Creating a chore in a chore block is a choice; dragging a
+ * planned task into one and silently deleting its plan is not.
+ *
+ * Everything else carries: "inherits the new requirements while forgoing the
+ * old ones" needs no clearing step, because each field is single-valued —
+ * setting plan_id to the target's plan IS forgoing the source's.
+ */
+export function movePayload(spec: PfBlockSpec, today: string): Record<string, unknown> {
+  const { category, ...rest } = creationPayload(spec, today);
+  void category;
+  return rest;
+}
+
 export function boardStatuses(spec: PfBlockSpec): string[] {
   return spec.statuses.length ? spec.statuses : [...KANBAN_STATUSES];
 }

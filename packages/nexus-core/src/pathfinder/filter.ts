@@ -412,6 +412,31 @@ export function creationDefaults(filter: TaskFilter): Record<string, unknown> {
   return out;
 }
 
+/**
+ * The fields of `creationDefaults` that describe WHERE work lives, as opposed
+ * to how one item is doing.
+ *
+ * The distinction earns its keep when a task is dragged from one block into
+ * another and its subtree comes along. Moving a branch of work into a project
+ * moves the whole branch — every step of it belongs to that plan, that goal,
+ * that team. It does NOT restate each step's status, priority, urgency,
+ * assignee or due date: those are claims about an individual piece of work, and
+ * inheriting them would silently mark a dozen subtasks as "doing", or assign
+ * them all to whoever the target block happens to be filtered to.
+ *
+ * So the dragged task takes the whole patch; its descendants take only this.
+ */
+export const SCOPE_FIELDS = ["plan_id", "goal_id", "team_id"] as const;
+
+/** The subset of a creation patch that a subtree should inherit. */
+export function scopeOnly(patch: Record<string, unknown>): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  for (const k of SCOPE_FIELDS) {
+    if (k in patch) out[k] = patch[k];
+  }
+  return out;
+}
+
 /** True when the filter constrains nothing — used to label a block "All tasks". */
 export function isUnfiltered(filter: TaskFilter): boolean {
   return (

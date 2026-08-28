@@ -23,11 +23,10 @@
 //     that as "All done ✓" is the same lie as an "Inbox zero" panel that has
 //     never successfully run.
 
-import { useCallback, useEffect, useMemo, useState, useSyncExternalStore } from "react";
+import { useCallback, useEffect, useMemo, useState, useSyncExternalStore , useRef } from "react";
 import React from "react";
 import { NodeViewWrapper, type NodeViewProps } from "@tiptap/react";
 import {
-  creationDefaults,
   isoDay,
   runQuery,
   runTreeQuery,
@@ -36,11 +35,15 @@ import {
   type PfTask,
   type SubtreeStat,
   type TaskTreeRow,
+  scopeOnly,
+  descendantIds,
 } from "@nexus/core/pathfinder";
 import {
   clearedSpec,
   deriveLabel,
   parseSpec,
+  creationPayload,
+  movePayload,
   serializeSpec,
   specFilterCount,
   specIsUnfiltered,
@@ -74,6 +77,9 @@ import { PathfinderFilterBar } from "./PathfinderFilterBar";
 import { PathfinderTaskDetail } from "./PathfinderTaskDetail";
 import { PfBoardView, PfListView, PfTableView } from "./PathfinderViews";
 import { useConfirm } from "./ConfirmDialog";
+import {
+  HOST_ATTR, nextHostId, registerHost, unregisterHost, type BlockHost,
+} from "../lib/pathfinderHosts";
 
 /** Subscribes to the shared snapshot and kicks off a load on first mount. */
 function usePathfinderData() {
@@ -93,6 +99,8 @@ export interface TaskActions {
   addSubtask: (parent: PfTask, title: string) => void;
   /** Persist a manual order. Pass the COMPLETE ordered group — see the api. */
   reorder: (orderedIds: number[]) => void;
+  /** Move a task (and its subtree's scope) into another block's filter. */
+  moveToHost: (task: PfTask, host: BlockHost) => void;
   openDetail: (task: PfTask) => void;
   addTag: (task: PfTask, tag: string) => void;
   removeTag: (task: PfTask, tag: string) => void;
@@ -197,6 +205,19 @@ export function PathfinderBlock({
   // due-date comparison, and recomputing it inside the memo would make the
   // filter result a new array on every render for no reason.
   const today = useMemo(() => isoDay(new Date()), []);
+
+  // Published so a drag STARTED IN ANOTHER BLOCK can find this one and read its
+  // filter. Re-registered on every render rather than once on mount: a drop must
+  // land against the block's current filter, not the one it had when mounted.
+  const hostId = useRef<string>("");
+  if (!hostId.current) hostId.current = nextHostId();
+  useEffect(() => {
+    registerHost({ id: hostId.current, spec, today });
+  }, [spec, today]);
+  useEffect(() => {
+    const id = hostId.current;
+    return () => unregisterHost(id);
+  }, []);
 
   const commitSpec = useCallback(
     (next: PfBlockSpec) => {
@@ -359,6 +380,50 @@ export function PathfinderBlock({
             );
           }
         });
+      },
+      /**
+       * A task dragged out of this block and dropped on another one.
+       *
+       * "Inherits the new requirements while forgoing the old ones" needs no
+       * clearing step: every inherited field is single-valued, so setting
+       * plan_id to the target's plan IS forgoing the source's.
+       *
+       * The subtree comes along, but only its SCOPE. Moving a branch of work
+       * into a project moves the whole branch; it does not restate every step's
+       * status, priority or assignee — see `scopeOnly`.
+       */
+      moveToHost: (task, host) => {
+        const patch = movePayload(host.spec, host.today);
+        // A target that constrains nothing has nothing to give. Writing an
+        // empty patch would still cost a round trip and a refresh, and would
+        // make an accidental drag look like it did something.
+        if (Object.keys(patch).length === 0) return;
+        setWriteError(null);
+        setBusy((b) => new Set(b).add(task.id));
+        void (async () => {
+          try {
+            await pathfinderApi.patchTask(task.id, patch);
+            const scope = scopeOnly(patch);
+            const kids = Object.keys(scope).length ? descendantIds(snap.tasks, task.id) : [];
+            // Sequential rather than Promise.all: a deep subtree would otherwise
+            // open one connection per descendant, which is the shape that wedged
+            // Supabase on 2026-08-15. Subtrees here are small; correctness is
+            // cheaper than the parallelism.
+            for (const id of kids) await pathfinderApi.patchTask(id, scope);
+            // The target's tag, when it has exactly one — same rule as creating
+            // in it, and for the same reason: otherwise the task lands in a
+            // block that immediately filters it out.
+            if (snap.tagsAvailable && host.spec.tagMode === "any"
+                && host.spec.tags.length === 1 && !host.spec.untaggedOnly) {
+              await addTaskTag(task.id, host.spec.tags[0]);
+            }
+            await refresh(true);
+          } catch (e: any) {
+            setWriteError(e?.message ?? String(e));
+          } finally {
+            setBusy((b) => { const n = new Set(b); n.delete(task.id); return n; });
+          }
+        })();
       },
       reorder: (orderedIds) => {
         setWriteError(null);
@@ -578,6 +643,7 @@ export function PathfinderBlock({
     <Wrapper
       className={`pf-block${selected ? " is-selected" : ""}${spec.compact ? " is-compact" : ""}`}
       data-view={view}
+      {...{ [HOST_ATTR]: hostId.current }}
       // The node view owns its own pointer handling; without this a click on a
       // checkbox is also a click on the paragraph behind it and ProseMirror
       // moves the selection into the block.
@@ -665,6 +731,7 @@ export function PathfinderBlock({
         >
           {view === "list" ? (
             <PfListView
+              hostId={hostId.current}
               rows={query.rows}
               spec={spec}
               members={snap.members}
@@ -679,6 +746,7 @@ export function PathfinderBlock({
             />
           ) : view === "board" ? (
             <PfBoardView
+              hostId={hostId.current}
               tasks={query.tasks}
               spec={spec}
               plans={snap.plans}
@@ -692,6 +760,7 @@ export function PathfinderBlock({
             />
           ) : (
             <PfTableView
+              hostId={hostId.current}
               rows={query.rows}
               spec={spec}
               members={snap.members}
@@ -839,15 +908,3 @@ function optimistic(task: PfTask, patch: Record<string, unknown>): Partial<PfTas
   return out as Partial<PfTask>;
 }
 
-/**
- * What a task created from inside this block inherits.
- *
- * The filter doubles as the creation context: a block showing plan "Thesis"
- * creates tasks in "Thesis", and a block showing today's work dates them today.
- * Only unambiguous single-value constraints carry over — see `creationDefaults`.
- */
-function creationPayload(spec: PfBlockSpec, today: string): Record<string, unknown> {
-  const raw = creationDefaults(spec.filter) as Record<string, unknown> & { __dueToday?: boolean };
-  const { __dueToday, ...rest } = raw;
-  return __dueToday ? { ...rest, due_date: today } : rest;
-}

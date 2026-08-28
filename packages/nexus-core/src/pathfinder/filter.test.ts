@@ -4,6 +4,8 @@ import {
   activeFilterCount,
   axisValue,
   creationDefaults,
+  SCOPE_FIELDS,
+  scopeOnly,
   groupTasks,
   isTaskRelevantToMe,
   isUnfiltered,
@@ -354,5 +356,43 @@ describe("filter summaries", () => {
     expect(activeFilterCount(DEFAULT_FILTER)).toBe(0);
     expect(activeFilterCount(filter({ done: "all" }))).toBe(1);
     expect(activeFilterCount(filter({ planIds: [1], due: "today" }))).toBe(2);
+  });
+});
+
+describe("scopeOnly", () => {
+  // The rule a cross-block drag depends on: moving a branch of work into a
+  // project moves the whole branch, but does not restate every step's status.
+  it("keeps where the work lives", () => {
+    expect(scopeOnly({ plan_id: 4, goal_id: 7, team_id: "t-1" }))
+      .toEqual({ plan_id: 4, goal_id: 7, team_id: "t-1" });
+  });
+
+  it("drops how one item is doing", () => {
+    const patch = {
+      plan_id: 4,
+      kanban_status: "doing",
+      priority: "high",
+      urgency: "now",
+      assigned_to: "uid-x",
+      due_date: "2026-08-28",
+      category: "chore",
+    };
+    expect(scopeOnly(patch)).toEqual({ plan_id: 4 });
+  });
+
+  it("keeps an explicit null — 'no plan' is a scope, not an absence", () => {
+    expect(scopeOnly({ plan_id: null })).toEqual({ plan_id: null });
+  });
+
+  it("omits what was never there rather than inventing undefined", () => {
+    expect(Object.keys(scopeOnly({ plan_id: 1 }))).toEqual(["plan_id"]);
+    expect(scopeOnly({})).toEqual({});
+  });
+
+  it("names only fields creationDefaults can actually produce", () => {
+    const produced = Object.keys(
+      creationDefaults(filter({ planIds: [1], goalIds: [2], teamIds: ["t"] })),
+    );
+    for (const f of SCOPE_FIELDS) expect(produced).toContain(f);
   });
 });

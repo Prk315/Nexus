@@ -58,9 +58,12 @@ import {
   type PfColumn,
 } from "../lib/pathfinderBlock";
 import type { TaskActions, TreeControls } from "./PathfinderBlockView";
+import { HOST_ATTR, hostAt, type BlockHost } from "../lib/pathfinderHosts";
 
 /** What every view needs, whatever shape it renders it in. */
 interface ViewCommon {
+  /** This block's drop-host id, so a drag can tell another block from its own. */
+  hostId: string;
   spec: PfBlockSpec;
   members: PfTeamMember[];
   actions: TaskActions;
@@ -427,7 +430,7 @@ function InlineAdd({
 // ─── List ───────────────────────────────────────────────────────────────────
 
 export function PfListView({
-  rows, spec, members, actions, today, editable, tagsOf, tagColor, tree, onAdd, onSpecChange,
+  hostId, rows, spec, members, actions, today, editable, tagsOf, tagColor, tree, onAdd, onSpecChange,
 }: ViewCommon & {
   rows: TaskTreeRow[];
   tree: TreeControls;
@@ -440,6 +443,22 @@ export function PfListView({
   const [addingUnder, setAddingUnder] = useState<number | null>(null);
   const cols = useMemo(() => listColumns(spec), [spec]);
   const listRef = useRef<HTMLDivElement>(null);
+
+  // The same gesture the board uses, for one purpose only: carrying a row OUT
+  // of this block and into another one. A drop back inside does nothing.
+  //
+  // Re-ordering or re-parenting within a list is a genuinely different
+  // question — a list is a tree, so "dropped on that row" is ambiguous between
+  // "before it" and "inside it" — and answering it by accident here would be
+  // worse than not answering it.
+  const { dragId: rowDragId, handlers: rowDrag } = useCardDrag({
+    enabled: editable,
+    onDrop: (taskId, _col, _slot, dropHost) => {
+      if (!dropHost || dropHost.id === hostId) return;
+      const task = rows.find((r) => r.task.id === taskId)?.task;
+      if (task) actions.moveToHost(task, dropHost);
+    },
+  });
 
   // ── Dragging the title / metadata split ─────────────────────────────────
   //
@@ -523,8 +542,12 @@ export function PfListView({
         return (
           <div key={t.id}>
             <div
-              className={`pf-list-row${t.done ? " is-done" : ""}${busy ? " is-busy" : ""}${r.depth > 0 ? " is-step" : ""}`}
+              className={
+                `pf-list-row${t.done ? " is-done" : ""}${busy ? " is-busy" : ""}` +
+                `${r.depth > 0 ? " is-step" : ""}${rowDragId === t.id ? " is-dragging" : ""}`
+              }
               style={{ "--pf-depth": r.depth } as React.CSSProperties}
+              onPointerDown={(e) => rowDrag.onPointerDown(e, t.id)}
             >
               <Disclosure row={r} onToggle={tree.toggleCollapse} onExpandHidden={tree.expandHidden} />
 
@@ -629,7 +652,7 @@ function addPlaceholder(spec: PfBlockSpec): string {
 // ─── Board ──────────────────────────────────────────────────────────────────
 
 export function PfBoardView({
-  tasks, spec, plans, members, actions, today, editable, tagsOf, tagColor, onSpecChange,
+  hostId, tasks, spec, plans, members, actions, today, editable, tagsOf, tagColor, onSpecChange,
 }: ViewCommon & {
   tasks: PfTask[];
   plans: PfPlan[];
@@ -648,9 +671,17 @@ export function PfBoardView({
 
   const { dragId, overKey, overSlot, handlers } = useCardDrag({
     enabled: editable && (writeField != null || canReorder),
-    onDrop: (taskId, colKey, slot) => {
+    onDrop: (taskId, colKey, slot, dropHost) => {
       const task = tasks.find((t) => t.id === taskId);
-      if (!task || colKey === "__other__") return;
+      if (!task) return;
+
+      // Dropped on a DIFFERENT block: that block's filter decides everything,
+      // so neither the column nor the slot means anything here.
+      if (dropHost && dropHost.id !== hostId) {
+        actions.moveToHost(task, dropHost);
+        return;
+      }
+      if (colKey === "__other__" || !colKey) return;
 
       // Same column: this is a reorder, not a move. The axis value is already
       // right, and writing it again would be a no-op round trip.
@@ -800,7 +831,7 @@ function useCardDrag({
    * numbering `reorderedIds` expects: slot i means "before the card currently
    * at index i", and length means "after the last one".
    */
-  onDrop: (taskId: number, columnKey: string, slot: number) => void;
+  onDrop: (taskId: number, columnKey: string, slot: number, dropHost: BlockHost | null) => void;
 }) {
   const [dragId, setDragId] = useState<number | null>(null);
   const [overKey, setOverKey] = useState<string | null>(null);
@@ -838,6 +869,22 @@ function useCardDrag({
    * @nexus/core/pathfinder — the same function PathFinder's row reorder uses,
    * rather than a second copy that would disagree about the edges.
    */
+  /**
+   * Mark the block under the pointer as the drop target.
+   *
+   * A DOM attribute rather than React state, and deliberately: the hovered
+   * block is a different React tree from the dragged one, so lifting this into
+   * state would mean re-rendering every block in the note on every
+   * pointermove — sixty times a second, each one a task list.
+   */
+  const markDropTarget = (el: HTMLElement | null) => {
+    for (const prev of document.querySelectorAll("[data-pf-drop]")) {
+      prev.removeAttribute("data-pf-drop");
+    }
+    const root = el?.closest(`[${HOST_ATTR}]`);
+    if (root) root.setAttribute("data-pf-drop", "");
+  };
+
   const slotAt = (col: HTMLElement | null, y: number): number => {
     if (!col) return 0;
     const cards = Array.from(col.querySelectorAll<HTMLElement>("[data-card]"));
@@ -859,13 +906,22 @@ function useCardDrag({
     setDragId(null);
     setOverKey(null);
     setOverSlot(null);
+    markDropTarget(null);
 
     if (commit && g.armed) {
       const col = columnAt(commit.x, commit.y);
       const key = col?.dataset.col ?? null;
-      // `__other__` is the catch-all bucket, not a state anything can be moved
-      // INTO — dropping there would have to invent a value for the axis.
-      if (key && key !== "__other__") onDrop(g.id, key, slotAt(col, commit.y));
+      // Resolved here rather than in the caller: by the time a React handler
+      // runs the pointer has moved on, and `elementFromPoint` would answer
+      // about wherever it is now.
+      const dropHost = hostAt(commit.x, commit.y);
+      // A drop on ANOTHER block is a move, and it does not need a column — the
+      // target block decides where the task lands from its own filter. Only a
+      // drop inside this block needs the column, and `__other__` is the
+      // catch-all bucket rather than a state anything can be moved INTO.
+      if (dropHost || (key && key !== "__other__")) {
+        onDrop(g.id, key ?? "", slotAt(col, commit.y), dropHost);
+      }
     }
   }, [onDrop]);
 
@@ -899,6 +955,7 @@ function useCardDrag({
       const col = columnAt(ev.clientX, ev.clientY);
       setOverKey(col?.dataset.col ?? null);
       setOverSlot(col ? slotAt(col, ev.clientY) : null);
+      markDropTarget(document.elementFromPoint(ev.clientX, ev.clientY) as HTMLElement | null);
     };
 
     const onUp = (ev: PointerEvent) => {
