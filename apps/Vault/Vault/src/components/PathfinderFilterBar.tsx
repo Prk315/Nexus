@@ -10,6 +10,7 @@
 // the search box: the others are discrete choices, and a transaction per click
 // is the correct granularity for undo — Cmd-Z should step back one decision.
 
+import { compile, MAX_FORMULA_CHARS } from "../lib/formula";
 import { useEffect, useRef, useState } from "react";
 import {
   PRIORITIES,
@@ -34,6 +35,12 @@ import {
   PF_COLUMNS,
   PF_COLUMN_LABELS,
   LIST_COLUMNS,
+  FORMULA_AGGS,
+  FORMULA_FIELDS,
+  FORMULA_FIELD_NAMES,
+  MAX_FORMULAS,
+  type FormulaAgg,
+  type FormulaColumn,
   boardStatuses,
   normalizeStatuses,
   SPEC_MAX_LIMIT,
@@ -362,6 +369,14 @@ export function PathfinderFilterBar({
             statuses={boardStatuses(spec)}
             isCustom={spec.statuses.length > 0}
             onChange={(statuses) => set({ statuses })}
+          />
+        ) : null}
+
+        {/* Table only: a list row has nowhere to put a computed column. */}
+        {view === "table" ? (
+          <FormulaEditor
+            formulas={spec.formulas}
+            onChange={(formulas) => set({ formulas })}
           />
         ) : null}
 
@@ -775,6 +790,102 @@ function StatusEditor({
           onClick={() => onChange([])}
         >Reset</button>
       ) : null}
+    </div>
+  );
+}
+
+/**
+ * Add, edit and remove computed columns.
+ *
+ * The expression is validated as you type and the error is shown inline —
+ * `compile` knows the field list, so a typo reads "unknown field: estimat"
+ * rather than producing a column of blanks with no explanation.
+ */
+function FormulaEditor({
+  formulas, onChange,
+}: {
+  formulas: FormulaColumn[];
+  onChange: (v: FormulaColumn[]) => void;
+}) {
+  const patch = (id: string, part: Partial<FormulaColumn>) =>
+    onChange(formulas.map((f) => (f.id === id ? { ...f, ...part } : f)));
+
+  return (
+    <div className="pf-formulas" role="group" aria-label="Computed columns">
+      <span className="pf-chips-label">Computed</span>
+
+      {formulas.map((f) => {
+        const prog = compile(f.expr, FORMULA_FIELD_NAMES);
+        return (
+          <span key={f.id} className="pf-formula-row">
+            <input
+              className="pf-formula-label"
+              value={f.label}
+              placeholder="Name"
+              maxLength={40}
+              aria-label="Column name"
+              onChange={(e) => patch(f.id, { label: e.target.value })}
+              onKeyDown={(e) => e.stopPropagation()}
+            />
+            <input
+              className={`pf-formula-expr${prog.ok ? "" : " is-bad"}`}
+              value={f.expr}
+              placeholder="estimate / 60"
+              maxLength={MAX_FORMULA_CHARS}
+              aria-label="Formula"
+              aria-invalid={!prog.ok}
+              // The block lives in a ProseMirror node view; an un-stopped key
+              // reaches the editor and types into the note.
+              onKeyDown={(e) => e.stopPropagation()}
+              onChange={(e) => patch(f.id, { expr: e.target.value })}
+            />
+            <select
+              className="pf-formula-agg"
+              value={f.agg}
+              aria-label="Footer total"
+              onChange={(e) => patch(f.id, { agg: e.target.value as FormulaAgg })}
+            >
+              {FORMULA_AGGS.map((a) => (
+                <option key={a} value={a}>{a === "none" ? "no total" : a}</option>
+              ))}
+            </select>
+            <button
+              type="button"
+              className="pf-tag-x"
+              aria-label={`Remove the ${f.label || f.expr} column`}
+              onClick={() => onChange(formulas.filter((x) => x.id !== f.id))}
+            >×</button>
+            {!prog.ok ? <span className="pf-formula-msg">{prog.error}</span> : null}
+          </span>
+        );
+      })}
+
+      {formulas.length < MAX_FORMULAS ? (
+        <button
+          type="button"
+          className="pf-chip"
+          onClick={() => onChange([
+            ...formulas,
+            // crypto.randomUUID is used for node ids elsewhere in Vault; a
+            // stable id is what lets a column keep its width and position
+            // across edits to its own label.
+            { id: crypto.randomUUID().slice(0, 8), label: "", expr: "estimate / 60", agg: "none" },
+          ])}
+        >+ column</button>
+      ) : null}
+
+      <details className="pf-formula-help">
+        <summary>fields</summary>
+        <ul>
+          {FORMULA_FIELDS.map((f) => (
+            <li key={f.name}><code>{f.name}</code> — {f.help}</li>
+          ))}
+          <li>
+            <code>+ - * / %</code>, comparisons, <code>&amp;&amp;</code> <code>||</code>,
+            {" "}<code>a ? b : c</code>, and <code>min max round floor ceil abs if</code>
+          </li>
+        </ul>
+      </details>
     </div>
   );
 }

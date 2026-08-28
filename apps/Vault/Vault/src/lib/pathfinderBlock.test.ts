@@ -9,6 +9,10 @@ import {
   parseSpec,
   serializeSpec,
   sortColumns,
+  aggregate,
+  formulaContext,
+  FORMULA_FIELD_NAMES,
+  MAX_FORMULAS,
   creationPayload,
   movePayload,
   normalizeStatuses,
@@ -568,5 +572,99 @@ describe("movePayload", () => {
 
   it("still never carries stage, gated or not", () => {
     expect(movePayload(withFilter({ stages: ["active"] }), TODAY)).toEqual({});
+  });
+});
+
+describe("formula columns", () => {
+  const spec = (formulas: unknown) => parseSpec(JSON.stringify({ formulas }), "table");
+
+  it("keeps a valid column", () => {
+    const f = spec([{ id: "a", label: "Hours", expr: "estimate / 60", agg: "sum" }]).formulas;
+    expect(f).toHaveLength(1);
+    expect(f[0]).toMatchObject({ id: "a", label: "Hours", expr: "estimate / 60", agg: "sum" });
+  });
+
+  // An invalid expression is KEPT. The column shows an error, which is
+  // recoverable; dropping it loses whatever the user was mid-way through
+  // writing, with no explanation for why it vanished.
+  it("keeps an expression that does not parse", () => {
+    expect(spec([{ id: "a", expr: "estimate /" }]).formulas).toHaveLength(1);
+  });
+
+  it("drops entries with no id or no expression", () => {
+    expect(spec([{ expr: "1" }, { id: "b" }, { id: "c", expr: "   " }]).formulas).toEqual([]);
+  });
+
+  it("drops duplicates and bounds the count", () => {
+    expect(spec([{ id: "a", expr: "1" }, { id: "a", expr: "2" }]).formulas).toHaveLength(1);
+    expect(spec(Array.from({ length: 20 }, (_, i) => ({ id: `f${i}`, expr: "1" }))).formulas)
+      .toHaveLength(MAX_FORMULAS);
+  });
+
+  it("falls back to no aggregate for a nonsense one", () => {
+    expect(spec([{ id: "a", expr: "1", agg: "median" }]).formulas[0].agg).toBe("none");
+  });
+
+  it("ignores junk", () => {
+    expect(spec(null).formulas).toEqual([]);
+    expect(spec("estimate").formulas).toEqual([]);
+    expect(spec([1, null, "x"]).formulas).toEqual([]);
+  });
+});
+
+describe("formulaContext", () => {
+  const task = (over: Record<string, unknown> = {}) => ({
+    id: 1, title: "t", done: false, priority: "medium", due_date: null,
+    time_estimate: null, aggregate_estimate: null, planning: null, ...over,
+  }) as never;
+
+  it("exposes exactly the documented field names", () => {
+    const ctx = formulaContext(task(), undefined, "2026-08-28");
+    expect(Object.keys(ctx).sort()).toEqual([...FORMULA_FIELD_NAMES].sort());
+  });
+
+  it("turns priority and urgency into ranks, because the language has no strings", () => {
+    expect(formulaContext(task({ priority: "high" }), undefined, "2026-08-28").priority).toBe(3);
+    expect(formulaContext(task({ planning: { urgency: "low" } }), undefined, "2026-08-28").urgency).toBe(1);
+  });
+
+  it("computes overdue against the day it is given, not the clock", () => {
+    const t = task({ due_date: "2026-08-01" });
+    expect(formulaContext(t, undefined, "2026-08-28").overdue).toBe(true);
+    expect(formulaContext(t, undefined, "2026-07-01").overdue).toBe(false);
+  });
+
+  it("does not call a completed task overdue", () => {
+    const t = task({ due_date: "2026-08-01", done: true });
+    expect(formulaContext(t, undefined, "2026-08-28").overdue).toBe(false);
+  });
+
+  it("treats a malformed due date as no due date", () => {
+    // pf_tasks.due_date is TEXT with no constraint.
+    expect(formulaContext(task({ due_date: "soon" }), undefined, "2026-08-28").hasDue).toBe(false);
+  });
+});
+
+describe("aggregate", () => {
+  // ⚠️ Nulls are skipped, never counted as zero. A task with no estimate has no
+  // estimate; averaging it in as 0 quietly drags every mean down.
+  it("skips nulls rather than treating them as zero", () => {
+    expect(aggregate("sum", [10, null, 20])).toEqual({ value: 30, n: 2 });
+    expect(aggregate("avg", [10, null, 20])).toEqual({ value: 15, n: 2 });
+  });
+
+  it("counts truthy rows, which is what makes a boolean column useful", () => {
+    expect(aggregate("count", [true, false, true, null])).toEqual({ value: 2, n: 3 });
+    expect(aggregate("percent", [true, false, true, false])).toEqual({ value: 50, n: 4 });
+  });
+
+  it("reports how many rows contributed, so the UI need not imply it measured all", () => {
+    expect(aggregate("sum", [null, null]).n).toBe(0);
+  });
+
+  it("has no answer for an empty column rather than inventing zero", () => {
+    expect(aggregate("avg", []).value).toBeNull();
+    expect(aggregate("percent", []).value).toBeNull();
+    expect(aggregate("none", [1, 2]).value).toBeNull();
   });
 });
