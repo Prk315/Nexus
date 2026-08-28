@@ -849,6 +849,32 @@ VITE_SUPABASE_URL=https://efxmzsdisaymtpebaxlp.supabase.co
 VITE_SUPABASE_ANON_KEY=<anon key>
 ```
 
+## Vault CSS: there were two palettes, not one untokenised palette
+
+⚠️ `App.css` grew an oklch scale on `:root` AND a separate hex palette that
+predates it. Measured before touching anything: of 234 colour literals outside
+`:root`, **exactly one** matched a declared token. They were never untokenised
+references to the scale — they were a second scale.
+
+So "tokenise the CSS" is not a find-and-replace. The fifteen colours used three
+or more times are now named (`--accent`, `--danger-solid`, `--handle`, …),
+covering 104 of the 234; `lib/cssTokens.test.ts` is a ratchet that fails if any
+of them is written as a hex literal again, naming the token to use instead.
+
+**92 colours are used exactly once and are deliberately NOT tokenised.** A token
+used once is a rename, not an abstraction, and naming them is a design decision
+rather than a cleanup — so a dark theme (833) still needs that conversation
+before it can override everything.
+
+⚠️ `--accent`/`--accent-pdf` and `--danger-solid`/`--danger-pdf` are near
+duplicates that drifted apart, not two intentional colours. They are kept
+distinct because unifying them would change pixels, which is a decision rather
+than a cleanup.
+
+The rule the whole change was held to: **no rendered colour may move.** Verified
+rather than asserted — expanding every new token back to its value reproduces
+the original file's colour multiset exactly.
+
 ## Vault: Frontend Gotchas
 
 These are non-obvious requirements that broke the 3D graph and PDF viewer once and will again if you regress them — keep them in `vite.config.ts` and `PdfViewer.tsx`.
