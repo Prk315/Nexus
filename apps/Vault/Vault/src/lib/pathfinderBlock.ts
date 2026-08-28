@@ -22,6 +22,10 @@ import { MAX_FORMULA_CHARS, type FormulaContext, type FormulaValue } from "./for
 // reach vaultTaskFields.ts and through it a Supabase client. Asserted by
 // lib/schemaPath.test.ts.
 import { coerceField, normalizeFieldKey, FIELD_TYPES, type FieldType } from "./taskFields";
+// Types and the option list only — the colour FUNCTIONS are not imported
+// here, because this module is on the note schema path and cardColor.ts
+// reaches @nexus/core/pathfinder. Asserted by lib/schemaPath.test.ts.
+import { COLOR_BY, type ColorBy } from "./cardColor";
 import {
   DEFAULT_FILTER,
   KANBAN_STATUSES,
@@ -244,6 +248,15 @@ export interface PfBlockSpec {
    * to put a column.
    */
   stats: StatCard[];
+
+  /**
+   * What a card's or row's colour stripe MEANS.
+   *
+   * A board shows status as columns and order as position; colour is the one
+   * free channel left, so what it says is a choice rather than a fixed scheme.
+   * See lib/cardColor.
+   */
+  colorBy: ColorBy;
 }
 
 export interface StatCard {
@@ -401,6 +414,7 @@ export function defaultSpec(view: PfBlockView): PfBlockSpec {
     formulas: [],
     fields: [],
     stats: [],
+    colorBy: "none",
   };
 }
 
@@ -521,6 +535,7 @@ export function parseSpec(raw: string | null | undefined, view: PfBlockView): Pf
     formulas: parseFormulas(obj.formulas),
     fields: parseFields(obj.fields),
     stats: parseStats(obj.stats),
+    colorBy: pick(obj.colorBy, COLOR_BY, "none"),
   };
 }
 

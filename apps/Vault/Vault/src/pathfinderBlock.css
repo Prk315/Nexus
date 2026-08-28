@@ -1480,3 +1480,32 @@
   overflow: hidden;
   text-overflow: ellipsis;
 }
+
+/* ─── Colour stripes ────────────────────────────────────────────────────────
+   The one free channel a board has left, once status is columns and order is
+   position. A task the dimension says nothing about gets NO stripe — a grey
+   "unset" colour would read as a real category. */
+
+.pf-card { position: relative; }
+.pf-card-stripe {
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 3px;
+  border-radius: 7px 0 0 7px;
+  pointer-events: none;
+}
+/* The card's own padding has to clear the stripe, or the tick sits on it. */
+.pf-card:has(.pf-card-stripe) { padding-left: 11px; }
+
+.pf-row-stripe {
+  flex: 0 0 auto;
+  width: 3px;
+  align-self: stretch;
+  min-height: 14px;
+  border-radius: 2px;
+  margin-right: 5px;
+}
+
+.pf-colorby { display: flex; align-items: center; gap: 6px; }

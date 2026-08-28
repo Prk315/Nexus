@@ -915,3 +915,21 @@ describe("parseStats", () => {
     expect(parseSpec(JSON.stringify({ ...defaultSpec("table"), stats }), "table").stats).toEqual(stats);
   });
 });
+
+describe("colorBy in the spec", () => {
+  const parse = (colorBy: unknown) =>
+    parseSpec(JSON.stringify({ ...defaultSpec("board"), colorBy }), "board").colorBy;
+
+  it("defaults to none, and an old document has none", () => {
+    // A block must not gain a colour channel it was never asked for.
+    expect(defaultSpec("board").colorBy).toBe("none");
+    expect(parseSpec(JSON.stringify({ view: "board" }), "board").colorBy).toBe("none");
+  });
+
+  it("keeps a valid dimension and refuses an unknown one", () => {
+    expect(parse("tag")).toBe("tag");
+    expect(parse("assignee")).toBe("assignee");
+    expect(parse("rainbow")).toBe("none");
+    expect(parse(7)).toBe("none");
+  });
+});
