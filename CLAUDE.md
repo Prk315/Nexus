@@ -1769,6 +1769,41 @@ so it can only fall; naming them is a design decision per colour, not a cleanup.
 Stored in **localStorage, per device**. A Mac in a lit room and an iPad in bed
 want different schemes, so per-account would be the wrong shape, not a better one.
 
+### One icon set, and a test that refuses the mixed state
+
+`extensions/icons.tsx` — every icon a 24×24 path in `currentColor`, stroke 1.75,
+round caps. At 14px, stroke weight is most of what the eye compares, and it is
+the one property a Unicode glyph gives you no control over.
+
+It replaced **51 distinct Unicode strings across 55 actions**: box drawing,
+arrows, emoji (which render in *colour* and at a different weight), mathematical
+alphanumerics (three fonts in one row), and short strings pretending to be glyphs
+(`⤒row`, `−col`).
+
+⚠️ **Three were ambiguous, not merely inconsistent** — the same symbol for two
+different things, all three found by the coverage test rather than by eye:
+`⌄` was both "fold this heading" and "unfold everything"; inline text size and
+per-note text size shared three icons; and `unsetHighlight` shared the
+highlighter with "apply this highlighter". Opposite actions on one glyph.
+
+`iconCoverage.test.ts` fails on any two actions sharing an icon unless they are
+in a **declared family** (card colours, text colours, faces, code languages —
+where the swatch or the face *is* the differentiator). It also fails on a **stale
+exemption**, which is the hole the next collision walks through, and it builds
+the registry with **every gated action present** — `buildBlockRegistry({})` omits
+link, database, image, both maths and the highlighters, and a coverage test that
+skips most of what it covers is worse than none.
+
+**`ActionIcon` is the one place any surface draws an icon.** There are four —
+toolbar buttons, toolbar menus, the bubble, the slash list — and each
+interpolated `a.icon` itself, which is how the set drifted: an action added with
+a glyph looked fine in the one surface its author was looking at. The legacy
+`icon` string is still the fallback, but the test asserts nothing reaches it: one
+glyph among sixty SVGs is *more* obviously wrong than sixty inconsistent glyphs.
+
+⚠️ **Size is a prop, never a class.** These sit in a 13px button, a menu row and
+the slash list; an icon inheriting `font-size` from three places is three sizes.
+
 ### What a card's colour means is a choice, and "no value" has no colour
 
 `spec.colorBy` — tag / priority / urgency / assignee — puts a stripe on every

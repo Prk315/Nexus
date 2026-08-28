@@ -8581,3 +8581,22 @@ body.vault-block-dragging .tt-bubble {
   background: var(--border-base);
   flex: 0 0 auto;
 }
+
+/* One icon set, one grid. `currentColor` and a shared stroke weight are what
+   make sixty separate paths read as one family — see extensions/icons.tsx. */
+.nx-icon {
+  display: block;
+  flex: 0 0 auto;
+  /* Optical centring: a 24-grid glyph sits slightly high against a text
+     baseline in a button that also holds a label. */
+  vertical-align: -0.12em;
+}
+/* A button whose whole content is an icon centres it rather than baseline-
+   aligning it, which is what left the old glyphs sitting a pixel low. */
+.tt-btn:has(> .nx-icon),
+.tt-menu-icon,
+.slash-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
