@@ -334,6 +334,43 @@ export function setCachedTaskTags(taskId: number, next: readonly string[]): stri
   return before; // the PREVIOUS value, so a failed write can roll back to it
 }
 
+/**
+ * Optimistically write one custom field cell.
+ *
+ * Returns the PREVIOUS bag so a failed write can roll back — same contract as
+ * setCachedTaskTags. An empty value DELETES the key rather than storing "",
+ * mirroring what setTaskField does to the row: the cache and the table must
+ * agree on what "no value" is, or a cleared cell reads as null on the server
+ * and as "" here until the next refresh, and a formula sees two different
+ * numbers on either side of a reload.
+ */
+export function setCachedTaskField(
+  taskId: number,
+  key: string,
+  value: string,
+): Record<string, string> {
+  const before = snapshot.fields.get(taskId) ?? {};
+  const bag = { ...before };
+  if (value.trim()) bag[key] = value;
+  else delete bag[key];
+
+  const fields = new Map(snapshot.fields);
+  if (Object.keys(bag).length > 0) fields.set(taskId, bag);
+  else fields.delete(taskId);
+  snapshot = { ...snapshot, fields };
+  emit();
+  return before;
+}
+
+/** Restore a whole bag — the rollback half of setCachedTaskField. */
+export function restoreCachedTaskFields(taskId: number, bag: Record<string, string>): void {
+  const fields = new Map(snapshot.fields);
+  if (Object.keys(bag).length > 0) fields.set(taskId, bag);
+  else fields.delete(taskId);
+  snapshot = { ...snapshot, fields };
+  emit();
+}
+
 /** Folds a whole freshly-read tag index in — used after a rename or a bulk delete. */
 export function setCachedTagIndex(index: TaskTagIndex): void {
   snapshot = {

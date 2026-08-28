@@ -1536,6 +1536,61 @@ An invalid expression is **kept**, not dropped: the column shows an error, which
 is recoverable, whereas discarding it loses whatever was being written with no
 explanation for the disappearance.
 
+### Stored columns: the definition is in the note, the values are in Postgres
+
+A custom column is two halves, and which half holds what is the whole design.
+The **definition** — key, label, type — lives in the block spec, in the note.
+The **values** live in `vault_task_fields`, keyed `(user_id, task_id, key)`.
+
+That split makes the type a **lens rather than a constraint**: the value column
+is `text` for every type, so changing a column from number to text and back
+loses nothing, and two notes may legitimately show `budget` as a number and as
+free text without either being wrong. A typed column in Postgres would have to
+pick a winner and would need a data migration on every type change.
+
+**The key IS the storage key**, so it is normalised the way tags are — a key
+differing only by case or spacing would be a second column that looks exactly
+like the first, with the values split silently between them. Two consequences
+that are easy to get wrong:
+
+- **The collision check must compare NORMALISED names.** `subtasksDone`
+  normalises to `subtasksdone`, so checking a normalised key against the raw
+  built-in list let a column named "subtasksDone" through — sitting in the
+  field list one character from the built-in, with nothing to say which a
+  formula meant. `RESERVED_FIELD_KEYS` is the normalised set; a test walks
+  every built-in name.
+- **Removing a column from a block does not delete its values.** The same key
+  is very often a column in another note. Deleting everywhere is a separate,
+  explicit act (`deleteTaskFieldEverywhere`), and the × is labelled "hide"
+  rather than "delete" for that reason.
+
+**A stored number column is a name a formula reads** — that is why the two
+shipped together. `formulaFieldNames(fields)` extends the built-ins with the
+block's numeric and check keys, so `budget * 1.25` compiles. Text columns are
+deliberately **absent**: binding one would make every formula reading it
+silently blank instead of failing with a named error, and renaming a column
+must turn a formula into a legible error rather than an empty cell.
+
+⚠️ **An absent value binds as `null`, never 0 or false.** A task nobody has
+given a budget has no budget: `sum(budget)` over ten tasks where two have one
+must be the sum of two, and `avg` must divide by two. This is the same rule
+`aggregate` already implements for nulls, and the reason `coerceField` returns
+null for every empty string regardless of type. A cleared cell **deletes** the
+row rather than storing `""`, so the cache and the server agree on what "no
+value" is — otherwise a formula reads a different number either side of a
+reload.
+
+**A missing table is a state of its own.** Before the migration is applied the
+block hides its stored columns entirely rather than drawing every task blank:
+"unavailable" and "nobody has filled this in" must not look the same. Same
+posture as tags, and the same reason `blocking_state` is not seeded.
+
+**`lib/taskFields.ts` is the pure half and `lib/vaultTaskFields.ts` is the
+query half**, and the split is not tidiness — `lib/pathfinderBlock.ts` is on the
+note SCHEMA path, and a Supabase import there would make "is this note safe to
+open?" depend on a configured network client. `lib/schemaPath.test.ts` walks the
+import graph and asserts it rather than trusting it.
+
 ### The table: column order is the ARRAY order
 
 ⚠️ **`parseSpec` must not sort `spec.columns`.** It used to, and that single call

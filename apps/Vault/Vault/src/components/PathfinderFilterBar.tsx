@@ -10,8 +10,9 @@
 // the search box: the others are discrete choices, and a transaction per click
 // is the correct granularity for undo — Cmd-Z should step back one decision.
 
+import { normalizeFieldKey, FIELD_TYPES, FIELD_KEY_MAX, type FieldType } from "../lib/taskFields";
 import { compile, MAX_FORMULA_CHARS } from "../lib/formula";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, useMemo } from "react";
 import {
   PRIORITIES,
   STAGES,
@@ -37,7 +38,10 @@ import {
   LIST_COLUMNS,
   FORMULA_AGGS,
   FORMULA_FIELDS,
-  FORMULA_FIELD_NAMES,
+  RESERVED_FIELD_KEYS,
+  formulaFieldNames,
+  MAX_FIELDS,
+  type FieldColumn,
   MAX_FORMULAS,
   type FormulaAgg,
   type FormulaColumn,
@@ -372,10 +376,21 @@ export function PathfinderFilterBar({
           />
         ) : null}
 
+        {/* Table only, and stored before computed — that is the order they are
+            drawn in, and the order the dependency runs: a formula may read a
+            stored column, never the other way round. */}
+        {view === "table" ? (
+          <FieldEditor
+            fields={spec.fields}
+            onChange={(fields) => set({ fields })}
+          />
+        ) : null}
+
         {/* Table only: a list row has nowhere to put a computed column. */}
         {view === "table" ? (
           <FormulaEditor
             formulas={spec.formulas}
+            fields={spec.fields}
             onChange={(formulas) => set({ formulas })}
           />
         ) : null}
@@ -801,12 +816,106 @@ function StatusEditor({
  * `compile` knows the field list, so a typo reads "unknown field: estimat"
  * rather than producing a column of blanks with no explanation.
  */
+/**
+ * Stored custom columns.
+ *
+ * The key is the storage key and is normalised, so renaming a column is a data
+ * operation, not a label change — the editor makes that visible by showing the
+ * key next to the name rather than hiding it. Removing a column here removes it
+ * from THIS note only; the values stay, because the same key is very often a
+ * column in another note too.
+ */
+function FieldEditor({
+  fields, onChange,
+}: {
+  fields: FieldColumn[];
+  onChange: (v: FieldColumn[]) => void;
+}) {
+  const [adding, setAdding] = useState("");
+
+  const add = () => {
+    const key = normalizeFieldKey(adding);
+    setAdding("");
+    if (!key) return;
+    // Two refusals with different reasons, and both are silent-by-design: the
+    // button simply does nothing rather than throwing a dialog into a note.
+    // A duplicate would split one column's values across two headers; a
+    // built-in name would make `estimate` mean two things in one formula.
+    if (fields.some((f) => f.key === key)) return;
+    if (RESERVED_FIELD_KEYS.has(key)) return;
+    onChange([...fields, { key, label: adding.trim().slice(0, 40), type: "text" }]);
+  };
+
+  return (
+    <div className="pf-fields" role="group" aria-label="Stored columns">
+      <span className="pf-chips-label">Stored</span>
+
+      {fields.map((f) => (
+        <span key={f.key} className="pf-field-row">
+          <input
+            className="pf-field-label"
+            value={f.label}
+            placeholder={f.key}
+            maxLength={40}
+            aria-label={`Name of the ${f.key} column`}
+            onKeyDown={(e) => e.stopPropagation()}
+            onChange={(e) =>
+              onChange(fields.map((x) => (x.key === f.key ? { ...x, label: e.target.value } : x)))}
+          />
+          <select
+            className="pf-field-type"
+            value={f.type}
+            aria-label={`Type of the ${f.label || f.key} column`}
+            onChange={(e) =>
+              onChange(fields.map((x) => (x.key === f.key ? { ...x, type: e.target.value as FieldType } : x)))}
+          >
+            {FIELD_TYPES.map((t) => <option key={t} value={t}>{t}</option>)}
+          </select>
+          <button
+            type="button"
+            className="pf-tag-x"
+            // Deliberately "Hide": the values survive. Deleting them everywhere
+            // is a separate, explicit act — see deleteTaskFieldEverywhere.
+            aria-label={`Hide the ${f.label || f.key} column here`}
+            title="Removes the column from this block. The values are kept."
+            onClick={() => onChange(fields.filter((x) => x.key !== f.key))}
+          >×</button>
+        </span>
+      ))}
+
+      {fields.length < MAX_FIELDS ? (
+        <span className="pf-field-add">
+          <input
+            className="pf-field-new"
+            value={adding}
+            placeholder="+ stored column"
+            maxLength={FIELD_KEY_MAX}
+            aria-label="Add a stored column"
+            onChange={(e) => setAdding(e.target.value)}
+            onKeyDown={(e) => {
+              e.stopPropagation();
+              if (e.key === "Enter") { e.preventDefault(); add(); }
+            }}
+            onBlur={add}
+          />
+        </span>
+      ) : null}
+    </div>
+  );
+}
+
 function FormulaEditor({
-  formulas, onChange,
+  formulas, fields, onChange,
 }: {
   formulas: FormulaColumn[];
+  /** The block's stored columns — their numeric keys are readable names. */
+  fields: FieldColumn[];
   onChange: (v: FormulaColumn[]) => void;
 }) {
+  // Compiled against the same names the table uses, so a formula that works
+  // here works there. Getting this wrong would validate `budget * 2` in the
+  // editor and blank it in the table, or the reverse.
+  const names = useMemo(() => formulaFieldNames(fields), [fields]);
   const patch = (id: string, part: Partial<FormulaColumn>) =>
     onChange(formulas.map((f) => (f.id === id ? { ...f, ...part } : f)));
 
@@ -815,7 +924,7 @@ function FormulaEditor({
       <span className="pf-chips-label">Computed</span>
 
       {formulas.map((f) => {
-        const prog = compile(f.expr, FORMULA_FIELD_NAMES);
+        const prog = compile(f.expr, names);
         return (
           <span key={f.id} className="pf-formula-row">
             <input
@@ -879,6 +988,12 @@ function FormulaEditor({
         <ul>
           {FORMULA_FIELDS.map((f) => (
             <li key={f.name}><code>{f.name}</code> — {f.help}</li>
+          ))}
+          {/* Text columns are absent by design: they have no numeric meaning,
+              and offering one here would produce a formula that is always
+              blank rather than an error naming the reason. */}
+          {fields.filter((f) => f.type !== "text").map((f) => (
+            <li key={f.key}><code>{f.key}</code> — stored {f.type}{f.label && f.label !== f.key ? ` ("${f.label}")` : ""}</li>
           ))}
           <li>
             <code>+ - * / %</code>, comparisons, <code>&amp;&amp;</code> <code>||</code>,
