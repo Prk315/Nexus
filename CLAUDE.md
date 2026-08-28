@@ -1375,6 +1375,28 @@ pointerdown: the board reflows during a drag (a column highlights, the drop
 line appears), and a cached rect lands the card in the wrong gap without ever
 looking wrong on screen.
 
+### ⚠️ The toolbar renders BY GROUP, so a group nobody lists is invisible
+
+`NoteToolbar` holds several arrays naming which `BlockGroup`s appear where.
+Anything whose group is in none of them is never drawn — no error, no warning,
+no empty slot. An action can be registered, correctly gated, correctly
+implemented, covered by its own tests, and completely unreachable.
+
+That is what happened to card colours: `cardColor` declared
+`surfaces: ["toolbar"]` and appeared in no array, so there was no way to change
+a callout's or container's colour at all. It was found by the user asking how
+to do it, which is the worst way to find it.
+
+`components/groupCoverage.test.ts` now asserts the relationship in both
+directions — every toolbar-surfaced group is rendered somewhere, and every
+listed group has actions. Adding a group is easy and forgetting to render it is
+easy, and both failures are silent.
+
+The same audit found `pathfinder` declaring `["slash", "toolbar"]` while only
+the slash half worked; the task blocks are now under Insert as well. `color` is
+fine: it is `["bubble"]`, and the bubble menu renders every bubble action
+without filtering by group.
+
 ### The table: column order is the ARRAY order
 
 ⚠️ **`parseSpec` must not sort `spec.columns`.** It used to, and that single call

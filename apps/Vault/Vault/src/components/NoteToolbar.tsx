@@ -17,21 +17,30 @@ import { actionsFor, GROUP_LABELS, type BlockAction, type BlockGroup } from "../
 // of the time — and when you ARE in a table, adding and removing rows and
 // columns is the whole job. Folding it into "Insert ▾" made tables feel
 // read-only, which is the regression this ordering fixes.
-const INLINE_GROUPS: BlockGroup[] = ["format", "text", "lists", "align", "tableOps"];
+export const INLINE_GROUPS: BlockGroup[] = ["format", "text", "lists", "align", "tableOps"];
 // Groups folded behind a single "Insert ▾" menu — they're occasional, and
 // .tiptap-toolbar doesn't wrap, so ~25 bare buttons would simply clip.
-const MENU_GROUPS: BlockGroup[] = ["structure", "callout", "container", "media", "math", "table", "code"];
+export const MENU_GROUPS: BlockGroup[] = ["structure", "callout", "container", "media", "math", "table", "code", "pathfinder"];
 // Its own menu, which only materialises inside a table: header toggles,
 // merge/split, repair and delete are worth having but not worth five more
 // permanent buttons.
-const TABLE_MENU_GROUPS: BlockGroup[] = ["tableMore"];
+export const TABLE_MENU_GROUPS: BlockGroup[] = ["tableMore"];
+// Same shape, for cards. Every action in it is gated on the caret being inside
+// a callout or a container, so outside one the menu renders nothing and hides.
+//
+// ⚠️ This list existing at all is the fix for a real bug: `cardColor` actions
+// were registered with `surfaces: ["toolbar"]` and were in NONE of these
+// arrays, so the toolbar — which renders BY GROUP — never drew them. The
+// feature was complete, correct and unreachable. `groupCoverage.test.ts` now
+// fails if any toolbar-surfaced group is left out again.
+export const CARD_MENU_GROUPS: BlockGroup[] = ["cardColor"];
 // Page width is a per-note setting rather than an insertable thing, so it gets
 // its own small menu at the end rather than living under "Insert".
 // Text size joins it: both are per-note appearance settings stored on the doc
 // node, and they are looked for in the same place.
-const WIDTH_MENU_GROUPS: BlockGroup[] = ["width", "textSize", "fold"];
+export const WIDTH_MENU_GROUPS: BlockGroup[] = ["width", "textSize", "fold"];
 // Trailing groups, shown inline after the menu.
-const TAIL_GROUPS: BlockGroup[] = ["vault", "history"];
+export const TAIL_GROUPS: BlockGroup[] = ["vault", "history"];
 
 interface Props {
   editor: Editor;
@@ -87,6 +96,7 @@ export function NoteToolbar({ editor, registry, swatches, trailing }: Props) {
   const inlineSections = INLINE_GROUPS.map(byGroup).filter((g) => g.length > 0);
   const menuSections = MENU_GROUPS.map((g) => [g, byGroup(g)] as const).filter(([, a]) => a.length > 0);
   const tableMenuSections = TABLE_MENU_GROUPS.map((g) => [g, byGroup(g)] as const).filter(([, a]) => a.length > 0);
+  const cardMenuSections = CARD_MENU_GROUPS.map((g) => [g, byGroup(g)] as const).filter(([, a]) => a.length > 0);
   const widthMenuSections = WIDTH_MENU_GROUPS.map((g) => [g, byGroup(g)] as const).filter(([, a]) => a.length > 0);
   const tailSections = TAIL_GROUPS.map(byGroup).filter((g) => g.length > 0);
 
@@ -112,6 +122,16 @@ export function NoteToolbar({ editor, registry, swatches, trailing }: Props) {
         <>
           <span className="tt-sep" />
           <ToolbarMenu label="Table" sections={tableMenuSections} editor={editor} flags={flags} />
+        </>
+      )}
+
+      {/* Appears only while the caret is inside a callout or container, for the
+          same reason the table menu does — and next to it, because both are
+          "what can I do to the thing I am standing in". */}
+      {cardMenuSections.length > 0 && (
+        <>
+          <span className="tt-sep" />
+          <ToolbarMenu label="Colour" sections={cardMenuSections} editor={editor} flags={flags} />
         </>
       )}
 
