@@ -1576,6 +1576,42 @@ note's table is tens of cells, and an incremental recompute is where spreadsheet
 bugs live (a stale cell that is right until you delete a row).
 
 Adds no node type and no attribute, so there is no deployment ordering.
+### Canvas frame containment is geometric, and folding only hides
+
+A frame has **no children field**, and `lib/canvasFrames.ts` deliberately does
+not add one. Membership is derived from geometry every render.
+
+⚠️ **Storing membership means every drag has to maintain it** — drop a block on
+a frame, drag it out, resize the frame over it. Each is a place for the stored
+answer to disagree with what the user can plainly see, and a block that *looks*
+inside a frame but is not in its list is a bug with no visible cause. Deriving
+it means the picture is the model.
+
+Containment requires **full** containment, not overlap: a block half in and half
+out is not "in" a frame in any sense a user would agree with, and folding would
+make half a diagram vanish for no visible reason.
+
+**Folding hides; it never moves.** `folded: true` and nothing else — contained
+blocks keep their coordinates, the frame keeps its stored height, only the
+rendered height shrinks. Moving or stashing the contents needs an inverse that
+restores them exactly, and any bug in that inverse loses work.
+
+Three things its tests forced:
+
+- **Membership must be a function, not a relation.** Frames nest, so the
+  innermost wins by area — otherwise a block belongs to both and folding the
+  outer then the inner hides it twice.
+- ⚠️ **Two coincident frames each contain the other**, so smallest-area-wins is a
+  2-cycle. An antisymmetric tie-break (lower id owns higher) makes ownership a
+  forest by construction.
+- **Hiding is transitive**, and a blanket "un-hide every folded frame" at the end
+  resurrects an inner folded frame inside a folded outer one — a stray title bar
+  floating in a closed group. Top-level folded frames are simply never added.
+
+**Arrows re-anchor to the closed group** rather than vanishing — an arrow that
+disappeared would read as "this connection was deleted". Both ends in the same
+folded frame means it is internal, so it goes.
+
 ### Canvas text blocks are Tiptap, and `content` changed MEANING not format
 
 A canvas text block was a textarea holding markdown; it is now the full note

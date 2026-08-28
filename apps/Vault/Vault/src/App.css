@@ -8489,6 +8489,60 @@ body.vault-block-dragging .tt-bubble {
   color: var(--fg-ghost);
 }
 
+/* ─── Folding on the canvas ─────────────────────────────────────────────────
+   A folded frame keeps its stored size and only renders shorter; a folded text
+   block keeps its content and only renders its first line. Nothing here moves
+   or rewrites anything, so unfolding has no inverse to get wrong. */
+
+.canvas-frame-fold,
+.canvas-block-fold {
+  background: transparent;
+  border: 0;
+  color: inherit;
+  cursor: pointer;
+  font-size: 10px;
+  line-height: 1;
+  padding: 2px 4px;
+  opacity: 0.65;
+}
+.canvas-frame-fold:hover,
+.canvas-block-fold:hover { opacity: 1; }
+
+/* A folded frame is its title bar and nothing else. `overflow: hidden` matters:
+   the tag is absolutely positioned in the unfolded case and would otherwise
+   spill out of a 34px box. */
+.canvas-frame.folded {
+  overflow: hidden;
+  display: flex;
+  align-items: center;
+}
+.canvas-frame.folded .canvas-frame-tag {
+  position: static;
+  transform: none;
+}
+
+.canvas-block-folded {
+  display: flex;
+  align-items: center;
+  height: 100%;
+  padding: 0 8px;
+  overflow: hidden;
+}
+.canvas-folded-title {
+  font-size: 13px;
+  color: var(--fg-main);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+/* Visibly different from a title, so "this block has nothing in it" does not
+   read as a block whose title happens to be the word Empty. */
+.canvas-folded-empty {
+  font-size: 12px;
+  font-style: italic;
+  color: var(--fg-ghost);
+}
+
 /* ─── Canvas rich-text blocks ───────────────────────────────────────────────
    The note editor inside a canvas block. It scrolls within the block's own
    box rather than growing it: a block has a size the user set by dragging,

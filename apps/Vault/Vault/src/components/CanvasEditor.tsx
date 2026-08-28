@@ -11,6 +11,7 @@ import sqlWasmUrl from 'sql.js/dist/sql-wasm.wasm?url';
 import { readText as clipboardReadText } from "@tauri-apps/plugin-clipboard-manager";
 import { isTauri } from "../lib/platform";
 import * as api from "../lib/api";
+import { hiddenBlockIds, visibleAnchor, foldedRect, firstLine, FOLDED_FRAME_HEIGHT } from "../lib/canvasFrames";
 import { editorContent, afterEdit, isConverted } from "../lib/canvasRichText";
 import Markdown from "react-markdown";
 import remarkMath from "remark-math";
@@ -42,6 +43,9 @@ interface TextBlock extends BaseBlock {
    *  overwritten — it is what makes a partial markdown converter safe. */
   md?: string;
   preview?: boolean;
+  /** Collapsed to its first line. Like a folded frame, this hides and never
+   *  moves — the content is untouched and unfolding is a flag flip. */
+  folded?: boolean;
 }
 interface StickyBlock    extends BaseBlock { type: "sticky";    content: string; color: string; }
 interface TitleBlock     extends BaseBlock { type: "title";     text: string;    level: 1 | 2 | 3; fontSize?: number; }
@@ -69,7 +73,25 @@ interface ShapeBlock     extends BaseBlock { type: "shape"; shape: ShapeKind; la
 interface PathfinderBlockOnCanvas extends BaseBlock {
   type: "pathfinder"; view: string; spec: string; title: string;
 }
-interface FrameBlock     extends BaseBlock { type: "frame"; label: string; color?: string; borderStyle?: "solid" | "dashed" | "dotted"; borderWidth?: number; radius?: number; fill?: string; }
+interface FrameBlock extends BaseBlock {
+  type: "frame";
+  label: string;
+  color?: string;
+  borderStyle?: "solid" | "dashed" | "dotted";
+  borderWidth?: number;
+  radius?: number;
+  fill?: string;
+  /**
+   * Collapsed to its title bar, hiding everything geometrically inside it.
+   *
+   * ⚠️ Folding changes NOTHING else — every contained block keeps its
+   * coordinates, and `height` keeps its stored value. Moving or stashing the
+   * contents would need an inverse that restores them exactly, and any bug in
+   * that inverse loses work. Hiding has no inverse to get wrong. See
+   * lib/canvasFrames.
+   */
+  folded?: boolean;
+}
 interface OutputChunk    { type: "text" | "image" | "error" | "html" | "table"; content: string; }
 interface CodeCellBlock  extends BaseBlock { type: "code_cell"; code: string; outputs: OutputChunk[]; running: boolean; language?: "python" | "sql"; }
 interface HtmlBlock      extends BaseBlock { type: "html"; code: string; preview: boolean; }
@@ -2228,13 +2250,22 @@ function renderHeaderPure(block: CanvasBlock, api: React.MutableRefObject<BlockA
     );
   }
   // text (default)
+  const tb = block as TextBlock;
   return (
     <div className="canvas-block-header" onPointerDown={e => api.current.onHeaderPointerDown(e, block)}>
       <span className="canvas-block-drag">⠿</span>
-      {/* Only while the block is still markdown. Once it is a Tiptap document
-          the editor IS the rendering, and "Preview" would toggle between a
-          thing and itself. */}
-      {isConverted(block as TextBlock) ? null : previewToggle(block as TextBlock, api)}
+      <button
+        className="canvas-block-fold"
+        title={tb.folded ? "Unfold" : "Fold to the first line"}
+        aria-expanded={!tb.folded}
+        onPointerDown={e => e.stopPropagation()}
+        onClick={e => { e.stopPropagation(); api.current.updateBlock(block.id, { folded: !tb.folded }); }}
+      >{tb.folded ? "▸" : "▾"}</button>
+      {/* Two independent reasons there is nothing to preview: the block is
+          folded, so nothing is shown at all; or it is a Tiptap document, where
+          the editor IS the rendering and "Preview" would toggle between a thing
+          and itself. */}
+      {tb.folded || isConverted(tb) ? null : previewToggle(tb, api)}
       {closeBtn(block.id, api)}
     </div>
   );
@@ -2258,6 +2289,22 @@ function renderContentPure(block: CanvasBlock, api: React.MutableRefObject<Block
     return <MathContent block={block} onUpdate={api.current.updateBlock} />;
   }
   if (block.type === "text") {
+    // Folded wins over both other modes: a folded block shows its first line
+    // and nothing else, whether or not it has been converted.
+    //
+    // ⚠️ `content` is the plain-text projection once converted, so the title
+    // works for both kinds of block without reaching into the document.
+    if (block.folded) {
+      const title = firstLine(block.content);
+      return (
+        <div className="canvas-block-folded" onPointerDown={e => e.stopPropagation()}>
+          {/* No "Untitled" fallback: a folded block with no text should say
+              nothing rather than assert a name it does not have. */}
+          {title ? <span className="canvas-folded-title">{title}</span>
+                 : <span className="canvas-folded-empty">Empty</span>}
+        </div>
+      );
+    }
     // The markdown preview is kept, and only for an UNCONVERTED block. Once the
     // block is a Tiptap document the editor is already the rendering, so a
     // second "preview" of it would be a toggle between a thing and itself.
@@ -2371,11 +2418,17 @@ const BlockView = memo(function BlockView({ block, selected, inMultiSel, zoom, s
     const fWidth  = block.borderWidth ?? 2;
     const fRadius = block.radius      ?? 10;
     const fFill   = block.fill        ?? "transparent";
+    const folded = !!block.folded;
     return (
       <div key={block.id}
-        className={`canvas-frame${selected ? " selected" : ""}${inMultiSel ? " multi-selected" : ""}`}
+        className={`canvas-frame${selected ? " selected" : ""}${inMultiSel ? " multi-selected" : ""}${folded ? " folded" : ""}`}
         style={{
-          left: block.x, top: block.y, width: block.width, height: block.height, zIndex: 0,
+          left: block.x, top: block.y, width: block.width,
+          // The STORED height is untouched; only the rendered one shrinks, so
+          // unfolding is a flag flip rather than a restore that can get the
+          // number wrong.
+          height: folded ? FOLDED_FRAME_HEIGHT : block.height,
+          zIndex: 0,
           borderColor: fColor, borderStyle: fStyle, borderWidth: fWidth,
           borderRadius: fRadius, background: fFill,
         }}
@@ -2384,6 +2437,13 @@ const BlockView = memo(function BlockView({ block, selected, inMultiSel, zoom, s
         <div className="canvas-frame-tag" style={{ borderColor: fColor, color: fColor }}
           onPointerDown={e => api.current.onHeaderPointerDown(e, block)}>
           <span className="canvas-frame-drag">⠿</span>
+          <button
+            className="canvas-frame-fold"
+            title={folded ? "Unfold this group" : "Fold this group to its title"}
+            aria-expanded={!folded}
+            onPointerDown={e => e.stopPropagation()}
+            onClick={e => { e.stopPropagation(); api.current.updateBlock(block.id, { folded: !folded }); }}
+          >{folded ? "▸" : "▾"}</button>
           <input
             className="canvas-frame-label-input"
             value={block.label}
@@ -2396,7 +2456,11 @@ const BlockView = memo(function BlockView({ block, selected, inMultiSel, zoom, s
               onClick={e => { e.stopPropagation(); api.current.deleteBlock(block.id); }}>×</button>
           )}
         </div>
-        {(selected || inMultiSel) && (
+        {/* Resizing a folded frame would change what it contains without the
+            user being able to see what — the whole point of folding is that the
+            contents are not on screen. Styling is hidden for the same reason:
+            there is nothing visible to style. */}
+        {(selected || inMultiSel) && !folded && (
           <div className="canvas-frame-toolbar" onPointerDown={e => e.stopPropagation()}>
             {FRAME_COLORS.map(c => (
               <button key={c} className={`canvas-frame-color-btn${fColor === c ? " active" : ""}`}
@@ -2437,7 +2501,9 @@ const BlockView = memo(function BlockView({ block, selected, inMultiSel, zoom, s
             ))}
           </div>
         )}
-        <div className="canvas-block-resize" onPointerDown={e => api.current.onResizePointerDown(e, block)} />
+        {!folded && (
+          <div className="canvas-block-resize" onPointerDown={e => api.current.onResizePointerDown(e, block)} />
+        )}
       </div>
     );
   }
@@ -4506,12 +4572,24 @@ export function CanvasEditor({ content, onChange, nodeId }: Props) {
   }, [inkStrokeBlocks]);
 
   // ── Memoized arrow JSX — avoids bezier recompute on snap-guide / hover changes ─
+  // Which blocks the folded frames are hiding. Derived from geometry every
+  // render rather than stored — see lib/canvasFrames for why membership is not
+  // a field on the frame.
+  const hidden = useMemo(() => hiddenBlockIds(data.blocks), [data.blocks]);
+
   const arrowElements = useMemo(() => data.arrows.map(arrow => {
-    const fb = data.blocks.find(b => b.id === arrow.fromId);
-    const tb = data.blocks.find(b => b.id === arrow.toId);
+    // An endpoint inside a folded frame is drawn to that frame's title bar. An
+    // arrow that simply vanished would read as "this connection was deleted",
+    // which is a worse lie than "it points at the closed group". Both ends in
+    // the SAME folded frame means the whole arrow is internal, so it goes.
+    const fromId = visibleAnchor(data.blocks, hidden, arrow.fromId);
+    const toId = visibleAnchor(data.blocks, hidden, arrow.toId);
+    if (!fromId || !toId || fromId === toId) return null;
+    const fb = data.blocks.find(b => b.id === fromId);
+    const tb = data.blocks.find(b => b.id === toId);
     if (!fb || !tb) return null;
-    const p1 = getPortPos(fb as any, arrow.fromPort);
-    const p2 = getPortPos(tb as any, arrow.toPort);
+    const p1 = getPortPos(foldedRect(fb as any) as any, arrow.fromPort);
+    const p2 = getPortPos(foldedRect(tb as any) as any, arrow.toPort);
     const wpts = arrow.waypoints ?? [];
     const pathD = makePathWithWaypoints(p1, arrow.fromPort, p2, arrow.toPort, wpts);
     const sel = selectedArrowId === arrow.id;
@@ -5325,6 +5403,9 @@ export function CanvasEditor({ content, onChange, nodeId }: Props) {
         {data.blocks.map(block => {
           if (block.type === "divider" || block.type === "draw_arrow" || block.type === "draw_ellipse"
             || block.type === "draw_polygon" || block.type === "ink_stroke") return null;
+          // Inside a folded frame. Not unmounted for cheapness — unmounting is
+          // what makes a folded group cost nothing to have on the canvas.
+          if (hidden.has(block.id)) return null;
           return (
             <BlockView key={block.id} block={block}
               selected={selectedId === block.id || (selectedIds.has(block.id) && selectedIds.size === 1)}
