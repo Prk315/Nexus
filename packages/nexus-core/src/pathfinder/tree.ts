@@ -311,6 +311,39 @@ export function runTreeQuery(opts: {
  * Cycle-guarded, and stops at the edge of the fetched window rather than
  * pretending the chain ended there.
  */
+/**
+ * Every descendant of `rootId`, at any depth. The root itself is not included.
+ *
+ * Breadth-first over a child index rather than a recursive walk of the whole
+ * list per level, because "move this task and everything under it" is called
+ * on a drop and a task can be four levels deep.
+ *
+ * ⚠️ Cycle-guarded. `parent_id` is a plain column with no constraint stopping
+ * A→B→A, and a cycle here would not be a wrong answer — it would be an infinite
+ * loop inside a pointerup handler, which takes the tab with it.
+ */
+export function descendantIds(all: PfTask[], rootId: number): number[] {
+  const childrenOf = new Map<number, number[]>();
+  for (const t of all) {
+    if (t.parent_id == null) continue;
+    const list = childrenOf.get(t.parent_id);
+    if (list) list.push(t.id);
+    else childrenOf.set(t.parent_id, [t.id]);
+  }
+  const out: number[] = [];
+  const seen = new Set<number>([rootId]);
+  const queue = [...(childrenOf.get(rootId) ?? [])];
+  while (queue.length) {
+    const id = queue.shift()!;
+    if (seen.has(id)) continue;
+    seen.add(id);
+    out.push(id);
+    const kids = childrenOf.get(id);
+    if (kids) queue.push(...kids);
+  }
+  return out;
+}
+
 export function ancestorsOf(task: PfTask, byId: Map<number, PfTask>): PfTask[] {
   const out: PfTask[] = [];
   const seen = new Set<number>([task.id]);

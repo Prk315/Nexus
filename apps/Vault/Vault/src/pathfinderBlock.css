@@ -1207,3 +1207,20 @@
   /* Just visible enough to read as "here", not as a card. */
   box-shadow: 0 0 0 1px var(--edge-in-bg);
 }
+
+/* ── Dragging a task between blocks ──────────────────────────────────────────
+   The receiving block is outlined while the pointer is over it. Without this
+   the gesture is invisible until it has already happened — and it is a write to
+   several rows, so "did that do anything?" is not an acceptable state to leave
+   someone in. */
+.pf-block[data-pf-drop] {
+  outline: 2px solid var(--edge-in);
+  outline-offset: 2px;
+  /* Not a background change: a task list is mostly background, and tinting it
+     makes the rows harder to read at the exact moment you are aiming at one. */
+}
+
+/* The row or card being carried. Dimmed rather than hidden — a gap opening
+   where it was would reflow the list under the pointer. */
+.pf-list-row.is-dragging { opacity: 0.4; }
+.pf-list-row { touch-action: pan-y; }

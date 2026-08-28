@@ -1397,6 +1397,49 @@ the slash half worked; the task blocks are now under Insert as well. `color` is
 fine: it is `["bubble"]`, and the bubble menu renders every bubble action
 without filtering by group.
 
+### Dragging a task from one block into another
+
+A cross-block drag has no common React parent to route through — the target is a
+different node view, possibly in a different pane — so blocks publish themselves
+in a module-scope registry (`lib/pathfinderHosts.ts`) keyed by a `data-pf-host`
+attribute, and the drop resolves through `elementFromPoint`. Deliberately not
+context: context reaches descendants, and two blocks in a note are siblings.
+
+Re-registered on every render, so a drop reads the block's CURRENT filter rather
+than the one it had at mount.
+
+**"Inherits the new requirements while forgoing the old ones" needs no clearing
+step.** Every inherited field is single-valued, so setting `plan_id` to the
+target's plan *is* forgoing the source's.
+
+⚠️ **`movePayload` is `creationPayload` minus `category`, and that one exclusion
+is the whole difference.** `category` is the ISA discriminator: re-typing a
+`task` to a sparse kind DROPS its planning row — urgency, stage, completion
+mode, notes — and the demotion is lossy by construction. Creating a chore in a
+chore block is a choice; dragging a planned task into one and silently deleting
+its plan is not.
+
+**The subtree comes along, but only its SCOPE** (`scopeOnly`: plan, goal, team).
+Moving a branch of work into a project moves the whole branch; it does not
+restate every step's status, priority, assignee or due date — those are claims
+about an individual piece of work, and inheriting them would mark a dozen
+subtasks "doing" or assign them all to whoever the target block is filtered to.
+Descendants are patched sequentially, not with `Promise.all`: one connection per
+descendant is the shape that wedged Supabase on 2026-08-15.
+
+`descendantIds` is cycle-guarded. `parent_id` has no constraint stopping A→B→A,
+and a cycle there would not be a wrong answer — it would be an infinite loop
+inside a pointerup handler, which takes the tab with it.
+
+The hovered block is marked with a `data-pf-drop` ATTRIBUTE written straight to
+the DOM, not React state: the hovered block is a different tree from the dragged
+one, so lifting it would re-render every block in the note sixty times a second.
+
+List rows drag only to LEAVE the block. Re-ordering or re-parenting inside a
+list is a different question — a list is a tree, so "dropped on that row" is
+ambiguous between "before it" and "inside it" — and answering it by accident
+would be worse than not answering it.
+
 ### The table: column order is the ARRAY order
 
 ⚠️ **`parseSpec` must not sort `spec.columns`.** It used to, and that single call

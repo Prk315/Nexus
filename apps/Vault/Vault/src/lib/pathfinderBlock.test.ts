@@ -9,6 +9,8 @@ import {
   parseSpec,
   serializeSpec,
   sortColumns,
+  creationPayload,
+  movePayload,
   normalizeStatuses,
   boardStatuses,
   MAX_STATUSES,
@@ -520,5 +522,51 @@ describe("board statuses", () => {
   it("does not affect other axes", () => {
     expect(boardColumns("priority", [], [], ["triage"]).map((c) => c.key))
       .not.toContain("triage");
+  });
+});
+
+describe("movePayload", () => {
+  const withFilter = (f: Record<string, unknown>) =>
+    parseSpec(JSON.stringify({ filter: f }), "list");
+  const TODAY = "2026-08-28";
+
+  it("carries what a target block constrains", () => {
+    const spec = withFilter({ planIds: [4], goalIds: [7], priorities: ["high"] });
+    expect(movePayload(spec, TODAY)).toMatchObject({
+      plan_id: 4, goal_id: 7, priority: "high",
+    });
+  });
+
+  // ⚠️ THE rule that separates a move from a creation. `category` is the ISA
+  // discriminator: re-typing a `task` to a sparse kind DROPS its planning row —
+  // urgency, stage, completion mode, notes — and the demotion is lossy by
+  // construction. Creating a chore in a chore block is a choice; dragging a
+  // planned task into one and silently deleting its plan is not.
+  it("never changes what KIND of thing a task is", () => {
+    const spec = withFilter({ taskTypes: ["chore"], planIds: [4] });
+    expect(creationPayload(spec, TODAY).category).toBe("chore");   // creating: yes
+    expect("category" in movePayload(spec, TODAY)).toBe(false);    // moving: never
+    expect(movePayload(spec, TODAY).plan_id).toBe(4);              // the rest still carries
+  });
+
+  it("dates a task dropped into a today block", () => {
+    expect(movePayload(withFilter({ due: "today" }), TODAY).due_date).toBe(TODAY);
+    // A window is a range, not a date — only "today" is exactly one day.
+    expect(movePayload(withFilter({ due: "week" }), TODAY).due_date).toBeUndefined();
+  });
+
+  it("is empty for a block that constrains nothing", () => {
+    // The caller uses this to skip the write entirely, so an accidental drag
+    // onto an unfiltered block costs no round trip and looks like nothing.
+    expect(movePayload(parseSpec("{}", "list"), TODAY)).toEqual({});
+  });
+
+  it("inherits nothing from an ambiguous constraint", () => {
+    // Same rule as creation: a filter admitting several plans names none.
+    expect(movePayload(withFilter({ planIds: [4, 5] }), TODAY).plan_id).toBeUndefined();
+  });
+
+  it("still never carries stage, gated or not", () => {
+    expect(movePayload(withFilter({ stages: ["active"] }), TODAY)).toEqual({});
   });
 });

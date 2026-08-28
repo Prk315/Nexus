@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import { DEFAULT_FILTER, type TaskFilter } from "./filter";
 import {
   ancestorsOf,
+  descendantIds,
   buildTaskTree,
   flattenTaskTree,
   runTreeQuery,
@@ -273,5 +274,51 @@ describe("ancestorsOf", () => {
     ];
     const map = new Map(cyclic.map((t) => [t.id, t]));
     expect(ancestorsOf(cyclic[0], map).length).toBeLessThanOrEqual(3);
+  });
+});
+
+describe("descendantIds", () => {
+  const tree = [
+    task({ id: 1 }),
+    task({ id: 2, parent_id: 1 }),
+    task({ id: 3, parent_id: 1 }),
+    task({ id: 4, parent_id: 2 }),
+    task({ id: 5, parent_id: 4 }),
+    task({ id: 9 }),                    // unrelated root
+    task({ id: 10, parent_id: 9 }),
+  ];
+
+  it("returns every descendant at any depth", () => {
+    expect(descendantIds(tree, 1).sort()).toEqual([2, 3, 4, 5]);
+  });
+
+  it("excludes the root itself", () => {
+    expect(descendantIds(tree, 1)).not.toContain(1);
+  });
+
+  it("does not cross into another branch", () => {
+    expect(descendantIds(tree, 1)).not.toContain(10);
+    expect(descendantIds(tree, 9)).toEqual([10]);
+  });
+
+  it("is empty for a leaf and for an unknown id", () => {
+    expect(descendantIds(tree, 5)).toEqual([]);
+    expect(descendantIds(tree, 999)).toEqual([]);
+  });
+
+  // ⚠️ `parent_id` is a plain column with nothing stopping A→B→A. A cycle here
+  // would not be a wrong answer, it would be an infinite loop inside a
+  // pointerup handler — which takes the tab with it.
+  it("terminates on a cycle rather than hanging", () => {
+    const cyclic = [
+      task({ id: 1, parent_id: 3 }),
+      task({ id: 2, parent_id: 1 }),
+      task({ id: 3, parent_id: 2 }),
+    ];
+    expect(descendantIds(cyclic, 1).sort()).toEqual([2, 3]);
+  });
+
+  it("survives a parent_id pointing at nothing", () => {
+    expect(descendantIds([task({ id: 1, parent_id: 77 })], 1)).toEqual([]);
   });
 });
