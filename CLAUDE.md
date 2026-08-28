@@ -950,6 +950,17 @@ plugin's `descendants` walk, both written on the belief that a row cannot
 contain a row — true only because nothing could make one. Both are gone; nesting
 is now offered and every nested row gets its own resize gutters.
 
+**Inline text size is a TextStyle mark attribute, in `em`.** `@tiptap/extension-text-style`
+already ships `FontSize` (and `FontFamily`), so this needed registering rather
+than writing. `em` and never `px` is the design: the note has its own `textSize`
+and the same note opens on an iPad, so a run pinned to 11px would ignore both.
+Three sizes rather than a spectrum — this is for a caption or an aside, and
+headings already exist for structure.
+
+It is registered `surfaces: ["bubble"]` only, which also sidesteps the trap that
+made card colours unreachable: the bubble menu renders every bubble action
+without filtering by group, so no toolbar group list has to know about it.
+
 **Per-note appearance lives on the DOC node: `width` and `textSize`.** Both are
 properties of the NOTE rather than of a browser — a dense reference note wants
 small text and a journal page wants large, and the iPad is simultaneously where

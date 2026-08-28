@@ -5,6 +5,7 @@ import StarterKit from "@tiptap/starter-kit";
 import { buildNoteExtensions, noteSchema } from "./noteExtensions";
 import { auditNoteRaw } from "../lib/noteSchemaGuard";
 import { NOTE_WIDTHS, DEFAULT_NOTE_WIDTH, NOTE_TEXT_SIZES, DEFAULT_NOTE_TEXT } from "./noteDocument";
+import { INLINE_TEXT_SIZES } from "./blockRegistry";
 
 const schema = noteSchema();
 const exts = buildNoteExtensions();
@@ -101,6 +102,54 @@ describe("per-note text size", () => {
   it("passes the schema guard", () => {
     const raw = JSON.stringify({ type: "doc", attrs: { textSize: "xlarge" }, content: [para()] });
     expect(auditNoteRaw(raw, schema).ok).toBe(true);
+  });
+});
+
+// Inline size rides the TextStyle MARK, not the doc node — but the safety
+// property is the same one, and it is the reason this could ship without
+// waiting for the iPad: a build without the FontSize extension drops the
+// attribute and renders the run at the normal size. It does not blank the note.
+describe("inline text size", () => {
+  const styled = (size: string) => ({
+    type: "doc",
+    content: [{
+      type: "paragraph",
+      content: [{ type: "text", text: "aside", marks: [{ type: "textStyle", attrs: { fontSize: size } }] }],
+    }],
+  });
+
+  it("survives the JSON round trip, which is how notes are stored", () => {
+    for (const size of ["0.85em", "1.25em"]) {
+      const d = schema.nodeFromJSON(styled(size));
+      const mark = d.firstChild!.firstChild!.marks[0];
+      expect(mark.attrs.fontSize).toBe(size);
+      expect(schema.nodeFromJSON(d.toJSON()).firstChild!.firstChild!.marks[0].attrs.fontSize).toBe(size);
+    }
+  });
+
+  // The claim the release order rests on. A schema WITHOUT FontSize must keep
+  // the text and lose only the size.
+  it("is dropped, not fatal, on a build that lacks the extension", () => {
+    const older = getSchema([StarterKit]);
+    const d = older.nodeFromJSON({
+      type: "doc",
+      content: [{ type: "paragraph", content: [{ type: "text", text: "aside" }] }],
+    });
+    expect(d.textContent).toBe("aside");
+    // And the real schema still reads its own output.
+    expect(schema.nodeFromJSON(styled("0.85em")).textContent).toBe("aside");
+  });
+
+  it("passes the schema guard", () => {
+    expect(auditNoteRaw(JSON.stringify(styled("1.25em")), schema).ok).toBe(true);
+  });
+
+  // em, never px: the note has its own size and the same note opens on an iPad,
+  // so a run pinned to 11px would ignore both.
+  it("is expressed relative to the surrounding text", () => {
+    for (const z of INLINE_TEXT_SIZES) {
+      if (z.value) expect(z.value).toMatch(/em$/);
+    }
   });
 });
 

@@ -31,7 +31,7 @@ import { PathfinderBlock } from "./PathfinderBlock";
 import { NoteImage } from "./noteImage";
 import { NoteCodeBlock } from "./noteCodeBlock";
 import TextAlign from "@tiptap/extension-text-align";
-import { TextStyle, Color } from "@tiptap/extension-text-style";
+import { TextStyle, Color, FontSize } from "@tiptap/extension-text-style";
 import { KATEX_OPTS } from "../lib/katexShared";
 
 export interface NoteExtensionOpts {
@@ -113,6 +113,11 @@ export function buildNoteExtensions(opts: NoteExtensionOpts = {}): Extensions {
     // categories, which mean something (they file vault_records rows).
     TextStyle,
     Color,
+    // Inline size, in `em` rather than `px` — see INLINE_TEXT_SIZES. It rides
+    // the same TextStyle mark as Color, so it is a mark ATTRIBUTE: a build
+    // without it drops the attribute and renders the text at the normal size,
+    // rather than failing. (Unlike a node type, which blanks the document.)
+    FontSize,
     Placeholder.configure({ placeholder }),
     // Checkboxes. Note this is a SCHEMA addition — taskList/taskItem — so it
     // depends on the Phase 1 guard being deployed everywhere first; a client
