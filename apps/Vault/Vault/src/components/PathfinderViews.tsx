@@ -67,6 +67,7 @@ import {
 import type { TaskActions, TreeControls } from "./PathfinderBlockView";
 import { HOST_ATTR, hostAt, type BlockHost } from "../lib/pathfinderHosts";
 import { coerceField, FIELD_VALUE_MAX } from "../lib/taskFields";
+import { stripeColor, stripeLabel } from "../lib/cardColor";
 import { compile, type FormulaValue } from "../lib/formula";
 
 /** What every view needs, whatever shape it renders it in. */
@@ -558,6 +559,16 @@ export function PfListView({
               style={{ "--pf-depth": r.depth } as React.CSSProperties}
               onPointerDown={(e) => rowDrag.onPointerDown(e, t.id)}
             >
+              {/* The same channel as a board card's stripe, in the same colours
+                  — one dimension means one thing across every view of the same
+                  block, or the setting would be per-view and mean less. */}
+              {(() => {
+                const c = stripeColor(t, spec.colorBy, { tagsOf, tagColor, members });
+                if (!c) return null;
+                return <span className="pf-row-stripe" style={{ background: c }}
+                             title={stripeLabel(t, spec.colorBy, { tagsOf, tagColor, members }) ?? undefined}
+                             aria-hidden="true" />;
+              })()}
               <Disclosure row={r} onToggle={tree.toggleCollapse} onExpandHidden={tree.expandHidden} />
 
               {cols.has("done") ? (
@@ -760,6 +771,18 @@ export function PfBoardView({
                   data-card={t.id}
                   onPointerDown={(e) => handlers.onPointerDown(e, t.id)}
                 >
+                  {/* ⚠️ Nothing at all when the dimension says nothing about
+                      this task. A grey "unset" stripe would read as a real
+                      category and the board would grow a group that does not
+                      exist. The title is what makes the colour decodable —
+                      a stripe nobody can read back is decoration. */}
+                  {(() => {
+                    const c = stripeColor(t, spec.colorBy, { tagsOf, tagColor, members });
+                    if (!c) return null;
+                    const label = stripeLabel(t, spec.colorBy, { tagsOf, tagColor, members });
+                    return <span className="pf-card-stripe" style={{ background: c }}
+                                 title={label ?? undefined} aria-hidden="true" />;
+                  })()}
                   <div className="pf-card-top">
                     <input
                       type="checkbox"
