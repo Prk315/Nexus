@@ -78,7 +78,7 @@ import {
 import { setTaskField, normalizeFieldKey } from "../lib/vaultTaskFields";
 import { PathfinderFilterBar } from "./PathfinderFilterBar";
 import { PathfinderTaskDetail } from "./PathfinderTaskDetail";
-import { PfBoardView, PfListView, PfTableView, PfStatsStrip, PfTimelineView } from "./PathfinderViews";
+import { PfBoardView, PfListView, PfTableView, PfStatsStrip, PfTimelineView, PfCalendarView } from "./PathfinderViews";
 import { useConfirm } from "./ConfirmDialog";
 import {
   HOST_ATTR, nextHostId, registerHost, unregisterHost, type BlockHost,
@@ -792,6 +792,18 @@ export function PathfinderBlock({
               tagsOf={tagsOf}
               tagColor={tagColor}
               onSpecChange={commitSpec}
+            />
+          ) : view === "calendar" ? (
+            <PfCalendarView
+              hostId={hostId.current}
+              tasks={query.tasks}
+              spec={spec}
+              members={snap.members}
+              actions={actions}
+              today={today}
+              editable={editable}
+              tagsOf={tagsOf}
+              tagColor={tagColor}
             />
           ) : view === "timeline" ? (
             <PfTimelineView

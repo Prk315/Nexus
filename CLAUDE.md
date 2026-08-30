@@ -1832,6 +1832,36 @@ glyph among sixty SVGs is *more* obviously wrong than sixty inconsistent glyphs.
 ⚠️ **Size is a prop, never a class.** These sit in a 13px button, a menu row and
 the slash list; an icon inheriting `font-size` from three places is three sizes.
 
+### The calendar, and the tray that answers the timeline's omission
+
+`calendar` is a fifth `view` on `pathfinderBlock`: a month grid over the same
+filtered tasks. Grid maths is pure in `lib/calendarGrid.ts`, reusing
+`timeline.ts`'s day arithmetic — two date implementations in one app eventually
+disagree, and the disagreement shows as an entry one column out.
+
+**The tray is the point.** The timeline must omit undated work; a footer count
+is honest but not actionable. Dragging from the tray onto a day schedules the
+task, and it leaves the tray because it now has a date. The two views are one
+loop.
+
+**What the gestures may and may not do:** dragging a scheduled chip MOVES its
+`pf_cal_blocks` row (a second insert would leave a copy on every day the drag
+visited); × deletes the calendar block and ⚠️ **never the task** — taking work
+off a day is not deciding not to do it; and a **due-date chip is not draggable
+at all**, because a due date is a property of the task and dragging it would
+silently rewrite a deadline while looking like a reschedule.
+
+⚠️ **Two weekday conventions live one function apart.** `pf_recurring_cal_blocks`
+numbers weekdays **0=Sunday** and is explicitly not ISO; the grid draws
+**Monday-first**. `weekdayOfDay` returns the database's number, `columnOfDay` the
+drawing column. Using one where the other belongs shifts everything a day.
+
+`loadScheduledBlocks` is the single loader for both time views — it carries block
+ids so the calendar can edit what the timeline only reads. `scheduleTask` /
+`moveBlockToDay` / `unscheduleBlock` are separate from `createBlock` /
+`updateBlock`, which are the calendar editor's full form and deliberately omit
+`date`.
+
 ### The timeline: dates come from data, and undated work is counted not placed
 
 `timeline` is a fourth `view` value on `pathfinderBlock` — an attribute, so no

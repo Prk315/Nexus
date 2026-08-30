@@ -64,15 +64,16 @@ import {
 // PathfinderBlockLazy enforces for the view.
 import { TAG_MODES, normalizeTagList, type TagMode } from "./taskTags";
 
-export type PfBlockView = "list" | "board" | "table" | "timeline";
+export type PfBlockView = "list" | "board" | "table" | "timeline" | "calendar";
 
-export const PF_VIEWS: PfBlockView[] = ["list", "board", "table", "timeline"];
+export const PF_VIEWS: PfBlockView[] = ["list", "board", "table", "timeline", "calendar"];
 
 export const PF_VIEW_LABELS: Record<PfBlockView, string> = {
   list: "To-do list",
   board: "Board",
   table: "Table",
   timeline: "Timeline",
+  calendar: "Calendar",
 };
 
 export const PF_VIEW_ICONS: Record<PfBlockView, string> = {
@@ -80,6 +81,7 @@ export const PF_VIEW_ICONS: Record<PfBlockView, string> = {
   board: "▦",
   table: "▤",
   timeline: "▭",
+  calendar: "▦",
 };
 
 /** Table columns, in the order they render when all are on. */
