@@ -1509,3 +1509,96 @@
 }
 
 .pf-colorby { display: flex; align-items: center; gap: 6px; }
+
+/* ─── Timeline ──────────────────────────────────────────────────────────────
+   Dated work on a horizontal axis. The canvas is a fixed pixel width derived
+   from the zoom, so the scroll container does the scrolling and nothing has to
+   recompute on every frame. */
+
+.pf-timeline { display: flex; flex-direction: column; min-width: 0; }
+
+.pf-tl-bar {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 6px 10px;
+  flex-wrap: wrap;
+}
+.pf-tl-spacer { flex: 1 1 auto; }
+.pf-chip.is-on { background: var(--bg-muted); border-color: var(--border-strong); }
+
+.pf-tl-scroll {
+  overflow-x: auto;
+  overflow-y: hidden;
+  /* The note itself scrolls vertically; this must not fight it. */
+  overscroll-behavior-x: contain;
+  padding: 0 10px 8px;
+}
+.pf-tl-canvas { position: relative; }
+
+.pf-tl-axis {
+  position: relative;
+  height: 20px;
+  border-bottom: 1px solid var(--border-base);
+}
+.pf-tl-tick {
+  position: absolute;
+  top: 0;
+  bottom: -9999px; /* the rule runs down through the lanes */
+  border-left: 1px solid var(--border-faint);
+}
+.pf-tl-tick.is-major { border-left-color: var(--border-base); }
+.pf-tl-tick-label {
+  position: absolute;
+  top: 2px;
+  left: 3px;
+  font-size: 10px;
+  color: var(--fg-muted);
+  white-space: nowrap;
+}
+/* Today is the one line worth finding at a glance, so it is the accent and
+   sits above the grid rather than among it. */
+.pf-tl-today {
+  position: absolute;
+  top: 0;
+  bottom: -9999px;
+  border-left: 1.5px solid var(--edge-in);
+  opacity: 0.7;
+  z-index: 1;
+}
+
+.pf-tl-lanes { position: relative; overflow: hidden; margin-top: 4px; }
+
+.pf-tl-span {
+  position: absolute;
+  height: 20px;
+  display: flex;
+  align-items: center;
+  padding: 0 5px;
+  border: 1px solid var(--border-base);
+  /* The colour stripe rides the left border, same channel as a board card. */
+  border-left-width: 3px;
+  border-radius: 4px;
+  background: var(--bg-raised);
+  color: var(--fg-main);
+  font-size: 11px;
+  cursor: pointer;
+  overflow: hidden;
+  text-align: left;
+}
+.pf-tl-span:hover { background: var(--bg-subtle); border-color: var(--border-strong); }
+/* A due date is a POINT and a scheduled span is a DURATION — they must not
+   look like the same thing at a glance. */
+.pf-tl-span.is-due { border-style: dashed; background: transparent; }
+.pf-tl-span.is-scheduled { background: var(--edge-in-bg); }
+.pf-tl-span.is-done { opacity: 0.55; text-decoration: line-through; }
+.pf-tl-span-label { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+.pf-tl-foot {
+  padding: 4px 10px 8px;
+  font-size: 11px;
+  color: var(--fg-muted);
+}
+/* Never hidden: a timeline that silently drops undated work would imply it
+   showed everything. */
+.pf-tl-undated { color: var(--fg-subdued); }

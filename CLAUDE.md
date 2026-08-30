@@ -1832,6 +1832,36 @@ glyph among sixty SVGs is *more* obviously wrong than sixty inconsistent glyphs.
 ⚠️ **Size is a prop, never a class.** These sit in a 13px button, a menu row and
 the slash list; an icon inheriting `font-size` from three places is three sizes.
 
+### The timeline: dates come from data, and undated work is counted not placed
+
+`timeline` is a fourth `view` value on `pathfinderBlock` — an attribute, so no
+deploy-everywhere gate — showing dated work at month / 3-month / year zoom.
+Date maths is pure in `lib/timeline.ts`.
+
+⚠️ **A task with no date has NO POSITION.** 384 of 554 tasks are undated;
+parking them at today would assert deadlines nobody set. They are partitioned
+out and counted in the footer. Absent is not zero, again.
+
+**Extent comes from data.** A bar spans real scheduled calendar days; a due date
+alone is a single-day marker, drawn dashed so a point never reads as a duration.
+`time_estimate` is deliberately NOT used for width — an estimate is how long the
+work takes, not which days it occupies.
+
+⚠️ **Recurring series are excluded.** `pf_recurring_cal_blocks` is open-ended, so
+at year zoom every weekly series would paint a solid bar across the whole axis.
+
+Two bugs its tests caught before anything rendered:
+
+- **`Date.UTC(2026, 12, 1)` does not fail — it rolls over into January 2027.** So
+  "2026-13-01" parsed to a finite index twelve months from where it claimed to
+  be. `isIsoDate` validates by ROUND TRIP, which also catches "2026-02-30".
+- **Epoch day 0 was a Thursday** and `getUTCDay()` numbers Sunday 0, so Monday is
+  `(d + 4) % 7 === 1`. Writing `=== 0` put every week rule on Sunday — off by one
+  column the whole way across, and it looks almost right.
+
+**Scroll position is a DAY, not a pixel offset.** Converting pixels between
+scales is how a zoom control jumps you to a different month.
+
 ### What a card's colour means is a choice, and "no value" has no colour
 
 `spec.colorBy` — tag / priority / urgency / assignee — puts a stripe on every

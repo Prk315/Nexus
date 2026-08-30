@@ -901,6 +901,16 @@ export function buildBlockRegistry(opts: BlockRegistryOptions = {}): BlockAction
       keywords: ["table", "database", "grid", "task", "tasks", "pathfinder", "rows", "pf"],
       run: atCursor((c) => c.insertPathfinderBlock("table")),
     },
+    {
+      id: "pf:timeline",
+      iconName: "timelineView",
+      title: "Task timeline",
+      icon: "▭",
+      group: "pathfinder",
+      surfaces: ["slash", "toolbar"],
+      keywords: ["timeline", "gantt", "schedule", "dates", "due", "when", "pathfinder", "pf"],
+      run: atCursor((c) => c.insertPathfinderBlock("timeline")),
+    },
   );
 
   // ── Folding ───────────────────────────────────────────────────────────────

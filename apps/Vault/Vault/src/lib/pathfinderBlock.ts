@@ -26,6 +26,8 @@ import { coerceField, normalizeFieldKey, FIELD_TYPES, type FieldType } from "./t
 // here, because this module is on the note schema path and cardColor.ts
 // reaches @nexus/core/pathfinder. Asserted by lib/schemaPath.test.ts.
 import { COLOR_BY, type ColorBy } from "./cardColor";
+// Pure date maths, no client — safe on the schema path.
+import { ZOOMS, type Zoom } from "./timeline";
 import {
   DEFAULT_FILTER,
   KANBAN_STATUSES,
@@ -62,20 +64,22 @@ import {
 // PathfinderBlockLazy enforces for the view.
 import { TAG_MODES, normalizeTagList, type TagMode } from "./taskTags";
 
-export type PfBlockView = "list" | "board" | "table";
+export type PfBlockView = "list" | "board" | "table" | "timeline";
 
-export const PF_VIEWS: PfBlockView[] = ["list", "board", "table"];
+export const PF_VIEWS: PfBlockView[] = ["list", "board", "table", "timeline"];
 
 export const PF_VIEW_LABELS: Record<PfBlockView, string> = {
   list: "To-do list",
   board: "Board",
   table: "Table",
+  timeline: "Timeline",
 };
 
 export const PF_VIEW_ICONS: Record<PfBlockView, string> = {
   list: "☑",
   board: "▦",
   table: "▤",
+  timeline: "▭",
 };
 
 /** Table columns, in the order they render when all are on. */
@@ -257,6 +261,10 @@ export interface PfBlockSpec {
    * See lib/cardColor.
    */
   colorBy: ColorBy;
+
+  /** How wide a window the timeline shows. An attribute, so an older build
+   *  drops it and falls back to the default rather than blanking anything. */
+  timelineZoom: Zoom;
 }
 
 export interface StatCard {
@@ -415,6 +423,7 @@ export function defaultSpec(view: PfBlockView): PfBlockSpec {
     fields: [],
     stats: [],
     colorBy: "none",
+    timelineZoom: "quarter",
   };
 }
 
@@ -536,6 +545,7 @@ export function parseSpec(raw: string | null | undefined, view: PfBlockView): Pf
     fields: parseFields(obj.fields),
     stats: parseStats(obj.stats),
     colorBy: pick(obj.colorBy, COLOR_BY, "none"),
+    timelineZoom: pick(obj.timelineZoom, ZOOMS, "quarter"),
   };
 }
 

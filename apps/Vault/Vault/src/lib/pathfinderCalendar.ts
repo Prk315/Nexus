@@ -238,3 +238,45 @@ export async function deleteSeries(id: number): Promise<void> {
     .eq("id", id);
   if (error) throw error;
 }
+
+
+/**
+ * Which days each task has calendar blocks on, across a date range.
+ *
+ * One query for the whole window rather than `loadPathfinderDay` per day: a
+ * year zoom is 366 days, and 366 round trips is the shape that wedged Supabase
+ * on 2026-08-15.
+ *
+ * ⚠️ Recurring series are deliberately NOT expanded here. `pf_recurring_cal_blocks`
+ * is open-ended, so over a year every weekly series would paint a solid bar
+ * across the whole axis for its task — which says "this task is scheduled every
+ * week forever", not "here is when the work is". A timeline is for the dated,
+ * bounded work; the recurring commitment is what Systems and the calendar are
+ * for. Same reasoning as counting a recurring series by occurrence over a
+ * bounded horizon rather than treating it as infinite time.
+ */
+export async function loadScheduledDays(
+  fromIso: string,
+  toIso: string,
+): Promise<Map<number, string[]>> {
+  const { data, error } = await supabase
+    .from("pf_cal_blocks")
+    .select("task_id, date")
+    .not("task_id", "is", null)
+    .gte("date", fromIso)
+    .lte("date", toIso);
+  if (error) throw new Error(error.message);
+
+  const out = new Map<number, string[]>();
+  for (const row of data ?? []) {
+    const id = Number(row.task_id);
+    if (!Number.isFinite(id)) continue;
+    const days = out.get(id) ?? [];
+    // Deduped: several blocks on one day is one scheduled day, and leaving
+    // duplicates in only makes buildTimeline sort a longer list to the same
+    // first and last.
+    if (!days.includes(String(row.date))) days.push(String(row.date));
+    out.set(id, days);
+  }
+  return out;
+}

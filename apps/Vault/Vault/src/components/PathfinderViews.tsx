@@ -68,6 +68,10 @@ import type { TaskActions, TreeControls } from "./PathfinderBlockView";
 import { HOST_ATTR, hostAt, type BlockHost } from "../lib/pathfinderHosts";
 import { coerceField, FIELD_VALUE_MAX } from "../lib/taskFields";
 import { stripeColor, stripeLabel } from "../lib/cardColor";
+import {
+  buildTimeline, axisTicks, clampWindow, dayToX, spanWidth, dayIndex, isoFromDay,
+  ZOOMS, ZOOM_LABELS, ZOOM_DAYS, ZOOM_PX_PER_DAY,
+} from "../lib/timeline";
 import { compile, type FormulaValue } from "../lib/formula";
 
 /** What every view needs, whatever shape it renders it in. */
@@ -1029,6 +1033,163 @@ function useCardDrag({
 /** A stable empty list: an inline `[]` would be a new identity every render
  *  and would defeat every memo keyed on the field list. */
 const EMPTY_FIELDS_LIST: FieldColumn[] = [];
+
+// ─── Timeline ───────────────────────────────────────────────────────────────
+
+/**
+ * Dated work on a horizontal axis, at month / 3-month / year zoom.
+ *
+ * All the arithmetic lives in `lib/timeline.ts` and is tested there; this is
+ * layout, scrolling and the two things that are genuinely visual decisions.
+ *
+ * ⚠️ Undated tasks are COUNTED, not drawn. 384 of 554 tasks have no due date,
+ * and placing them at today would assert deadlines nobody set. The footer says
+ * how many are missing rather than the axis quietly lying about them — the same
+ * rule the stat cards follow when they report how many rows contributed.
+ *
+ * ⚠️ Scroll position is a DAY, not a pixel offset. Converting pixels between
+ * scales is how a zoom control ends up jumping you to a different month; anchoring
+ * on the date under the left edge keeps the view where you left it.
+ */
+export function PfTimelineView({
+  tasks, spec, actions, tagsOf, tagColor, members, onSpecChange,
+}: ViewCommon & {
+  tasks: PfTask[];
+  onSpecChange: (next: PfBlockSpec) => void;
+}) {
+  const zoom = spec.timelineZoom;
+  const [scheduled, setScheduled] = useState<Map<number, string[]>>(EMPTY_SCHEDULE);
+  const [startDay, setStartDay] = useState<number | null>(null);
+  const scrollRef = useRef<HTMLDivElement>(null);
+
+  const model = useMemo(
+    () => buildTimeline(tasks.map((t) => ({
+      id: t.id, title: t.title, done: t.done,
+      dueDate: t.due_date, scheduledDays: scheduled.get(t.id),
+    }))),
+    [tasks, scheduled],
+  );
+
+  // Opens on the content rather than on today: a plan whose work is all next
+  // month would otherwise open on an empty stretch of axis.
+  const win = clampWindow(startDay ?? model.range?.from ?? dayIndex(todayIso()), zoom, model.range);
+  const ticks = useMemo(() => axisTicks(win.from, win.to, zoom), [win.from, win.to, zoom]);
+
+  // Scheduled days for the window only. Refetched when the window moves, which
+  // is why the whole range is one query — see loadScheduledDays.
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      try {
+        const { loadScheduledDays } = await import("../lib/pathfinderCalendar");
+        const map = await loadScheduledDays(isoFromDay(win.from), isoFromDay(win.to));
+        if (!cancelled) setScheduled(map);
+      } catch {
+        // A failed read leaves due-date markers, which is a degraded picture
+        // rather than an empty one. buildTimeline treats a missing schedule as
+        // "no scheduled days", not as an error.
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [win.from, win.to]);
+
+  const width = ZOOM_DAYS[zoom] * ZOOM_PX_PER_DAY[zoom];
+  const today = dayIndex(todayIso());
+
+  const nudge = (days: number) => setStartDay(win.from + days);
+
+  return (
+    <div className="pf-timeline">
+      <div className="pf-tl-bar">
+        <span className="pf-chips-label">Zoom</span>
+        {ZOOMS.map((z) => (
+          <button
+            key={z}
+            type="button"
+            className={`pf-chip${zoom === z ? " is-on" : ""}`}
+            aria-pressed={zoom === z}
+            // Keeps the same day under the left edge across a zoom change.
+            onClick={() => { setStartDay(win.from); onSpecChange({ ...spec, timelineZoom: z }); }}
+          >{ZOOM_LABELS[z]}</button>
+        ))}
+        <span className="pf-tl-spacer" />
+        <button type="button" className="pf-chip" onClick={() => nudge(-Math.round(ZOOM_DAYS[zoom] / 2))}
+                aria-label="Earlier">‹</button>
+        <button type="button" className="pf-chip" onClick={() => setStartDay(today - Math.round(ZOOM_DAYS[zoom] / 3))}>
+          Today
+        </button>
+        <button type="button" className="pf-chip" onClick={() => nudge(Math.round(ZOOM_DAYS[zoom] / 2))}
+                aria-label="Later">›</button>
+      </div>
+
+      <div
+        className="pf-tl-scroll"
+        ref={scrollRef}
+        // Wheel scrolls time. stopPropagation because a note scrolls too, and
+        // a horizontal gesture inside a block must not also move the page.
+        onWheel={(e) => {
+          if (Math.abs(e.deltaX) <= Math.abs(e.deltaY)) return;
+          e.stopPropagation();
+          nudge(Math.round(e.deltaX / ZOOM_PX_PER_DAY[zoom]));
+        }}
+      >
+        <div className="pf-tl-canvas" style={{ width }}>
+          <div className="pf-tl-axis">
+            {ticks.map((t) => (
+              <div
+                key={`${t.day}-${t.major}`}
+                className={`pf-tl-tick${t.major ? " is-major" : ""}`}
+                style={{ left: dayToX(t.day, win.from, zoom) }}
+              >{t.label ? <span className="pf-tl-tick-label">{t.label}</span> : null}</div>
+            ))}
+            {today >= win.from && today <= win.to ? (
+              <div className="pf-tl-today" style={{ left: dayToX(today, win.from, zoom) }} title="Today" />
+            ) : null}
+          </div>
+
+          <div className="pf-tl-lanes" style={{ height: Math.max(model.lanes, 1) * 24 + 8 }}>
+            {model.spans.map((s) => {
+              const task = tasks.find((t) => t.id === s.id);
+              const stripe = task ? stripeColor(task, spec.colorBy, { tagsOf, tagColor, members }) : null;
+              const x = dayToX(s.from, win.from, zoom);
+              const w = spanWidth(s.from, s.to, zoom);
+              // Off-window spans are skipped rather than clamped: a bar clamped
+              // to the edge claims work on days the window does not cover.
+              if (x + w < 0 || x > width) return null;
+              return (
+                <button
+                  key={s.id}
+                  type="button"
+                  className={`pf-tl-span${s.scheduled ? " is-scheduled" : " is-due"}${s.done ? " is-done" : ""}`}
+                  style={{ left: x, width: w, top: s.lane * 24, borderLeftColor: stripe ?? undefined }}
+                  title={`${s.title}\n${s.scheduled ? "scheduled" : "due"} ${isoFromDay(s.from)}${s.to !== s.from ? ` – ${isoFromDay(s.to)}` : ""}`}
+                  onClick={() => actions.openDetail(task!)}
+                  disabled={!task}
+                >
+                  <span className="pf-tl-span-label">{s.title}</span>
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      </div>
+
+      {/* Says what it could not place, rather than letting the axis imply it
+          showed everything. */}
+      <div className="pf-tl-foot">
+        {model.spans.length} dated
+        {model.undated > 0 ? <span className="pf-tl-undated"> · {model.undated} with no date</span> : null}
+      </div>
+    </div>
+  );
+}
+
+const EMPTY_SCHEDULE = new Map<number, string[]>();
+
+function todayIso(): string {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+}
 
 // ─── Stats ──────────────────────────────────────────────────────────────────
 
