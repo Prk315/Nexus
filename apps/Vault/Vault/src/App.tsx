@@ -104,6 +104,9 @@ function App() {
   const videoImportRef = useRef<HTMLInputElement>(null);
   const parsedImportRef = useRef<HTMLInputElement>(null);
   const [importingParsed, setImportingParsed] = useState(false);
+  /** Last import failure. Cleared on the next attempt, and dismissable —
+   *  an error that cannot be got rid of becomes furniture. */
+  const [importError, setImportError] = useState<string | null>(null);
   const sidebarResize = useResizableWidth("nexus.vault.sidebarWidth", 240, 200, 520);
 
   // Multi-pane state
@@ -263,33 +266,59 @@ function App() {
     if (newId) await addEdge(parentId, newId);
   }
 
-  async function handleImportPdf(e: React.ChangeEvent<HTMLInputElement>) {
+  /**
+   * Import a file as a new node: create the node, upload the file, point the
+   * node at it.
+   *
+   * ⚠️ The upload can fail, and it used to fail SILENTLY. `uploadAsset` throws,
+   * these handlers had no catch, and a throw inside an async event handler goes
+   * nowhere — so a denied upload left a node whose viewer said "PDF not loaded"
+   * with no error anywhere on screen or in any log the user would look at.
+   * That is how a missing Storage policy went unnoticed: every import since
+   * auth landed had been failing this way. The policy is fixed
+   * (20260830180000), but the swallowing is the more general bug.
+   *
+   * The half-created node is REMOVED on failure. An empty node is not a
+   * partial result the user can do anything with — it cannot be filled in
+   * later, because the import is the only thing that writes its content — so
+   * leaving it behind is leaving litter that looks like a broken document.
+   */
+  async function importFileAsNode(
+    e: React.ChangeEvent<HTMLInputElement>,
+    kind: string,
+    stripExt: RegExp,
+  ) {
     const file = e.target.files?.[0];
+    // Reset FIRST, so picking the same file again after a failure still fires
+    // a change event. Doing it at the end means a retry of the same file is
+    // silently ignored, which reads as "the button stopped working".
+    e.target.value = "";
     if (!file) return;
-    const name = file.name.replace(/\.pdf$/i, "");
+
+    const name = file.name.replace(stripExt, "");
     const oldIds = new Set(Object.keys(graph.nodes));
-    const g = await createNode(name, "Pdf");
+    const g = await createNode(name, kind);
     const newId = Object.keys(g.nodes).find(id => !oldIds.has(id));
-    if (newId) {
+    if (!newId) return;
+
+    setImportError(null);
+    try {
       await api.uploadAsset(newId, file);
       selectNode(newId);
+    } catch (err: any) {
+      const msg = err?.message ?? String(err);
+      setImportError(`Couldn't import ${file.name}: ${msg}`);
+      // Best effort. If the cleanup itself fails the node stays, which is
+      // strictly better than also hiding this second failure.
+      try { await deleteNode(newId); } catch { /* reported above */ }
     }
-    e.target.value = "";
   }
 
-  async function handleImportVideo(e: React.ChangeEvent<HTMLInputElement>) {
-    const file = e.target.files?.[0];
-    if (!file) return;
-    const name = file.name.replace(/\.[^.]+$/, "");
-    const oldIds = new Set(Object.keys(graph.nodes));
-    const g = await createNode(name, "Video");
-    const newId = Object.keys(g.nodes).find(id => !oldIds.has(id));
-    if (newId) {
-      await api.uploadAsset(newId, file);
-      selectNode(newId);
-    }
-    e.target.value = "";
-  }
+  const handleImportPdf = (e: React.ChangeEvent<HTMLInputElement>) =>
+    importFileAsNode(e, "Pdf", /\.pdf$/i);
+
+  const handleImportVideo = (e: React.ChangeEvent<HTMLInputElement>) =>
+    importFileAsNode(e, "Video", /\.[^.]+$/);
 
   // Import a folder of parsed book chapters (chNN_*/*.md + figure images) as a
   // Parsed node: upload figures, convert markdown→full-fidelity HTML, save it.
@@ -722,6 +751,13 @@ function App() {
                 {importingParsed ? "Importing…" : "Import Parsed"}
               </button>
             </div>
+            {/* The whole point of the fix above: a failed import says so. */}
+            {importError ? (
+              <div className="import-error" role="alert" onClick={() => setImportError(null)}
+                   title="Click to dismiss">
+                {importError}
+              </div>
+            ) : null}
             <ul className="node-list">
               {topLevelNodes.map(node => (
                 <TreeRow

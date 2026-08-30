@@ -875,6 +875,34 @@ The rule the whole change was held to: **no rendered colour may move.** Verified
 rather than asserted — expanding every new token back to its value reproduces
 the original file's colour multiset exactly.
 
+## ⚠️ Storage has its own RLS, and it excluded the signed-in user
+
+`storage.objects` carried one policy: `anon_all`, **FOR ALL TO anon**. Vault's
+web app signs in, so its client is the **authenticated** role — which had no
+policy at all, and therefore could not upload. Every "Import PDF" since auth
+landed was denied (migration `20260830180000` adds owner-scoped authenticated
+policies; `anon_all` stays, because removals here are strictly ordered).
+
+Same trap as the productivity tables, with Storage in place of a table: **a
+policy written for one role does not merely restrict the other, it excludes
+it.** The tell is in the data — every object in the bucket had `owner IS NULL`,
+i.e. written as anon, and the newest predated the auth work.
+
+New Storage policies are scoped by path prefix (`(storage.foldername(name))[1]
+= auth.uid()::text`), which works because `uploadAsset` and `uploadCanvasImage`
+already write `${auth.uid()}/…`. Verify one by running as the role in a
+transaction that rolls back — `set_config('request.jwt.claims', …)` then
+`set_config('role','authenticated')`, insert, and `raise` to abort.
+`storage.protect_delete()` forbids deleting rows here, so a probe that commits
+cannot be cleaned up.
+
+**The reason it went unnoticed is the more general bug:** `uploadAsset` throws,
+the import handlers had no catch, and a throw inside an async event handler goes
+nowhere. The user saw a node whose viewer said "PDF not loaded" and no error
+anywhere. Imports now report the failure and remove the half-created node — an
+empty node is not a partial result, since nothing but the import writes its
+content.
+
 ## Vault: Frontend Gotchas
 
 These are non-obvious requirements that broke the 3D graph and PDF viewer once and will again if you regress them — keep them in `vite.config.ts` and `PdfViewer.tsx`.
