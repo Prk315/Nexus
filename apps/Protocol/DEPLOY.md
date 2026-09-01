@@ -28,21 +28,26 @@ Output / Install commands in the project's dashboard (Settings → Build & Outpu
 ```
 VITE_SUPABASE_URL       = https://efxmzsdisaymtpebaxlp.supabase.co
 VITE_SUPABASE_ANON_KEY  = <same anon key as Vault/PathFinder>
-VITE_VAULT_URL          = <Vault's production URL>
-VITE_PATHFINDER_URL     = <PathFinder's production URL>
 ```
 `VITE_`-prefixed → inlined into the client bundle (anon key is public by
-design; RLS is the guard). Not "Sensitive". The `VITE_*_URL` vars feed
-`NexusHeader`'s cross-app switcher so Protocol can link out to its siblings —
-they don't need to be set for Protocol's *own* deploy to work, only for the
-switcher UI to be functional.
+design; RLS is the guard). Not "Sensitive".
 
-To make Vault's and PathFinder's switchers show Protocol back (and, as a
-pre-existing gap, show each other — neither `VITE_VAULT_URL` nor
-`VITE_PATHFINDER_URL` was ever set on either live deployment), add
-`VITE_PROTOCOL_URL` to Vault's and PathFinder's own Vercel env vars once
-Protocol's URL is known, and redeploy each. That's a separate follow-up, not
-part of this deploy.
+**The cross-app switcher no longer uses env vars.** `VITE_VAULT_URL` /
+`VITE_PATHFINDER_URL` / `VITE_PROTOCOL_URL` are dead — the app list now lives in
+`packages/nexus-core/src/apps.ts`, committed. Any such vars still set in a Vercel
+project are ignored; delete them when convenient.
+
+That move was a bug fix, not tidying. Because the values existed only in the Vercel
+dashboard and in no file, one drifted unnoticed: Protocol's `VITE_PATHFINDER_URL`
+pointed at PathFinder's *team-scoped* URL
+(`nexus-path-finder-bastian-thomsens-projects.vercel.app`), which Vercel
+Authentication gates behind team membership. Every user who was not on the Vercel
+team got "Request Sent / Team owners emailed" when switching Protocol → PathFinder.
+
+**When adding an app to the switcher, use its public production alias and verify it
+first** — load it in a private window with no Vercel session and confirm you get the
+app's Supabase login screen, not a Vercel SSO page. A `*-bastian-thomsens-projects
+.vercel.app` URL will always fail that test.
 
 ## Supabase auth
 
