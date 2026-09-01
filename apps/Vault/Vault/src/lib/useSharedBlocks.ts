@@ -1,10 +1,11 @@
-import { useEffect, useRef } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { Editor } from "@tiptap/react";
 import {
   collectShares, changedShares, serializeShare, parseShare, loadDecision,
   shareIdOf, REMOTE_META, type PmNode,
 } from "./sharedBlocks";
 import { readSharedBlock, saveSharedBlock } from "./api";
+import { subscribeShares, newClientId, type ShareChannel } from "./shareChannel";
 
 // ⚠️ Deliberately in lib/, not collab/, even though it is co-editing of a sort.
 // NoteEditor imports from collab/ as TYPES ONLY, to keep yjs and both Tiptap
@@ -48,6 +49,50 @@ export function useSharedBlocks(editor: Editor | null, enabled: boolean): void {
   /** shareId → the payload this client last read from or wrote to the row. */
   const seen = useRef(new Map<string, string>());
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  /** Distinct per hook instance so two panes in one window notify each other. */
+  const clientId = useRef(newClientId());
+  const channel = useRef<ShareChannel | null>(null);
+
+  /**
+   * Pull one share's row and apply it if it moved on.
+   *
+   * The read is the authority, not the broadcast payload — see shareChannel.ts.
+   * Shared by the open path and the live path so there is one apply rule.
+   */
+  const pull = useCallback(async (id: string) => {
+    if (!editor || editor.isDestroyed) return;
+    let stored: PmNode[] | null;
+    try {
+      stored = parseShare(await readSharedBlock(id));
+    } catch {
+      return; // degrades to the local copy, never to a hole
+    }
+    if (stored === null || editor.isDestroyed) return;
+    const payload = serializeShare(stored);
+    // Guard 2 again, on the way IN: an announcement we already have the
+    // content for must not dispatch a transaction, or every peer's save would
+    // cost every other peer a document rewrite.
+    if (seen.current.get(id) === payload) return;
+    seen.current.set(id, payload);
+    applyShare(editor, id, stored);
+  }, [editor]);
+
+  // ── Live ────────────────────────────────────────────────────────────────
+  //
+  // ⚠️ Without this, a shared block only syncs when a note is OPENED — and the
+  // case the feature exists for is two notes open at once. The second one would
+  // sit showing a stale copy with nothing to suggest it was stale.
+  //
+  // The subscribed set is keyed on the SHARE IDS, not the document: a note is
+  // re-subscribed when its set of shared blocks changes, not on every keystroke.
+  const shareIds = useSharedIds(editor, enabled);
+
+  useEffect(() => {
+    if (!editor || !enabled || shareIds.length === 0) return;
+    const ch = subscribeShares(shareIds, clientId.current, (id) => { void pull(id); });
+    channel.current = ch;
+    return () => { channel.current = null; ch.close(); };
+  }, [editor, enabled, shareIds, pull]);
 
   // ── Load ────────────────────────────────────────────────────────────────
   //
@@ -78,7 +123,10 @@ export function useSharedBlocks(editor: Editor | null, enabled: boolean): void {
         } else if (decision.action === "seed") {
           const payload = serializeShare(decision.content);
           seen.current.set(id, payload);
-          try { await saveSharedBlock(id, payload); } catch { seen.current.delete(id); }
+          try {
+            await saveSharedBlock(id, payload);
+            channel.current?.announce(id);
+          } catch { seen.current.delete(id); }
         } else {
           // Agreed already — record it so the first keystroke is not read as a
           // change and immediately written back.
@@ -110,7 +158,13 @@ export function useSharedBlocks(editor: Editor | null, enabled: boolean): void {
         const shares = collectShares(editor.getJSON() as PmNode);
         for (const { id, payload } of changedShares(shares, seen.current)) {
           seen.current.set(id, payload);
-          void saveSharedBlock(id, payload).catch(() => {
+          void saveSharedBlock(id, payload).then(() => {
+            // Announce only AFTER the row is written. Announcing first would
+            // race: a peer that re-read in between would fetch the old content,
+            // record it as seen, and then ignore the real change as "already
+            // have it".
+            channel.current?.announce(id);
+          }).catch(() => {
             // Forget it so the next edit retries. Keeping it would mean one
             // failed write silently stops that share syncing for the session.
             seen.current.delete(id);
@@ -176,4 +230,40 @@ function applyShare(editor: Editor, shareId: string, content: PmNode[]): void {
   // and Cmd-Z on it would "undo" the other note's edit into this one's history.
   tr.setMeta("addToHistory", false);
   view.dispatch(tr);
+}
+
+
+/**
+ * The share ids currently in the document, as a value that only changes when
+ * the SET does.
+ *
+ * ⚠️ Re-subscribing on every transaction would tear down and rebuild a Realtime
+ * channel per keystroke — which is both a socket storm and a window in which a
+ * peer's announcement lands on no listener. Keying on a sorted join means
+ * typing inside a shared block does not touch the subscription; only adding or
+ * removing one does.
+ */
+function useSharedIds(editor: Editor | null, enabled: boolean): string[] {
+  const [key, setKey] = useState("");
+
+  useEffect(() => {
+    if (!editor || !enabled) { setKey(""); return; }
+
+    const read = () => {
+      if (editor.isDestroyed) return;
+      const ids = [...collectShares(editor.getJSON() as PmNode).keys()].sort();
+      const next = ids.join(",");
+      // setState with the same string is a no-op in React, so this is cheap
+      // even though it runs per transaction.
+      setKey(next);
+    };
+
+    read();
+    editor.on("transaction", read);
+    return () => { editor.off("transaction", read); };
+  }, [editor, enabled]);
+
+  // Split back to an array, memoised so the effect above does not see a new
+  // array identity for an unchanged set.
+  return useMemo(() => (key ? key.split(",") : []), [key]);
 }

@@ -170,8 +170,7 @@ describe("note schema", () => {
     const plain = getSchema(buildNoteExtensions());
     const configured = getSchema(
       buildNoteExtensions({
-        onMathClick: () => {},
-        extra: [NoopNoteExtension],
+                extra: [NoopNoteExtension],
         placeholder: "something else",
       })
     );

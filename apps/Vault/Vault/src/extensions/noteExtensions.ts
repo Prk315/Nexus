@@ -11,10 +11,12 @@
 // plugins) can be passed in via `extra`.
 
 import { Extension, getSchema, type Extensions } from "@tiptap/core";
+import { ReactNodeViewRenderer } from "@tiptap/react";
+import { MathNodeView } from "./MathNodeView";
 import type { Schema } from "@tiptap/pm/model";
 import StarterKit from "@tiptap/starter-kit";
 import Placeholder from "@tiptap/extension-placeholder";
-import Mathematics from "@tiptap/extension-mathematics";
+import { InlineMath, BlockMath } from "@tiptap/extension-mathematics";
 import { Table, TableRow, TableHeader, TableCell } from "@tiptap/extension-table";
 import { SheetFormulas } from "./sheetFormulas";
 import { TaskList } from "@tiptap/extension-list/task-list";
@@ -37,7 +39,6 @@ import { KATEX_OPTS } from "../lib/katexShared";
 
 export interface NoteExtensionOpts {
   /** Opens the math edit popover. Behaviour only — contributes no schema. */
-  onMathClick?: (kind: "inline" | "block", node: any, pos: number) => void;
   /** Slash commands and any other pure-behaviour extension. */
   extra?: Extensions;
   placeholder?: string;
@@ -65,7 +66,7 @@ export interface NoteExtensionOpts {
 }
 
 export function buildNoteExtensions(opts: NoteExtensionOpts = {}): Extensions {
-  const { onMathClick, extra = [], placeholder = "Write here… (type / for commands)", collab } = opts;
+  const { extra = [], placeholder = "Write here… (type / for commands)", collab } = opts;
 
   return [
     NoteDocument,
@@ -131,14 +132,17 @@ export function buildNoteExtensions(opts: NoteExtensionOpts = {}): Extensions {
     // without it blanks any note containing a to-do list.
     TaskList,
     TaskItem.configure({ nested: true }),
-    Mathematics.configure({
-      katexOptions: KATEX_OPTS,
-      inlineOptions: {
-        onClick: (node: any, pos: number) => onMathClick?.("inline", node, pos),
-      },
-      blockOptions: {
-        onClick: (node: any, pos: number) => onMathClick?.("block", node, pos),
-      },
+    // ⚠️ The two nodes directly, not the `Mathematics` wrapper — and the SCHEMA
+    // is unchanged by that. `Mathematics` is nothing but
+    // `addExtensions: () => [blockMath, inlineMath]`, so this registers exactly
+    // the same node types with exactly the same names and attributes. What it
+    // buys is `addNodeView`, which is how editing moved from a modal into the
+    // node itself. A note written before this opens identically.
+    InlineMath.configure({ katexOptions: KATEX_OPTS }).extend({
+      addNodeView: () => ReactNodeViewRenderer(MathNodeView),
+    }),
+    BlockMath.configure({ katexOptions: KATEX_OPTS }).extend({
+      addNodeView: () => ReactNodeViewRenderer(MathNodeView),
     }),
     CategoryHighlight,
     // Structural family. All schema additions — see lib/noteSchemaGuard.ts for
