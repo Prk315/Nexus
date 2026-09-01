@@ -4,7 +4,6 @@ import { Extension } from "@tiptap/core";
 import type { Editor } from "@tiptap/core";
 import type { EditorState } from "@tiptap/pm/state";
 import { useEffect, useMemo, useRef, useState, Fragment } from "react";
-import katex from "katex";
 import { createSlashCommandsExtension, type SlashMenuState } from "../extensions/SlashCommands";
 import { buildBlockRegistry, actionsFor, FONT_FAMILIES, TEXT_COLORS, type BlockAction } from "../extensions/blockRegistry";
 import { ActionIcon } from "./ActionIcon";
@@ -12,12 +11,12 @@ import { buildNoteExtensions, noteSchema } from "../extensions/noteExtensions";
 import { auditNoteContent, parseNoteContent } from "../lib/noteSchemaGuard";
 import { NoteSchemaError } from "./NoteSchemaError";
 import { NoteToolbar } from "./NoteToolbar";
+import { MathToolbar } from "./MathToolbar";
 import { NoteOutline } from "./NoteOutline";
 import { LinkDialog, type LinkDialogState } from "./LinkDialog";
 import { SlashCommandsList } from "./SlashCommandsList";
 import { HighlighterCatEditor } from "./HighlighterCatEditor";
 import { DatabaseInsertPicker } from "./DatabaseInsertPicker";
-import { MathField } from "./MathField";
 import * as api from "../lib/api";
 import { DEFAULT_HIGHLIGHTERS, findAncestorOfKind, getDescendants } from "../nodeUtils";
 import type { VaultGraph, HighlighterCategory, VaultRecord } from "../types";
@@ -25,122 +24,9 @@ import type { VaultGraph, HighlighterCategory, VaultRecord } from "../types";
 // yjs and both Tiptap collaboration packages into the eager note bundle.
 import type { CollabSession } from "../collab/types";
 import { useSharedBlocks } from "../lib/useSharedBlocks";
-import { KATEX_OPTS } from "../lib/katexShared";
 import "katex/dist/katex.min.css";
 import "katex/contrib/mhchem";
 
-interface MathEditState { kind: "inline" | "block"; pos: number; latex: string }
-
-// Small centered dialog for editing an inline/block math node's LaTeX with a
-// live KaTeX preview. Mirrors ConfirmDialog's visual language (see App.css
-// .math-edit-*) but isn't a destructive confirmation, so it gets its own
-// button styling rather than reusing .confirm-btn-danger for Save.
-function MathEditPopover({
-  state, onChange, onSave, onDelete, onCancel,
-}: {
-  state: MathEditState;
-  onChange: (latex: string) => void;
-  onSave: () => void;
-  onDelete: () => void;
-  onCancel: () => void;
-}) {
-  const textareaRef = useRef<HTMLTextAreaElement>(null);
-  const previewRef = useRef<HTMLDivElement>(null);
-  // Local to the popover — the LaTeX string itself stays the single source
-  // of truth (lifted into `mathEdit.latex`), so switching tabs never has
-  // anything to reconcile.
-  const [mode, setMode] = useState<"visual" | "latex">("visual");
-
-  useEffect(() => { if (mode === "latex") textareaRef.current?.focus(); }, [mode]);
-
-  useEffect(() => {
-    const el = previewRef.current;
-    if (!el) return;
-    if (!state.latex.trim()) { el.innerHTML = ""; el.classList.remove("math-edit-preview-error"); return; }
-    try {
-      katex.render(state.latex, el, { ...KATEX_OPTS, displayMode: state.kind === "block" });
-      el.classList.remove("math-edit-preview-error");
-    } catch (e: any) {
-      el.textContent = e?.message ?? "Invalid LaTeX";
-      el.classList.add("math-edit-preview-error");
-    }
-    // `mode` is a dep because the preview div only exists on the LaTeX tab —
-    // switching tabs must render the existing latex, not wait for an edit.
-  }, [state.latex, state.kind, mode]);
-
-  useEffect(() => {
-    function onKey(e: KeyboardEvent) {
-      if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); onCancel(); }
-    }
-    // Capture phase, same reasoning as ConfirmDialog: don't let a global
-    // Escape binding close whatever is rendered behind this dialog too.
-    window.addEventListener("keydown", onKey, true);
-    return () => window.removeEventListener("keydown", onKey, true);
-  }, [onCancel]);
-
-  return (
-    <div className="math-edit-backdrop" onPointerDown={onCancel}>
-      <div
-        className="math-edit-dialog"
-        role="dialog"
-        aria-modal="true"
-        aria-label={state.kind === "block" ? "Edit math block" : "Edit inline math"}
-        onPointerDown={e => e.stopPropagation()}
-      >
-        <div className="math-edit-title">{state.kind === "block" ? "Math block" : "Inline math"}</div>
-        <div className="math-edit-mode-tabs" role="tablist">
-          <button
-            type="button"
-            role="tab"
-            aria-selected={mode === "visual"}
-            className={`math-edit-mode-tab${mode === "visual" ? " active" : ""}`}
-            onClick={() => setMode("visual")}
-          >Visual</button>
-          <button
-            type="button"
-            role="tab"
-            aria-selected={mode === "latex"}
-            className={`math-edit-mode-tab${mode === "latex" ? " active" : ""}`}
-            onClick={() => setMode("latex")}
-          >LaTeX</button>
-        </div>
-        {mode === "visual" ? (
-          <MathField
-            value={state.latex}
-            onChange={onChange}
-            autoFocus
-            className="math-edit-mathfield"
-          />
-        ) : (
-          <>
-            <textarea
-              ref={textareaRef}
-              className="math-edit-input"
-              value={state.latex}
-              onChange={e => onChange(e.target.value)}
-              spellCheck={false}
-              rows={state.kind === "block" ? 4 : 2}
-            />
-            <div ref={previewRef} className="math-edit-preview" />
-          </>
-        )}
-        <div className="math-edit-actions">
-          <button className="math-edit-btn math-edit-btn-delete" onClick={onDelete} type="button">
-            Delete
-          </button>
-          <div className="math-edit-actions-right">
-            <button className="math-edit-btn math-edit-btn-cancel" onClick={onCancel} type="button">
-              Cancel
-            </button>
-            <button className="math-edit-btn math-edit-btn-save" onClick={onSave} type="button">
-              Save
-            </button>
-          </div>
-        </div>
-      </div>
-    </div>
-  );
-}
 
 /**
  * The face or colour a bubble button previews.
@@ -318,7 +204,6 @@ function NoteEditorInner({ content, onChange, nodeId, graph, variant = "full", c
   const hardBlockedRef = useRef(false);
   hardBlockedRef.current = hardBlocked;
   const [slashMenu, setSlashMenu] = useState<SlashMenuState | null>(null);
-  const [mathEdit, setMathEdit] = useState<MathEditState | null>(null);
   const [linkDialog, setLinkDialog] = useState<LinkDialogState | null>(null);
   const wrapperRef = useRef<HTMLDivElement>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -398,7 +283,6 @@ function NoteEditorInner({ content, onChange, nodeId, graph, variant = "full", c
     // here; a second copy of the list makes the guard validate against a
     // schema this editor doesn't actually have.
     extensions: buildNoteExtensions({
-      onMathClick: (kind, node, pos) => setMathEdit({ kind, pos, latex: node.attrs.latex }),
       extra: [slashExtRef.current, linkKeyExtRef.current],
       // Empty for a private note. Supplying it also disables StarterKit's
       // undoRedo — one fused decision, see noteExtensions.ts.
@@ -763,50 +647,11 @@ function NoteEditorInner({ content, onChange, nodeId, graph, variant = "full", c
   // particular does not land the node at selection.from), so never trust a
   // stored pos: re-resolve against the live document, falling back to the
   // nearest node of the right type if the exact position no longer holds it.
-  function resolveMathPos(kind: "inline" | "block", pos: number): number | null {
-    if (!editor) return null;
-    const typeName = kind === "inline" ? "inlineMath" : "blockMath";
-    const doc = editor.state.doc;
-    if (pos >= 0 && pos <= doc.content.size && doc.nodeAt(pos)?.type.name === typeName) return pos;
 
-    // The fallback used to be "nearest node of this type anywhere in the doc",
-    // measured by absolute position distance. That was already a guess, and
-    // columns make it actively wrong: positions in a two-column row interleave
-    // in a way unrelated to visual proximity, so a math node in column 1 can be
-    // numerically closer than the one you just clicked in column 2 — and Save
-    // would silently rewrite the wrong equation.
-    //
-    // Restricting the search to the caret's own ancestor keeps a stale position
-    // from escaping into a sibling column, a callout, or a table cell.
-    let scopeFrom = 0;
-    let scopeTo = doc.content.size;
-    if (pos >= 0 && pos <= doc.content.size) {
-      const $pos = doc.resolve(Math.min(pos, doc.content.size));
-      for (let d = $pos.depth; d > 0; d--) {
-        const name = $pos.node(d).type.name;
-        if (name === "column" || name === "calloutBlock" || name === "containerBlock" ||
-            name === "toggleContent" || name === "tableCell" || name === "tableHeader") {
-          scopeFrom = $pos.before(d);
-          scopeTo = $pos.after(d);
-          break;
-        }
-      }
-    }
-
-    let found: number | null = null;
-    let best = Infinity;
-    doc.nodesBetween(scopeFrom, scopeTo, (n, p) => {
-      if (n.type.name === typeName) {
-        const d = Math.abs(p - pos);
-        if (d < best) { best = d; found = p; }
-      }
-      return true;
-    });
-    return found;
-  }
-
-  // Insert a placeholder math node at the cursor, then immediately open the
-  // popover on it so the user types the real expression right away.
+  // Insert a math node at the cursor and SELECT it, which is what makes it
+  // editable — see extensions/MathNodeView. It used to open a dialog here;
+  // selecting is the same gesture the user would make by clicking the node, so
+  // inserting and clicking now lead to exactly one state rather than two.
   //
   // The position comes from the insert's own step map, not from
   // selection.from: a *block* insert does not leave the selection on the node
@@ -817,8 +662,8 @@ function NoteEditorInner({ content, onChange, nodeId, graph, variant = "full", c
     const before = editor.state.doc;
     const chain = editor.chain().focus();
     (kind === "inline"
-      ? chain.insertInlineMath({ latex: "x" })
-      : chain.insertBlockMath({ latex: "x" })
+      ? chain.insertInlineMath({ latex: "" })
+      : chain.insertBlockMath({ latex: "" })
     ).run();
 
     const typeName = kind === "inline" ? "inlineMath" : "blockMath";
@@ -838,37 +683,14 @@ function NoteEditorInner({ content, onChange, nodeId, graph, variant = "full", c
       }
       return true;
     });
-    if (pos !== null) setMathEdit({ kind, pos, latex: "x" });
+    // Empty, not "x": a placeholder you have to delete first is a worse
+    // starting point than an empty field with the caret already in it.
+    if (pos !== null) editor.chain().focus().setNodeSelection(pos).run();
   }
 
   function insertInlineMathAtCursor() { insertMathAtCursor("inline"); }
   function insertBlockMathAtCursor() { insertMathAtCursor("block"); }
 
-  function saveMathEdit() {
-    if (!editor || !mathEdit) return;
-    const pos = resolveMathPos(mathEdit.kind, mathEdit.pos);
-    if (pos !== null) {
-      if (mathEdit.kind === "inline") {
-        editor.chain().focus().updateInlineMath({ latex: mathEdit.latex, pos }).run();
-      } else {
-        editor.chain().focus().updateBlockMath({ latex: mathEdit.latex, pos }).run();
-      }
-    }
-    setMathEdit(null);
-  }
-
-  function deleteMathEdit() {
-    if (!editor || !mathEdit) return;
-    const pos = resolveMathPos(mathEdit.kind, mathEdit.pos);
-    if (pos !== null) {
-      if (mathEdit.kind === "inline") {
-        editor.chain().focus().deleteInlineMath({ pos }).run();
-      } else {
-        editor.chain().focus().deleteBlockMath({ pos }).run();
-      }
-    }
-    setMathEdit(null);
-  }
 
   if (!editor) return null;
 
@@ -891,6 +713,11 @@ function NoteEditorInner({ content, onChange, nodeId, graph, variant = "full", c
         style={{ display: "none" }}
         onChange={onImageChosen}
       />
+      {/* Directly under the main toolbar, and only while a math node is
+          selected. This is what replaced the modal: the page stays exactly as
+          it was, so you can see the sentence the equation belongs to. */}
+      <MathToolbar editor={editor} />
+
       <NoteToolbar
         editor={editor}
         registry={registry}
@@ -996,15 +823,6 @@ function NoteEditorInner({ content, onChange, nodeId, graph, variant = "full", c
         <SlashCommandsList
           {...slashMenu}
           keyHandlerRef={keyHandlerRef}
-        />
-      )}
-      {mathEdit && (
-        <MathEditPopover
-          state={mathEdit}
-          onChange={(latex) => setMathEdit(m => m && { ...m, latex })}
-          onSave={saveMathEdit}
-          onDelete={deleteMathEdit}
-          onCancel={() => setMathEdit(null)}
         />
       )}
     </div>

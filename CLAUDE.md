@@ -946,6 +946,41 @@ its `deleteNode` prop), and it resolves `false` on cancel so callers skip their
 post-delete cleanup. Wire new delete entry points to that function rather than to
 `useGraph().deleteNode`.
 
+## Math is edited in the document, not in a dialog
+
+Clicking an equation makes it an editable field **where it sits**, and a second
+toolbar row appears under the main one with the palette. The modal it replaced
+covered the page — and maths is written *about* something, so hiding the
+sentence above it is the one thing the editor must not do.
+
+⚠️ **`Mathematics.configure(...)` was replaced by `InlineMath` + `BlockMath`
+extended with a node view, and the SCHEMA is unchanged by that.** `Mathematics`
+is nothing but `addExtensions: () => [blockMath, inlineMath]`, so the same two
+node types are registered under the same names with the same `latex` attribute.
+This matters more than usual: an unknown node type **blanks a document**, so a
+careless change here would risk every note containing an equation.
+`extensions/math.test.ts` asserts both types still exist, that `latex` is still
+their attribute, and that a pre-existing note round-trips.
+
+**Selected IS editable — there is no separate flag.** The toolbar row derives
+its visibility from the same selection the node view uses, so the two cannot
+disagree; a flag would let the row show while no field exists and its buttons
+would insert into nothing. It also removes Save/Cancel, which nothing else in
+Vault has: every other edit is the document, undone with Cmd-Z.
+
+⚠️ **The toolbar reaches the field through a module-scope registry that clears
+BY IDENTITY** (`lib/mathToolbar.ts`). Two fields hand over on focus — the new
+one registers *before* the old one's blur fires — so an unconditional clear on
+blur wipes the field that just took over, and the palette inserts into nothing
+while looking alive.
+
+**Inserting creates an EMPTY node and selects it**, rather than seeding `"x"`.
+A placeholder you must delete first is a worse start than an empty field with
+the caret in it, and insert-then-click now reach one state rather than two.
+
+**mathlive must stay out of the eager bundle** (~600 kB). The node view imports
+`MathField`, which dynamic-imports mathlive — verified against built output.
+
 ## Vault: the note editor (Tiptap)
 
 `NoteEditor.tsx` is the Tiptap surface for the plain **Note** kind — and the

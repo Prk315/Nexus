@@ -80,13 +80,26 @@ export interface MathFieldProps {
   onChange: (latex: string) => void;
   autoFocus?: boolean;
   className?: string;
+  /**
+   * The live element, once it exists. The math toolbar needs a handle to
+   * insert into, and it lives in a different React tree — see lib/mathToolbar.
+   */
+  onFieldReady?: (field: MathfieldElement) => void;
+  /** Focus in and out, so the toolbar knows which field it is talking to. */
+  onFocusChange?: (focused: boolean, field: MathfieldElement) => void;
 }
 
-export function MathField({ value, onChange, autoFocus, className }: MathFieldProps) {
+export function MathField({ value, onChange, autoFocus, className, onFieldReady, onFocusChange }: MathFieldProps) {
   const hostRef = useRef<HTMLDivElement>(null);
   const mfRef = useRef<MathfieldElement | null>(null);
   const onChangeRef = useRef(onChange);
   onChangeRef.current = onChange;
+  // Refs, not deps: these must not re-run the imperative mount effect, which
+  // is deliberately keyed on `ready` alone.
+  const onReadyRef = useRef(onFieldReady);
+  onReadyRef.current = onFieldReady;
+  const onFocusRef = useRef(onFocusChange);
+  onFocusRef.current = onFocusChange;
   const [ready, setReady] = useState(false);
 
   useEffect(() => {
@@ -128,7 +141,12 @@ export function MathField({ value, onChange, autoFocus, className }: MathFieldPr
     mf.value = value;
     const handleInput = () => onChangeRef.current(mf.value);
     mf.addEventListener("input", handleInput);
+    const handleFocus = () => onFocusRef.current?.(true, mf);
+    const handleBlur = () => onFocusRef.current?.(false, mf);
+    mf.addEventListener("focusin", handleFocus);
+    mf.addEventListener("focusout", handleBlur);
     mfRef.current = mf;
+    onReadyRef.current?.(mf);
     if (autoFocus) {
       // Deferred and guarded: MathLive's focus() runs blur bookkeeping that
       // can still reference a previously disposed field's model (observed:
@@ -143,6 +161,11 @@ export function MathField({ value, onChange, autoFocus, className }: MathFieldPr
       // mount's focus() trips over.
       try { mf.blur(); } catch { /* already disposed */ }
       mf.removeEventListener("input", handleInput);
+      mf.removeEventListener("focusin", handleFocus);
+      mf.removeEventListener("focusout", handleBlur);
+      // Tell the toolbar this field is gone BEFORE the element is destroyed,
+      // or it holds a handle whose insert() throws "Mathfield not mounted".
+      onFocusRef.current?.(false, mf);
       mf.remove();
       mfRef.current = null;
     };

@@ -8617,3 +8617,120 @@ body.vault-block-dragging .tt-bubble {
   /* A long Supabase message must not stretch the sidebar. */
   overflow-wrap: anywhere;
 }
+
+/* ─── Math: a toolbar row, not a dialog ─────────────────────────────────────
+   Editing used to open a modal over the page. Maths is written ABOUT
+   something — the sentence above it, the equation before it — and a modal
+   hides exactly that. The row costs one strip of vertical space and leaves the
+   document underneath untouched. */
+
+.math-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  padding: 5px 10px;
+  border-bottom: 1px solid var(--border-base);
+  background: var(--bg-subtle);
+  /* Sticks with the toolbar it hangs under, so scrolling a long equation's
+     note never leaves the palette behind. */
+  position: sticky;
+  top: 0;
+  z-index: 3;
+}
+.math-toolbar-kind {
+  font-size: 10.5px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--fg-muted);
+  white-space: nowrap;
+}
+.math-toolbar-groups { display: flex; gap: 3px; }
+.math-toolbar-items {
+  display: flex;
+  gap: 3px;
+  flex-wrap: wrap;
+  flex: 1 1 auto;
+  min-width: 0;
+}
+.math-toolbar-tail { display: flex; gap: 4px; margin-left: auto; }
+
+.math-tb-group,
+.math-tb-btn {
+  font: inherit;
+  font-size: 11px;
+  padding: 3px 8px;
+  border: 1px solid var(--border-base);
+  border-radius: 5px;
+  background: var(--bg-base);
+  color: var(--fg-main);
+  cursor: pointer;
+  white-space: nowrap;
+}
+.math-tb-group:hover, .math-tb-btn:hover { background: var(--bg-muted); }
+.math-tb-group.is-on { background: var(--bg-muted); border-color: var(--border-strong); }
+
+.math-tb-sym {
+  min-width: 30px;
+  height: 26px;
+  padding: 0 6px;
+  border: 1px solid var(--border-faint);
+  border-radius: 5px;
+  background: var(--bg-base);
+  color: var(--fg-main);
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  /* KaTeX inside a button sets its own font-size; cap it so a \begin{pmatrix}
+     preview does not make the row three times taller than the others. */
+  font-size: 12px;
+  overflow: hidden;
+}
+.math-tb-sym:hover { background: var(--bg-muted); border-color: var(--border-base); }
+.math-tb-sym .katex { font-size: 1em; }
+.math-tb-sym .katex-display { margin: 0; }
+
+/* ─── The node itself ───────────────────────────────────────────────────── */
+
+.nx-math-inline { display: inline-block; }
+.nx-math-block { display: block; margin: 0.6em 0; text-align: center; }
+
+/* Selected IS editable — there is no third state. The outline is the only
+   affordance needed, because the field inside it is already visibly a field. */
+.nx-math.is-editing { outline: 1px solid var(--edge-in); border-radius: 4px; }
+.nx-math:not(.is-editing) .nx-math-render { cursor: pointer; }
+.nx-math:not(.is-editing):hover .nx-math-render { background: var(--bg-muted); border-radius: 3px; }
+
+/* An empty formula still needs a target, or it becomes unselectable and so
+   uneditable and undeletable. */
+.nx-math-empty { color: var(--fg-ghost); font-style: italic; }
+/* The SOURCE is shown on an error, not just the message — an error that hides
+   what you wrote leaves you nothing to correct. */
+.nx-math-error {
+  color: var(--destructive);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.9em;
+  border-bottom: 1px dotted var(--destructive);
+}
+
+.nx-math-field { display: inline-block; min-width: 5ch; }
+.nx-math-field.is-block { display: block; min-width: 12ch; }
+.nx-math-field math-field {
+  border: 0;
+  background: transparent;
+  padding: 0 2px;
+  font-size: inherit;
+}
+.nx-math-source {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.9em;
+  border: 1px solid var(--border-base);
+  border-radius: 4px;
+  background: var(--bg-raised);
+  color: var(--fg-main);
+  padding: 2px 5px;
+  min-width: 12ch;
+  resize: vertical;
+}
+.nx-math-source.is-block { display: block; width: 100%; }
