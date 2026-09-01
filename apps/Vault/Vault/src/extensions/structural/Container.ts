@@ -4,6 +4,7 @@
 // warning), a container only groups. Conflating them would mean every visual
 // grouping had to borrow a semantic it didn't mean.
 
+import { spacingGripsPlugin } from "./spacingGrips";
 import { createContainerNode } from "./createContainerNode";
 import { isCardColorId, cardColorStyle } from "./cardColor";
 
@@ -41,4 +42,13 @@ export const Container = createContainerNode({
   },
   className: (attrs) => `container-block container-${attrs.style}`,
   extraHTML: (attrs) => cardColorStyle(attrs.color),
+
+}).extend({
+  // ⚠️ Registered HERE, once, although the plugin serves callout and toggle as
+  // well. Putting it inside `createContainerNode` would register the same
+  // plugin four times — four decoration passes over every transaction, and
+  // four grips stacked on one block.
+  addProseMirrorPlugins() {
+    return [spacingGripsPlugin()];
+  },
 });

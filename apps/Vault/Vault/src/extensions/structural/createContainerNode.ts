@@ -7,6 +7,15 @@
 // four chances to get `isolating`/`defining` subtly different.
 
 import { Node, mergeAttributes, type Attribute } from "@tiptap/core";
+import { readSpacing, spacingPx } from "../../lib/blockSize";
+
+/** Inline style for a container's spacing, or nothing when it is unset. */
+function spacingStyle(attrs: Record<string, any>): string | undefined {
+  const parts: string[] = [];
+  if (attrs.pad != null) parts.push(`padding-block:${spacingPx(attrs.pad)}px`);
+  if (attrs.gap != null) parts.push(`margin-block:${spacingPx(attrs.gap)}px`);
+  return parts.length ? parts.join(";") : undefined;
+}
 import {
   backspaceAtContainerStart,
   enterAtContainerEnd,
@@ -75,6 +84,28 @@ export function createContainerNode(spec: ContainerNodeSpec) {
       // wiped the note. That is the whole difference between shipping this
       // today and having to deploy every client first.
       return {
+        /**
+         * Inner and outer spacing, as a STEP on a short scale — see
+         * lib/blockSize. Attributes, so an older build drops them and renders
+         * the block at its stylesheet default rather than blanking anything.
+         *
+         * ⚠️ `null`, not `0`. Zero is a deliberate "no spacing at all", which a
+         * user can choose; null is "never set", which follows the stylesheet.
+         * Collapsing the two would make opening a note rewrite every container
+         * that had never been adjusted.
+         */
+        pad: {
+          default: null as number | null,
+          parseHTML: (el: HTMLElement) => readSpacing(el.getAttribute("data-pad")),
+          renderHTML: (attrs: Record<string, any>) =>
+            attrs.pad == null ? {} : { "data-pad": String(attrs.pad) },
+        },
+        gap: {
+          default: null as number | null,
+          parseHTML: (el: HTMLElement) => readSpacing(el.getAttribute("data-gap")),
+          renderHTML: (attrs: Record<string, any>) =>
+            attrs.gap == null ? {} : { "data-gap": String(attrs.gap) },
+        },
         shareId: {
           default: null as string | null,
           parseHTML: (el: HTMLElement) => el.getAttribute("data-share") || null,
@@ -99,6 +130,9 @@ export function createContainerNode(spec: ContainerNodeSpec) {
           class: [spec.className?.(node.attrs), node.attrs.shareId ? "is-shared" : null]
             .filter(Boolean)
             .join(" ") || undefined,
+          // Resolved here rather than in CSS: the step scale lives in one
+          // module, and a stylesheet cannot read it.
+          style: spacingStyle(node.attrs),
         }),
         0,
       ];

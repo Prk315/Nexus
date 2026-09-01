@@ -946,6 +946,35 @@ its `deleteNode` prop), and it resolves `false` on cancel so callers skip their
 post-delete cleanup. Wire new delete entry points to that function rather than to
 `useGraph().deleteNode`.
 
+### Sizing and spacing a block by dragging
+
+`lib/blockSize.ts` holds the arithmetic; the grips are **widget decorations**
+(`spacingGrips.ts`), for the reason `columnResize` already documents — a node
+view means a React tree per block, re-reconciling on every keystroke inside it,
+to render handles that never change.
+
+⚠️ **Width is a percentage, height is pixels.** A note opens at 720 px, full
+bleed, and on an iPad: a stored pixel *width* is wrong the moment the column
+changes. Height has no such relationship, and a percentage there would make a
+drawing's aspect ratio depend on the window.
+
+**Spacing is a step on a short scale, not free pixels** — a free value lets you
+reach 0 and 400 px by twitching, and both are broken states.
+
+⚠️ **`Number("")` is `0`, which is FINITE.** `readWidthPct("")` therefore
+returned the minimum rather than null — and an HTML round trip renders an unset
+attribute as `width=""`, so every never-sized block would have come back 15%
+wide the first time a note was pasted. Absent is not zero, in the one place the
+language quietly disagrees.
+
+**null is "never set", 0 or 100 is a choice.** Collapsing them would make simply
+*opening* a note rewrite every block that had never been adjusted — and an
+autosave follows. It is also what gives double-click-to-reset somewhere to go.
+
+**Nothing dispatches until pointerup** — the same rule as the column resizer.
+And a plugin must not `dispatch` from `view.update`: that is a loop waiting for
+one guard to be wrong, and `decorations(state)` already has everything needed.
+
 ## Math is edited in the document, not in a dialog
 
 Clicking an equation makes it an editable field **where it sits**, and a second

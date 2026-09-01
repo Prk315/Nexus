@@ -8734,3 +8734,75 @@ body.vault-block-dragging .tt-bubble {
   resize: vertical;
 }
 .nx-math-source.is-block { display: block; width: 100%; }
+
+/* ─── Spacing grips ─────────────────────────────────────────────────────────
+   Two small handles on the block the caret is in. Only that block: two handles
+   on every card on the page is noise in a document you are trying to read, and
+   makes an accidental drag likely. */
+
+.nx-grip {
+  position: absolute;
+  width: 22px;
+  height: 5px;
+  border-radius: 3px;
+  background: var(--border-strong);
+  opacity: 0;
+  cursor: ns-resize;
+  /* Above the block's own content so a grip over text is still grabbable. */
+  z-index: 2;
+  transition: opacity 120ms var(--ease);
+}
+/* The container is position:relative via .container-block etc; these sit on
+   its top edge, inner and outer distinguished by inset. */
+.nx-grip-padding { top: 3px; left: 50%; transform: translateX(-50%); }
+.nx-grip-margin  { top: -8px; left: 50%; transform: translateX(-50%); background: var(--border-base); }
+
+/* Revealed on hover or while the caret is inside — a permanently visible
+   handle on every card would compete with the text for attention. */
+.ProseMirror .container-block:hover > .nx-grip,
+.ProseMirror .callout-block:hover > .nx-grip,
+.ProseMirror .toggle-block:hover > .nx-grip { opacity: 0.5; }
+.nx-grip:hover { opacity: 1 !important; background: var(--edge-in); }
+
+/* The corner grip, for blocks that own both dimensions. */
+.nx-grip-corner {
+  position: absolute;
+  right: -3px;
+  bottom: -3px;
+  width: 12px;
+  height: 12px;
+  border-radius: 3px;
+  border: 1.5px solid var(--bg-base);
+  background: var(--edge-in);
+  cursor: nwse-resize;
+  opacity: 0;
+  z-index: 2;
+}
+*:hover > .nx-grip-corner, .nx-grip-corner:hover { opacity: 1; }
+
+/* The container family must be a positioning context for the grips above. */
+.ProseMirror .container-block,
+.ProseMirror .callout-block,
+.ProseMirror .toggle-block { position: relative; }
+
+/* The sketch's corner grip, beside the existing bottom-edge one. Two handles
+   because one axis at a time is still the easier gesture when only the height
+   is wrong. */
+.sketch-block { position: relative; }
+.sketch-resize-corner {
+  position: absolute;
+  right: -4px;
+  bottom: -4px;
+  width: 13px;
+  height: 13px;
+  border-radius: 3px;
+  border: 1.5px solid var(--bg-base);
+  background: var(--edge-in);
+  cursor: nwse-resize;
+  opacity: 0;
+  transition: opacity 120ms var(--ease);
+  touch-action: none;
+}
+.sketch-block:hover .sketch-resize-corner,
+.sketch-block.is-selected .sketch-resize-corner { opacity: 0.85; }
+.sketch-resize-corner:hover { opacity: 1; }
