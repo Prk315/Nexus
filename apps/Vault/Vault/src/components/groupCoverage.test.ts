@@ -5,6 +5,7 @@ import {
   MENU_GROUPS,
   TABLE_MENU_GROUPS,
   CARD_MENU_GROUPS,
+  SHARE_MENU_GROUPS,
   WIDTH_MENU_GROUPS,
   TAIL_GROUPS,
 } from "./NoteToolbar";
@@ -30,6 +31,7 @@ const toolbarGroups = new Set<BlockGroup>([
   ...MENU_GROUPS,
   ...TABLE_MENU_GROUPS,
   ...CARD_MENU_GROUPS,
+  ...SHARE_MENU_GROUPS,
   ...WIDTH_MENU_GROUPS,
   ...TAIL_GROUPS,
 ]);

@@ -1701,6 +1701,25 @@ failed share read degrades to "you see your last copy" rather than a hole. On
 open the **row wins**; a missing row is **seeded from the note**, which makes
 sharing an existing block a no-op rather than a wipe.
 
+**Live propagation is a PING, not a payload.** A save announces on a Realtime
+channel per share; every other holder re-reads the row. Sending the content
+would inherit Realtime's payload ceiling — the same one the CRDT provider works
+around with `onReloadRequest` — and a shared block has no size limit of its own,
+so sync would break silently once a block grew past the cap.
+
+⚠️ **The sender id is explicit; `self: false` is not trusted.** Two notes side by
+side in one window are one Supabase client on one socket, and `self` is
+client-granular rather than per channel instance — relying on it risks
+suppressing exactly the delivery the feature exists for.
+
+⚠️ **Announce AFTER the row is written.** Announcing first races: a peer that
+re-reads in between fetches the old content, records it as seen, and then
+ignores the real change as "already have it".
+
+The subscription is keyed on the SET of share ids, not the document —
+re-subscribing per transaction would rebuild a channel per keystroke and leave
+windows where an announcement lands on no listener.
+
 ⚠️ **The write loop.** Apply → transaction → save → write back what was just
 received. Two independent guards, because either alone has a hole: the apply
 path marks its transaction and the save path skips it (precise, but only knows

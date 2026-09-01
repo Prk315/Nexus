@@ -34,7 +34,17 @@ export const TABLE_MENU_GROUPS: BlockGroup[] = ["tableMore"];
 // arrays, so the toolbar — which renders BY GROUP — never drew them. The
 // feature was complete, correct and unreachable. `groupCoverage.test.ts` now
 // fails if any toolbar-surfaced group is left out again.
-export const CARD_MENU_GROUPS: BlockGroup[] = ["cardColor", "share"];
+export const CARD_MENU_GROUPS: BlockGroup[] = ["cardColor"];
+/**
+ * Sharing gets its own menu rather than riding along under "Colour".
+ *
+ * ⚠️ It was in CARD_MENU_GROUPS, which made it technically reachable and
+ * `groupCoverage.test.ts` pass — and completely undiscoverable, because nobody
+ * looks for "Share this block" under a menu called Colour. That is the same
+ * failure the coverage test was written for, one level up: the test can prove a
+ * group is RENDERED, but not that it is rendered anywhere a person would look.
+ */
+export const SHARE_MENU_GROUPS: BlockGroup[] = ["share"];
 // Page width is a per-note setting rather than an insertable thing, so it gets
 // its own small menu at the end rather than living under "Insert".
 // Text size joins it: both are per-note appearance settings stored on the doc
@@ -98,6 +108,7 @@ export function NoteToolbar({ editor, registry, swatches, trailing }: Props) {
   const menuSections = MENU_GROUPS.map((g) => [g, byGroup(g)] as const).filter(([, a]) => a.length > 0);
   const tableMenuSections = TABLE_MENU_GROUPS.map((g) => [g, byGroup(g)] as const).filter(([, a]) => a.length > 0);
   const cardMenuSections = CARD_MENU_GROUPS.map((g) => [g, byGroup(g)] as const).filter(([, a]) => a.length > 0);
+  const shareMenuSections = SHARE_MENU_GROUPS.map((g) => [g, byGroup(g)] as const).filter(([, a]) => a.length > 0);
   const widthMenuSections = WIDTH_MENU_GROUPS.map((g) => [g, byGroup(g)] as const).filter(([, a]) => a.length > 0);
   const tailSections = TAIL_GROUPS.map(byGroup).filter((g) => g.length > 0);
 
@@ -132,7 +143,16 @@ export function NoteToolbar({ editor, registry, swatches, trailing }: Props) {
       {cardMenuSections.length > 0 && (
         <>
           <span className="tt-sep" />
-          <ToolbarMenu label="Colour" sections={cardMenuSections} editor={editor} flags={flags} />
+          <ToolbarMenu label="Card colour" sections={cardMenuSections} editor={editor} flags={flags} />
+        </>
+      )}
+
+      {/* Only inside a shareable container, same as the colour menu — outside
+          one it renders nothing and hides. */}
+      {shareMenuSections.length > 0 && (
+        <>
+          <span className="tt-sep" />
+          <ToolbarMenu label="Sync" sections={shareMenuSections} editor={editor} flags={flags} />
         </>
       )}
 
