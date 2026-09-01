@@ -1886,6 +1886,66 @@ glyph among sixty SVGs is *more* obviously wrong than sixty inconsistent glyphs.
 ⚠️ **Size is a prop, never a class.** These sit in a 13px button, a menu row and
 the slash list; an icon inheriting `font-size` from three places is three sizes.
 
+### The calendar, and the tray that answers the timeline's omission
+
+`calendar` is a fifth `view` on `pathfinderBlock`: a month grid over the same
+filtered tasks. Grid maths is pure in `lib/calendarGrid.ts`, reusing
+`timeline.ts`'s day arithmetic — two date implementations in one app eventually
+disagree, and the disagreement shows as an entry one column out.
+
+**The tray is the point.** The timeline must omit undated work; a footer count
+is honest but not actionable. Dragging from the tray onto a day schedules the
+task, and it leaves the tray because it now has a date. The two views are one
+loop.
+
+**What the gestures may and may not do:** dragging a scheduled chip MOVES its
+`pf_cal_blocks` row (a second insert would leave a copy on every day the drag
+visited); × deletes the calendar block and ⚠️ **never the task** — taking work
+off a day is not deciding not to do it; and a **due-date chip is not draggable
+at all**, because a due date is a property of the task and dragging it would
+silently rewrite a deadline while looking like a reschedule.
+
+⚠️ **Two weekday conventions live one function apart.** `pf_recurring_cal_blocks`
+numbers weekdays **0=Sunday** and is explicitly not ISO; the grid draws
+**Monday-first**. `weekdayOfDay` returns the database's number, `columnOfDay` the
+drawing column. Using one where the other belongs shifts everything a day.
+
+`loadScheduledBlocks` is the single loader for both time views — it carries block
+ids so the calendar can edit what the timeline only reads. `scheduleTask` /
+`moveBlockToDay` / `unscheduleBlock` are separate from `createBlock` /
+`updateBlock`, which are the calendar editor's full form and deliberately omit
+`date`.
+
+### The timeline: dates come from data, and undated work is counted not placed
+
+`timeline` is a fourth `view` value on `pathfinderBlock` — an attribute, so no
+deploy-everywhere gate — showing dated work at month / 3-month / year zoom.
+Date maths is pure in `lib/timeline.ts`.
+
+⚠️ **A task with no date has NO POSITION.** 384 of 554 tasks are undated;
+parking them at today would assert deadlines nobody set. They are partitioned
+out and counted in the footer. Absent is not zero, again.
+
+**Extent comes from data.** A bar spans real scheduled calendar days; a due date
+alone is a single-day marker, drawn dashed so a point never reads as a duration.
+`time_estimate` is deliberately NOT used for width — an estimate is how long the
+work takes, not which days it occupies.
+
+⚠️ **Recurring series are excluded.** `pf_recurring_cal_blocks` is open-ended, so
+at year zoom every weekly series would paint a solid bar across the whole axis.
+
+Two bugs its tests caught before anything rendered:
+
+- **`Date.UTC(2026, 12, 1)` does not fail — it rolls over into January 2027.** So
+  "2026-13-01" parsed to a finite index twelve months from where it claimed to
+  be. `isIsoDate` validates by ROUND TRIP, which also catches "2026-02-30".
+- **Epoch day 0 was a Thursday** and `getUTCDay()` numbers Sunday 0, so Monday is
+  `(d + 4) % 7 === 1`. Writing `=== 0` put every week rule on Sunday — off by one
+  column the whole way across, and it looks almost right.
+
+**Scroll position is a DAY, not a pixel offset.** Converting pixels between
+scales is how a zoom control jumps you to a different month.
+
 ### What a card's colour means is a choice, and "no value" has no colour
 
 `spec.colorBy` — tag / priority / urgency / assignee — puts a stripe on every

@@ -47,7 +47,7 @@ export type IconName =
   | "colBefore" | "colAfter" | "colRemove"
   | "headerRow" | "headerCol" | "merge" | "repair" | "trash"
   | "language" | "widthAuto" | "widthWide" | "widthFull"
-  | "listView" | "boardView" | "tableView"
+  | "listView" | "boardView" | "tableView" | "timelineView" | "calendarView"
   | "foldOne" | "foldAll" | "unfoldAll"
   | "undo" | "redo";
 
@@ -150,6 +150,14 @@ const I: Record<IconName, Spec> = {
   listView: { d: ["M9 7h11", "M9 12h11", "M9 17h11", "M4 6.5l1.2 1.2L7.5 5.4", "M4 11.5l1.2 1.2L7.5 9.9"] },
   boardView: { d: ["M4 5.5h4.5v13H4z", "M9.75 5.5h4.5v9h-4.5z", "M15.5 5.5H20v11h-4.5z"] },
   tableView: { d: ["M3.5 5.5h17v13h-17z", "M3.5 10h17", "M3.5 14.5h17", "M9.5 5.5v13"] },
+
+  // Bars on an axis — deliberately not the container rectangle, which `▭` was
+  // doing double duty as before the set existed.
+  timelineView: { d: ["M3.5 5h9", "M3.5 12h14", "M3.5 19h6", "M3 3.5v17"] },
+
+  // A month grid, distinct from `boardView`'s three uneven columns: a calendar
+  // is a regular lattice and a board is not.
+  calendarView: { d: ["M3.5 5.5h17v14h-17z", "M3.5 10h17", "M8.5 3.5v4", "M15.5 3.5v4", "M9 14h1", "M14 14h1", "M9 17h1", "M14 17h1"] },
 
   foldOne: { d: ["M6 9.5 L12 15.5 L18 9.5"] },
   foldAll: { d: ["M6 12 L12 6 L18 12", "M6 19 L12 13 L18 19"] },

@@ -238,3 +238,87 @@ export async function deleteSeries(id: number): Promise<void> {
     .eq("id", id);
   if (error) throw error;
 }
+
+
+/**
+ * Every task-linked calendar block in a date range, as day + block id.
+ *
+ * ONE loader for both time views. The timeline only needs the days and could
+ * have had a lighter query, but two loaders over the same table drift — and the
+ * drift would show as the calendar and the timeline disagreeing about when a
+ * task is scheduled, which reads as a sync bug rather than as two queries.
+ *
+ * One query for the whole window rather than per day: a year is 366 days, and
+ * 366 round trips is the shape that wedged Supabase on 2026-08-15.
+ *
+ * ⚠️ Recurring series are deliberately NOT expanded. `pf_recurring_cal_blocks`
+ * is open-ended, so over a year every weekly series would claim its task is
+ * scheduled every week forever. A recurring commitment is what Systems and the
+ * day calendar are for; these views are for dated, bounded work.
+ */
+export async function loadScheduledBlocks(
+  fromIso: string,
+  toIso: string,
+): Promise<Map<number, Array<{ iso: string; blockId: number }>>> {
+  const { data, error } = await supabase
+    .from("pf_cal_blocks")
+    .select("id, task_id, date")
+    .eq("user_id", getUserId())
+    .not("task_id", "is", null)
+    .gte("date", fromIso)
+    .lte("date", toIso);
+  if (error) throw new Error(error.message);
+
+  const out = new Map<number, Array<{ iso: string; blockId: number }>>();
+  for (const row of data ?? []) {
+    const id = Number(row.task_id);
+    if (!Number.isFinite(id)) continue;
+    const list = out.get(id) ?? [];
+    list.push({ iso: String(row.date), blockId: Number(row.id) });
+    out.set(id, list);
+  }
+  return out;
+}
+
+/**
+ * Put a task on a day.
+ *
+ * Deliberately separate from `createBlock`: that one is the calendar editor's
+ * full form (times, colour, location) and carries no task link. This is the one
+ * gesture the block offers — drop a task on a day — so it fills in a whole-day
+ * default rather than asking for six fields nobody wants to type mid-drag.
+ */
+export async function scheduleTask(taskId: number, iso: string, title: string): Promise<void> {
+  const { error } = await supabase.from("pf_cal_blocks").insert({
+    user_id: getUserId(),
+    date: iso,
+    title,
+    start_time: "09:00",
+    end_time: "10:00",
+    color: "#3b82f6",
+    task_id: taskId,
+  });
+  if (error) throw new Error(error.message);
+}
+
+/** Move a scheduled block to another day. `updateBlock` deliberately omits
+ *  `date` — its editor changes what a block IS, not when it is. */
+export async function moveBlockToDay(blockId: number, iso: string): Promise<void> {
+  const { error } = await supabase
+    .from("pf_cal_blocks")
+    .update({ date: iso })
+    .eq("id", blockId)
+    .eq("user_id", getUserId());
+  if (error) throw new Error(error.message);
+}
+
+/** Take a task off the calendar. The TASK is untouched — unscheduling is not
+ *  deleting the work, and a gesture in a note must never be able to. */
+export async function unscheduleBlock(blockId: number): Promise<void> {
+  const { error } = await supabase
+    .from("pf_cal_blocks")
+    .delete()
+    .eq("id", blockId)
+    .eq("user_id", getUserId());
+  if (error) throw new Error(error.message);
+}
