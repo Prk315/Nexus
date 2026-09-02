@@ -946,6 +946,35 @@ its `deleteNode` prop), and it resolves `false` on cancel so callers skip their
 post-delete cleanup. Wire new delete entry points to that function rather than to
 `useGraph().deleteNode`.
 
+### Sizing and spacing a block by dragging
+
+`lib/blockSize.ts` holds the arithmetic; the grips are **widget decorations**
+(`spacingGrips.ts`), for the reason `columnResize` already documents — a node
+view means a React tree per block, re-reconciling on every keystroke inside it,
+to render handles that never change.
+
+⚠️ **Width is a percentage, height is pixels.** A note opens at 720 px, full
+bleed, and on an iPad: a stored pixel *width* is wrong the moment the column
+changes. Height has no such relationship, and a percentage there would make a
+drawing's aspect ratio depend on the window.
+
+**Spacing is a step on a short scale, not free pixels** — a free value lets you
+reach 0 and 400 px by twitching, and both are broken states.
+
+⚠️ **`Number("")` is `0`, which is FINITE.** `readWidthPct("")` therefore
+returned the minimum rather than null — and an HTML round trip renders an unset
+attribute as `width=""`, so every never-sized block would have come back 15%
+wide the first time a note was pasted. Absent is not zero, in the one place the
+language quietly disagrees.
+
+**null is "never set", 0 or 100 is a choice.** Collapsing them would make simply
+*opening* a note rewrite every block that had never been adjusted — and an
+autosave follows. It is also what gives double-click-to-reset somewhere to go.
+
+**Nothing dispatches until pointerup** — the same rule as the column resizer.
+And a plugin must not `dispatch` from `view.update`: that is a loop waiting for
+one guard to be wrong, and `decorations(state)` already has everything needed.
+
 ## Math is edited in the document, not in a dialog
 
 Clicking an equation makes it an editable field **where it sits**, and a second
@@ -973,6 +1002,25 @@ BY IDENTITY** (`lib/mathToolbar.ts`). Two fields hand over on focus — the new
 one registers *before* the old one's blur fires — so an unconditional clear on
 blur wipes the field that just took over, and the palette inserts into nothing
 while looking alive.
+
+⚠️ **The extension's own `insertInlineMath` / `insertBlockMath` cannot be used
+for this.** Both begin `if (!latex) return false`, so an EMPTY latex is refused
+— and seeding `""` therefore made every insert a silent no-op: no node, no
+toolbar row, no error. The node is created directly instead.
+
+No schema test could see that: they assert node types and HTML round trips, and
+the schema was never wrong; a command's runtime guard was.
+`extensions/mathInsert.test.ts` drives a REAL editor, which is the only thing
+that distinguishes "the node type exists" from "inserting one works". It needs
+`requestAnimationFrame` in `test/domSetup.ts` — happy-dom's window has it,
+`globalThis` does not, and Tiptap reaches for the global.
+
+⚠️ **The inserted node is found by proximity to the INSERT POINT, not to the
+selection afterwards.** Measured: a block equation inserted at the start of
+`<p>before</p>` lands at position 0 while the caret was at 1 and the mapping
+gives 2 — ProseMirror lifts a block node out of the paragraph, so there is no
+fixed offset. Measuring from the post-command selection is what made the old
+code select the wrong equation next to an existing one.
 
 **Inserting creates an EMPTY node and selects it**, rather than seeding `"x"`.
 A placeholder you must delete first is a worse start than an empty field with

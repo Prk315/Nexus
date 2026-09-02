@@ -30,7 +30,11 @@ import { describe, it } from "node:test";
 import {
   type ApplyCandidate,
   type ApplyContext,
+  assembleApplication,
   bodyHasUnresolvedGaps,
+  type ModuleRow,
+  normalizeModulePlan,
+  pickUncontestedModule,
   collapseByPosting,
   cvGateReady,
   DAILY_SUBMIT_CAP,
@@ -696,5 +700,109 @@ describe("batch limits", () => {
     // notify item is an email to the user. The blast radii are not comparable.
     assert.ok(MAX_APPLY < MAX_NOTIFY);
     assert.ok(DAILY_SUBMIT_CAP <= MAX_APPLY);
+  });
+});
+
+// ===========================================================================
+// MARK: - Uncontested slots, and honest gap markers
+//
+// Drawn from a live run on 2026-09-01. Both stored drafts ended with
+// `[GAP: no module for 'experience']` while an enabled `experience` module sat
+// in the catalog: the model had asked for the slot and then chosen nothing for
+// it. Two separate defects — a written paragraph silently dropped, and a marker
+// asserting something untrue about why.
+// ===========================================================================
+
+const mod = (id: string, slot: string, extra: Partial<ModuleRow> = {}): ModuleRow => ({
+  id,
+  name: id,
+  slot,
+  tags: [],
+  lang: "en",
+  sort: 10,
+  content: `content of ${id}`,
+  ...extra,
+});
+
+const CATALOG_ONE_EXP: ModuleRow[] = [
+  mod("i1", "intro", { sort: 0 }),
+  mod("s1", "skill"),
+  mod("e1", "experience", { sort: 40 }),
+  mod("c1", "closing", { sort: 90 }),
+];
+
+describe("uncontested slot back-fill", () => {
+  it("fills a needed slot when the catalog offers exactly one module", () => {
+    const plan = normalizeModulePlan(
+      { chosen: ["s1"], missing_slots: ["experience"] },
+      CATALOG_ONE_EXP,
+      { score: 85, lang: "en", skills: [] },
+    );
+    assert.ok(!plan.missing_slots.includes("experience"));
+    assert.ok(plan.chosen.includes("e1"));
+  });
+
+  it("leaves a gap when two modules compete — declining IS the judgement", () => {
+    const contested = [...CATALOG_ONE_EXP, mod("e2", "experience", { sort: 41 })];
+    const plan = normalizeModulePlan(
+      { chosen: ["s1"], missing_slots: ["experience"] },
+      contested,
+      { score: 85, lang: "en", skills: [] },
+    );
+    assert.ok(plan.missing_slots.includes("experience"));
+    assert.ok(!plan.chosen.includes("e1"));
+    assert.ok(!plan.chosen.includes("e2"));
+  });
+
+  it("does not back-fill when there is no letter being built", () => {
+    // No chosen modules and no score: framing is off, and an intro plus a
+    // back-filled paragraph plus a sign-off would dress an empty result up as
+    // a considered one.
+    const plan = normalizeModulePlan(
+      { chosen: [], missing_slots: ["experience"] },
+      CATALOG_ONE_EXP,
+      { score: null, lang: "en", skills: [] },
+    );
+    assert.deepEqual(plan.chosen, []);
+    assert.ok(plan.missing_slots.includes("experience"));
+  });
+
+  it("returns null rather than guessing", () => {
+    assert.equal(
+      pickUncontestedModule(CATALOG_ONE_EXP, "experience", new Set()),
+      CATALOG_ONE_EXP[2],
+    );
+    assert.equal(pickUncontestedModule(CATALOG_ONE_EXP, "education", new Set()), null);
+    assert.equal(pickUncontestedModule(CATALOG_ONE_EXP, "experience", new Set(["e1"])), null);
+  });
+});
+
+describe("gap markers distinguish two different states", () => {
+  const posting = { title: "Game Engineer", company: "Sybo Games" };
+
+  it("says 'no module chosen' when one exists but none was picked", () => {
+    const out = assembleApplication(
+      { job_type: null, slots: [], missing_slots: ["experience"], chosen: ["s1"] },
+      CATALOG_ONE_EXP,
+      posting,
+    );
+    assert.ok(out.body.includes("[GAP: no module chosen for 'experience']"));
+  });
+
+  it("says 'no module' when nobody has written one", () => {
+    const withoutExp = CATALOG_ONE_EXP.filter((m) => m.slot !== "experience");
+    const out = assembleApplication(
+      { job_type: null, slots: [], missing_slots: ["experience"], chosen: ["s1"] },
+      withoutExp,
+      posting,
+    );
+    assert.ok(out.body.includes("[GAP: no module for 'experience']"));
+  });
+
+  it("both wordings still block a send", () => {
+    // This is why GAP_MARKERS matches the '[GAP' prefix rather than a whole
+    // sentence. Rewording a marker must never open the send gate.
+    assert.equal(bodyHasUnresolvedGaps("x\n\n[GAP: no module chosen for 'experience']"), true);
+    assert.equal(bodyHasUnresolvedGaps("x\n\n[GAP: no module for 'experience']"), true);
   });
 });

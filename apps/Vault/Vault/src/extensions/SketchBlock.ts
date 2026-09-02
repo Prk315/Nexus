@@ -28,6 +28,7 @@
 // which is what the guard is for — but the note is still unreadable there
 // until it updates.
 
+import { readWidthPct } from "../lib/blockSize";
 import { Node, mergeAttributes } from "@tiptap/core";
 import { ReactNodeViewRenderer } from "@tiptap/react";
 import { SketchView } from "../components/SketchView";
@@ -97,6 +98,24 @@ export const SketchBlock = Node.create({
             : SKETCH_DEFAULT_HEIGHT;
         },
         renderHTML: (attrs) => ({ "data-height": String(attrs.height) }),
+      },
+      /**
+       * Width as a PERCENTAGE of the note column, or null for the full width.
+       *
+       * ⚠️ Percent, not pixels — the same reason note width is a keyword and
+       * column widths are weights. A sketch drawn on a wide screen and opened
+       * on the iPad must occupy the same share of the column, not the same
+       * number of pixels.
+       *
+       * ⚠️ null, not 100. "Never sized" and "deliberately full width" are the
+       * same picture but not the same document, and the double-click reset has
+       * to be able to reach the first.
+       */
+      width: {
+        default: null as number | null,
+        parseHTML: (el) => readWidthPct(el.getAttribute("data-width")),
+        renderHTML: (attrs) =>
+          attrs.width == null ? {} : { "data-width": String(attrs.width) },
       },
       background: {
         default: "blank" as SketchBackground,

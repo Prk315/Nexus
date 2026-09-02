@@ -13,6 +13,7 @@
 import { memo, useCallback, useMemo, useRef, useState } from "react";
 import type { PointerEvent as ReactPointerEvent } from "react";
 import { NodeViewWrapper, type NodeViewProps } from "@tiptap/react";
+import { widthPct, readWidthPct } from "../lib/blockSize";
 import {
   parseSketch,
   serializeSketch,
@@ -87,6 +88,10 @@ export function SketchView({ node, updateAttributes, editor, selected }: NodeVie
   const data: SketchData = useMemo(() => parseSketch(node.attrs.data), [node.attrs.data]);
   const height: number = node.attrs.height;
   const background: SketchBackground = node.attrs.background;
+  // `blockWidth`, not `width`: in this component `width` already means the
+  // STROKE width, and two of them one screen apart is a bug waiting to be
+  // written.
+  const blockWidth: number | null = readWidthPct(node.attrs.width);
 
   const [prefs, setPrefs] = useState<Prefs>(loadPrefs);
   const [touchDraw, setTouchDraw] = useState(false);
@@ -309,6 +314,54 @@ export function SketchView({ node, updateAttributes, editor, selected }: NodeVie
     [editable, height, updateAttributes]
   );
 
+  /**
+   * Corner drag: width AND height.
+   *
+   * Follows the same rule as the edge handle — DOM during the drag, one
+   * transaction on release. The two axes are different units on purpose:
+   * width is a percentage of the column (a sketch must occupy the same share
+   * of a narrower note), height is in the sketch's own 1000-unit logical
+   * space, which is an aspect ratio and therefore already width-relative.
+   */
+  const onCornerDown = useCallback(
+    (e: ReactPointerEvent) => {
+      if (!editable) return;
+      e.preventDefault();
+      e.stopPropagation();
+      const el = surfaceRef.current;
+      const column = el?.parentElement;
+      if (!el) return;
+      const r = el.getBoundingClientRect();
+      const containerPx = column?.getBoundingClientRect().width ?? r.width;
+      const start = { x: e.clientX, y: e.clientY, w: r.width, h: height };
+      const k = SKETCH_UNITS / r.width;
+
+      const move = (ev: PointerEvent) => {
+        const w = widthPct(start.w + (ev.clientX - start.x), containerPx);
+        const h = clampHeight(start.h + (ev.clientY - start.y) * k);
+        el.style.width = `${w}%`;
+        el.style.aspectRatio = `${SKETCH_UNITS} / ${h}`;
+      };
+      const up = (ev: PointerEvent) => {
+        window.removeEventListener("pointermove", move);
+        window.removeEventListener("pointerup", up);
+        window.removeEventListener("pointercancel", up);
+        // Clear the inline overrides so the committed attributes are what
+        // renders; leaving both would make a later reset look like a no-op.
+        el.style.width = "";
+        el.style.aspectRatio = "";
+        updateAttributes({
+          width: widthPct(start.w + (ev.clientX - start.x), containerPx),
+          height: clampHeight(start.h + (ev.clientY - start.y) * k),
+        });
+      };
+      window.addEventListener("pointermove", move);
+      window.addEventListener("pointerup", up);
+      window.addEventListener("pointercancel", up);
+    },
+    [editable, height, updateAttributes]
+  );
+
   const empty = data.strokes.length === 0 && !wet;
 
   return (
@@ -418,6 +471,9 @@ export function SketchView({ node, updateAttributes, editor, selected }: NodeVie
         data-bg={background}
         style={{
           aspectRatio: `${SKETCH_UNITS} / ${height}`,
+          // null means "follow the column", which is not the same document as
+          // a deliberate 100% — see the `width` attribute.
+          width: blockWidth == null ? undefined : `${blockWidth}%`,
           // Only claim the gesture when a finger is actually meant to draw.
           // `touch-action: none` unconditionally would make the note unscrollable
           // wherever a sketch happens to be under your thumb.
@@ -452,12 +508,23 @@ export function SketchView({ node, updateAttributes, editor, selected }: NodeVie
       </div>
 
       {editable && (
-        <div
-          className="sketch-resize"
-          onPointerDown={onResizeDown}
-          title="Drag to resize"
-          aria-label="Resize sketch"
-        />
+        <>
+          <div
+            className="sketch-resize"
+            onPointerDown={onResizeDown}
+            title="Drag to change the height"
+            aria-label="Resize sketch height"
+          />
+          {/* Both axes at once. The edge handle stays: one axis at a time is
+              still the easier gesture when only the height is wrong. */}
+          <div
+            className="sketch-resize-corner"
+            onPointerDown={onCornerDown}
+            onDoubleClick={(e) => { e.stopPropagation(); updateAttributes({ width: null }); }}
+            title="Drag to resize — double-click to fit the column"
+            aria-label="Resize sketch"
+          />
+        </>
       )}
     </NodeViewWrapper>
   );

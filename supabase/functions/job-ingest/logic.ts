@@ -560,6 +560,32 @@ export function pickFramingModule(
 }
 
 /**
+ * Fill a slot the model asked for and then chose nothing for — but ONLY when the
+ * catalog leaves no choice to make.
+ *
+ * This is the same argument `FRAMING_SLOTS` already won. Measured on live runs:
+ * the model reliably asks for `experience`, and then selects no module for it,
+ * against a catalog holding exactly one — so both stored drafts carried a gap
+ * marker for a paragraph that was written, enabled, and sitting right there.
+ * Choosing among one option is not a judgement about the ad, and anything
+ * derivable should be derived.
+ *
+ * **Exactly one, and no tie-break.** With two or more candidates, declining to
+ * pick IS a judgement the model was asked to make, and quietly picking for it
+ * would put a paragraph into someone's job application on the strength of
+ * alphabetical order. A gap is the honest output there.
+ */
+export function pickUncontestedModule(
+  catalog: ModuleRow[],
+  slot: string,
+  used: Set<string>,
+): ModuleRow | null {
+  const want = String(slot ?? "").toLowerCase();
+  const candidates = catalog.filter((m) => slotOf(m) === want && !used.has(m.id));
+  return candidates.length === 1 ? candidates[0] : null;
+}
+
+/**
  * Re-derive the module plan from what n8n posted, against the REAL catalog.
  *
  * ## Why this IS recomputed when `dedupe_key` deliberately is not
@@ -652,12 +678,23 @@ export function normalizeModulePlan(
   const used = new Set<string>();
 
   for (const slot of neededSlots) {
-    const hit = chosenModules.find(
+    let hit = chosenModules.find(
       (m) => String(m.slot ?? "").toLowerCase() === slot.toLowerCase() && !used.has(m.id),
     );
+    // Gated on `framing` for the same reason framing itself is: with no chosen
+    // modules and no score there is no letter being built, and back-filling a
+    // slot there would dress an empty result up as a considered one.
+    if (!hit && framing) {
+      const only = pickUncontestedModule(catalog, slot, used);
+      if (only) {
+        hit = only;
+        chosenModules.push(only);
+      }
+    }
     if (hit) used.add(hit.id);
     slots.push({ slot, module_id: hit ? hit.id : null });
   }
+  chosenModules = chosenModules.sort(byBodyOrder);
   // A chosen module covering a slot nobody listed was still a deliberate choice.
   // Dropping it would make the stored draft differ from the stored plan for a
   // reason no later reader could reconstruct.
@@ -712,7 +749,19 @@ export function assembleApplication(
     const content = sanitizeText(m.content, MAX_BODY_CHARS, { multiline: true });
     if (content) parts.push(content);
   }
-  for (const slot of plan.missing_slots ?? []) parts.push(`[GAP: no module for '${slot}']`);
+  // Two different states, and they must not print the same sentence — the same
+  // rule as `blocking_state` never being seeded. "Nobody has written one" is a
+  // thing to go and write; "one exists and none was picked" is a thing to go and
+  // look at. Saying "no module for 'experience'" while an enabled experience
+  // module sits in the catalog is simply a false statement in a draft.
+  for (const slot of plan.missing_slots ?? []) {
+    const exists = modules.some(
+      (m) => String(m?.slot ?? "").toLowerCase() === String(slot ?? "").toLowerCase(),
+    );
+    parts.push(
+      exists ? `[GAP: no module chosen for '${slot}']` : `[GAP: no module for '${slot}']`,
+    );
+  }
 
   const body = parts.join("\n\n");
   return {

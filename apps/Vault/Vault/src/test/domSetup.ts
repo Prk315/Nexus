@@ -26,3 +26,19 @@ g.HTMLElement ??= win.HTMLElement;
 g.Text ??= win.Text;
 g.DocumentFragment ??= win.DocumentFragment;
 g.getComputedStyle ??= win.getComputedStyle.bind(win);
+
+// A LIVE editor needs a little more than a document.
+//
+// ProseMirror's EditorView schedules DOM reads through requestAnimationFrame,
+// which happy-dom's window has but `globalThis` does not — and Tiptap reaches
+// for the global. Without these, constructing an `Editor` throws
+// "requestAnimationFrame is not defined" and every test that drives a real
+// editor fails for a reason that has nothing to do with what it is testing.
+//
+// Immediate rather than timed: a test wants the frame to have happened by the
+// time the next line runs, and 16 ms of real latency in a unit test buys
+// nothing but flakiness.
+g.requestAnimationFrame ??= (cb: FrameRequestCallback) => setTimeout(() => cb(Date.now()), 0) as unknown as number;
+g.cancelAnimationFrame ??= (id: number) => clearTimeout(id);
+g.MutationObserver ??= win.MutationObserver;
+g.DOMRect ??= (win as any).DOMRect;
