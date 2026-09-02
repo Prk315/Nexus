@@ -1003,6 +1003,25 @@ one registers *before* the old one's blur fires — so an unconditional clear on
 blur wipes the field that just took over, and the palette inserts into nothing
 while looking alive.
 
+⚠️ **The extension's own `insertInlineMath` / `insertBlockMath` cannot be used
+for this.** Both begin `if (!latex) return false`, so an EMPTY latex is refused
+— and seeding `""` therefore made every insert a silent no-op: no node, no
+toolbar row, no error. The node is created directly instead.
+
+No schema test could see that: they assert node types and HTML round trips, and
+the schema was never wrong; a command's runtime guard was.
+`extensions/mathInsert.test.ts` drives a REAL editor, which is the only thing
+that distinguishes "the node type exists" from "inserting one works". It needs
+`requestAnimationFrame` in `test/domSetup.ts` — happy-dom's window has it,
+`globalThis` does not, and Tiptap reaches for the global.
+
+⚠️ **The inserted node is found by proximity to the INSERT POINT, not to the
+selection afterwards.** Measured: a block equation inserted at the start of
+`<p>before</p>` lands at position 0 while the caret was at 1 and the mapping
+gives 2 — ProseMirror lifts a block node out of the paragraph, so there is no
+fixed offset. Measuring from the post-command selection is what made the old
+code select the wrong equation next to an existing one.
+
 **Inserting creates an EMPTY node and selects it**, rather than seeding `"x"`.
 A placeholder you must delete first is a worse start than an empty field with
 the caret in it, and insert-then-click now reach one state rather than two.

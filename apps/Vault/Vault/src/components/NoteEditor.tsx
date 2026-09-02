@@ -1,4 +1,5 @@
 import { useEditor, EditorContent } from "@tiptap/react";
+import { NodeSelection } from "@tiptap/pm/state";
 import { BubbleMenu } from "@tiptap/react/menus";
 import { Extension } from "@tiptap/core";
 import type { Editor } from "@tiptap/core";
@@ -657,35 +658,62 @@ function NoteEditorInner({ content, onChange, nodeId, graph, variant = "full", c
   // selection.from: a *block* insert does not leave the selection on the node
   // it created, so reading the selection afterwards was a guess that only
   // happened to work in a flat document.
+  /**
+   * Insert an EMPTY math node and select it, which is what makes it editable.
+   *
+   * ⚠️ The node is created directly rather than through `insertInlineMath` /
+   * `insertBlockMath`, and that is the fix for a real bug rather than a
+   * preference.
+   *
+   * Those commands begin `if (!latex) return false` — so an empty string is
+   * refused. Seeding `""` (a better start than a placeholder you must delete
+   * first) therefore made every insert a silent no-op: no node, no toolbar
+   * row, no error. The command is only usable with content we do not want to
+   * put there, so it is not used.
+   *
+   * The insert position is captured BEFORE the transaction rather than
+   * searched for afterwards. The old code scanned for "the math node nearest
+   * the caret", which is a guess that happens to be right in a flat document
+   * and picks the wrong equation next to an existing one.
+   */
   function insertMathAtCursor(kind: "inline" | "block") {
-    if (!editor) return;
-    const before = editor.state.doc;
-    const chain = editor.chain().focus();
-    (kind === "inline"
-      ? chain.insertInlineMath({ latex: "" })
-      : chain.insertBlockMath({ latex: "" })
-    ).run();
-
+    if (!editor || editor.isDestroyed) return;
     const typeName = kind === "inline" ? "inlineMath" : "blockMath";
-    const doc = editor.state.doc;
-    if (doc === before) return; // the insert was refused
+    const type = editor.schema.nodes[typeName];
+    if (!type) return;
 
-    // The newly created node is the one nearest the caret that wasn't there a
-    // moment ago; scanning from the selection outward finds it without relying
-    // on where the command chose to leave the cursor.
-    const from = editor.state.selection.from;
-    let pos: number | null = null;
-    let best = Infinity;
-    doc.descendants((n, p) => {
-      if (n.type.name === typeName) {
-        const d = Math.abs(p - from);
-        if (d < best) { best = d; pos = p; }
-      }
-      return true;
-    });
-    // Empty, not "x": a placeholder you have to delete first is a worse
-    // starting point than an empty field with the caret already in it.
-    if (pos !== null) editor.chain().focus().setNodeSelection(pos).run();
+    editor
+      .chain()
+      .focus()
+      .command(({ tr, dispatch }) => {
+        if (!dispatch) return true;
+        const at = tr.selection.from;
+        tr.replaceSelectionWith(type.create({ latex: "" }), false);
+
+        // ⚠️ Neither `at` nor its mapped position finds the node. Measured: a
+        // BLOCK equation inserted at the start of `<p>before</p>` lands at 0,
+        // while `at` was 1 and the mapping gives 2 — ProseMirror lifts a block
+        // node out of the paragraph rather than splitting it, so there is no
+        // fixed offset to apply.
+        //
+        // So it is found by proximity to the point we inserted at, which is
+        // correct by CONSTRUCTION rather than by luck: whatever else the
+        // document holds, the node just created is the one adjacent to where
+        // the caret was. (The old code measured from the selection AFTER the
+        // command, which is what made it pick the wrong equation next to an
+        // existing one.)
+        let pos: number | null = null;
+        let best = Infinity;
+        tr.doc.descendants((n, p) => {
+          if (n.type.name !== typeName) return true;
+          const d = Math.abs(p - at);
+          if (d < best) { best = d; pos = p; }
+          return false;
+        });
+        if (pos !== null) tr.setSelection(NodeSelection.create(tr.doc, pos));
+        return true;
+      })
+      .run();
   }
 
   function insertInlineMathAtCursor() { insertMathAtCursor("inline"); }
