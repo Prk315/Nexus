@@ -1469,6 +1469,63 @@ long after any schema is built.
 The test also asserts that its own walk finds a known importer, because a broken
 walk would make every other assertion pass vacuously.
 
+## Vault: runnable code cells
+
+A `codeCell` node runs Python or SQL inside a note, notebook-style: every cell in
+a note shares one namespace, Shift+Enter runs, results render underneath.
+CanvasEditor has had the same thing as a `code_cell` block for far longer — the
+execution model, sessions, output shapes and renderers now live in **`src/kernel/`
+and `components/CellOutput.tsx`, shared by both**, because two copies would have
+drifted on exactly the invisible details (how a session is keyed, what a restart
+clears, whether output is bounded).
+
+**The worker is a security boundary, not an optimisation.** `lib/formula.ts` states
+the rule this feature had to answer: a note can be shared, co-edited and pasted
+from elsewhere, so anything that executes its contents is *arbitrary code driven
+by a document another person can edit, in a tab holding a Supabase session*.
+Pyodide runs in a Web Worker with its own global scope, no DOM, no `window`, no
+`localStorage` — which is where supabase-js keeps the session. That is why cells
+offer **Python and SQL and never JavaScript**: a JS cell would run same-origin and
+no care around it would restore that property. The `html` output chunk is rendered
+in an iframe with `sandbox="allow-scripts"` and deliberately WITHOUT
+`allow-same-origin` — the two together would let the frame drop its own sandbox.
+
+**Python runs in two places, chosen at runtime.** `kernel/python.ts` calls Tauri's
+`run_python` (real system interpreter, any installed package) when `isTauri()`,
+and the Pyodide worker otherwise. Before this, a Python cell on the web said "not
+available on this device", which is most of why cells were desktop-only. The two
+sessions are necessarily separate — one is a process, one is a WASM heap.
+
+**Outputs live in the document**, as a node attribute, for the reasons
+`SketchBlock.ts` gives for strokes: `NoteEditor`'s `nodeId` is optional, one note
+holds many cells, and in the document copy-paste, undo and delete all behave. The
+cost is size, and three budgets apply at once — `saveContent` refuses a note over
+2 MB, a shared note's outputs enter a CRDT that never shrinks, and one matplotlib
+PNG is 50–150 kB of base64. Hence `CELL_OUTPUT_MAX_CHARS` in `kernel/outputs.ts`:
+text truncates from the MIDDLE (a traceback's last line is the message), images
+are dropped WHOLE rather than corrupted, and what was dropped is said out loud.
+
+**Traps worth knowing:**
+
+- **`worker.format: "es"` is required in `vite.config.ts`.** Vite defaults workers
+  to `iife`, and Pyodide's dynamic imports force a code-splitting build, which
+  Rollup refuses outright for IIFE. The build fails loudly, at least.
+- **There is no interrupt.** Pyodide can only be interrupted through a
+  SharedArrayBuffer, which needs COOP/COEP headers this app does not serve. Stop
+  TERMINATES the worker, so the session's variables go with it — the UI says so
+  rather than pretending to cancel.
+- **Pyodide is fetched from a CDN**, pinned to the npm package's exact version
+  (a mismatch between loader and assets fails confusingly). Self-hosting it the
+  way pdf.js assets are copied into `public/` was rejected on size — tens of MB.
+  The honest cost is that a cell cannot run offline.
+- **`sessionId` is an extension OPTION, never a schema attribute.** It says where
+  a cell is being rendered, not what the document holds; storing it would make a
+  pasted cell drag another note's namespace along.
+- ⚠️ **`codeCell` is a NEW NODE TYPE**, so a build without it cannot read a note
+  containing one — the guard names it and refuses to mount rather than blanking
+  the note. Web-only today means one atomic deploy; that stops being true the
+  moment a Mac or iPad build is installed again.
+
 ## Vault: PathFinder task blocks
 
 ### One block, two hosts — the note and the canvas

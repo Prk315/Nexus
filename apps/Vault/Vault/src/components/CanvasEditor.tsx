@@ -4,10 +4,9 @@ import { MatrixBlockContent, MatrixBlockData } from "./MatrixBlock";
 import { NoteEditor } from "./NoteEditor";
 import { GraphBlockContent, GraphBlockData } from "./GraphBlock";
 import { GridBlockContent, GridBlockData } from "./GridBlock";
-import { invoke } from "@tauri-apps/api/core";
-import initSqlJs from 'sql.js';
-import type { SqlJsStatic, Database } from 'sql.js';
-import sqlWasmUrl from 'sql.js/dist/sql-wasm.wasm?url';
+import { runCell, resetSession } from "../kernel";
+import type { OutputChunk } from "../kernel/types";
+import { SqlResultTable } from "./CellOutput";
 import { readText as clipboardReadText } from "@tauri-apps/plugin-clipboard-manager";
 import { isTauri } from "../lib/platform";
 import * as api from "../lib/api";
@@ -92,7 +91,6 @@ interface FrameBlock extends BaseBlock {
    */
   folded?: boolean;
 }
-interface OutputChunk    { type: "text" | "image" | "error" | "html" | "table"; content: string; }
 interface CodeCellBlock  extends BaseBlock { type: "code_cell"; code: string; outputs: OutputChunk[]; running: boolean; language?: "python" | "sql"; }
 interface HtmlBlock      extends BaseBlock { type: "html"; code: string; preview: boolean; }
 interface ImageBlock     extends BaseBlock { type: "image"; src: string; }
@@ -1439,77 +1437,17 @@ function ElementContent({ block, onUpdate, onSelect }: {
   );
 }
 
-// ── SQL engine (sql.js / SQLite WASM) ───────────────────────────────────────────
-// One in-memory SQLite database per session ID — mirrors the Python session model.
-// Sessions survive re-renders and accumulate schema/data until explicitly reset.
-
-let _sqlJs: SqlJsStatic | null = null;
-const _sqlSessions = new Map<string, Database>();
-
-interface SqlTableData { columns: string[]; rows: (string | null)[][]; rowCount: number; }
-
-async function _getSqlJs(): Promise<SqlJsStatic> {
-  if (!_sqlJs) _sqlJs = await initSqlJs({ locateFile: () => sqlWasmUrl });
-  return _sqlJs;
-}
-
-async function _getSqlDb(sessionId: string): Promise<Database> {
-  if (!_sqlSessions.has(sessionId)) {
-    const SQL = await _getSqlJs();
-    _sqlSessions.set(sessionId, new SQL.Database());
-  }
-  return _sqlSessions.get(sessionId)!;
-}
-
-function _resetSqlSession(sessionId: string) {
-  _sqlSessions.get(sessionId)?.close();
-  _sqlSessions.delete(sessionId);
-}
-
-async function runSqlCode(sessionId: string, sql: string): Promise<OutputChunk[]> {
-  try {
-    const db = await _getSqlDb(sessionId);
-    const results = db.exec(sql);
-    const data: SqlTableData[] = results.map(({ columns, values }) => ({
-      columns,
-      rows: values.map(row => row.map(v => (v == null ? null : String(v)))),
-      rowCount: values.length,
-    }));
-    return [{ type: "table", content: JSON.stringify(data) }];
-  } catch (err: unknown) {
-    return [{ type: "error", content: err instanceof Error ? err.message : String(err) }];
-  }
-}
-
-function SqlResultTable({ content }: { content: string }) {
-  const data: SqlTableData[] = JSON.parse(content);
-  if (data.length === 0) return <pre className="code-cell-sql-ok">✓ OK</pre>;
-  return (
-    <>
-      {data.map((res, ri) => (
-        <div key={ri} className="sql-result-set">
-          <div className="sql-table-scroll">
-            <table className="sql-result-table">
-              <thead>
-                <tr>{res.columns.map((c, ci) => <th key={ci}>{c}</th>)}</tr>
-              </thead>
-              <tbody>
-                {res.rows.map((row, rowIdx) => (
-                  <tr key={rowIdx}>
-                    {row.map((v, ci) => (
-                      <td key={ci}>{v === null ? <span className="sql-null">NULL</span> : v}</td>
-                    ))}
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-          <span className="sql-row-count">{res.rowCount} row{res.rowCount !== 1 ? 's' : ''}</span>
-        </div>
-      ))}
-    </>
-  );
-}
+// ── Code cells ──────────────────────────────────────────────────────────────
+// Execution, sessions, output capping and the result renderers all live in
+// src/kernel and src/components/CellOutput now, shared with the note editor's
+// `codeCell` node. This file used to own the only implementation; a second copy
+// in the note editor would have drifted on exactly the details that are least
+// visible and hurt most — how a session is keyed, what a restart clears, and
+// whether output is bounded before it reaches a document.
+//
+// Python now also runs in the WEB build via Pyodide (kernel/python.ts picks the
+// Rust interpreter when in Tauri and the worker otherwise), so a canvas Python
+// cell is no longer desktop-only.
 
 // ── CodeCellContent ─────────────────────────────────────────────────────────────
 
@@ -1535,15 +1473,7 @@ function CodeCellContent({ block, sessionId, onUpdate, onRunAll, onRestart, onSe
     }
     onUpdate({ running: true, outputs: [] });
     try {
-      let outputs: OutputChunk[];
-      if (lang === "sql") {
-        outputs = await runSqlCode(sessionId, block.code);
-      } else {
-        const result = await invoke<{ chunks: { type: string; content: string }[] }>(
-          "run_python", { sessionId, code: block.code }
-        );
-        outputs = result.chunks as OutputChunk[];
-      }
+      const outputs = await runCell(sessionId, lang, block.code);
       onUpdate({ running: false, outputs });
     } catch (e) {
       const msg = String(e);
@@ -4659,15 +4589,7 @@ export function CanvasEditor({ content, onChange, nodeId }: Props) {
       const lang = block.language ?? "python";
       updateBlock(id, { running: true, outputs: [] });
       try {
-        let outputs: OutputChunk[];
-        if (lang === "sql") {
-          outputs = await runSqlCode(sessionId, block.code);
-        } else {
-          const result = await invoke<{ chunks: { type: string; content: string }[] }>(
-            "run_python", { sessionId, code: block.code }
-          );
-          outputs = result.chunks as OutputChunk[];
-        }
+        const outputs = await runCell(sessionId, lang, block.code);
         updateBlock(id, { running: false, outputs });
       } catch (e) {
         updateBlock(id, { running: false, outputs: [{ type: "error", content: String(e) }] });
@@ -4691,10 +4613,11 @@ export function CanvasEditor({ content, onChange, nodeId }: Props) {
         .map(id => getComponentSessionId(id, nodeId, blocks, arrows))
     );
 
-    // Python execution is Rust-backed (desktop only); no-op in the web build.
-    if (isTauri())
-      await Promise.all([...pythonSessionIds].map(sid => invoke("reset_python_session", { sessionId: sid })));
-    sqlSessionIds.forEach(sid => _resetSqlSession(sid));
+    // One reset per session, not per language. A session is a namespace from
+    // the user's point of view and they do not think of it as two — a cell
+    // switched from Python to SQL and back must not find its old tables
+    // waiting. resetSession clears both.
+    await Promise.all([...new Set([...pythonSessionIds, ...sqlSessionIds])].map(sid => resetSession(sid)));
 
     setData(d => ({
       ...d,

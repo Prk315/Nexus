@@ -862,6 +862,37 @@ export function buildBlockRegistry(opts: BlockRegistryOptions = {}): BlockAction
     run: atCursor((c) => c.insertSketch()),
   });
 
+  // ── Code cell ─────────────────────────────────────────────────────────────
+  // Two entries, one node type — same reasoning as the PathFinder blocks below.
+  // `language` is an attribute, and an unknown attribute is dropped in silence
+  // while an unknown node type can blank a note, so the two languages must not
+  // become two node types. Offering both is still worth it: "run some SQL" and
+  // "run some Python" are different intentions, and neither should require
+  // inserting the other and switching it over.
+  //
+  // Distinct from the "Code" block above, which is highlighted but inert. This
+  // one executes; cells in a note share one namespace, like a notebook.
+  actions.push({
+    id: "codeCell:python",
+    iconName: "runCell",
+    title: "Python cell",
+    icon: "▶",
+    group: "media",
+    surfaces: ["slash"],
+    keywords: ["python", "code", "run", "cell", "notebook", "jupyter", "execute", "py"],
+    run: atCursor((c) => c.insertCodeCell("python")),
+  });
+  actions.push({
+    id: "codeCell:sql",
+    iconName: "runCell",
+    title: "SQL cell",
+    icon: "▶",
+    group: "media",
+    surfaces: ["slash"],
+    keywords: ["sql", "query", "sqlite", "run", "cell", "notebook", "database", "select"],
+    run: atCursor((c) => c.insertCodeCell("sql")),
+  });
+
   // ── PathFinder ────────────────────────────────────────────────────────────
   // Three entries, three genuinely different surfaces — and one node type behind
   // all of them. The `view` attribute is what distinguishes them, because a new

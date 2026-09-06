@@ -8806,3 +8806,99 @@ body.vault-block-dragging .tt-bubble {
 .sketch-block:hover .sketch-resize-corner,
 .sketch-block.is-selected .sketch-resize-corner { opacity: 0.85; }
 .sketch-resize-corner:hover { opacity: 1; }
+
+/* ── Runnable code cells in a note ─────────────────────────────────────────── */
+/* The output renderers (.code-cell-output, .sql-result-table, .code-cell-img,
+   .code-cell-error-text …) are SHARED with CanvasEditor and defined above. Those
+   rules are hardcoded dark — correct on a canvas, which has its own dark
+   surface, and wrong in a note, which follows the app theme. Everything here is
+   scoped under .code-cell-block so the canvas is untouched. */
+
+.code-cell-block {
+  display: flex;
+  flex-direction: column;
+  margin: 14px 0;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  overflow: hidden;
+  background: var(--bg-soft, var(--bg));
+  /* A cell is a block in prose, not a pane: it grows with its content instead
+     of scrolling internally the way the canvas version does. */
+  min-height: 0;
+}
+
+.code-cell-bar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 8px;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg);
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+.code-cell-block .code-cell-lang {
+  margin-left: 0;
+  font-size: 11px;
+  background: none;
+  border: none;
+  color: var(--fg-muted, var(--fg-ghost));
+  cursor: pointer;
+  padding: 1px 2px;
+}
+.code-cell-block .code-cell-lang:focus { outline: none; }
+
+.code-cell-status {
+  margin-left: auto;
+  font-size: 11px;
+  color: var(--fg-ghost);
+  letter-spacing: 0.01em;
+}
+
+/* Override the canvas's dark editor surface. `resize: none` plus the
+   auto-grow in CodeCellView is what keeps a one-line cell one line tall. */
+.code-cell-block .code-cell-input {
+  flex: none;
+  min-height: 0;
+  overflow: hidden;
+  background: transparent;
+  color: var(--fg);
+  font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+  font-size: 13px;
+  padding: 10px 12px;
+}
+.code-cell-block .code-cell-input::placeholder { color: var(--fg-ghost); }
+
+.code-cell-block .code-cell-output {
+  flex: none;
+  min-height: 0;
+  overflow: visible;
+  background: transparent;
+  border-top: 1px solid var(--border);
+  padding: 8px 12px;
+}
+.code-cell-block .code-cell-output pre {
+  color: var(--fg);
+  font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+}
+
+/* The HTML output frame is a sandboxed iframe with no same-origin access, so it
+   cannot size itself to its content from the outside. A fixed, modest height
+   that scrolls beats one that collapses to nothing. */
+.code-cell-block .code-cell-html-frame {
+  width: 100%;
+  height: 220px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  /* Deliberately light in BOTH themes, and not var(--bg). The frame holds
+     arbitrary HTML a cell produced, which almost always assumes a white page
+     and specifies no colour of its own — unstyled markup renders black text, so
+     a dark backdrop would make the common case invisible. */
+  background: var(--on-accent);
+}
+
+/* Folded away with the rest of a section — a heading owns its cells like any
+   other block. Needs !important for the same reason .columns-row does: this
+   sets display:flex at equal specificity and later in the file. */
+.code-cell-block.is-folded { display: none !important; }
