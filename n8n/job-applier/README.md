@@ -258,9 +258,24 @@ node exec-forensics.mjs 395 --node Gate
 Read it as a funnel and find the first big step down. Two counts are misleading by
 design: `Post to job-ingest` collapses everything to **1** because it batches, and
 the ingest's real verdict is in the `Send` node's response body
-(`{"ok":true,"postings":21,"matches":63,"rejected":[]}`) — **a rejected posting
-does not fail the run**, so a green run can still have discarded a whole lane.
-`--node Send` is the second thing to look at, always.
+(`{"ok":true,"postings":21,"matches":4,"matches_new":4,"matches_offered":63,"rejected":[]}`)
+— **a rejected posting does not fail the run**, so a green run can still have
+discarded a whole lane. `--node Send` is the second thing to look at, always.
+
+⚠️ **`matches` counts matches NEWLY CREATED, not match rows submitted**, and a
+steady state of `matches: 0` beside a healthy `postings` count is the *correct*
+reading — it means every ad in the batch was already known. The harvest upsert is
+`ON CONFLICT DO NOTHING` (`ignoreDuplicates: true`), because a harvest match row
+carries no score and DO UPDATE was overwriting stored Qwen evaluations with nulls
+on every re-harvest — the decay that took the scored set from 30+ to 15 between
+Aug 26 and Sep 3. `matches_offered` is the old number (rows in the request) and is
+what to compare the funnel against; `matches_new` is the same value as `matches`,
+spelled so it cannot be misread.
+
+The trade-off that comes with it: changing a profile's gate rules does **not**
+retro-update `gate_verdict` / `gate_reason` on matches that already exist. To
+re-gate deliberately, delete the affected `job_matches` rows and let the next
+harvest re-create them.
 
 ## Phase 3 — decision emails and sending
 

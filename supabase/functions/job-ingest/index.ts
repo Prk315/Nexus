@@ -347,32 +347,148 @@ Deno.serve(async (req: Request) => {
 
     const assembled = assembleApplication(plan, catalog, posting);
 
-    const { data: application, error: appError } = await supabaseEarly
+    // ## The application write NEVER regresses a status
+    //
+    // This was one unconditional upsert carrying `status: "draft"`, which meant a
+    // re-evaluation of a posting whose letter was already in `needs_approval`,
+    // `approved` or `submitted` walked it back to `draft`. The row then left every
+    // queue view — `notify_queue` filters on `approval_requested_at is null` and
+    // so did not re-ask, `apply_queue` reads `status = 'approved'` and so no longer
+    // saw it — and the state machine had run backwards with nothing to show for it.
+    // Combined with the harvest clobber above (which is what caused the
+    // re-evaluations in the first place), every application in the queue walked
+    // back to draft over the Aug 26 → Sep 3 run.
+    //
+    // The rule: **a letter that has left `draft` is immutable from the evaluation
+    // side.** Once a human has been asked about a body, or has approved one, that
+    // exact text is what the decision was about; silently re-assembling it from a
+    // catalog that has since changed would make the approval a lie. Refreshing the
+    // content of a row that is *still* a draft is fine — nobody has seen it yet.
+    //
+    //   no row            -> insert as draft
+    //   status = 'draft'  -> refresh body / module_ids / missing_slots, stay draft
+    //   any other status  -> touch nothing, report `application_frozen: true`
+    //
+    // Both writes are guarded so a race cannot regress either: the insert is
+    // DO NOTHING on conflict, and the update carries `.eq("status", "draft")` so a
+    // row that moved on between the read and the write is left alone.
+    const { data: existingApp, error: existingAppError } = await supabaseEarly
       .from("job_applications")
-      .upsert(
-        {
-          user_id: v.userId,
-          posting_id: match.posting_id,
-          profile_id: match.profile_id,
-          body: assembled.body,
-          module_ids: assembled.module_ids,
-          missing_slots: assembled.missing_slots,
-          status: "draft",
-        },
-        { onConflict: "posting_id,profile_id", ignoreDuplicates: false },
-      )
-      .select("id")
+      .select("id,status")
+      .eq("user_id", v.userId)
+      .eq("posting_id", match.posting_id)
+      .eq("profile_id", match.profile_id)
       .maybeSingle();
 
-    if (appError) {
-      // The score landed. Say so rather than 500-ing, which would make n8n resend
-      // a verdict that is already stored — and the match is no longer `pending`,
-      // so the resend would be the last chance to notice this at all.
-      console.error("job-ingest: application upsert failed —", appError.message);
+    if (existingAppError) {
+      // Same reasoning as the write failures below: the score is stored, so 207
+      // rather than 500. Writing blind after a failed read is the one thing not
+      // allowed here — it is exactly how the status regression happened.
+      console.error("job-ingest: application read failed —", existingAppError.message);
       return json(
-        { ok: false, error: "application_failed", detail: appError.message, match_id: v.matchId },
+        {
+          ok: false,
+          error: "application_failed",
+          detail: existingAppError.message,
+          match_id: v.matchId,
+        },
         207,
       );
+    }
+
+    const draftFields = {
+      body: assembled.body,
+      module_ids: assembled.module_ids,
+      missing_slots: assembled.missing_slots,
+    };
+
+    let applicationId: string | null = existingApp?.id ?? null;
+    let applicationFrozen = false;
+
+    if (!existingApp) {
+      const { data: inserted, error: insertError } = await supabaseEarly
+        .from("job_applications")
+        .upsert(
+          {
+            user_id: v.userId,
+            posting_id: match.posting_id,
+            profile_id: match.profile_id,
+            ...draftFields,
+            status: "draft",
+          },
+          // DO NOTHING, not DO UPDATE: if a concurrent verdict for the sibling
+          // profile inserted this row between the read above and here, losing the
+          // race must cost nothing rather than overwrite a status.
+          { onConflict: "posting_id,profile_id", ignoreDuplicates: true },
+        )
+        .select("id")
+        .maybeSingle();
+
+      if (insertError) {
+        // The score landed. Say so rather than 500-ing, which would make n8n resend
+        // a verdict that is already stored — and the match is no longer `pending`,
+        // so the resend would be the last chance to notice this at all.
+        console.error("job-ingest: application insert failed —", insertError.message);
+        return json(
+          {
+            ok: false,
+            error: "application_failed",
+            detail: insertError.message,
+            match_id: v.matchId,
+          },
+          207,
+        );
+      }
+
+      if (inserted) {
+        applicationId = inserted.id;
+      } else {
+        // Nothing came back, so the conflict fired: the row exists and we did not
+        // write it. Re-read to answer honestly with its id and whether it is
+        // frozen. A row this fresh is whatever the winner made it — if it is a
+        // draft it already holds this same assembly, so there is nothing to
+        // refresh.
+        const { data: raced } = await supabaseEarly
+          .from("job_applications")
+          .select("id,status")
+          .eq("user_id", v.userId)
+          .eq("posting_id", match.posting_id)
+          .eq("profile_id", match.profile_id)
+          .maybeSingle();
+        applicationId = raced?.id ?? null;
+        applicationFrozen = Boolean(raced && raced.status !== "draft");
+      }
+    } else if (existingApp.status === "draft") {
+      const { data: updated, error: updateAppError } = await supabaseEarly
+        .from("job_applications")
+        .update(draftFields)
+        .eq("id", existingApp.id)
+        .eq("user_id", v.userId)
+        // The race guard. Without it, a row approved between the read and this
+        // write would have its reviewed body replaced underneath the approval.
+        .eq("status", "draft")
+        .select("id")
+        .maybeSingle();
+
+      if (updateAppError) {
+        console.error("job-ingest: application update failed —", updateAppError.message);
+        return json(
+          {
+            ok: false,
+            error: "application_failed",
+            detail: updateAppError.message,
+            match_id: v.matchId,
+          },
+          207,
+        );
+      }
+      // No row updated means the guard bit — it left `draft` mid-flight. That is
+      // the correct outcome, and it is a freeze, not a failure.
+      if (!updated) applicationFrozen = true;
+    } else {
+      // needs_approval / approved / queued / submitted / dismissed — under review,
+      // decided, or already sent. Not ours to rewrite.
+      applicationFrozen = true;
     }
 
     // First score for this posting flips it out of 'discovered'. Guarded on the
@@ -391,11 +507,16 @@ Deno.serve(async (req: Request) => {
       }
     }
 
+    // `module_ids` / `missing_slots` describe THIS assembly, which is what was
+    // stored only when the draft was actually written. `application_frozen` is
+    // what says whether it was — without it a caller would read the two arrays as
+    // the state of the stored letter, and for a row under review they are not.
     return json({
       ok: true,
       match_id: v.matchId,
       score: v.score,
-      application_id: application?.id ?? null,
+      application_id: applicationId,
+      application_frozen: applicationFrozen,
       module_ids: assembled.module_ids,
       missing_slots: assembled.missing_slots,
     });
@@ -905,11 +1026,38 @@ Deno.serve(async (req: Request) => {
     }
   }
 
-  let matchesWritten = 0;
+  // ⚠️ `ignoreDuplicates: true` = DO NOTHING on conflict, and the asymmetry with
+  // the posting upsert three lines above is deliberate.
+  //
+  // A harvest match row comes out of `normalizeMatch` against the n8n gate
+  // payload, which carries no score: `score`, `evaluated_at`, `reasoning`,
+  // `model` and `module_plan` are all null in it by construction. With DO UPDATE
+  // every re-harvest of an ad the 4h cron re-sees — which is most of them —
+  // overwrote the stored Qwen verdict with those nulls. The match then re-entered
+  // the `pending` queue, was re-scored at real inference cost, and its
+  // application was dragged back to `draft` by `evaluate_result`. That is what
+  // took the scored set from 30+ matches down to 15 over the Aug 26 → Sep 3 run.
+  //
+  // **An evaluation is strictly more information than a gate verdict**, so a gate
+  // verdict must never be allowed to write over one. The first verdict for a
+  // `(posting, profile)` stands.
+  //
+  // The trade-off, stated so nobody discovers it as a bug: a later change to a
+  // profile's gate rules will NOT retro-update `gate_verdict` / `gate_reason` on
+  // matches that already exist — they keep the verdict they were first stored
+  // with. That is accepted. Re-gating is a cosmetic refresh of two columns;
+  // destroying an evaluation to get it is not a trade worth making, and a
+  // deliberate re-gate is available by deleting the affected rows by hand (they
+  // are then re-created, gate-fresh, on the next harvest).
+  //
+  // Because DO NOTHING writes nothing on conflict, `.select()` returns ONLY the
+  // rows actually inserted — so the count below is new matches, not rows offered.
+  let matchesNew = 0;
   if (matchRows.length > 0) {
-    const { error: matchError } = await supabase
+    const { data: insertedMatches, error: matchError } = await supabase
       .from("job_matches")
-      .upsert(matchRows, { onConflict: "posting_id,profile_id", ignoreDuplicates: false });
+      .upsert(matchRows, { onConflict: "posting_id,profile_id", ignoreDuplicates: true })
+      .select("id");
 
     if (matchError) {
       // Postings are already stored. Report the partial success honestly rather
@@ -922,18 +1070,33 @@ Deno.serve(async (req: Request) => {
           error: "matches_failed",
           detail: matchError.message,
           postings: upserted?.length ?? 0,
+          matches: 0,
+          matches_new: 0,
+          matches_offered: matchRows.length,
           rejected,
         },
         207,
       );
     }
-    matchesWritten = matchRows.length;
+    matchesNew = insertedMatches?.length ?? 0;
   }
 
+  // `postings` and `matches` stay in the response because they are what a human
+  // reads off the `Send` node when a run stores fewer rows than expected — the
+  // funnel-reading recipe in `n8n/job-applier/README.md` names both by name, and
+  // `exec-forensics.mjs` prints this body verbatim. Nothing in the workflow
+  // BRANCHES on them (`Send` is the terminal node), so the meaning of `matches`
+  // could be tightened without breaking a run — but it is now "matches newly
+  // created", not "match rows submitted", and a steady state of `matches: 0` on a
+  // run that found postings is HEALTHY: it means every ad was already known and
+  // no evaluation was clobbered. `matches_offered` keeps the old number visible
+  // so the two can never be confused for each other.
   return json({
     ok: true,
     postings: upserted?.length ?? 0,
-    matches: matchesWritten,
+    matches: matchesNew,
+    matches_new: matchesNew,
+    matches_offered: matchRows.length,
     rejected,
   });
 });

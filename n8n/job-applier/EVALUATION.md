@@ -249,6 +249,27 @@ Three findings worth keeping:
   than recomputed on read. It is also why intro and closing were taken away from
   it entirely — see Framing above.
 
+⚠️ **A re-evaluation can rewrite a `draft` and nothing else.** `evaluate_result`
+reads the existing `job_applications` row first and applies exactly one of three
+outcomes:
+
+| existing row | what happens |
+|---|---|
+| none | insert, `status = 'draft'` |
+| `status = 'draft'` | refresh `body` / `module_ids` / `missing_slots`, still `draft` |
+| any other status | **untouched**; the response carries `application_frozen: true` |
+
+The write used to be one unconditional upsert carrying `status: "draft"`, so
+re-evaluating a posting already in `needs_approval` or `approved` dragged it back
+to `draft` — out of `notify_queue` (which asks only once, on
+`approval_requested_at is null`) and out of `apply_queue` (which reads
+`status = 'approved'`), with `approval_requested_at` still set. The row left every
+queue and the state machine had run backwards. The rule is that a letter a human
+has been asked about, or has approved, is the exact text that decision was about;
+re-assembling it from a catalog that has since changed would make the approval a
+lie. The `draft` update is additionally guarded with `.eq("status", "draft")`, so
+an approval landing mid-write wins the race.
+
 Two quirks that are noise rather than bugs, recorded so nobody chases them:
 
 - **`reasoning` sometimes comes back in Chinese.** Two of four live verdicts
