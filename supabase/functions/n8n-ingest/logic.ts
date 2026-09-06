@@ -1415,3 +1415,87 @@ export function parsePendingRequest(body: unknown): ParsedPending {
 
   return { ok: true, limit: Math.min(n, PENDING_MAX_LIMIT) };
 }
+
+// ───────────────────────────────────────────────────────────────────────────
+// The `brief` action — mail summary for the daily Slack briefs
+// ───────────────────────────────────────────────────────────────────────────
+//
+// ⚠️ This is a deliberate, bounded widening of what a leaked key can read, and
+// it was decided on purpose rather than drifted into.
+//
+// Everything else this function exposes is either write-only or ids
+// (`pending`). This returns **sender and subject** for a handful of messages,
+// because a brief saying "3 need a reply" without saying which is not worth
+// sending. What it does NOT return is the part that would make a leak serious:
+// no `snippet`, no `suggested_reply`, no `raw`. Those are the fields holding
+// actual message content and a draft written in the user's voice.
+//
+// So the blast radius moves from "can write mail triage rows" to "can also see
+// who mailed and about what, for the few most urgent". That is a real cost. It
+// buys the brief its most useful line, and it is capped at BRIEF_MAX_ITEMS so a
+// leaked key cannot enumerate the mailbox by paging.
+
+/** Hard cap on messages named in a brief. Not caller-adjustable. */
+export const BRIEF_MAX_ITEMS = 5;
+
+/** True when the body is asking for the brief summary. */
+export function isBriefRequest(body: unknown): boolean {
+  return typeof body === "object" && body !== null &&
+    (body as { action?: unknown }).action === "brief";
+}
+
+export interface BriefMailItem {
+  sender: string;
+  subject: string | null;
+  score: number | null;
+  importance: string | null;
+  urgency: string | null;
+}
+
+/**
+ * Shape the rows the brief needs from what the query returned.
+ *
+ * Pure so the field-narrowing is testable: the point of this function is as
+ * much what it drops as what it keeps, and a regression here leaks message
+ * content into a Slack channel rather than merely looking wrong.
+ */
+export function toBriefItems(rows: unknown, limit = BRIEF_MAX_ITEMS): BriefMailItem[] {
+  if (!Array.isArray(rows)) return [];
+  return rows.slice(0, limit).map((r) => {
+    const o = (r ?? {}) as Record<string, unknown>;
+    return {
+      sender: typeof o.sender === "string" ? o.sender : "",
+      subject: typeof o.subject === "string" ? o.subject : null,
+      score: typeof o.score === "number" ? o.score : null,
+      importance: typeof o.importance === "string" ? o.importance : null,
+      urgency: typeof o.urgency === "string" ? o.urgency : null,
+    };
+  });
+}
+
+/**
+ * The categories a brief will name, and the reason it filters at all.
+ *
+ * Measured against the real mailbox: ordering the brief by `score` alone put a
+ * Spotify one-time login code (90, "high") at the top, above everything a human
+ * was actually waiting on. That verdict is not wrong — a login code *is*
+ * urgent — but "urgent" and "needs you" are different questions, and a brief
+ * answers the second one.
+ *
+ * The category vocabulary already encodes the difference, so the brief uses it
+ * rather than trying to out-think the score:
+ *
+ *   Action needed   the owner personally has to do something
+ *   Awaiting reply  the owner is waiting on someone else
+ *   Personal        a human wrote it
+ *
+ * Everything else — Notification, Receipt, Newsletter, Bill, Meeting — is
+ * deliberately excluded. In the live mailbox those are 46 of the 50 triaged
+ * open messages, and none of them needs an answer today.
+ *
+ * The consequence worth stating: **an un-triaged message is never named**, so a
+ * brief cannot mention mail the model has not read yet. That is why the
+ * `untriaged` count travels alongside — the number says the queue is behind
+ * without letting a backlog fill all five slots with newsletters.
+ */
+export const BRIEF_CATEGORIES = ["Action needed", "Awaiting reply", "Personal"] as const;
