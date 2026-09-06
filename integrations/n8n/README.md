@@ -26,6 +26,9 @@ machine that can do the work does it, and the devices only read.
 | `workflows/mail-triage.json` | the workflow, importable into n8n 2.35.7 |
 | `workflows/mail-heartbeat.json` | the scheduled "we looked, and there was nothing" marker |
 | `workflows/mail-drain.json` | the scheduled queue drainer — classifies anything still untriaged |
+| `workflows/brief-morning.json` | 07:00 Slack brief — weather, 4 calendars, tasks |
+| `workflows/brief-day.json` | 12:00 Slack brief — calendars + top 5 tasks |
+| `workflows/brief-evening.json` | 19:00 Slack brief — tomorrow's weather, calendars, tasks |
 
 ---
 
@@ -891,3 +894,40 @@ forever, burning roughly 24 s of inference each time. The symptom is honest — 
 never leaves the top of the panel — but if you see one, that is what it is. The
 alternative designs were worse: giving up silently would lose mail, and scoring from the
 subject line alone would produce a verdict indistinguishable from a real one.
+
+## The daily briefs
+
+Three scheduled Slack messages — 07:00, 12:00, 19:00 — each assembling weather
+(`wttr.in`, no auth), four Google calendars, and an open-task list.
+
+They previously read tasks from **Notion**, which is no longer used. The task node now
+reads `pf_tasks` over PostgREST instead, which needed two changes that must move together:
+
+- **The node.** `GET /rest/v1/pf_tasks?select=…&done=eq.false&order=due_date.asc.nullslast`.
+  `nullslast` matters: undated tasks are not urgent, and without it they sort to the top
+  and crowd out everything with a real deadline.
+- **The formatter.** Notion answered with *one* item wrapping many pages (`data.results`),
+  so the branch looped. PostgREST returns a bare array and n8n splits it into one item
+  per row — keeping the loop would have silently shown only the first task.
+
+### Why `supabaseApi` and not a header credential
+
+The Supabase gateway rejects `Authorization` alone (`No API key found`); it wants
+**both** `apikey` and `Authorization`. n8n's Header Auth credential supplies one header,
+and this repo is public so neither may be a literal in the JSON. The `supabaseApi`
+predefined credential type injects both, which is why the node uses it.
+
+Reading works over the **anon** key because `pf_tasks` and `pf_task_planning` carry a
+`widget_anon_read` policy scoped to the owner uid — the same path the iOS widgets use.
+No new endpoint was needed.
+
+### Credentials these need
+
+| Type | Name | Notes |
+|---|---|---|
+| `supabaseApi` | `Nexus Supabase` | host + anon key |
+| `googleCalendarOAuth2Api` | `Google Calendar account` | needs the **Google Calendar API** enabled, which is separate from Gmail |
+| `slackApi` | `Slack account` | already present — the token predates this work and is worth rotating |
+
+A tasks failure is set to `continueRegularOutput`: weather and calendar are still worth
+sending, so a Supabase hiccup degrades the brief rather than cancelling it.

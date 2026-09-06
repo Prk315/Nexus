@@ -1,0 +1,397 @@
+{
+  "id": "nexusBriefMorning1",
+  "name": "✅ Morning Brief (KEEP)",
+  "description": null,
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "0 7 * * *"
+            }
+          ]
+        }
+      },
+      "id": "morning-trigger",
+      "name": "07:00 Trigger",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        0,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "url": "https://wttr.in/Copenhagen?format=j1",
+        "options": {}
+      },
+      "id": "fetch-weather",
+      "name": "Fetch Weather",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        220,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "getAll",
+        "calendar": {
+          "__rl": true,
+          "value": "primary",
+          "mode": "list"
+        },
+        "returnAll": false,
+        "limit": 20,
+        "options": {
+          "timeMin": "={{ $now.startOf('day').toISO() }}",
+          "timeMax": "={{ $now.endOf('day').toISO() }}"
+        }
+      },
+      "id": "cal-primary",
+      "name": "Primary Calendar",
+      "type": "n8n-nodes-base.googleCalendar",
+      "typeVersion": 1.2,
+      "position": [
+        220,
+        120
+      ],
+      "credentials": {
+        "googleCalendarOAuth2Api": {
+          "id": null,
+          "name": "Google Calendar account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "getAll",
+        "calendar": {
+          "__rl": true,
+          "value": "04sht4t8bci0fpfs2ri1r6l7rp34vpl5@import.calendar.google.com",
+          "mode": "id"
+        },
+        "returnAll": false,
+        "limit": 20,
+        "options": {
+          "timeMin": "={{ $now.startOf('day').toISO() }}",
+          "timeMax": "={{ $now.endOf('day').toISO() }}"
+        }
+      },
+      "id": "cal-uni",
+      "name": "KU Skema",
+      "type": "n8n-nodes-base.googleCalendar",
+      "typeVersion": 1.2,
+      "position": [
+        220,
+        240
+      ],
+      "credentials": {
+        "googleCalendarOAuth2Api": {
+          "id": null,
+          "name": "Google Calendar account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "getAll",
+        "calendar": {
+          "__rl": true,
+          "value": "17a480e7a608b6716ca8af9591ac14529f8074a76c41826648de4144eb629bd3@group.calendar.google.com",
+          "mode": "id"
+        },
+        "returnAll": false,
+        "limit": 20,
+        "options": {
+          "timeMin": "={{ $now.startOf('day').toISO() }}",
+          "timeMax": "={{ $now.endOf('day').toISO() }}"
+        }
+      },
+      "id": "cal-bastian-uni",
+      "name": "Bastian Universitet",
+      "type": "n8n-nodes-base.googleCalendar",
+      "typeVersion": 1.2,
+      "position": [
+        220,
+        360
+      ],
+      "credentials": {
+        "googleCalendarOAuth2Api": {
+          "id": null,
+          "name": "Google Calendar account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "getAll",
+        "calendar": {
+          "__rl": true,
+          "value": "ee3941a4315cb98fcb7c110f2043f897345cbe77182973eb0ea8cda19c62c3a4@group.calendar.google.com",
+          "mode": "id"
+        },
+        "returnAll": false,
+        "limit": 20,
+        "options": {
+          "timeMin": "={{ $now.startOf('day').toISO() }}",
+          "timeMax": "={{ $now.endOf('day').toISO() }}"
+        }
+      },
+      "id": "cal-social",
+      "name": "Fælles Social",
+      "type": "n8n-nodes-base.googleCalendar",
+      "typeVersion": 1.2,
+      "position": [
+        220,
+        480
+      ],
+      "credentials": {
+        "googleCalendarOAuth2Api": {
+          "id": null,
+          "name": "Google Calendar account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "https://efxmzsdisaymtpebaxlp.supabase.co/rest/v1/pf_tasks",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "supabaseApi",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "select",
+              "value": "id,title,priority,due_date,done"
+            },
+            {
+              "name": "done",
+              "value": "eq.false"
+            },
+            {
+              "name": "order",
+              "value": "due_date.asc.nullslast"
+            },
+            {
+              "name": "limit",
+              "value": "10"
+            }
+          ]
+        },
+        "options": {
+          "timeout": 30000
+        }
+      },
+      "id": "fetch-notion",
+      "name": "Tasks (pf_tasks)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        220,
+        600
+      ],
+      "credentials": {
+        "supabaseApi": {
+          "id": null,
+          "name": "Nexus Supabase"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "mode": "append"
+      },
+      "id": "merge-data",
+      "name": "Merge All Data",
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3,
+      "position": [
+        500,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const items = $input.all();\nlet weather = null, calendar = [], tasks = [];\n\nfor (const item of items) {\n  const data = item.json;\n  if (data.current_condition) {\n    const current = data.current_condition[0]; const today = data.weather?.[0];\n    weather = {temp: current.temp_C, feels: current.FeelsLikeC, condition: current.weatherDesc[0].value, high: today?.maxtempC, low: today?.mintempC};\n  } else if (data.summary || data.start) {\n    const start = data.start?.dateTime || data.start?.date;\n    const isAllDay = !data.start?.dateTime;\n    let timeStr = isAllDay ? 'All day' : new Date(start).toLocaleTimeString('da-DK', {hour: '2-digit', minute: '2-digit', timeZone: 'Europe/Copenhagen'});\n    calendar.push({title: data.summary || 'Untitled', time: timeStr, location: data.location || '', start: start});\n  } else if (data.done !== undefined || (data.title !== undefined && data.id !== undefined)) {\n    // A pf_tasks row from PostgREST.\n    //\n    // Notion used to answer with ONE item wrapping many pages (`data.results`),\n    // so this branch looped. PostgREST returns a bare array and n8n splits it\n    // into one item per row, so there is nothing to loop over — each pass\n    // handles a single task. Keeping the old loop here would silently drop\n    // every task but the first.\n    //\n    // Ordering is done in SQL (`order=due_date.asc.nullslast`), not here.\n    const deadline = data.due_date;\n    let deadlineStr = '';\n    if (deadline) {\n      // due_date is a DATE ('YYYY-MM-DD'); parse as UTC midnight so a local\n      // timezone cannot shift it a day and turn 'today' into 'OVERDUE'.\n      const d = new Date(deadline + 'T00:00:00Z');\n      const today = new Date(); today.setUTCHours(0,0,0,0);\n      const diffDays = Math.round((d - today) / 86400000);\n      if (diffDays < 0) deadlineStr = '⚠️ OVERDUE';\n      else if (diffDays === 0) deadlineStr = '📍 Today';\n      else if (diffDays === 1) deadlineStr = 'Tomorrow';\n      else deadlineStr = d.toLocaleDateString('da-DK', {day: 'numeric', month: 'short', timeZone: 'UTC'});\n    }\n    tasks.push({title: data.title || 'Untitled', deadline: deadlineStr, priority: data.priority || ''});\n  }\n}\n\ncalendar.sort((a, b) => new Date(a.start) - new Date(b.start));\nconst seen = new Set(); calendar = calendar.filter(e => { const key = e.title + e.start; if (seen.has(key)) return false; seen.add(key); return true; });\n\nlet msg = `☀️ *Good morning, Bastian!*\\n_${new Date().toLocaleDateString('da-DK', {weekday: 'long', day: 'numeric', month: 'long'})}_\\n\\n`;\nif (weather) msg += `🌡️ *Weather:* ${weather.temp}°C (feels ${weather.feels}°C) — ${weather.condition}\\n↗️ High ${weather.high}°C / ↘️ Low ${weather.low}°C\\n\\n`;\nif (calendar.length > 0) { msg += `📅 *Today (${calendar.length} events):*\\n`; for (const e of calendar.slice(0, 8)) { msg += `• ${e.time} — ${e.title}`; if (e.location) msg += ` _(${e.location})_`; msg += `\\n`; } if (calendar.length > 8) msg += `_...and ${calendar.length - 8} more_\\n`; msg += `\\n`; } else { msg += `📅 *Calendar:* No events today\\n\\n`; }\nif (tasks.length > 0) { msg += `✅ *Tasks (${tasks.length}):*\\n`; for (const t of tasks.slice(0, 5)) { let line = `• ${t.title}`; if (t.deadline) line += ` — ${t.deadline}`; if (t.priority === 'high') line += ` 🔴`; msg += line + `\\n`; } if (tasks.length > 5) msg += `_...and ${tasks.length - 5} more_\\n`; } else { msg += `✅ *Tasks:* All clear!\\n`; }\nmsg += `\\n_Have a great day!_ 🔮`;\nreturn [{ json: { slackMessage: msg } }];"
+      },
+      "id": "format-brief",
+      "name": "Format Brief",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        720,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "select": "channel",
+        "channelId": {
+          "__rl": true,
+          "value": "U0A3FM7K01Z",
+          "mode": "id"
+        },
+        "text": "={{ $json.slackMessage }}",
+        "otherOptions": {}
+      },
+      "id": "send-slack",
+      "name": "Send to Slack",
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 2.2,
+      "position": [
+        940,
+        300
+      ],
+      "credentials": {
+        "slackApi": {
+          "id": null,
+          "name": "Slack account"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "07:00 Trigger": {
+      "main": [
+        [
+          {
+            "node": "Fetch Weather",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Primary Calendar",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "KU Skema",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Bastian Universitet",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Fælles Social",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Tasks (pf_tasks)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch Weather": {
+      "main": [
+        [
+          {
+            "node": "Merge All Data",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Primary Calendar": {
+      "main": [
+        [
+          {
+            "node": "Merge All Data",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "KU Skema": {
+      "main": [
+        [
+          {
+            "node": "Merge All Data",
+            "type": "main",
+            "index": 2
+          }
+        ]
+      ]
+    },
+    "Bastian Universitet": {
+      "main": [
+        [
+          {
+            "node": "Merge All Data",
+            "type": "main",
+            "index": 3
+          }
+        ]
+      ]
+    },
+    "Fælles Social": {
+      "main": [
+        [
+          {
+            "node": "Merge All Data",
+            "type": "main",
+            "index": 4
+          }
+        ]
+      ]
+    },
+    "Merge All Data": {
+      "main": [
+        [
+          {
+            "node": "Format Brief",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Format Brief": {
+      "main": [
+        [
+          {
+            "node": "Send to Slack",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Tasks (pf_tasks)": {
+      "main": [
+        [
+          {
+            "node": "Merge All Data",
+            "type": "main",
+            "index": 5
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "nodeGroups": [],
+  "activeVersionId": null,
+  "versionCounter": 1,
+  "sourceWorkflowId": null,
+  "versionMetadata": {
+    "name": null,
+    "description": null
+  }
+}
