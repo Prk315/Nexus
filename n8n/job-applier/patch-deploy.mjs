@@ -1,11 +1,18 @@
 /**
- * Copy every generated job-applier workflow to the n8n deploy directory,
- * re-applying the two patches the deployed copies need and the repo copies must
- * never carry.
+ * Copy every generated n8n workflow to the deploy directory, re-applying the two
+ * patches the deployed copies need and the repo copies must never carry.
  *
  *   node patch-deploy.mjs            # write ~/docker/n8n/workflows/*.json
  *   node patch-deploy.mjs --check    # verify the deploy copies are current, write nothing
  *   node patch-deploy.mjs job-apply  # just one, by name
+ *
+ * It covers **both** pipelines — the four job workflows in this folder and the two
+ * housing workflows in `../housing/` — because the two patches are properties of
+ * *this n8n instance*, not of a pipeline: the Gmail credential id is a row id in
+ * this instance's database and the CLI trigger is an affordance of this machine's
+ * `n8n execute`. A second copy of this script for the housing folder would be a
+ * second place for the credential id to go stale, and a stale one there fails at
+ * the send.
  *
  * # Why the two copies differ at all
  *
@@ -32,12 +39,20 @@
  *
  * # The list is data, not code
  *
- * Four workflows now share this patcher. Nothing below is keyed to a particular
+ * Six workflows now share this patcher. Nothing below is keyed to a particular
  * one: the CLI trigger is wired by *finding* the schedule trigger rather than by
- * naming it, so adding a fifth workflow means adding a row to `WORKFLOWS` and
+ * naming it, so adding a seventh workflow means adding a row to `WORKFLOWS` and
  * nothing else. A hard-coded node name ("Every 4 Hours") was the first thing that
  * would have had to be copy-pasted-and-edited per workflow, and a stale one there
  * fails by wiring the CLI trigger to nothing at all.
+ *
+ * `dir` is the one field that had to be added when the housing pipeline arrived,
+ * and it is deliberately a *relative source* path rather than an absolute one:
+ * the deploy directory stays flat (n8n imports by filename), so a workflow's
+ * folder decides where it is read from and nothing else. That means the six names
+ * share one namespace — a `housing-harvest.json` and a `job-harvest.json` cannot
+ * collide, but two folders offering the same name would, silently, with the last
+ * one winning. The duplicate check below refuses that.
  */
 
 import { readFileSync, writeFileSync, existsSync } from "node:fs";
@@ -54,17 +69,37 @@ const GMAIL_CREDENTIAL = { id: "7hzqrhh9QEyx6Lqp", name: "Gmail account" };
 /**
  * `gmail: true` means the workflow *must* contain a credentialled Gmail node, and
  * a build that lost one is an error rather than a silent skip. `job-evaluate`
- * talks only to Ollama and Supabase, so it declares `false`.
+ * talks only to Ollama and Supabase, so it declares `false`; `housing-harvest`
+ * talks only to three public sources and Supabase, so it does too — the housing
+ * pipeline's Gmail lane is BoligPortal's own BoligAgent alerts arriving on the
+ * existing mail bus, which nothing here fetches.
  *
  * `sends: true` marks the workflow whose CLI trigger mails real companies. It
- * changes nothing mechanically; it is there so the console output says so.
+ * changes nothing mechanically; it is there so the console output says so. No
+ * housing workflow carries it and none ever should: the housing pipeline submits
+ * nothing to a third-party portal, by design (`HOUSING_PLAN.md` §5).
+ *
+ * `dir` is the folder holding `workflows/<name>.json`, relative to this file.
  */
 const WORKFLOWS = [
-  { name: "job-harvest", builder: "build-workflow.mjs", gmail: true },
-  { name: "job-evaluate", builder: "build-evaluate.mjs", gmail: false },
-  { name: "job-notify", builder: "build-apply.mjs", gmail: true },
-  { name: "job-apply", builder: "build-apply.mjs", gmail: true, sends: true },
+  { name: "job-harvest", dir: ".", builder: "build-workflow.mjs", gmail: true },
+  { name: "job-evaluate", dir: ".", builder: "build-evaluate.mjs", gmail: false },
+  { name: "job-notify", dir: ".", builder: "build-apply.mjs", gmail: true },
+  { name: "job-apply", dir: ".", builder: "build-apply.mjs", gmail: true, sends: true },
+  { name: "housing-harvest", dir: "../housing", builder: "build-housing.mjs", gmail: false },
+  { name: "housing-notify", dir: "../housing", builder: "build-housing.mjs", gmail: true },
+  { name: "housing-renewal", dir: "../housing", builder: "build-housing.mjs", gmail: true },
 ];
+
+// The deploy directory is flat, so two folders offering the same workflow name
+// would silently overwrite each other and whichever ran last would win.
+const seenNames = new Set();
+for (const w of WORKFLOWS) {
+  if (seenNames.has(w.name)) {
+    throw new Error(`two WORKFLOWS rows are called "${w.name}" — they would share one deploy file`);
+  }
+  seenNames.add(w.name);
+}
 
 const CLI_TRIGGER = {
   parameters: {},
@@ -143,7 +178,7 @@ if (!selected.length) {
 
 let stale = 0;
 for (const spec of selected) {
-  const src = join(here, "workflows", `${spec.name}.json`);
+  const src = join(here, spec.dir ?? ".", "workflows", `${spec.name}.json`);
   const dest = join(DEPLOY_DIR, `${spec.name}.json`);
 
   if (!existsSync(src)) {

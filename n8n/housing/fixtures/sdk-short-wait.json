@@ -1,0 +1,82 @@
+{
+ "count": 10,
+ "results": [
+  {
+   "pk": 165,
+   "name": "Trekroner Kollegiet",
+   "desc_address": "Universitetsparken 1",
+   "zipcode": "4000",
+   "committee_abbreviation": "RIU",
+   "committee_name": "RIU-Roskilde",
+   "tenancies_count": 108,
+   "tenancy_pks": [
+    "89EC1AdE711E"
+   ],
+   "rooms": [
+    1,
+    2
+   ],
+   "min_rent": 3692.0,
+   "max_rent": 6128.0,
+   "latitude": 55.650399,
+   "longitude": 12.133659
+  },
+  {
+   "pk": 183,
+   "name": "Erhvervskollegiet",
+   "desc_address": "Bakkesvinget 69-91",
+   "zipcode": "4000",
+   "committee_abbreviation": "RIU",
+   "committee_name": "RIU-Roskilde",
+   "tenancies_count": 96,
+   "tenancy_pks": [
+    "38C145dd0130"
+   ],
+   "rooms": [
+    1
+   ],
+   "min_rent": 3418.0,
+   "max_rent": 5167.0,
+   "latitude": 55.625755,
+   "longitude": 12.076896
+  },
+  {
+   "pk": 96,
+   "name": "Filosofparken",
+   "desc_address": "Lysalleen 2-500",
+   "zipcode": "4000",
+   "committee_abbreviation": "RIU",
+   "committee_name": "RIU-Roskilde",
+   "tenancies_count": 252,
+   "tenancy_pks": [
+    "7d1647416091"
+   ],
+   "rooms": [
+    1
+   ],
+   "min_rent": 4579.0,
+   "max_rent": 7058.0,
+   "latitude": 55.650894,
+   "longitude": 12.131167
+  },
+  {
+   "pk": 26,
+   "name": "Egedalsvænge",
+   "desc_address": "Egedalsvænge",
+   "zipcode": "2980",
+   "committee_abbreviation": "CIU",
+   "committee_name": "CIU - Centralindstillingsudvalget",
+   "tenancies_count": 110,
+   "tenancy_pks": [
+    "0C5408CC9E1C"
+   ],
+   "rooms": [
+    1
+   ],
+   "min_rent": 1586.0,
+   "max_rent": 5395.0,
+   "latitude": 55.907427,
+   "longitude": 12.49298
+  }
+ ]
+}

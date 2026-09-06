@@ -1,0 +1,251 @@
+{
+  "id": "nexus-housing-notify",
+  "name": "Housing Notify — listing alerts",
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "saveManualExecutions": true
+  },
+  "tags": [],
+  "nodes": [
+    {
+      "id": "trigger",
+      "name": "Every 10 Minutes",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        -620,
+        300
+      ],
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "minutes",
+              "minutesInterval": 10
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "queue",
+      "name": "Fetch Notify Queue",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        -400,
+        300
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.NEXUS_SUPABASE_URL }}/functions/v1/housing-ingest",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "X-Housing-Key",
+              "value": "={{ $env.HOUSING_INGEST_KEY }}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={ \"action\": \"notify_pending\", \"user_id\": \"{{ $env.NEXUS_USER_ID }}\", \"limit\": 5 }",
+        "options": {
+          "timeout": 30000
+        }
+      }
+    },
+    {
+      "id": "split",
+      "name": "Split Notify Queue",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -180,
+        300
+      ],
+      "parameters": {
+        "jsCode": "// housing-ingest answers with ONE item carrying the whole queue. Fan it out so\n// each listing is its own item — one refused send then costs one email, not the\n// whole pass.\nconst res = $input.first().json;\nif (!res || res.ok !== true) {\n  throw new Error('housing-ingest notify_pending failed: ' + JSON.stringify(res).slice(0, 300));\n}\nconst notify = res.notify || [];\n\n// An empty queue is the normal steady state, not a failure: every stored listing\n// has already been mailed. Returning [] ends the run quietly. Throwing would\n// paint a red execution every ten minutes and train everyone to ignore them — and\n// then the one that mattered would look exactly like the others.\nif (notify.length === 0) return [];\n\nreturn notify.map((n) => ({ json: n }));"
+      }
+    },
+    {
+      "id": "compose",
+      "name": "Build Listing Email",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        40,
+        300
+      ],
+      "parameters": {
+        "jsCode": "__NOTIFY_JS__\n\n// --- node body ---\n// One alert per queued listing, built by the tested buildListingEmail rather than\n// by string concatenation here: every field below (title, address, the listing\n// URL) was written by whoever posted the ad, and it all ends up in an HTML body\n// and a mail header.\n//\n// The recipient is the user's OWN inbox. Nothing in this pipeline ever mails a\n// portal or a landlord — HOUSING_PLAN.md §5, and it is not a limitation to be\n// worked around later.\nconst TO = $env.JOB_NOTIFY_TO || 'bastianrthomsen@gmail.com';\nconst now = new Date();\n\nreturn $input.all().map((item) => {\n  const listing = item.json || {};\n  const mail = buildListingEmail(listing, { now });\n  return {\n    json: {\n      listing_id: listing.listing_id,\n      to: TO,\n      subject: mail.subject,\n      html: mail.html,\n      // n8n's Gmail node sends a single body part, so only `html` is transmitted\n      // today. `text` is the text/plain half a raw-MIME sender would attach, and\n      // it is what the tests pin the email's CONTENT against independently of its\n      // markup. Carrying it makes multipart a one-line change if that node ever\n      // gains it.\n      text: mail.text,\n    },\n  };\n});"
+      }
+    },
+    {
+      "id": "send",
+      "name": "Send Listing Email",
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.1,
+      "position": [
+        280,
+        300
+      ],
+      "onError": "continueErrorOutput",
+      "parameters": {
+        "resource": "message",
+        "operation": "send",
+        "sendTo": "={{ $json.to }}",
+        "subject": "={{ $json.subject }}",
+        "emailType": "html",
+        "message": "={{ $json.html }}",
+        "options": {
+          "appendAttribution": false
+        }
+      },
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "GMAIL_CREDENTIAL_ID",
+          "name": "Gmail OAuth"
+        }
+      }
+    },
+    {
+      "id": "result",
+      "name": "Build Notify Result",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        520,
+        200
+      ],
+      "parameters": {
+        "jsCode": "__NOTIFY_JS__\n\n// --- node body ---\n// Reached only from the Gmail node's SUCCESS output. notify_result flips the row\n// to notified server-side, so posting it for an email that never left would hide\n// a listing you were never told about — and on a race lane a listing you hear\n// about tomorrow is a listing you did not hear about.\n//\n// Pairing is by pairedItem, not by position. The error output pulls failed items\n// out of this stream, so output-0 index i stops being upstream index i the moment\n// one send fails, and that offset would stamp a Gmail message id onto the WRONG\n// listing. pairedSourceIndex falls back to the index, which is correct whenever\n// nothing failed.\nconst composed = $('Build Listing Email').all();\n\nconst out = [];\nconst items = $input.all();\nfor (let i = 0; i < items.length; i++) {\n  const sent = items[i].json || {};\n  const src = composed[pairedSourceIndex(items[i].pairedItem, i)];\n  const listingId = src && src.json ? src.json.listing_id : null;\n\n  // No id, no claim. Silently skipping is right here: the row stays pending and\n  // comes back next pass, which is strictly better than marking something sent on\n  // a guess.\n  if (!listingId) continue;\n\n  // Gmail's message resource: `id` is the message, `threadId` the conversation.\n  out.push({\n    json: {\n      action: 'notify_result',\n      user_id: $env.NEXUS_USER_ID,\n      listing_id: listingId,\n      ok: true,\n      message_id: sent.id || sent.messageId || null,\n    },\n  });\n}\nreturn out;"
+      }
+    },
+    {
+      "id": "logfail",
+      "name": "Log Failed Send",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        520,
+        420
+      ],
+      "parameters": {
+        "jsCode": "// A failed send is not a failed run.\n//\n// notify_result is posted ONLY from the success output, so a listing whose email\n// did not leave the machine stays pending and the next ten-minute pass picks it\n// up again. That is the retry. Do not add another one here: Gmail can fail AFTER\n// accepting a message, and a retry loop that cannot tell those apart is how the\n// same alert arrives four times.\nfor (const item of $input.all()) {\n  const j = item.json || {};\n  const err = j.error || j.message || j;\n  console.log(\n    'listing alert failed, row left pending for the next pass: ' + JSON.stringify(err).slice(0, 300),\n  );\n}\nreturn [];"
+      }
+    },
+    {
+      "id": "post",
+      "name": "Post Notify Result",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        760,
+        200
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.NEXUS_SUPABASE_URL }}/functions/v1/housing-ingest",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "X-Housing-Key",
+              "value": "={{ $env.HOUSING_INGEST_KEY }}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json) }}",
+        "options": {
+          "batching": {
+            "batch": {
+              "batchSize": 1,
+              "batchInterval": 200
+            }
+          },
+          "timeout": 30000
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Every 10 Minutes": {
+      "main": [
+        [
+          {
+            "node": "Fetch Notify Queue",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch Notify Queue": {
+      "main": [
+        [
+          {
+            "node": "Split Notify Queue",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Split Notify Queue": {
+      "main": [
+        [
+          {
+            "node": "Build Listing Email",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Listing Email": {
+      "main": [
+        [
+          {
+            "node": "Send Listing Email",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send Listing Email": {
+      "main": [
+        [
+          {
+            "node": "Build Notify Result",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Log Failed Send",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Notify Result": {
+      "main": [
+        [
+          {
+            "node": "Post Notify Result",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  }
+}

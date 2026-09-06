@@ -1,0 +1,882 @@
+{
+  "id": "nexus-housing-harvest",
+  "name": "Housing Harvest — lejebolig + boligzonen (race) + mit.s.dk (daily)",
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "saveManualExecutions": true
+  },
+  "tags": [],
+  "nodes": [
+    {
+      "id": "trigger",
+      "name": "Every 30 Minutes",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        -760,
+        300
+      ],
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "minutes",
+              "minutesInterval": 30
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "config",
+      "name": "Load Config",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        -540,
+        300
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.NEXUS_SUPABASE_URL }}/functions/v1/housing-ingest",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "X-Housing-Key",
+              "value": "={{ $env.HOUSING_INGEST_KEY }}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={ \"action\": \"config\", \"user_id\": \"{{ $env.NEXUS_USER_ID }}\" }",
+        "options": {
+          "timeout": 30000
+        }
+      }
+    },
+    {
+      "id": "fanout",
+      "name": "Fan Out Sources",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -320,
+        300
+      ],
+      "parameters": {
+        "jsCode": "// One item per enabled source, each carrying the criteria rows and the seen-set.\n// The workflow deliberately holds no configuration of its own: criteria and\n// sources are rows in Supabase so that \"I'd also take Frederiksberg under 7k\" is\n// an insert, not an edit to a Code node.\nconst cfg = $input.first().json;\nif (!cfg || cfg.ok !== true) {\n  throw new Error('housing-ingest config failed: ' + JSON.stringify(cfg).slice(0, 300));\n}\nconst criteria = cfg.criteria || [];\nconst sources = cfg.sources || [];\nif (criteria.length === 0) {\n  throw new Error('no enabled housing_criteria — add one before this can gate anything');\n}\n\n// An empty source list is not an error, but it IS the difference between \"nothing\n// new\" and \"nothing was even looked at\", and a run that ends silently makes those\n// two look identical. Same reason freshness comes from n8n_requests rather than\n// from a row count.\nif (sources.length === 0) {\n  console.log('housing harvest: zero enabled sources — nothing was polled this run');\n  return [];\n}\n\nreturn sources.map((s) => ({\n  json: {\n    source: s,\n    criteria,\n    seen: cfg.seen || [],\n    // Additive to the pinned contract and worth carrying: boligzonen's ids are\n    // slugs parsed out of a URL, so a URL-keyed guard is the one that cannot be\n    // wrong about them.\n    seen_urls: cfg.seen_urls || [],\n  },\n}));"
+      }
+    },
+    {
+      "id": "route",
+      "name": "Route Source",
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3,
+      "position": [
+        -100,
+        300
+      ],
+      "parameters": {
+        "rules": {
+          "values": [
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "version": 2
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.source.kind }}",
+                    "rightValue": "lejebolig_jsonld",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "outputKey": "lejebolig"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "version": 2
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.source.kind }}",
+                    "rightValue": "boligzonen_sitemap",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "outputKey": "boligzonen"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "version": 2
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.source.kind }}",
+                    "rightValue": "sdk_api",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "outputKey": "sdk"
+            }
+          ]
+        },
+        "options": {
+          "fallbackOutput": "none"
+        }
+      }
+    },
+    {
+      "id": "lb_search",
+      "name": "Fetch Lejebolig Search",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        180,
+        60
+      ],
+      "parameters": {
+        "url": "={{ $json.source.config.search_url || 'https://www.lejebolig.dk/lejeboliger/koebenhavn' }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "User-Agent",
+              "value": "NexusHousing/0.1 (+personal housing search for one user; bastianrthomsen@gmail.com)"
+            }
+          ]
+        },
+        "options": {
+          "response": {
+            "response": {
+              "responseFormat": "text"
+            }
+          },
+          "timeout": 30000
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "id": "lb_pick",
+      "name": "Pick Lejebolig Listings",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        400,
+        60
+      ],
+      "parameters": {
+        "jsCode": "__EXTRACT_JS__\n\n// --- node body ---\n// One search page, then a capped number of detail fetches. lejebolig's listing\n// ids are sequential, so in the steady state the high-water mark makes a poll\n// cost exactly one request; the cap only binds on a first run or after an outage.\n//\n// robots.txt allows /lejeboliger/* and /lejebolig/*; it disallows /Hunter/*,\n// /Handler/* and /kort/, none of which are touched. Content-Signal says\n// ai-train=no — nothing here puts listing text into a training corpus.\nconst ctxs = $('Fan Out Sources').all().map((i) => i.json)\n  .filter((c) => c.source && c.source.kind === SOURCE_KIND.lejebolig);\nconst items = $input.all();\n\nconst out = [];\nfor (let i = 0; i < items.length; i++) {\n  // Pair each response with ITS OWN source row. The job harvester read\n  // `$input.first()` here and silently discarded two of three feeds — a run that\n  // looked healthy produced nothing from two whole sources.\n  const ctx = ctxs[i] || ctxs[0];\n  if (!ctx) continue;\n  const html = items[i].json.data ?? items[i].json.body ?? '';\n\n  const prefix = SOURCE_KIND.lejebolig + ' ';\n  const seenIds = new Set(\n    (ctx.seen || []).filter((s) => String(s).startsWith(prefix)).map((s) => String(s).slice(prefix.length)),\n  );\n  // The floor is max(numeric id already ingested). Nothing writes it back; see\n  // nextIdRange's header for why it is a floor and not a cursor.\n  let floor = null;\n  for (const id of seenIds) {\n    const n = Number(id);\n    if (Number.isFinite(n) && (floor === null || n > floor)) floor = n;\n  }\n\n  const cap = Number(ctx.source.config && ctx.source.config.max_detail_fetches) || MAX_DETAIL_FETCHES;\n  const found = parseLejeboligSearch(html);\n  const picked = nextIdRange(floor, found, { cap, seen: seenIds });\n\n  console.log(\n    'lejebolig: ' + found.length + ' on page, ' + picked.fresh + ' fresh, ' +\n      picked.stale + ' stale, ' + picked.take.length + ' fetching, ' +\n      picked.deferred + ' deferred (floor=' + floor + ', high_water=' + picked.high_water + ')',\n  );\n  // Deferred listings are NOT queued for a later run — the floor moves past them.\n  // On a race lane that is the right trade, but it must be visible.\n  if (picked.deferred > 0) {\n    console.log('lejebolig: ' + picked.deferred + ' listing(s) dropped by the cap; raise max_detail_fetches or poll faster');\n  }\n\n  for (const row of picked.take) {\n    out.push({ json: { url: row.url, external_id: row.external_id, source_id: ctx.source.id } });\n  }\n}\nreturn out;"
+      }
+    },
+    {
+      "id": "lb_fetch",
+      "name": "Fetch Lejebolig Listing",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        620,
+        60
+      ],
+      "parameters": {
+        "url": "={{ $json.url }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "User-Agent",
+              "value": "NexusHousing/0.1 (+personal housing search for one user; bastianrthomsen@gmail.com)"
+            }
+          ]
+        },
+        "options": {
+          "response": {
+            "response": {
+              "responseFormat": "text",
+              "neverError": true
+            }
+          },
+          "batching": {
+            "batch": {
+              "batchSize": 2,
+              "batchInterval": 1200
+            }
+          },
+          "timeout": 30000
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "id": "lb_build",
+      "name": "Build Lejebolig Listing",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        840,
+        60
+      ],
+      "parameters": {
+        "jsCode": "__EXTRACT_JS__\n\n// --- node body ---\n// The detail page carries a real schema.org RealEstateListing — the only one of\n// five private portals that does. A page without one is SKIPPED rather than\n// half-built: a row with a title and no rent passes the budget gate on a\n// technicality and lands in the notify queue unpriceable.\nconst metas = $('Pick Lejebolig Listings').all().map((i) => i.json);\nconst items = $input.all();\nconst out = [];\nlet skipped = 0;\n\nfor (let i = 0; i < items.length; i++) {\n  const meta = metas[i] || {};\n  const html = items[i].json.data ?? items[i].json.body ?? '';\n  const row = parseLejeboligJsonLd(html, { url: meta.url });\n  if (!row) { skipped++; continue; }\n  out.push({ json: { ...row, source_id: meta.source_id ?? null } });\n}\nif (skipped) console.log('lejebolig: ' + skipped + ' page(s) carried no RealEstateListing');\nreturn out;"
+      }
+    },
+    {
+      "id": "bz_sitemap",
+      "name": "Fetch Boligzonen Sitemap",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        180,
+        260
+      ],
+      "parameters": {
+        "url": "={{ $json.source.config.sitemap_url || 'https://boligzonen.dk/sitemaps/boligzonen-dk.xml.gz' }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "User-Agent",
+              "value": "NexusHousing/0.1 (+personal housing search for one user; bastianrthomsen@gmail.com)"
+            }
+          ]
+        },
+        "options": {
+          "response": {
+            "response": {
+              "responseFormat": "file",
+              "outputPropertyName": "data"
+            }
+          },
+          "timeout": 60000
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "id": "bz_gunzip",
+      "name": "Decompress Sitemap",
+      "type": "n8n-nodes-base.compression",
+      "typeVersion": 1.1,
+      "position": [
+        400,
+        260
+      ],
+      "parameters": {
+        "operation": "decompress",
+        "binaryPropertyName": "data",
+        "outputPrefix": "file_"
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "id": "bz_pick",
+      "name": "Pick Boligzonen Listings",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        620,
+        260
+      ],
+      "parameters": {
+        "jsCode": "__EXTRACT_JS__\n\n// --- node body ---\n// robots.txt disallows only /en/rentals/* and a named SEO-bot list; the sitemap\n// is published for crawling. Diff it against the seen-set and a lastmod window,\n// and fetch only what is both new and recent — a normal poll is one 133 kB\n// request and nothing else.\nconst ctx = $('Fan Out Sources').all().map((i) => i.json)\n  .find((c) => c.source && c.source.kind === SOURCE_KIND.boligzonen);\nif (!ctx) return [];\n\n\n// Read every binary property on an item as text, whatever n8n's binary-data mode\n// is. This is the half of the sitemap problem that a pure file cannot own.\n//\n// ⚠️ `item.binary[key].data` is base64 ONLY in the default in-memory mode. Under\n// filesystem/S3 mode — which is what a 2 MB decompressed sitemap gets — the bytes\n// live outside the item and `.data` is empty, with an `id` pointing at them\n// instead. The first live run failed exactly there: the property existed\n// (`file_0`) and decoded to nothing, which the old inline guard reported as\n// \"did not decompress to XML\".\n//\n// `getBinaryDataBuffer` is the mode-independent read and is proxied correctly\n// even when Code nodes run in an external task runner. The base64 path stays as a\n// fallback so this still works on an instance where the helper is unavailable.\nasync function binaryCandidates(item) {\n  const out = [];\n  const binary = (item && item.binary) || {};\n  for (const key of Object.keys(binary)) {\n    let text = '';\n    try {\n      const buf = await this.helpers.getBinaryDataBuffer(0, key);\n      if (buf && buf.length) text = buf.toString('utf8');\n    } catch (e) {\n      // fall through to the base64 path\n    }\n    if (!text) {\n      const b64 = binary[key] && binary[key].data;\n      if (b64) {\n        try { text = Buffer.from(b64, 'base64').toString('utf8'); } catch (e) { text = ''; }\n      }\n    }\n    out.push({ key, text });\n  }\n  return out;\n}\n\nconst item = $input.first();\nconst found = sitemapXmlFromCandidates(await binaryCandidates.call(this, item));\n\n// ⚠️ A dead sitemap must NOT be fatal. The first live run threw here, and because\n// a Code-node throw fails the WHOLE execution the lejebolig branch's already-\n// fetched listings never reached the batch POST: one broken lane zeroed a healthy\n// one. That is the job-harvest lesson (one dead feed costs its own items and\n// nothing else) arriving late.\n//\n// So this lane returns nothing and says so loudly. `Check Listing Rejects` runs\n// the same tested check again AFTER the POST has landed and turns the run red\n// there — the failure is still impossible to miss, it just no longer takes the\n// other lane's rows with it. Returning [] SILENTLY would be the real sin: an\n// empty lane is indistinguishable from a quiet one.\nif (!found.ok) {\n  const detail =\n    'boligzonen: sitemap unreadable (' + found.reason + '). Binary keys: [' +\n    found.keys.join(', ') + ']';\n  console.error(detail + '. Continuing without this lane so the other lanes still post.');\n  // A SENTINEL, not an empty array. `[]` is indistinguishable from 'nothing new\n  // in the window', which is the normal steady state — and a lane that silently\n  // harvests nothing forever is the exact failure this pipeline keeps writing\n  // guards against. `Drop Lane Errors` removes it before it can reach an HTTP\n  // node, and `Check Listing Rejects` reads it off THIS node's output (which\n  // survives the filter) to fail the run after the batch has landed.\n  return [{ json: { lane_error: detail } }];\n}\nconst xml = found.xml;\nconsole.log('boligzonen: sitemap read from binary property ' + found.key + ' (' + xml.length + ' chars)');\n\nconst cfg = ctx.source.config || {};\nconst windowMinutes = Number(cfg.window_minutes) || 180;\nconst cap = Number(cfg.max_detail_fetches) || MAX_DETAIL_FETCHES;\n\nconst prefix = SOURCE_KIND.boligzonen + ' ';\nconst seen = new Set(\n  (ctx.seen || []).filter((s) => String(s).startsWith(prefix)).map((s) => String(s).slice(prefix.length)),\n);\n\n// Two guards on the same trousers. The slug guard above is the contract's\n// `seen`; this one is `seen_urls`, which housing-ingest adds precisely because a\n// sitemap diff has a URL long before it has parsed an id out of a slug. If\n// boligzonen ever re-slugs a title the slug guard misses it and this one does not.\nconst seenUrls = new Set(ctx.seen_urls || []);\n\nconst all = parseBoligzonenSitemap(xml).filter((e) => !seenUrls.has(e.url));\nconst now = new Date();\n\n// ⚠️ This sitemap is rebuilt roughly DAILY, not continuously — measured 30 hours\n// stale on 2026-09-06. The window is therefore anchored on the file's own newest\n// `lastmod`, not on the clock; a clock window narrower than the rebuild period\n// matches nothing on every run, forever, and reports success. Log the age so an\n// empty lane is explainable without re-probing the site.\nconst ageMin = boligzonenSitemapAgeMinutes(all, now);\nconst recent = boligzonenWindow(all, { now, windowMinutes });\nconst picked = nextIdRange(null, recent, { cap, seen });\n\nconsole.log(\n  'boligzonen: ' + all.length + ' unseen listing urls, sitemap age ' +\n    (ageMin === null ? 'unknown' : ageMin + ' min') + ', ' + recent.length +\n    ' within ' + windowMinutes + ' min of its newest entry, ' + picked.take.length +\n    ' fetching, ' + picked.stale + ' already seen, ' + picked.deferred + ' deferred',\n);\nif (picked.deferred > 0) {\n  console.log('boligzonen: ' + picked.deferred + ' listing(s) dropped by the cap; raise max_detail_fetches or narrow window_minutes');\n}\nreturn picked.take.map((e) => ({\n  json: { url: e.url, external_id: e.external_id, lastmod: e.lastmod, source_id: ctx.source.id },\n}));"
+      }
+    },
+    {
+      "id": "bz_filter",
+      "name": "Drop Lane Errors",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        730,
+        260
+      ],
+      "parameters": {
+        "jsCode": "// The lane-error sentinel from `Pick Boligzonen Listings` carries no `url`, and\n// handing an HTTP node an undefined URL is a hard failure of the very run the\n// sentinel exists to keep alive. It is dropped here; `Check Listing Rejects`\n// still sees it, because `$('Node').all()` reads that node's OUTPUT and is\n// unaffected by anything downstream.\nreturn $input.all().filter((i) => i.json && i.json.url);"
+      }
+    },
+    {
+      "id": "bz_fetch",
+      "name": "Fetch Boligzonen Listing",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        970,
+        260
+      ],
+      "parameters": {
+        "url": "={{ $json.url }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "User-Agent",
+              "value": "NexusHousing/0.1 (+personal housing search for one user; bastianrthomsen@gmail.com)"
+            }
+          ]
+        },
+        "options": {
+          "response": {
+            "response": {
+              "responseFormat": "text",
+              "neverError": true
+            }
+          },
+          "batching": {
+            "batch": {
+              "batchSize": 2,
+              "batchInterval": 1500
+            }
+          },
+          "timeout": 30000
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "id": "bz_build",
+      "name": "Build Boligzonen Listing",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1190,
+        260
+      ],
+      "parameters": {
+        "jsCode": "__EXTRACT_JS__\n\n// --- node body ---\n// No JSON-LD anywhere on this source: rent, rooms, size, address and the ad body\n// are all server-rendered HTML. `lastmod` from the sitemap becomes posted_at —\n// the page itself only says \"Oprettet / Opdateret: I går\", which is a phrase.\nconst metas = $('Pick Boligzonen Listings').all().map((i) => i.json);\nconst items = $input.all();\nconst out = [];\nlet thin = 0;\n\nfor (let i = 0; i < items.length; i++) {\n  const meta = metas[i] || {};\n  const html = items[i].json.data ?? items[i].json.body ?? '';\n  const row = extractBoligzonenListing(html, { url: meta.url, lastmod: meta.lastmod });\n  // No rent AND no title means the fetch failed or the layout moved. Skipping is\n  // right; a row with neither is not a listing, it is an error wearing one.\n  if (row.rent === null && !row.title) { thin++; continue; }\n  out.push({ json: { ...row, source_id: meta.source_id ?? null } });\n}\nif (thin) console.log('boligzonen: ' + thin + ' page(s) yielded neither a rent nor a title');\nreturn out;"
+      }
+    },
+    {
+      "id": "merge",
+      "name": "Merge Listings",
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3,
+      "position": [
+        1280,
+        160
+      ],
+      "parameters": {
+        "mode": "append",
+        "numberInputs": 2
+      }
+    },
+    {
+      "id": "gate",
+      "name": "Gate Listings",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1500,
+        160
+      ],
+      "parameters": {
+        "jsCode": "__EXTRACT_JS__\n\n// --- node body ---\n// Rule-only screening before anything expensive happens. A listing that fails\n// every criteria row is not posted at all; one that passes any is posted once.\n//\n// ⚠️ The gate's VERDICTS ARE NOT PERSISTED. The pinned housing-ingest contract's\n// listing shape has no room for them, so they are logged here and nowhere else.\n// HOUSING_PLAN.md §3 describes a housing_matches table with gate_verdict and\n// gate_reason columns; when that lands, this node grows a `matches` array and the\n// server grows somewhere to put it. Until then a drop is auditable only in the\n// n8n execution log — say so rather than letting someone assume the database\n// knows why a listing never appeared.\nconst ctx = $('Fan Out Sources').first().json;\nconst criteria = ctx.criteria || [];\nconst out = [];\nconst dropped = [];\n\nfor (const item of $input.all()) {\n  const listing = item.json;\n  const verdicts = criteria.map((c) => ({ id: c.id, ...cheapGateHousing(listing, c) }));\n  const passed = verdicts.filter((v) => v.verdict === 'pass');\n\n  if (passed.length === 0) {\n    dropped.push((listing.title || listing.url) + ' — ' + verdicts.map((v) => v.reason).join('; '));\n    continue;\n  }\n  const flags = [...new Set(passed.flatMap((v) => v.flags))];\n  console.log(\n    'pass: ' + (listing.title || listing.url) + ' [' + passed.map((v) => v.id).join(',') + ']' +\n      (flags.length ? ' flags=' + flags.join(',') : ''),\n  );\n  // Exactly the contract's fields go on the wire. Everything the extractors carry\n  // for the gate's benefit — housing_type, available_from, shared, furnished —\n  // is stripped here.\n  out.push({ json: toIngestListing(listing) });\n}\n\nif (dropped.length) console.log('gate dropped ' + dropped.length + ':\\n  ' + dropped.join('\\n  '));\nreturn out;"
+      }
+    },
+    {
+      "id": "post_listings",
+      "name": "Batch Listings",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1720,
+        160
+      ],
+      "parameters": {
+        "jsCode": "// One request for the whole run. An empty batch ends the run quietly rather\n// than posting `listings: []` — the server would accept it and the response\n// would be indistinguishable from a real, empty harvest.\nconst listings = $input.all().map((i) => i.json);\nif (listings.length === 0) return [];\nreturn [{ json: { user_id: $env.NEXUS_USER_ID, listings } }];"
+      }
+    },
+    {
+      "id": "send_listings",
+      "name": "Post Listings",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1940,
+        160
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.NEXUS_SUPABASE_URL }}/functions/v1/housing-ingest",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "X-Housing-Key",
+              "value": "={{ $env.HOUSING_INGEST_KEY }}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json) }}",
+        "options": {
+          "timeout": 60000
+        }
+      }
+    },
+    {
+      "id": "check_listings",
+      "name": "Check Listing Rejects",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2160,
+        160
+      ],
+      "parameters": {
+        "jsCode": "// Two jobs, in this order: report what the server did with the batch, then fail\n// the run if a source lane died on the way here.\n//\n// The ORDER is the point. `Pick Boligzonen Listings` deliberately does not throw\n// any more, so a sitemap failure no longer costs the lejebolig lane its rows —\n// but a lane that quietly harvests nothing forever is exactly the silent failure\n// this pipeline keeps guarding against. So the rows land first, and then this\n// goes red.\nconst res = $input.first().json || {};\nif (res.ok !== true) throw new Error('housing-ingest rejected the batch: ' + JSON.stringify(res).slice(0, 400));\nconst rejected = res.rejected || [];\nif (rejected.length) {\n  throw new Error(\n    'housing-ingest rejected ' + rejected.length + ' listing(s): ' + JSON.stringify(rejected).slice(0, 600),\n  );\n}\nconsole.log('stored ' + (res.listings ?? 0) + ' listing(s)');\n\n// ⚠️ Read the SENTINEL, never the binary. The first version of this check called\n// `this.helpers.getBinaryDataBuffer(0, key)` on `$('Decompress Sitemap')`'s item\n// — and that helper is indexed against the CURRENT node's input, not the named\n// node's, so it read this node's HTTP response instead. It then reported a\n// perfectly healthy boligzonen lane as dead and failed a run that had just\n// stored rows from it. A false alarm on a guard is worse than no guard: it\n// teaches you to ignore the one that matters.\n//\n// Wrapped because a run with no boligzonen source never executes that node at\n// all, and \"the branch did not run\" is not a failure.\nlet laneError = null;\ntry {\n  for (const item of $('Pick Boligzonen Listings').all()) {\n    if (item.json && item.json.lane_error) laneError = item.json.lane_error;\n  }\n} catch (e) {\n  // node did not run in this execution\n}\n\nif (laneError) throw new Error('listings posted, but a lane was dead this run — ' + laneError);\n\nreturn [{ json: res }];"
+      }
+    },
+    {
+      "id": "sdk_gate",
+      "name": "Daily Window?",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        180,
+        520
+      ],
+      "parameters": {
+        "jsCode": "// Lane A is a DAILY job riding a 30-minute trigger, because patch-deploy.mjs\n// requires exactly one schedule trigger per workflow (it mirrors that trigger's\n// wiring onto the CLI Trigger, and two would make \"which one\" a coin toss).\n//\n// So the cadence is a clock guard instead: the tick that lands in [hour:00, hour:30)\n// runs, the one at :30 does not. HOUSING_PLAN.md's cadence table asks for daily at\n// 07:00, and a building catalogue does not change hourly.\n//\n// The honest failure mode, stated so nobody debugs it as a bug: if the Mac is\n// asleep across the whole window, Lane A is skipped that day. That is the\n// \"n8n for what is nice to happen\" rule — a missed catalogue diff costs nothing,\n// which is exactly why this is not on pg_cron.\nconst ctx = $input.first().json;\nconst hour = Number(ctx.source.config && ctx.source.config.daily_hour);\nconst target = Number.isFinite(hour) ? hour : 7;\nconst now = new Date();\nconst run = now.getHours() === target && now.getMinutes() < 30;\nif (!run) return [];\nreturn [{ json: ctx }];"
+      }
+    },
+    {
+      "id": "sdk_page1",
+      "name": "Fetch Buildings Page 1",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        400,
+        520
+      ],
+      "parameters": {
+        "url": "={{ ($json.source.config.api_base || 'https://mit.s.dk/api/v2/public') + '/buildings/search/' }}",
+        "sendQuery": true,
+        "specifyQuery": "json",
+        "jsonQuery": "={{ JSON.stringify(Object.assign({ min_zipcode: 2100, max_zipcode: 2200, min_rooms: 1 }, $json.source.config.params || {}, { page: 1 })) }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "User-Agent",
+              "value": "NexusHousing/0.1 (+personal housing search for one user; bastianrthomsen@gmail.com)"
+            }
+          ]
+        },
+        "options": {
+          "timeout": 30000
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "id": "sdk_plan",
+      "name": "Plan Building Calls",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        620,
+        520
+      ],
+      "parameters": {
+        "jsCode": "// Page 1 told us the total. Emit the remaining page URLs plus the one\n// short-wait-time call, all through a single HTTP node — two nodes' worth of work\n// for one node's worth of traffic, and the tag on each item is how the builder\n// tells them apart afterwards.\n//\n// mit.s.dk has NO robots.txt at all (404) and namespaces these endpoints\n// /public/, so nothing is forbidden and nothing is granted. Daily, identified,\n// and capped is what \"indistinguishable from a person browsing\" looks like.\nconst ctx = $('Daily Window?').first().json;\nconst cfg = ctx.source.config || {};\nconst base = cfg.api_base || 'https://mit.s.dk/api/v2/public';\nconst params = Object.assign({ min_zipcode: 2100, max_zipcode: 2200, min_rooms: 1 }, cfg.params || {});\n\nconst res = $input.first().json || {};\nconst count = Number(res.count);\nconst perPage = (res.results || []).length || 10;\nconst MAX_PAGES = Number(cfg.max_pages) || 10;\n\nconst out = [];\nif (Number.isFinite(count) && perPage > 0) {\n  const pages = Math.min(Math.ceil(count / perPage), MAX_PAGES);\n  const qs = (page) =>\n    Object.entries({ ...params, page }).map(([k, v]) => encodeURIComponent(k) + '=' + encodeURIComponent(v)).join('&');\n  for (let p = 2; p <= pages; p++) out.push({ json: { kind: 'page', url: base + '/buildings/search/?' + qs(p) } });\n  if (pages < Math.ceil(count / perPage)) {\n    console.log('sdk: catalogue has ' + count + ' buildings but max_pages caps this run at ' + pages * perPage);\n  }\n} else {\n  console.log('sdk: page 1 carried no usable count — importing page 1 only');\n}\n\n// The only Lane-A field that moves. One call.\nout.push({ json: { kind: 'short_wait', url: base + '/buildings/short-wait-time/' } });\nreturn out;"
+      }
+    },
+    {
+      "id": "sdk_rest",
+      "name": "Fetch Buildings Rest",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        840,
+        520
+      ],
+      "parameters": {
+        "url": "={{ $json.url }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "User-Agent",
+              "value": "NexusHousing/0.1 (+personal housing search for one user; bastianrthomsen@gmail.com)"
+            }
+          ]
+        },
+        "options": {
+          "batching": {
+            "batch": {
+              "batchSize": 2,
+              "batchInterval": 1500
+            }
+          },
+          "timeout": 30000,
+          "response": {
+            "response": {
+              "neverError": true
+            }
+          }
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "id": "sdk_build",
+      "name": "Build Buildings",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1060,
+        520
+      ],
+      "parameters": {
+        "jsCode": "__EXTRACT_JS__\n\n// --- node body ---\n// A building is not a listing: it has no posted_at, it never goes away, and its\n// interesting field is a QUEUE. It goes to buildings_sync, not to the listing\n// batch, and it is never merged into the race lane.\nconst page1 = $('Fetch Buildings Page 1').first().json || {};\nconst plan = $('Plan Building Calls').all().map((i) => i.json);\nconst items = $input.all();\n\nlet shortWaitPks = null;   // null = call not made or failed = UNKNOWN\nlet shortWaitOk = false;\n\n// Tag-to-response pairing is POSITIONAL, so if the two lists ever disagree in\n// length the tags are meaningless — and a mis-tagged short-wait response read as\n// a page would import ten Roskilde dorms as if they were the query result, while\n// a mis-tagged page read as the short-wait list would flip short_wait on for the\n// wrong buildings. Neither is recoverable from the row. So a length mismatch\n// abandons the tagging entirely: every response is treated as a page and\n// short_wait stays UNKNOWN. Wrong-and-loud beats wrong-and-plausible.\nconst aligned = plan.length === items.length;\nif (!aligned) {\n  console.log('sdk: ' + plan.length + ' planned call(s) but ' + items.length + ' response(s) — short_wait left unknown');\n}\nconst pages = [page1];\n\nfor (let i = 0; i < items.length; i++) {\n  const tag = plan[i] || {};\n  const body = items[i].json;\n  if (!body || body.error) continue;\n  if (aligned && tag.kind === 'short_wait') {\n    const rows = parseSdkBuildings(body);\n    shortWaitPks = rows.map((r) => r.external_id);\n    shortWaitOk = true;\n    continue;\n  }\n  pages.push(body);\n}\n\n// ⚠️ Absence from a SUCCESSFUL short-wait call is real evidence of false.\n// Absence because the call failed is evidence of nothing, and writing false for\n// all 38 buildings would silently retract every short-wait flag in the database.\nif (!shortWaitOk) console.log('sdk: short-wait-time was not read this run — short_wait stays unknown (null)');\n\nconst byId = new Map();\nfor (const page of pages) {\n  for (const b of parseSdkBuildings(page, { shortWaitPks })) byId.set(b.external_id, b);\n}\nconst buildings = [...byId.values()];\nif (buildings.length === 0) return [];\n\nconsole.log('sdk: ' + buildings.length + ' building(s), short_wait ' + (shortWaitOk ? 'known' : 'unknown'));\nreturn [{ json: { action: 'buildings_sync', user_id: $env.NEXUS_USER_ID, buildings } }];"
+      }
+    },
+    {
+      "id": "send_buildings",
+      "name": "Post Buildings",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1280,
+        520
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.NEXUS_SUPABASE_URL }}/functions/v1/housing-ingest",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "X-Housing-Key",
+              "value": "={{ $env.HOUSING_INGEST_KEY }}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json) }}",
+        "options": {
+          "timeout": 60000
+        }
+      }
+    },
+    {
+      "id": "check_buildings",
+      "name": "Check Buildings Result",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1500,
+        520
+      ],
+      "parameters": {
+        "jsCode": "const res = $input.first().json || {};\nif (res.ok !== true) throw new Error('buildings_sync failed: ' + JSON.stringify(res).slice(0, 400));\nconsole.log('synced ' + (res.buildings ?? 0) + ' building(s)');\nreturn [{ json: res }];"
+      }
+    }
+  ],
+  "connections": {
+    "Every 30 Minutes": {
+      "main": [
+        [
+          {
+            "node": "Load Config",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Load Config": {
+      "main": [
+        [
+          {
+            "node": "Fan Out Sources",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fan Out Sources": {
+      "main": [
+        [
+          {
+            "node": "Route Source",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Route Source": {
+      "main": [
+        [
+          {
+            "node": "Fetch Lejebolig Search",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Fetch Boligzonen Sitemap",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Daily Window?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch Lejebolig Search": {
+      "main": [
+        [
+          {
+            "node": "Pick Lejebolig Listings",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Pick Lejebolig Listings": {
+      "main": [
+        [
+          {
+            "node": "Fetch Lejebolig Listing",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch Lejebolig Listing": {
+      "main": [
+        [
+          {
+            "node": "Build Lejebolig Listing",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Lejebolig Listing": {
+      "main": [
+        [
+          {
+            "node": "Merge Listings",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch Boligzonen Sitemap": {
+      "main": [
+        [
+          {
+            "node": "Decompress Sitemap",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Decompress Sitemap": {
+      "main": [
+        [
+          {
+            "node": "Pick Boligzonen Listings",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Pick Boligzonen Listings": {
+      "main": [
+        [
+          {
+            "node": "Drop Lane Errors",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch Boligzonen Listing": {
+      "main": [
+        [
+          {
+            "node": "Build Boligzonen Listing",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Boligzonen Listing": {
+      "main": [
+        [
+          {
+            "node": "Merge Listings",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "Merge Listings": {
+      "main": [
+        [
+          {
+            "node": "Gate Listings",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Gate Listings": {
+      "main": [
+        [
+          {
+            "node": "Batch Listings",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Batch Listings": {
+      "main": [
+        [
+          {
+            "node": "Post Listings",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Post Listings": {
+      "main": [
+        [
+          {
+            "node": "Check Listing Rejects",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Daily Window?": {
+      "main": [
+        [
+          {
+            "node": "Fetch Buildings Page 1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch Buildings Page 1": {
+      "main": [
+        [
+          {
+            "node": "Plan Building Calls",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Plan Building Calls": {
+      "main": [
+        [
+          {
+            "node": "Fetch Buildings Rest",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch Buildings Rest": {
+      "main": [
+        [
+          {
+            "node": "Build Buildings",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Buildings": {
+      "main": [
+        [
+          {
+            "node": "Post Buildings",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Post Buildings": {
+      "main": [
+        [
+          {
+            "node": "Check Buildings Result",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Drop Lane Errors": {
+      "main": [
+        [
+          {
+            "node": "Fetch Boligzonen Listing",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  }
+}

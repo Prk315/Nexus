@@ -1,0 +1,81 @@
+{
+ "results": [
+  {
+   "pk": 5,
+   "name": "Ågården",
+   "desc_address": "Kapelvej 52-56",
+   "zipcode": "2200",
+   "committee_abbreviation": "CIU",
+   "committee_name": "CIU - Centralindstillingsudvalget",
+   "tenancies_count": 42,
+   "tenancy_pks": [
+    "C101A778972E"
+   ],
+   "rooms": [
+    1
+   ],
+   "min_rent": 2474.0,
+   "max_rent": 3671.0,
+   "latitude": 55.6858871,
+   "longitude": 12.55070596
+  },
+  {
+   "pk": 10,
+   "name": "Rådmandsbo",
+   "desc_address": "Rådmandsgade 2A-C",
+   "zipcode": "2200",
+   "committee_abbreviation": "CIU",
+   "committee_name": "CIU - Centralindstillingsudvalget",
+   "tenancies_count": 4,
+   "tenancy_pks": [
+    "bdE141314528"
+   ],
+   "rooms": [
+    1
+   ],
+   "min_rent": 2588.0,
+   "max_rent": 3035.0,
+   "latitude": 55.697616,
+   "longitude": 12.548056
+  },
+  {
+   "pk": 24,
+   "name": "Lundtoftegade",
+   "desc_address": "Lundtoftegade",
+   "zipcode": "2200",
+   "committee_abbreviation": "CIU",
+   "committee_name": "CIU - Centralindstillingsudvalget",
+   "tenancies_count": 22,
+   "tenancy_pks": [
+    "7f27396b6640"
+   ],
+   "rooms": [
+    1
+   ],
+   "min_rent": 3790.0,
+   "max_rent": 5537.0,
+   "latitude": 55.693944,
+   "longitude": 12.537512
+  },
+  {
+   "pk": 30,
+   "name": "Nørrebro Vænge",
+   "desc_address": "Nørrebro Vænge 1-16",
+   "zipcode": "2200",
+   "committee_abbreviation": "CIU",
+   "committee_name": "CIU - Centralindstillingsudvalget",
+   "tenancies_count": 34,
+   "tenancy_pks": [
+    "d9EEAAEEfb63"
+   ],
+   "rooms": [
+    1
+   ],
+   "min_rent": 4446.0,
+   "max_rent": 5991.0,
+   "latitude": 55.694866,
+   "longitude": 12.540276
+  }
+ ],
+ "count": 38
+}
