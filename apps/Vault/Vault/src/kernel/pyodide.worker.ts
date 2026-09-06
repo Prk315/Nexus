@@ -29,6 +29,7 @@
 
 import { loadPyodide, type PyodideInterface } from "pyodide";
 import type { OutputChunk } from "./types";
+import { cleanTraceback, stripNoise } from "./traceback";
 
 // Pyodide's JS loader fetches its own WASM, stdlib zip and packages from
 // `indexURL` at runtime. It is pinned to the exact version of the npm package
@@ -123,11 +124,19 @@ async function run(code: string): Promise<OutputChunk[]> {
     // Makes `import numpy` work without the user installing anything: Pyodide
     // scans the source and fetches the wheels it recognises.
     await py.loadPackagesFromImports(code);
+    // The loader narrates itself to stdout ("Loading numpy", "Didn't find
+    // package …whl locally, attempting to load from https://cdn…"). That is not
+    // the cell's output, and dropping it here is why the buffers are cleared
+    // AFTER the load rather than before it.
+    stdout = [];
+    stderr = [];
 
     const result = await py.runPythonAsync(code);
 
-    if (stdout.length) chunks.push({ type: "text", content: stdout.join("\n") });
-    if (stderr.length) chunks.push({ type: "text", content: stderr.join("\n") });
+    const out = stripNoise(stdout);
+    const err = stripNoise(stderr);
+    if (out.length) chunks.push({ type: "text", content: out.join("\n") });
+    if (err.length) chunks.push({ type: "text", content: err.join("\n") });
 
     chunks.push(...(await drainFigures(py)));
 
@@ -140,12 +149,17 @@ async function run(code: string): Promise<OutputChunk[]> {
     }
     (result as { destroy?: () => void } | null)?.destroy?.();
   } catch (err: unknown) {
-    if (stdout.length) chunks.push({ type: "text", content: stdout.join("\n") });
+    const out = stripNoise(stdout);
+    if (out.length) chunks.push({ type: "text", content: out.join("\n") });
     // A Python exception is a normal result for an editor cell — it renders as
     // red text, exactly like a SQL syntax error, rather than propagating.
+    //
+    // cleanTraceback drops Pyodide's own `_pyodide/_base.py` frames, which sit
+    // ABOVE the user's error and would otherwise be the only part visible once
+    // the output cap truncates.
     chunks.push({
       type: "error",
-      content: err instanceof Error ? err.message : String(err),
+      content: cleanTraceback(err instanceof Error ? err.message : String(err)),
     });
   }
 
