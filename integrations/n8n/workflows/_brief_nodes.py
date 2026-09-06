@@ -1,5 +1,14 @@
 """Shared node/code definitions for the three daily briefs.
 
+Two node-level settings that are easy to lose and hard to notice:
+
+* the wttr.in node needs options.response.response.responseFormat = "json".
+  wttr.in serves valid JSON with a text/plain content type, and n8n's autodetect
+  therefore hands back a STRING in `data`. `current_condition` is never seen and
+  the weather section disappears with no error at all.
+* the Slack node needs otherOptions.includeLinkToWorkflow = false, or every
+  brief carries an "Automated with this n8n workflow" advert.
+
 The three workflows are kept separate (an explicit choice), which means three
 copies of the same formatter. They have already drifted once — the evening brief
 was missing the high-priority marker the other two had — so the bodies below are
@@ -100,7 +109,17 @@ for (const item of $input.all()) {
   } else if (d.duration_min !== undefined) {
     // protocol_sleep. quality_score is a 0-10 scale, NOT a percentage, and
     // there is no readiness column on this table — do not invent one.
-    sleep = { date: d.date, minutes: d.duration_min, quality: d.quality_score,
+    //
+    // Oura dates a record by the WAKE day, so last night's sleep is dated
+    // today. The query asks for the newest row, which is NOT necessarily last
+    // night: if the ring was not worn, or Oura has not synced, the newest row
+    // can be days old. Rendering that as plain "Sleep:" states something false
+    // — it happened here, showing a two-night-old 3h26 as if it were last
+    // night. So the age travels with the value and the template must show it.
+    const sd = new Date((d.date || '') + 'T12:00:00');
+    const t0 = new Date(todayISO + 'T12:00:00');
+    const nightsAgo = Number.isFinite(sd.getTime()) ? Math.round((t0 - sd) / 86400000) : null;
+    sleep = { date: d.date, nightsAgo, minutes: d.duration_min, quality: d.quality_score,
               deep: d.deep_sleep_min, rem: d.rem_sleep_min, latency: d.sleep_latency_min };
 
   } else if (d.habit_id !== undefined) {
@@ -109,17 +128,29 @@ for (const item of $input.all()) {
   } else if (d.target_per_week !== undefined) {
     habits.push({ id: d.id, name: d.name });
 
-  } else if (d.summary || d.start) {
-    const start = d.start?.dateTime || d.start?.date;
-    const allDay = !d.start?.dateTime;
-    habits.length; // no-op, keeps the branch shape obvious
-    calendar.push({
-      title: d.summary || 'Untitled',
-      time: allDay ? 'All day'
-                   : new Date(start).toLocaleTimeString('da-DK', {hour:'2-digit', minute:'2-digit', timeZone:'Europe/Copenhagen'}),
-      location: d.location || '',
-      start,
-    });
+  } else if (d.recurrence !== undefined || d.days_of_week !== undefined) {
+    // pf_recurring_cal_blocks. Kept out of the SQL because the day filter is a
+    // comma-separated string, which PostgREST cannot match against "today".
+    //
+    // 0 = Sunday: PathFinder's own systems.ts does
+    // `days.includes(new Date(date + "T12:00:00").getDay())`, and the noon
+    // anchor is deliberate there — parsing a bare date at midnight can land on
+    // the previous day under some timezone offsets.
+    const days = (d.days_of_week || '').split(',').map(Number).filter(Number.isFinite);
+    const dow = new Date(todayISO + 'T12:00:00').getDay();
+    const startsOk = !d.start_date || d.start_date <= todayISO;
+    const endsOk   = !d.end_date   || d.end_date   >= todayISO;
+    if (days.includes(dow) && startsOk && endsOk) {
+      calendar.push({ title: d.title || 'Untitled', time: (d.start_time || '').slice(0,5),
+                      location: d.location || '', start: (d.start_time || '99:99') });
+    }
+
+  } else if (d.start_time !== undefined) {
+    // pf_cal_blocks: one-off blocks, already filtered to today in SQL.
+    // start_time is local 'HH:MM' text, so there is no timezone maths to get
+    // wrong here — a real improvement on the Google Calendar path it replaces.
+    calendar.push({ title: d.title || 'Untitled', time: (d.start_time || '').slice(0,5),
+                    location: d.location || '', start: (d.start_time || '99:99') });
 
   } else if (d.done !== undefined || (d.title !== undefined && d.id !== undefined)) {
     const due = d.due_date;
@@ -137,7 +168,7 @@ for (const item of $input.all()) {
   }
 }
 
-calendar.sort((a,b) => new Date(a.start) - new Date(b.start));
+calendar.sort((a,b) => String(a.start).localeCompare(String(b.start)));
 const seen = new Set();
 const events = calendar.filter(e => { const k = e.title + e.start; if (seen.has(k)) return false; seen.add(k); return true; });
 
@@ -249,10 +280,20 @@ if (narrative) msg += `_${narrative}_\n\n`;
 if (facts.sleep) {
   const s = facts.sleep;
   const h = Math.floor(s.minutes/60), m = String(s.minutes%60).padStart(2,'0');
-  msg += `😴 *Sleep:* ${h}h${m}`;
-  if (s.quality != null) msg += ` · quality ${s.quality}/10`;
-  if (s.latency != null) msg += ` · asleep in ${s.latency}m`;
-  msg += `\n\n`;
+  // Say WHICH night. Oura dates by wake day, so nightsAgo === 0 is last night;
+  // anything older is stale and must say so rather than borrow last night's
+  // authority. Beyond three nights it is not a sleep figure any more, it is an
+  // observation that the ring has not been worn.
+  const n = s.nightsAgo;
+  if (n != null && n > 3) {
+    msg += `😴 *Sleep:* no data since ${s.date} — ring not synced\n\n`;
+  } else {
+    const when = n === 0 ? '' : n === 1 ? ' _(night before last)_' : ` _(${n} nights ago)_`;
+    msg += `😴 *Sleep:*${when ? '' : ''} ${h}h${m}`;
+    if (s.quality != null) msg += ` · quality ${s.quality}/10`;
+    if (s.latency != null) msg += ` · asleep in ${s.latency}m`;
+    msg += when + `\n\n`;
+  }
 }
 
 if (facts.weather) {
