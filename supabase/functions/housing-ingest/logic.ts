@@ -260,6 +260,138 @@ export interface CriterionRow {
   types?: unknown;
   min_rooms?: number | string | null;
   max_rooms?: number | string | null;
+  /** `'NNNN'` / `'NNNN-NNNN'` entries. Empty = no postal gate. See `postalVerdict`. */
+  postal_codes?: unknown;
+}
+
+// MARK: - The postal gate
+
+/**
+ * An inclusive postcode range. A single code parses to `{lo: n, hi: n}`.
+ *
+ * Both bounds inclusive, and the type deliberately has no "single" variant — a
+ * bare `'2200'` is just the degenerate range, so every downstream comparison is
+ * one shape and there is no second code path to get wrong.
+ */
+export interface PostalRange {
+  lo: number;
+  hi: number;
+}
+
+const POSTAL_SINGLE_RE = /^(\d{4})$/;
+const POSTAL_RANGE_RE = /^(\d{4})-(\d{4})$/;
+
+/**
+ * Parse the allow-list entries. Malformed entries are DROPPED, not thrown on.
+ *
+ * The grammar, which the migration's comment is the contract for:
+ *
+ *     'NNNN'        a single postcode      '2200'
+ *     'NNNN-NNNN'   an inclusive range     '1300-1799'
+ *
+ * A reversed range (`'2200-1300'`) is normalized rather than rejected. That
+ * asymmetry is deliberate and it runs the opposite way to the renewal guard's:
+ * here a dropped entry NARROWS the allow-list, which turns into extra hard
+ * drops, and in a race lane a missed listing is the loss. So the forgiving
+ * reading is the safe one, and the caller separately notices when NOTHING parsed
+ * (see `postalVerdict`) so a wholly broken list cannot silently narrow anything.
+ *
+ * Non-arrays and non-string elements yield nothing — a column read before the
+ * migration lands arrives as `undefined`, and that must behave as "no gate"
+ * rather than as an error on the notify path.
+ */
+export function parsePostalEntries(raw: unknown): PostalRange[] {
+  if (!Array.isArray(raw)) return [];
+  const out: PostalRange[] = [];
+  for (const entry of raw) {
+    if (typeof entry !== "string") continue;
+    const s = entry.trim();
+    const single = POSTAL_SINGLE_RE.exec(s);
+    if (single) {
+      const n = Number(single[1]);
+      out.push({ lo: n, hi: n });
+      continue;
+    }
+    const range = POSTAL_RANGE_RE.exec(s);
+    if (range) {
+      const a = Number(range[1]);
+      const b = Number(range[2]);
+      out.push(a <= b ? { lo: a, hi: b } : { lo: b, hi: a });
+    }
+    // Anything else — '22 00', '2200–2400' (en dash), 'København N', '' — is
+    // ignored. It cannot be reported from here without giving a pure predicate a
+    // side channel; `postalVerdict` reports the case that actually matters.
+  }
+  return out;
+}
+
+/** Is this postcode inside any of the ranges? */
+export const postalAllowed = (zip: number, ranges: PostalRange[]): boolean =>
+  ranges.some((r) => zip >= r.lo && zip <= r.hi);
+
+/**
+ * The five states of the postal gate.
+ *
+ *   `no_gate`          the list is empty — the column is not in use
+ *   `allowed`          a known postcode inside the list
+ *   `blocked`          a known postcode outside it — the only HARD drop
+ *   `zip_unknown`      no readable postcode — inconclusive, passes flagged
+ *   `gate_unreadable`  a non-empty list, none of whose entries parse
+ */
+export type PostalVerdict =
+  | "no_gate"
+  | "allowed"
+  | "blocked"
+  | "zip_unknown"
+  | "gate_unreadable";
+
+/**
+ * Should this listing's postcode keep it in?
+ *
+ * ## Why this exists at all, when there is already a radius gate
+ *
+ * Because the radius gate is INERT on Lane B. The live harvest established that
+ * the portals publish no coordinates, so `distance_km` is null for essentially
+ * every listing, the radius check records `distance_unknown`, and — by the
+ * gate's own correct rule that an unknown is inconclusive and inconclusive
+ * passes — a Hillerød flat (3400) and Aarhus listings (8200) reached the notify
+ * queue with only rent standing in the way.
+ *
+ * The fix is not to make an unknown distance fail: that would drop every Lane B
+ * listing in the database, in the lane where the entire product is not missing
+ * things. It is to gate on data the portals DO publish. Every Danish listing
+ * carries a postcode.
+ *
+ * ## The unknown zipcode still passes, and that is not an oversight
+ *
+ * `zip_unknown` is inconclusive for exactly the reason `rent_unknown` and
+ * `distance_unknown` are: a parser regression that starts returning null for
+ * postcode must surface as a flagged listing a human still sees, not as a quiet
+ * week. The flag is what stops that being a licence to flood.
+ *
+ * ## `gate_unreadable` is the case worth being careful about
+ *
+ * A non-empty list none of whose entries parse is a misconfiguration, and the
+ * two obvious readings are both silent and both wrong in opposite directions:
+ * treating it as no gate reverts to the Hillerød behaviour, and treating it as
+ * "nothing allowed" drops every listing on the strength of a typo. So it passes
+ * with its own distinct flag — visible, and impossible to confuse with either
+ * "he has not configured this" or "this listing is local".
+ */
+export function postalVerdict(zipcodeRaw: unknown, postalCodes: unknown): PostalVerdict {
+  const configured = Array.isArray(postalCodes) &&
+    postalCodes.some((e) => typeof e === "string" && e.trim().length > 0);
+  if (!configured) return "no_gate";
+
+  const ranges = parsePostalEntries(postalCodes);
+  if (ranges.length === 0) return "gate_unreadable";
+
+  // Routed through the same `parseZipcode` the ingest path uses, so the gate and
+  // the stored column can never disagree about what counts as a postcode.
+  const zip = parseZipcode(zipcodeRaw);
+  if (zip === null) return "zip_unknown";
+
+  return postalAllowed(Number(zip), ranges) ? "allowed" : "blocked";
 }
 
 /**
@@ -300,6 +432,8 @@ export interface GateListing {
   lat?: number | string | null;
   lng?: number | string | null;
   housing_type?: string | null;
+  /** The coarse geographic gate. Present on every portal; coordinates are not. */
+  zipcode?: string | null;
 }
 
 export interface GateVerdict {
@@ -354,6 +488,27 @@ export function gateAgainstCriterion(
       pass = false;
       reasons.push("over_max_rent");
     }
+  }
+
+  // Postcode — the COARSE geographic gate, and on Lane B the only one that
+  // actually decides anything. Runs before distance because it is the check that
+  // can conclude: the portals publish no coordinates, so the radius check below
+  // is almost always `distance_unknown` and therefore inconclusive.
+  //
+  // Only `blocked` is a hard drop. `zip_unknown` and `gate_unreadable` are
+  // inconclusive passes carrying their own flags — see `postalVerdict`.
+  switch (postalVerdict(listing.zipcode, criterion.postal_codes)) {
+    case "blocked":
+      pass = false;
+      reasons.push("postal_mismatch");
+      break;
+    case "zip_unknown":
+      reasons.push("zip_unknown");
+      break;
+    case "gate_unreadable":
+      reasons.push("postal_gate_unreadable");
+      break;
+    // "no_gate" and "allowed" contribute nothing.
   }
 
   // Distance. Computed even when the criterion has no radius, because the number

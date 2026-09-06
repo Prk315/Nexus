@@ -1,0 +1,145 @@
+-- 20260906180000_housing_postal_gate.sql
+--
+-- One additive column on `housing_criteria`: a postal-code allow-list, because
+-- the radius gate turned out to be inert on Lane B.
+--
+-- Read `20260906120000_housing_pipeline.sql` first — this extends the criteria
+-- table it creates, and follows the same rule every other gate input follows:
+-- **absent means "do not gate on this", never "gate everything out".**
+--
+-- # Why the radius gate is not enough, which was only discovered by running it
+--
+-- The geography design in the pipeline migration argues — correctly — that a
+-- centre plus a radius is the honest spelling of "how far is this from
+-- Universitetsparken", and that a postcode list answers it only by proxy. That
+-- reasoning is still right. It just has a precondition that the live harvest
+-- disproved:
+--
+--     ⚠️ **The Lane B portals publish no coordinates at all.**
+--
+-- So `gateAgainstCriterion` computes `distance_km = null` for essentially every
+-- listing, the radius check records `distance_unknown` and — by the gate's own
+-- deliberate rule that an unknown is inconclusive and inconclusive passes —
+-- lets it through. The result was a Hillerød flat (3400) and Aarhus listings
+-- (8200) reaching the notify queue, filtered by nothing but rent.
+--
+-- That is not a bug in the gate. It is the gate behaving exactly as designed on
+-- an input nobody had yet: "we could not tell" must surface for a human rather
+-- than be silently dropped, because in a race lane the product is not missing
+-- things. The fix is therefore **not** to make an unknown distance fail — that
+-- would drop every Lane B listing in the database. It is to add a second,
+-- coarser geographic gate that works on data the portals DO publish.
+--
+-- Every Danish listing carries a postcode. It is a worse proxy for distance than
+-- a haversine, and it is available, and available beats precise.
+--
+-- ## The two gates are complements, not alternatives
+--
+-- Keep both. They fail in opposite directions and that is the point:
+--
+--   * `radius_km` is exact and usually undecidable (no coordinates).
+--   * `postal_codes` is coarse and almost always decidable.
+--
+-- A listing with coordinates gets both. `distance_km` is still computed and
+-- still reported — it is the number a human wants to see — and a Nørrebro
+-- address 400 m from campus is still distinguishable from one 3 km away, which
+-- a postcode alone cannot do.
+--
+-- # The entry grammar
+--
+-- Each element of the array is EITHER
+--
+--     'NNNN'          a single postcode          e.g. '2200'
+--     'NNNN-NNNN'     an inclusive range         e.g. '1300-1799'
+--
+-- Exactly four digits per code, no spaces, no other separators. The range form
+-- exists because inner-city Copenhagen spans hundreds of codes: København K
+-- alone is 1050–1499, and enumerating it would be 450 array elements that no
+-- human will ever audit.
+--
+-- Both bounds are INCLUSIVE. A reversed range ('2200-1300') is accepted and read
+-- as though it were written the right way round — see the note on unreadable
+-- entries below for why the forgiving reading is the safe one here.
+--
+-- ⚠️ **A range is a range of NUMBERS, and inside København K that is not a range
+-- of PLACES.** The whole of 1050–1499 is one district — Indre By — and the
+-- number does not track distance from anything. Measured against
+-- Universitetsparken with this repo's own `haversineKm`:
+--
+--     1050 Kongens Nytorv                 2.88 km
+--     1051 Nyhavn                         3.11 km   <- the FARTHEST
+--     1100 Østergade                      2.65 km
+--     1300 Borgergade                     2.40 km
+--     1350 Øster Voldgade (Botanisk Have) 1.80 km   <- the NEAREST
+--     1450 Larsbjørnsstræde               2.61 km
+--
+-- The ordering is not monotone in either direction, so a partial range inside K
+-- selects an arbitrary set of inner-city streets rather than a region. Ranges
+-- are safe and useful for spanning a WHOLE district (1050-1499 = all of K,
+-- 1500-1799 = all of V, 1800-1999 = all of Frederiksberg C); a partial range
+-- inside one is close to meaningless. Outside 1000–1999 each code is its own
+-- district and this does not arise.
+--
+-- (1000–1049 are postboks codes with no street addresses, which is why a
+-- whole-K range starts at 1050 rather than 1000. Including them is harmless —
+-- no listing can carry one — but it is noise in a list a human has to audit.)
+--
+-- # The three states, and the one that matters
+--
+--   | `postal_codes` | listing zipcode | verdict |
+--   |---|---|---|
+--   | `'{}'` (empty) | anything | **no gate** — the column is not in use |
+--   | non-empty | known, in the list | pass |
+--   | non-empty | known, NOT in the list | **hard drop** (`postal_mismatch`) |
+--   | non-empty | **NULL / unparseable** | **inconclusive pass**, flagged `zip_unknown` |
+--   | non-empty, every entry malformed | anything | inconclusive pass, `postal_gate_unreadable` |
+--
+-- The fourth row is the house rule, and it is the same call the rent and type
+-- checks already make: a listing whose postcode we could not read is a listing
+-- we know nothing about, and dropping it silently is indistinguishable from a
+-- parser regression. It passes carrying `zip_unknown` so the decision email can
+-- say "we could not read the postcode" rather than implying it is local.
+--
+-- The fifth row is the one worth arguing about. A non-empty list none of whose
+-- entries parse is a *misconfiguration*, and there are three possible readings:
+--
+--   1. treat it as no gate — reverts silently to the broken behaviour this
+--      column exists to fix, and Hillerød comes back;
+--   2. treat it as "nothing is allowed" — drops every listing in the database on
+--      the strength of a typo, in the lane where a missed listing IS the loss;
+--   3. pass everything WITH A DISTINCT FLAG.
+--
+-- (3), because it is the only one that is visible. (1) and (2) are both silent,
+-- and they are silent in opposite directions, which is how you get a week of
+-- either noise or nothing while everything looks configured.
+--
+-- Empty-vs-unreadable is therefore a real distinction and not pedantry: `'{}'`
+-- is "he has not set this up", a fully-malformed list is "he tried and it did
+-- not take". Only one of them deserves a flag.
+--
+-- # Why `text[]` and not a constraint-checked domain
+--
+-- No CHECK on the element format. The allow-list of shapes lives in the edge
+-- function, where it can gain a new form without a migration against a database
+-- every branch shares (CLAUDE.md, "One database, every branch") — the same call
+-- `housing_sources.kind` and `housing_listings.status` already make. And a CHECK
+-- would turn a typo into a failed INSERT from the panel rather than a flagged
+-- listing, which is a worse place to discover it.
+--
+-- `not null default '{}'` rather than nullable: an empty array and a NULL would
+-- both have to mean "no gate", and two spellings of one state is how half the
+-- consumers end up checking only one of them. Existing rows take the default and
+-- are therefore un-gated, which is the correct no-op for an additive change.
+
+alter table public.housing_criteria
+  add column if not exists postal_codes text[] not null default '{}';
+
+comment on column public.housing_criteria.postal_codes is
+  'Postal-code allow-list. Entries are ''NNNN'' or ''NNNN-NNNN'' (inclusive). Empty array = no postal gate, consistent with every other absent gate input. When non-empty: a KNOWN zipcode outside the list is a hard drop; a listing with no readable zipcode passes flagged zip_unknown (absent is never a verdict). Beware: 1050-1499 is all one district (Indre By) and the number does not track distance, so a PARTIAL range inside it selects arbitrary streets, not an area — use whole-district ranges.';
+
+-- No index. The gate runs in TypeScript over the handful of enabled criteria
+-- already read per request (`CRITERIA_COLUMNS`), never as a SQL predicate — for
+-- the same reason the radius gate does not: it spans the criteria rows and a
+-- per-listing decision, and pushing it into Postgres would put a second copy of
+-- the matching rule in the tree. One rule, one implementation, in
+-- `supabase/functions/housing-ingest/logic.ts` (`postalVerdict`).

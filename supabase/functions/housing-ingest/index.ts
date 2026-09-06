@@ -121,8 +121,17 @@ const NOTIFY_COLUMNS =
   "id,title,url,address,zipcode,rent,rooms,sqm,lat,lng,housing_type,available_from," +
   "posted_at,first_seen_at,source_kind";
 
+/**
+ * ⚠️ `postal_codes` is load-bearing here. `readCriteria` feeds `gateListing`, and
+ * a criterion read WITHOUT this column arrives with `postal_codes: undefined` —
+ * which `postalVerdict` correctly reads as "no gate". So omitting it does not
+ * error, it silently switches the postal gate off and lets Hillerød and Aarhus
+ * back into the notify queue. Exactly the `TASK_SELECT` trap CLAUDE.md records:
+ * a missing embed does not fail, it yields a quiet default.
+ */
 const CRITERIA_COLUMNS =
-  "id,name,enabled,max_rent,center_lat,center_lng,radius_km,types,min_rooms,max_rooms";
+  "id,name,enabled,max_rent,center_lat,center_lng,radius_km,types,min_rooms,max_rooms," +
+  "postal_codes";
 
 /**
  * The renewal guard's read set. Pinned as a constant for the reason `MAIL_COLUMNS`

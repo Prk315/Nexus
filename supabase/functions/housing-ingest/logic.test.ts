@@ -69,10 +69,13 @@ import {
   parseNotifyLimit,
   parseNotifyResult,
   parseNumberOrNull,
+  parsePostalEntries,
   parseRenewalResult,
   parseStrictBool,
   parseYmd,
   parseZipcode,
+  postalAllowed,
+  postalVerdict,
   REMIND_REPEAT_DAYS,
   type RenewalPositionRow,
   renewalDaysLeft,
@@ -1222,5 +1225,285 @@ describe("parseRenewalResult", () => {
     assert.equal(parseRenewalResult({ ...base, position_id: "42" }).ok, false);
     assert.equal(parseRenewalResult({ ...base, user_id: "default" }).ok, false);
     assert.equal(parseRenewalResult({ user_id: UID, ok: true }).ok, false);
+  });
+});
+
+// ===========================================================================
+// The postal gate
+// ===========================================================================
+//
+// Added after the live harvest disproved a precondition of the radius gate: the
+// Lane B portals publish NO coordinates, so `distance_km` is null for
+// essentially every listing, the radius check records `distance_unknown`, and —
+// by the gate's own correct rule that an unknown is inconclusive and
+// inconclusive passes — a Hillerød flat (3400) and Aarhus listings (8200)
+// reached the notify queue filtered by nothing but rent.
+//
+// So these cases pull in two directions at once, and both must hold:
+//   * a KNOWN out-of-area postcode is a hard drop (the whole point);
+//   * an UNKNOWN postcode still passes, flagged (the house rule — a parser
+//     regression must not read as a quiet week).
+
+describe("parsePostalEntries", () => {
+  it("parses a single code as a degenerate range", () => {
+    assert.deepEqual(parsePostalEntries(["2200"]), [{ lo: 2200, hi: 2200 }]);
+  });
+
+  it("parses an inclusive range", () => {
+    assert.deepEqual(parsePostalEntries(["1300-1799"]), [{ lo: 1300, hi: 1799 }]);
+  });
+
+  it("normalizes a reversed range rather than dropping it", () => {
+    // The asymmetry runs opposite to the renewal guard's: a DROPPED entry narrows
+    // the allow-list, which becomes extra hard drops, and in a race lane a missed
+    // listing is the loss. So be forgiving here.
+    assert.deepEqual(parsePostalEntries(["2200-1300"]), [{ lo: 1300, hi: 2200 }]);
+  });
+
+  it("ignores malformed entries without crashing", () => {
+    const out = parsePostalEntries([
+      "2200",
+      "22 00",
+      "220",
+      "22000",
+      "2200–2400", // en dash, not a hyphen
+      "København N",
+      "",
+      "   ",
+      "1300-",
+      "-1799",
+      "1300-179",
+      null,
+      42,
+      undefined,
+      {},
+      ["2200"],
+    ]);
+    assert.deepEqual(out, [{ lo: 2200, hi: 2200 }]);
+  });
+
+  it("tolerates surrounding whitespace", () => {
+    assert.deepEqual(parsePostalEntries([" 2200 ", "\t1300-1799\n"]), [
+      { lo: 2200, hi: 2200 },
+      { lo: 1300, hi: 1799 },
+    ]);
+  });
+
+  it("yields nothing for a non-array, including a column read before the migration", () => {
+    assert.deepEqual(parsePostalEntries(undefined), []);
+    assert.deepEqual(parsePostalEntries(null), []);
+    assert.deepEqual(parsePostalEntries("2200"), []);
+    assert.deepEqual(parsePostalEntries({}), []);
+  });
+});
+
+describe("postalAllowed", () => {
+  it("is inclusive at both bounds", () => {
+    const r = [{ lo: 1300, hi: 1799 }];
+    assert.equal(postalAllowed(1300, r), true);
+    assert.equal(postalAllowed(1799, r), true);
+    assert.equal(postalAllowed(1299, r), false);
+    assert.equal(postalAllowed(1800, r), false);
+  });
+
+  it("matches any range in the list", () => {
+    const r = parsePostalEntries(["2100", "2200", "1300-1799"]);
+    assert.equal(postalAllowed(2100, r), true);
+    assert.equal(postalAllowed(1500, r), true);
+    assert.equal(postalAllowed(2400, r), false);
+  });
+});
+
+describe("postalVerdict", () => {
+  const CPH = ["2100", "2200", "2400", "1300-1899", "2000"];
+
+  it("is no_gate when the list is empty — every absent gate input means this", () => {
+    assert.equal(postalVerdict("3400", []), "no_gate");
+    assert.equal(postalVerdict("3400", undefined), "no_gate");
+    // Whitespace-only entries are not a configuration either.
+    assert.equal(postalVerdict("3400", ["", "  "]), "no_gate");
+  });
+
+  it("allows a postcode inside the list, by exact match and by range", () => {
+    assert.equal(postalVerdict("2200", CPH), "allowed");
+    assert.equal(postalVerdict("1500", CPH), "allowed"); // inside 1300-1899
+    assert.equal(postalVerdict("1300", CPH), "allowed"); // lower bound
+    assert.equal(postalVerdict("1899", CPH), "allowed"); // upper bound
+  });
+
+  it("HARD DROPS the exact listings that motivated this gate", () => {
+    // These reached the notify queue in the live harvest.
+    assert.equal(postalVerdict("3400", CPH), "blocked"); // Hillerød
+    assert.equal(postalVerdict("8200", CPH), "blocked"); // Aarhus N
+    assert.equal(postalVerdict("2300", CPH), "blocked"); // Amager — near, still out
+    assert.equal(postalVerdict("1050", CPH), "blocked"); // K, below the range
+  });
+
+  it("passes an UNREADABLE postcode as inconclusive, never as a drop", () => {
+    // Same rule as rent_unknown and distance_unknown. A parser regression that
+    // starts returning null must surface as a flagged listing a human still sees,
+    // not as a silently emptier queue.
+    assert.equal(postalVerdict(null, CPH), "zip_unknown");
+    assert.equal(postalVerdict("", CPH), "zip_unknown");
+    assert.equal(postalVerdict("pris efter aftale", CPH), "zip_unknown");
+    assert.equal(postalVerdict(undefined, CPH), "zip_unknown");
+  });
+
+  it("reports gate_unreadable rather than silently reverting to no gate", () => {
+    // A non-empty list none of whose entries parse is a misconfiguration. Reading
+    // it as "no gate" would silently restore the Hillerød behaviour; reading it as
+    // "nothing allowed" would drop every listing on the strength of a typo. So:
+    // pass, with its own distinct flag.
+    assert.equal(postalVerdict("3400", ["København N", "22 00"]), "gate_unreadable");
+    assert.equal(postalVerdict(null, ["nonsense"]), "gate_unreadable");
+  });
+
+  it("still gates when only SOME entries are malformed", () => {
+    // A partially-broken list must not become a free pass.
+    assert.equal(postalVerdict("3400", ["2200", "København N"]), "blocked");
+    assert.equal(postalVerdict("2200", ["2200", "København N"]), "allowed");
+  });
+
+  it("reads a postcode embedded in a longer string, as the ingest path does", () => {
+    // Routed through the same `parseZipcode`, so the gate and the stored column
+    // can never disagree about what counts as a postcode.
+    assert.equal(postalVerdict("2200 København N", CPH), "allowed");
+    assert.equal(postalVerdict("DK-3400 Hillerød", CPH), "blocked");
+  });
+});
+
+describe("the postal gate inside gateAgainstCriterion", () => {
+  const criterion: CriterionRow = {
+    id: "c1",
+    enabled: true,
+    max_rent: 9000,
+    postal_codes: ["2100", "2200", "2400", "1300-1899", "2000"],
+  };
+
+  it("drops the Hillerød flat that rent alone let through", () => {
+    // The regression this whole gate exists for: cheap, no coordinates, 60 km away.
+    const v = gateAgainstCriterion(
+      { rent: 6500, zipcode: "3400", lat: null, lng: null },
+      criterion,
+    );
+    assert.equal(v.pass, false);
+    assert.ok(v.reasons.includes("postal_mismatch"));
+  });
+
+  it("drops the Aarhus listings too", () => {
+    const v = gateAgainstCriterion({ rent: 5200, zipcode: "8200" }, criterion);
+    assert.equal(v.pass, false);
+    assert.ok(v.reasons.includes("postal_mismatch"));
+  });
+
+  it("keeps a Nørrebro listing with no coordinates at all", () => {
+    // The case the radius gate could never decide, and the reason a coarse gate
+    // beats a precise one that has no input.
+    const v = gateAgainstCriterion(
+      { rent: 6500, zipcode: "2200", lat: null, lng: null },
+      criterion,
+    );
+    assert.equal(v.pass, true);
+    assert.equal(v.reasons.includes("postal_mismatch"), false);
+  });
+
+  it("passes a zipcode-less listing WITH a flag rather than implying a location", () => {
+    const v = gateAgainstCriterion({ rent: 6500, zipcode: null }, criterion);
+    assert.equal(v.pass, true);
+    assert.ok(v.reasons.includes("zip_unknown"));
+  });
+
+  it("is a no-op for a criterion that has not configured it", () => {
+    // Additive change: every existing criterion takes the '{}' default and must
+    // behave exactly as it did before.
+    const v = gateAgainstCriterion({ rent: 6500, zipcode: "3400" }, {
+      id: "c1",
+      enabled: true,
+      max_rent: 9000,
+      postal_codes: [],
+    });
+    assert.equal(v.pass, true);
+    assert.equal(v.reasons.length, 0);
+  });
+
+  it("surfaces a misconfigured list without dropping anything", () => {
+    const v = gateAgainstCriterion({ rent: 6500, zipcode: "3400" }, {
+      id: "c1",
+      enabled: true,
+      postal_codes: ["Storkøbenhavn"],
+    });
+    assert.equal(v.pass, true);
+    assert.ok(v.reasons.includes("postal_gate_unreadable"));
+  });
+
+  it("combines with the radius gate rather than replacing it", () => {
+    // A listing that DOES carry coordinates still gets both. Postcode is coarse;
+    // 400 m from campus and 3 km from campus are the same postcode.
+    const withRadius: CriterionRow = {
+      ...criterion,
+      center_lat: CAMPUS.lat,
+      center_lng: CAMPUS.lng,
+      radius_km: 1,
+    };
+    const near = gateAgainstCriterion(
+      { rent: 6500, zipcode: "2200", lat: 55.6995, lng: 12.5555 },
+      withRadius,
+    );
+    assert.equal(near.pass, true);
+    // Same postcode, but outside the 1 km radius: the fine gate still decides.
+    const far = gateAgainstCriterion(
+      { rent: 6500, zipcode: "2200", lat: 55.6870, lng: 12.5300 },
+      withRadius,
+    );
+    assert.equal(far.pass, false);
+    assert.ok(far.reasons.includes("outside_radius"));
+  });
+});
+
+describe("the postal gate through selectNotifyCandidates", () => {
+  const criteria: CriterionRow[] = [{
+    id: "c1",
+    enabled: true,
+    max_rent: 9000,
+    postal_codes: ["2100", "2200", "2400", "1300-1899", "2000"],
+  }];
+
+  const listing = (over: Partial<NotifyListingRow>): NotifyListingRow => ({
+    id: "11111111-2222-4333-8444-555555555555",
+    title: "Room",
+    url: "https://lejebolig.dk/1",
+    address: null,
+    zipcode: null,
+    rent: 6500,
+    rooms: null,
+    sqm: null,
+    lat: null,
+    lng: null,
+    housing_type: null,
+    available_from: null,
+    posted_at: null,
+    first_seen_at: "2026-09-01T00:00:00Z",
+    source_kind: "lejebolig_jsonld",
+    ...over,
+  });
+
+  it("removes the out-of-area rows from the live queue and keeps the local ones", () => {
+    const out = selectNotifyCandidates(
+      [
+        listing({ id: "aaaaaaaa-2222-4333-8444-555555555555", zipcode: "3400" }),
+        listing({ id: "bbbbbbbb-2222-4333-8444-555555555555", zipcode: "2200" }),
+        listing({ id: "cccccccc-2222-4333-8444-555555555555", zipcode: "8200" }),
+        listing({ id: "dddddddd-2222-4333-8444-555555555555", zipcode: "1500" }),
+      ],
+      criteria,
+      { limit: 10 },
+    );
+    assert.deepEqual(out.map((r) => r.zipcode), ["2200", "1500"]);
+  });
+
+  it("keeps a zipcode-less listing in the queue, carrying the flag", () => {
+    const out = selectNotifyCandidates([listing({ zipcode: null })], criteria, { limit: 10 });
+    assert.equal(out.length, 1);
+    assert.ok(out[0].flags.includes("zip_unknown"));
   });
 });
