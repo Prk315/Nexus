@@ -5,6 +5,7 @@ import {
   type ApplyCandidate,
   assembleApplication,
   cvGateReady,
+  cvUrlFromModules,
   DAILY_SUBMIT_CAP,
   dedupeWithinBatch,
   MAX_POSTINGS,
@@ -567,7 +568,12 @@ Deno.serve(async (req: Request) => {
           // `sort` is the collapse's first tie-break. Without it in the embed the
           // pure function defaults every profile to 0 and the tie falls through to
           // the name, which is a different (still deterministic) winner.
-          "job_profiles(id,name,approval_threshold,sort)",
+          //
+          // The four expected_* columns are pure passthrough onto
+          // `NotifyItem.expected_pay` (see `selectNotifyCandidates`) — nothing here
+          // branches on them, they just need to be in the embed to reach it.
+          "job_profiles(id,name,approval_threshold,sort," +
+          "expected_monthly_min,expected_monthly_max,expected_hourly_min,expected_hourly_max)",
       )
       .eq("user_id", uid)
       .eq("status", "draft")
@@ -583,11 +589,15 @@ Deno.serve(async (req: Request) => {
     }
 
     const drafts = (draftRows ?? []) as unknown as NotifyDraftRow[];
+    // Nothing to ask about: return before the three reads below, `cv_url`
+    // included. It is a field ON a notification, and with no notifications there
+    // is nothing for it to be on — so it is *not computed*, not reported null. A
+    // null here would be the only case where the field means "we did not look".
     if (drafts.length === 0) return json({ ok: true, notify: [] });
 
     const postingIds = [...new Set(drafts.map((d) => d.posting_id))];
 
-    const [matchRows, askedRows] = await Promise.all([
+    const [matchRows, askedRows, cvRows] = await Promise.all([
       // The verdicts. Separate query because `job_applications` has no FK to
       // `job_matches` — they hang off `(posting_id, profile_id)` independently, and
       // PostgREST has no relationship to embed through.
@@ -607,6 +617,20 @@ Deno.serve(async (req: Request) => {
         .eq("user_id", uid)
         .in("posting_id", postingIds)
         .not("approval_requested_at", "is", null),
+      // The CV link, for the ATS forms most of these applications actually end in
+      // (see "The CV link as a FIELD" in logic.ts). `content` is read HERE and
+      // nowhere near the prompt path: `action: "pending"` stays content-free by
+      // design, because that catalog is what gets pasted into a model's context.
+      // This one is read to pull a URL out of a paragraph the user wrote, and the
+      // paragraph never leaves the function.
+      supabaseEarly
+        .from("job_app_modules")
+        .select("id,name,slot,sort,content")
+        .eq("user_id", uid)
+        .eq("enabled", true)
+        // `ilike`, not `eq`: a slot typed 'CV_Link' is the same slot. Mirrors the
+        // read `apply_queue` does for the send gate.
+        .ilike("slot", "cv_link"),
     ]);
 
     const notifyReadFailed = matchRows.error ?? askedRows.error;
@@ -615,14 +639,29 @@ Deno.serve(async (req: Request) => {
       return json({ error: "notify_queue_failed", detail: notifyReadFailed.message }, 500);
     }
 
+    // A failed CV read is NOT a failed queue. The link is an extra affordance on
+    // an email that is perfectly useful without it, and 500-ing the whole poll
+    // over it would stop a human being asked about work that is ready to send.
+    // Absent is absent, exactly as when no module exists.
+    if (cvRows.error) {
+      console.error("job-ingest: cv_link read failed —", cvRows.error.message);
+    }
+    const cvUrl = cvUrlFromModules((cvRows.data ?? []) as ModuleRow[]);
+
     const askedPostingIds = new Set(
       ((askedRows.data ?? []) as { posting_id: string }[]).map((r) => r.posting_id),
     );
 
     return json({
       ok: true,
+      // Also top-level, so a workflow that needs the link outside the per-item
+      // loop can see it — including when the threshold and the per-posting
+      // collapse leave `notify` empty. (The no-drafts-at-all path returns above
+      // and carries no `cv_url` at all: there, we never looked.)
+      cv_url: cvUrl,
       notify: selectNotifyCandidates(drafts, (matchRows.data ?? []) as NotifyMatchRow[], {
         limit,
+        cvUrl,
         // Built server-side. n8n never composes this URL: the token is the only
         // credential the review page has, and a workflow assembling the link is a
         // workflow that can get the origin wrong and mail a dead one.

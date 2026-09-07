@@ -333,7 +333,8 @@ export function dedupeWithinBatch(rows: PostingRow[]): PostingRow[] {
 //
 //   1. Header: `Application: {title} — {company}`, title alone when unknown.
 //   2. Every chosen module's `content` verbatim, in body order: intro first,
-//      closing last, everything else between, `(sort, name, id)` within a rank.
+//      then the body, then the CV line, then the closing, `(sort, name, id)`
+//      within a rank.
 //   3. One `[GAP: no module for '{slot}']` line per missing slot, in plan order.
 //   4. Parts joined by a blank line, and NOTHING else is ever written.
 //
@@ -417,11 +418,39 @@ export function byAssemblyOrder(a: ModuleRow, b: ModuleRow): number {
 // carry `sort = 0` and differ only by tags. Drop either and one of the two slots
 // silently picks alphabetically.
 //
+// # `cv_link` is the THIRD framed slot, and it is optional
+//
+// Added 2026-09-07. The prompt only ever offers the model `skill`, `project` and
+// `education`, so nothing chose `cv_link` — and once the module was written and
+// enabled the pipeline reached a state where `cvGateReady` said "a usable CV
+// module exists, sending is allowed" while not one assembled letter carried the
+// line. The link is exactly the kind of thing that follows from facts already
+// decided rather than from a judgement about the ad, which is the same argument
+// `intro` and `closing` already won.
+//
+// It differs from those two in one respect: **a missing `cv_link` adds no slot
+// and therefore no gap marker.** An application with no opening or no sign-off
+// has a structural hole in it; one with no CV line does not — it is a complete
+// letter that happens not to link a CV. And the fact would be double-reported
+// anyway: `cvGateReady` already blocks every send until a usable module exists,
+// so a `[GAP: cv_link]` would add nothing but a marker that also pollutes the
+// ATS-channel drafts a human pastes into a form with its own CV upload field.
+//
 // ⚠️ This mirrors the same block in `n8n/job-applier/evaluate.js`. Both run — the
 // workflow frames the plan it posts, and this re-derives it — so they must agree,
-// and `evaluate.test.js` pins the resulting body verbatim.
+// and `evaluate.test.js` pins the resulting body verbatim. The ONE deliberate
+// divergence is the `[TODO` exclusion below: it needs `content`, which only this
+// side ever has.
 
-export const FRAMING_SLOTS = ["intro", "closing"] as const;
+/**
+ * The slots decided by rule rather than by the model.
+ *
+ * Used for stripping — anything the plan claims for one of these is dropped
+ * before the rule runs — and, in `evaluate.js`, for hiding these modules from the
+ * prompt entirely. `intro` and `closing` are always added; `cv_link` only when
+ * there is a usable module. Order is body order.
+ */
+export const FRAMING_SLOTS = ["intro", "cv_link", "closing"] as const;
 
 /**
  * The closed slot vocabulary. A slot is a KIND OF PARAGRAPH, not a skill.
@@ -438,9 +467,12 @@ export const FRAMING_SLOTS = ["intro", "closing"] as const;
  * because the prompt is a request and this is a guarantee.
  *
  * A slot survives if it is conventional or if some module in the catalog uses it
- * — so a genuine whole-slot gap ("no cv_link module exists") stays expressible,
- * while `skill_python` is dropped. The missing *skill* is already reported in
- * `missing_skills`, which is where a skill belongs.
+ * — so a genuine whole-slot gap ("no portfolio_link module exists") stays
+ * expressible, while `skill_python` is dropped. The missing *skill* is already
+ * reported in `missing_skills`, which is where a skill belongs.
+ *
+ * `cv_link` is still listed, and still only for the framing-off path: with
+ * framing on it is stripped and re-derived like `intro` and `closing`.
  */
 export const KNOWN_SLOTS = [
   "intro",
@@ -453,8 +485,11 @@ export const KNOWN_SLOTS = [
   "closing",
 ] as const;
 
-/** Body position: intro first, closing last, everything else in between. */
-const SLOT_RANK: Record<string, number> = { intro: 0, closing: 2 };
+/**
+ * Body position: intro first, closing last, everything else in between — with
+ * the CV line immediately before the sign-off, which is where a letter puts it.
+ */
+const SLOT_RANK: Record<string, number> = { intro: 0, cv_link: 2, closing: 3 };
 
 const slotOf = (m: ModuleRow): string => String(m?.slot ?? "").toLowerCase();
 
@@ -560,6 +595,151 @@ export function pickFramingModule(
 }
 
 /**
+ * Is this a `cv_link` module a letter could actually use?
+ *
+ * Non-empty content, and no `[TODO` marker in it. **One rule, two consumers**:
+ * `pickCvLinkModule` will not put a stub into a draft, and `cvGateReady` will not
+ * let a draft be sent while the only CV module is one. They must agree — a picker
+ * that is stricter than the gate produces letters with no CV line that the gate
+ * happily sends; a picker that is looser mails a stranger the literal string
+ * `[TODO: paste the link]`.
+ *
+ * (`bodyHasUnresolvedGaps` would in fact catch the second case, because `[TODO`
+ * is one of its markers — but only as an unexplained "body_has_gaps" skip on a
+ * letter nobody could see the defect in. Excluding it at pick time keeps the
+ * reported reason the true one: `cv_missing`.)
+ */
+export function isUsableCvModule(m: ModuleRow): boolean {
+  if (slotOf(m) !== "cv_link") return false;
+  const content = typeof m?.content === "string" ? m.content : "";
+  return content.trim().length > 0 && !content.includes("[TODO");
+}
+
+/**
+ * Pick the `cv_link` paragraph, or null when the catalog holds none worth using.
+ *
+ * Same rule as every other framed slot — language, then tag overlap, then
+ * `(sort, name, id)` — over a catalog pre-filtered to usable modules. A null here
+ * means the slot is simply **not added to the plan**: no module, no slot, no gap
+ * marker. See the FRAMING block above for why that asymmetry with intro/closing
+ * is deliberate.
+ *
+ * ⚠️ The `isUsableCvModule` filter is the one place this file's framing rule is
+ * knowingly stricter than `evaluate.js`'s. That copy runs against the metadata
+ * catalog `action: "pending"` returns, which carries no `content` at all — it
+ * could not apply this filter without excluding everything. So an enabled
+ * `cv_link` module still holding a `[TODO` marker is offered by the preview and
+ * refused here. This side is canonical and is the only one that writes a row.
+ */
+export function pickCvLinkModule(
+  catalog: ModuleRow[],
+  lang: string | null,
+  tokens: Set<string>,
+): ModuleRow | null {
+  return pickFramingModule(catalog.filter(isUsableCvModule), "cv_link", lang, tokens);
+}
+
+// MARK: - The CV link as a FIELD, not only as a sentence
+//
+// Most applications in this pipeline are not emails: they are ATS forms a human
+// opens and fills in, and those forms have a CV upload or a "link to your CV"
+// box. A letter that mentions the CV in prose is useless there — the human needs
+// the bare URL, next to the review link, in the decision email and the panel.
+//
+// So `notify_queue` carries `cv_url` alongside the body. It is DERIVED from the
+// same `cv_link` module the letter quotes rather than configured separately: two
+// places to write a CV link is two links to keep in step, and the one nobody
+// looks at goes stale silently. Deriving it means the field and the sentence can
+// never disagree.
+//
+// Absent is absent: no usable module, or no URL in its prose, yields `null` and
+// consumers render nothing. It is not an error and must not read as one — the
+// same rule as `blocking_state` never being seeded.
+
+/** Prose scanned for a URL. A CV module is a paragraph, not a document. */
+export const MAX_CV_SCAN = 10_000;
+
+/** Sentence punctuation that ends up glued to a URL in ordinary prose. */
+const URL_TRAILING_PUNCT = /[.,;:!?)\]}>"'»]+$/;
+
+/**
+ * A scheme-prefixed URL, a `www.` one, or a bare `host.tld/path`.
+ *
+ * The third alternative **requires a path**, and that is the whole guard: this
+ * runs over a sentence a human wrote, and a bare `host.tld` pattern with no slash
+ * matches "e.g.", "Ph.D." and the full stop ending "…suits your process." A
+ * required `/` costs nothing real (a CV link is a link to a file) and removes the
+ * entire family of false positives at once.
+ */
+const URL_CANDIDATE_RE =
+  /(?:https?:\/\/|www\.)[^\s<>"']+|[a-z0-9][a-z0-9-]*(?:\.[a-z0-9-]+)+\/[^\s<>"']*/gi;
+
+/**
+ * The first URL in a piece of prose, normalized to `https://`, or null.
+ *
+ * Pure and bounded. Scheme-less input is assumed https rather than http, and an
+ * explicit `http://` is UPGRADED: this string is about to be pasted into someone
+ * else's form as a link to a document about the candidate, and offering it over
+ * plaintext is a worse default than being wrong about a server that redirects
+ * anyway. The result goes through `canonicalizeUrl`, so it is parsed, protocol-
+ * checked, tracking-stripped and length-bounded by the same rules every other URL
+ * in this file obeys.
+ *
+ * Null for anything that does not parse. A half-parsed URL rendered as a link is
+ * worse than no link: the human clicks it, gets nothing, and has no way to tell
+ * whether the CV or the pipeline is broken.
+ */
+export function extractFirstUrl(content: unknown): string | null {
+  if (typeof content !== "string" || content.length === 0) return null;
+  const text = content.length > MAX_CV_SCAN ? content.slice(0, MAX_CV_SCAN) : content;
+
+  URL_CANDIDATE_RE.lastIndex = 0;
+  let match: RegExpExecArray | null;
+  while ((match = URL_CANDIDATE_RE.exec(text)) !== null) {
+    // A bare `host/path` sitting immediately after a scheme separator is the tail
+    // of a scheme we did not accept (`ftp://example.com/cv`). Prefixing https to
+    // it would be inventing a URL the author did not write — and one that may not
+    // serve the file at all.
+    if (text.slice(Math.max(0, match.index - 3), match.index) === "://") continue;
+
+    let raw = match[0].replace(URL_TRAILING_PUNCT, "");
+    if (raw.length === 0 || raw.length > MAX_URL) continue;
+    if (/^http:\/\//i.test(raw)) raw = `https://${raw.slice("http://".length)}`;
+    else if (!/^https:\/\//i.test(raw)) raw = `https://${raw}`;
+
+    const canonical = canonicalizeUrl(raw);
+    if (!canonical) continue;
+    try {
+      // A hostname with no dot is a word, not a host — `https://process/x` would
+      // otherwise parse perfectly and be rendered as a link to nowhere.
+      if (!new URL(canonical).hostname.includes(".")) continue;
+    } catch {
+      continue;
+    }
+    return canonical;
+  }
+  return null;
+}
+
+/**
+ * The CV link to put in the decision email, taken from the catalog.
+ *
+ * Deterministic `(sort, name, id)` over the usable `cv_link` modules, falling
+ * through to the next one when a module's prose holds no URL. Deliberately NOT
+ * lang- or tag-aware, unlike `pickCvLinkModule`: this is one field on a response
+ * that may cover several applications, and a URL is a URL in either language.
+ * With the real catalog — one enabled `cv_link` module — the two pick the same
+ * row, and if a second language is ever added they still point at the same file.
+ */
+export function cvUrlFromModules(modules: ModuleRow[]): string | null {
+  for (const m of modules.filter(isUsableCvModule).sort(byAssemblyOrder)) {
+    const url = extractFirstUrl(m.content);
+    if (url) return url;
+  }
+  return null;
+}
+
+/**
  * Fill a slot the model asked for and then chose nothing for — but ONLY when the
  * catalog leaves no choice to make.
  *
@@ -607,11 +787,13 @@ export function pickUncontestedModule(
  *
  * ## Framing is applied here too
  *
- * `opts` carries the verdict's score, language and skills so `intro` and
- * `closing` can be decided by rule. n8n already framed the plan it posted; this
- * re-derives the same thing from the same inputs, so the result is identical and
- * a plan posted by an older workflow (or by hand) still comes out framed. Being
- * idempotent is what lets both run without disagreeing.
+ * `opts` carries the verdict's score, language and skills so `intro`, `cv_link`
+ * and `closing` can be decided by rule. n8n already framed the plan it posted;
+ * this re-derives the same thing from the same inputs, so the result is identical
+ * and a plan posted by an older workflow (or by hand) still comes out framed.
+ * Being idempotent is what lets both run without disagreeing — and it is why an
+ * existing draft picks the CV line up on its next re-assembly with no migration
+ * and no backfill. (Only a *draft*: `index.ts` freezes anything past `draft`.)
  *
  * Framing needs chosen modules AND a score. No chosen modules means the model
  * found nothing worth saying, and a letter that is an intro, a gap and a sign-off
@@ -659,17 +841,23 @@ export function normalizeModulePlan(
     chosenModules.length > 0 && opts.score !== null && opts.score !== undefined;
   if (framing) {
     const tokens = skillTokens(opts.skills);
-    // Strip whatever arrived for these two slots. Deterministic means
-    // deterministic: a stray intro id must not produce two intros.
+    const lang = opts.lang ?? null;
+    // Strip whatever arrived for the framed slots. Deterministic means
+    // deterministic: a stray intro id must not produce two intros, and a plan
+    // posted by an older workflow must not be able to name its own CV module.
     chosenModules = chosenModules.filter((m) => !isFramingSlot(m.slot));
     neededSlots = neededSlots.filter((s) => !isFramingSlot(s));
-    for (const slot of FRAMING_SLOTS) {
-      const pick = pickFramingModule(catalog, slot, opts.lang ?? null, tokens);
-      // A null pick leaves the slot in `neededSlots` with nothing to fill it,
-      // which is exactly a gap — the honest answer for a catalog with no closing.
+
+    // A null intro or closing leaves the slot in `neededSlots` with nothing to
+    // fill it, which is exactly a gap — the honest answer for a catalog with no
+    // closing. A null `cv_link` adds no slot at all: see `pickCvLinkModule`.
+    const intro = pickFramingModule(catalog, "intro", lang, tokens);
+    const cvLink = pickCvLinkModule(catalog, lang, tokens);
+    const closing = pickFramingModule(catalog, "closing", lang, tokens);
+    for (const pick of [intro, cvLink, closing]) {
       if (pick) chosenModules.push(pick);
     }
-    neededSlots = ["intro", ...neededSlots, "closing"];
+    neededSlots = ["intro", ...neededSlots, ...(cvLink ? ["cv_link"] : []), "closing"];
   }
 
   chosenModules = chosenModules.sort(byBodyOrder);
@@ -978,13 +1166,14 @@ export function bodyHasUnresolvedGaps(body: unknown): boolean {
  *
  * A missing or stubbed CV is a SKIP, never a failure. It unblocks for every
  * pending application at once the moment the user fills one row in.
+ *
+ * The predicate is `isUsableCvModule`, shared with the framing picker on purpose:
+ * the module this gate accepts is exactly the module the draft was built with. A
+ * second spelling of "usable" here is how the gate ends up opening for a module
+ * no letter actually quotes.
  */
 export function cvGateReady(modules: ModuleRow[]): boolean {
-  return modules.some((m) => {
-    if (String(m?.slot ?? "").toLowerCase() !== "cv_link") return false;
-    const content = typeof m?.content === "string" ? m.content : "";
-    return content.trim().length > 0 && !content.includes("[TODO");
-  });
+  return modules.some(isUsableCvModule);
 }
 
 // MARK: - Guard 2: the deadline
@@ -1032,6 +1221,16 @@ export interface NotifyProfile {
   approval_threshold?: number | null;
   /** `job_profiles.sort`. The first tie-break of the per-posting collapse below. */
   sort?: number | null;
+  /**
+   * The expected-pay range, DKK. All four independently nullable — see
+   * `20260907120000_job_profile_expected_pay.sql`. Read here only to be
+   * passed through onto `NotifyItem.expected_pay` verbatim; nothing in this
+   * function branches on them.
+   */
+  expected_monthly_min?: number | null;
+  expected_monthly_max?: number | null;
+  expected_hourly_min?: number | null;
+  expected_hourly_max?: number | null;
 }
 
 export interface NotifyDraftRow {
@@ -1073,6 +1272,28 @@ export interface NotifyItem {
     valid_through: string | null;
   };
   review_url: string;
+  /**
+   * The candidate's CV, as a bare link. Null when the catalog has no usable
+   * `cv_link` module or its prose holds no URL — render nothing, not an error.
+   *
+   * Repeated on every item rather than left to the response's top-level field
+   * because n8n splits `notify` into one item per email, and an item that cannot
+   * see the link cannot put it in the message it is composing.
+   */
+  cv_url: string | null;
+  /**
+   * The profile's expected-pay range, DKK, pure passthrough from
+   * `job_profiles`. Every half is independently nullable — a profile may have
+   * only a monthly figure, only an hourly one, both, or neither — and nulls are
+   * preserved exactly as read rather than defaulted to 0, which would render as
+   * a real (and wrong) answer in the ATS form this exists to help fill in.
+   */
+  expected_pay: {
+    monthly_min: number | null;
+    monthly_max: number | null;
+    hourly_min: number | null;
+    hourly_max: number | null;
+  };
 }
 
 /** The review link that goes in the decision email. Built here, never by n8n. */
@@ -1192,10 +1413,25 @@ function beatsForNotify(a: NotifyCollapseCandidate, b: NotifyCollapseCandidate):
  * one slot of the batch rather than four — a limit spent on duplicates is a
  * backlog that never drains.
  */
+/**
+ * A profile pay-range field, or null. `0` and `null` mean different things
+ * (stated-as-zero vs not-stated), so this is not a `?? 0` — it only rejects
+ * what is not actually a finite number, and passes every real value through
+ * unchanged.
+ */
+const payFieldOrNull = (v: number | null | undefined): number | null =>
+  typeof v === "number" && Number.isFinite(v) ? v : null;
+
 export function selectNotifyCandidates(
   drafts: NotifyDraftRow[],
   matches: NotifyMatchRow[],
-  opts: { limit: number; supabaseUrl: string; notifiedPostingIds?: ReadonlySet<string> },
+  opts: {
+    limit: number;
+    supabaseUrl: string;
+    notifiedPostingIds?: ReadonlySet<string>;
+    /** From `cvUrlFromModules`. Absent is null, and null is a legitimate answer. */
+    cvUrl?: string | null;
+  },
 ): NotifyItem[] {
   const byKey = new Map<string, NotifyMatchRow>();
   for (const m of matches) byKey.set(`${m.posting_id}|${m.profile_id}`, m);
@@ -1251,6 +1487,13 @@ export function selectNotifyCandidates(
         valid_through: posting?.valid_through ?? null,
       },
       review_url: reviewUrl(opts.supabaseUrl, d.approval_token),
+      cv_url: opts.cvUrl ?? null,
+      expected_pay: {
+        monthly_min: payFieldOrNull(profile?.expected_monthly_min),
+        monthly_max: payFieldOrNull(profile?.expected_monthly_max),
+        hourly_min: payFieldOrNull(profile?.expected_hourly_min),
+        hourly_max: payFieldOrNull(profile?.expected_hourly_max),
+      },
     });
   }
 

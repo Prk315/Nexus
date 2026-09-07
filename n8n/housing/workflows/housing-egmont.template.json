@@ -1,0 +1,211 @@
+{
+  "id": "nexus-housing-egmont",
+  "name": "Egmont Kollegiet — application round watcher",
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "saveManualExecutions": true
+  },
+  "tags": [],
+  "nodes": [
+    {
+      "id": "trigger",
+      "name": "Every Day At 09:00",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        -640,
+        300
+      ],
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "days",
+              "daysInterval": 1,
+              "triggerAtHour": 9,
+              "triggerAtMinute": 0
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "fetch",
+      "name": "Fetch Egmont Homepage",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        -420,
+        300
+      ],
+      "parameters": {
+        "method": "GET",
+        "url": "https://egmontkollegiet.dk/",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "User-Agent",
+              "value": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36"
+            }
+          ]
+        },
+        "options": {
+          "response": {
+            "response": {
+              "responseFormat": "text",
+              "neverError": true
+            }
+          },
+          "timeout": 30000
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "id": "check",
+      "name": "Check Round Status",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -200,
+        300
+      ],
+      "parameters": {
+        "jsCode": "__EXTRACT_JS__\n\n// --- node body ---\n// A daily one-page watcher for a round that opens with no warning and closes\n// fast once it does (HOUSING_PLAN.md / LEARN_PLAN.md context: this is the prime\n// kollegie next to campus). `egmontRoundStatus` only ever recognises the CLOSED\n// sentence; absence of it — an open round, a reworded page, a redesign, or a\n// fetch that came back empty or as an error page — is the alert condition, not\n// evidence of any one of those in particular.\n//\n// `onError: continueRegularOutput` + `neverError: true` on the fetch node mean a\n// DNS failure, a timeout or a non-2xx response ALL still reach this node as one\n// item rather than failing the run — a watcher that goes red and stops on a\n// blip is a watcher that silently stops watching. What is distinguished HERE,\n// once, is only \"did a request complete at all\": that decides which subject the\n// alert uses downstream, never the closed/open verdict itself, which stays a\n// pure function of the page text.\nconst item = $input.first().json || {};\nconst fetchFailed = Boolean(item.error) && !item.data && !item.body;\nconst html = item.data ?? item.body ?? '';\n\nconst result = egmontRoundStatus(html);\nconsole.log(\n  'egmont: status=' + result.status + ' marker_found=' + result.marker_found +\n    (fetchFailed ? ' (fetch failed: ' + JSON.stringify(item.error).slice(0, 200) + ')' : ''),\n);\n\nreturn [{ json: { ...result, fetch_failed: fetchFailed, checked_at: new Date().toISOString() } }];"
+      }
+    },
+    {
+      "id": "route",
+      "name": "Round Still Closed?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        20,
+        300
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "combinator": "and",
+          "conditions": [
+            {
+              "id": "closed-check",
+              "leftValue": "={{ $json.status }}",
+              "rightValue": "closed",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ]
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "compose",
+      "name": "Build Egmont Alert",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        240,
+        420
+      ],
+      "parameters": {
+        "jsCode": "// --- node body ---\n// Reached only on the FALSE branch of \"Round Still Closed?\" — status is\n// `open_or_changed`, for whichever of its reasons. Two subjects, not one: a\n// genuine fetch failure gets its own honest wording rather than being dressed\n// up as \"the round looks open\", which would be a claim this run cannot back.\n//\n// No database, no seen-state, nothing persisted anywhere. The page IS the\n// state — this sends every day the marker stays missing, on purpose. Rounds\n// are short once open (HOUSING_PLAN.md §2's asymmetry, same shape as the\n// waiting-list renewal guard: better an email he has seen nineteen times than\n// the one time it mattered arriving zero times.\nconst row = $input.first().json || {};\nconst TO = $env.JOB_NOTIFY_TO || 'bastianrthomsen@gmail.com';\nconst url = 'https://egmontkollegiet.dk/';\n\nconst escapeHtml = (v) => String(v ?? '')\n  .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')\n  .replace(/\"/g, '&quot;').replace(/'/g, '&#39;');\n\nconst subject = row.fetch_failed\n  ? 'Egmont-vagten kunne ikke læse siden'\n  : '🏠 Egmont: ansøgningsrunden ser ÅBEN ud — søg nu';\n\nconst detail = row.fetch_failed\n  ? 'Det daglige tjek kunne ikke hente egmontkollegiet.dk i morges. Det kan være ' +\n    'en midlertidig netværksfejl eller at siden er lagt om — det ved denne mail ikke, ' +\n    'og siger det derfor ligeud i stedet for at gætte.'\n  : 'Sætningen \"Ansøgningsrunden er lukket.\" findes ikke længere på forsiden. Det kan ' +\n    'betyde runden er åbnet — men det kan også være en omformulering eller en ny ' +\n    'sideopsætning. Tjek selv, og søg med det samme hvis runden rent faktisk er åben.';\n\nconst html =\n  '<table role=\"presentation\" width=\"100%\" cellpadding=\"0\" cellspacing=\"0\" border=\"0\" ' +\n  'style=\"background:#f4f5f7;margin:0;padding:20px 0;\"><tr><td align=\"center\" style=\"padding:0 12px;\">' +\n  '<table role=\"presentation\" width=\"560\" cellpadding=\"0\" cellspacing=\"0\" border=\"0\" ' +\n  'style=\"width:100%;max-width:560px;background:#ffffff;border:2px solid #2f6feb;border-radius:12px;' +\n  \"font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;\" +\n  'color:#16181d;text-align:left;\">' +\n  '<tr><td style=\"padding:22px 22px 12px 22px;\">' +\n  '<div style=\"display:inline-block;background:#2f6feb;color:#ffffff;border-radius:999px;' +\n  'padding:6px 16px;font-size:15px;font-weight:700;\">' + escapeHtml(row.fetch_failed ? 'fetch failed' : 'round looks open') + '</div>' +\n  '<div style=\"font-size:19px;font-weight:700;line-height:26px;margin-top:14px;\">Egmont Kollegiet</div>' +\n  '<div style=\"font-size:14px;color:#3a3f47;margin-top:8px;line-height:20px;\">' + escapeHtml(detail) + '</div>' +\n  '</td></tr>' +\n  '<tr><td style=\"padding:8px 22px 22px 22px;\">' +\n  '<a href=\"' + escapeHtml(url) + '\" style=\"display:block;background:#2f6feb;color:#ffffff;' +\n  'font-size:17px;font-weight:700;padding:16px 20px;border-radius:10px;text-decoration:none;' +\n  'text-align:center;\">Åbn egmontkollegiet.dk &rarr;</a>' +\n  '</td></tr>' +\n  '<tr><td style=\"padding:0 22px 18px 22px;border-top:1px solid #eceef1;\">' +\n  '<div style=\"font-size:11px;color:#9aa0a6;padding-top:12px;line-height:16px;\">' +\n  'checked ' + escapeHtml(row.checked_at || '') + ' &middot; this mail repeats every day at 09:00 ' +\n  'until the site says \"Ansøgningsrunden er lukket.\" again — rounds are short, so the ' +\n  'repetition is the point, not a bug' +\n  '</div></td></tr>' +\n  '</table></td></tr></table>';\n\nconst text = [\n  subject,\n  '',\n  detail,\n  '',\n  'Open: ' + url,\n  '',\n  'checked ' + (row.checked_at || ''),\n  'This will repeat daily until the site says \"Ansøgningsrunden er lukket.\" again.',\n].join('\\n');\n\nreturn [{ json: { to: TO, subject, html, text } }];"
+      }
+    },
+    {
+      "id": "send",
+      "name": "Send Egmont Alert",
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.1,
+      "position": [
+        460,
+        420
+      ],
+      "onError": "continueRegularOutput",
+      "parameters": {
+        "resource": "message",
+        "operation": "send",
+        "sendTo": "={{ $json.to }}",
+        "subject": "={{ $json.subject }}",
+        "emailType": "html",
+        "message": "={{ $json.html }}",
+        "options": {
+          "appendAttribution": false
+        }
+      },
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "GMAIL_CREDENTIAL_ID",
+          "name": "Gmail OAuth"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Every Day At 09:00": {
+      "main": [
+        [
+          {
+            "node": "Fetch Egmont Homepage",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch Egmont Homepage": {
+      "main": [
+        [
+          {
+            "node": "Check Round Status",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Check Round Status": {
+      "main": [
+        [
+          {
+            "node": "Round Still Closed?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Round Still Closed?": {
+      "main": [
+        [],
+        [
+          {
+            "node": "Build Egmont Alert",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Egmont Alert": {
+      "main": [
+        [
+          {
+            "node": "Send Egmont Alert",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  }
+}

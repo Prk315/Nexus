@@ -49,6 +49,7 @@ const ID = {
   project: "33333333-3333-4333-8333-333333333333",
   closingEn: "44444444-4444-4444-8444-444444444444",
   closingDa: "44444444-4444-4444-8444-444444444445",
+  cvLink: "55555555-5555-4555-8555-555555555555",
 };
 
 const MODULES = [
@@ -103,6 +104,16 @@ const MODULES = [
     enabled: true,
   },
   {
+    id: ID.cvLink,
+    name: "CV link",
+    slot: "cv_link",
+    tags: ["cv", "resume"],
+    lang: "en",
+    sort: 30,
+    content: "My CV is at prk315.github.io/personal-website/cv.pdf.",
+    enabled: true,
+  },
+  {
     id: ID.closingEn,
     name: "Closing",
     slot: "closing",
@@ -125,7 +136,11 @@ const MODULES = [
 ];
 
 const MODULE_IDS = MODULES.map((m) => m.id);
-const BODY_MODULES = MODULES.filter((m) => !["intro", "closing"].includes(m.slot));
+const BODY_MODULES = MODULES.filter((m) => !["intro", "cv_link", "closing"].includes(m.slot));
+/** The catalog as it was before `cv_link` became a framed slot. */
+const NO_CV_MODULES = MODULES.filter((m) => m.slot !== "cv_link");
+
+const CV_LINE = "My CV is at prk315.github.io/personal-website/cv.pdf.";
 
 const POSTING = {
   title: "AI Engineer",
@@ -169,13 +184,20 @@ test("the prompt lists module metadata but never module content", () => {
   }
 });
 
-test("intro and closing modules are NOT offered to the model", () => {
+test("framing modules — intro, cv_link and closing — are NOT offered to the model", () => {
   const { system, user } = buildEvalPrompt(POSTING, PROFILE, MODULES);
-  for (const id of [ID.introEn, ID.introGames, ID.introDa, ID.closingEn, ID.closingDa]) {
+  for (const id of [ID.introEn, ID.introGames, ID.introDa, ID.cvLink, ID.closingEn, ID.closingDa]) {
     assert.ok(!user.includes(id), `a framing module was offered as a choice: ${id}`);
   }
   assert.ok(user.includes(ID.skill) && user.includes(ID.project), "the body modules must be shown");
   assert.match(system, /added AUTOMATICALLY/, "the model should be told why they are absent");
+  assert.match(system, /cv_link/, "the CV line joined the framed slots and the prompt must say so");
+  // A slot that is added automatically must not also be askable: `cv_link` was
+  // removed from the `module_slots_needed` vocabulary when it became framed.
+  assert.ok(
+    !/vocabulary:\n\s+.*cv_link/.test(system),
+    "cv_link is still offered as a slot the model may ask for",
+  );
 });
 
 test("the system prompt fences the ad as data and forbids writing prose", () => {
@@ -335,12 +357,14 @@ test("a hallucinated id surfaces as a gap, not as a substituted module", () => {
 });
 
 test("every needed slot with no module at all becomes a gap", () => {
+  // `cv_link` is deliberately absent from this list: it is a framed slot now, so
+  // a model that asks for it has its request stripped and the rule re-derives it.
   const verdict = scored({
-    module_slots_needed: ["skill", "cv_link", "portfolio_link"],
+    module_slots_needed: ["skill", "education", "portfolio_link"],
     chosen_module_ids: [ID.skill],
   });
   const plan = planFromVerdict(verdict, MODULES);
-  assert.deepEqual(plan.missing_slots, ["cv_link", "portfolio_link"]);
+  assert.deepEqual(plan.missing_slots, ["education", "portfolio_link"]);
 });
 
 test("an empty catalog yields all gaps and no invented text", () => {
@@ -401,10 +425,13 @@ test("invented per-skill slot names are dropped", () => {
 test("a conventional slot with no module is still a real gap", () => {
   // Dropping invented slots must not cost us the honest whole-slot gaps.
   const verdict = scored({
-    module_slots_needed: ["skill", "cv_link", "portfolio_link"],
+    module_slots_needed: ["skill", "education", "portfolio_link"],
     chosen_module_ids: [ID.skill],
   });
-  assert.deepEqual(planFromVerdict(verdict, MODULES).missing_slots, ["cv_link", "portfolio_link"]);
+  assert.deepEqual(planFromVerdict(verdict, MODULES).missing_slots, [
+    "education",
+    "portfolio_link",
+  ]);
 });
 
 test("a slot the catalog uses is accepted even if unconventional", () => {
@@ -439,7 +466,7 @@ test("intro and closing are added automatically for a scored verdict", () => {
 
   assert.deepEqual(
     plan.chosen,
-    [ID.introEn, ID.skill, ID.project, ID.closingEn],
+    [ID.introEn, ID.skill, ID.project, ID.cvLink, ID.closingEn],
     "framing did not run, or ran in the wrong body order",
   );
   assert.deepEqual(plan.missing_slots, []);
@@ -477,7 +504,9 @@ test("a Danish ad gets the Danish intro and the Danish closing", () => {
     chosen_module_ids: [ID.skill],
   });
   const plan = planFromVerdict(verdict, MODULES);
-  assert.deepEqual(plan.chosen, [ID.introDa, ID.skill, ID.closingDa]);
+  // The CV line falls back to English because no Danish cv_link module exists —
+  // the same pool fallback every framed slot uses. A link is a link.
+  assert.deepEqual(plan.chosen, [ID.introDa, ID.skill, ID.cvLink, ID.closingDa]);
 });
 
 test("language beats tag overlap — the two closings differ only by lang", () => {
@@ -530,6 +559,58 @@ test("framing does not run when nothing was chosen", () => {
   assert.deepEqual(plan.missing_slots, ["skill"]);
 });
 
+// MARK: - Framing: the CV link
+//
+// Added 2026-09-07. The prompt only ever offered `skill` / `project` /
+// `education`, so nothing chose the `cv_link` module — the send gate said "a
+// usable CV module exists" while not one assembled letter carried the line.
+
+test("the CV line is added automatically, immediately before the closing", () => {
+  const verdict = scored({
+    module_slots_needed: ["skill"],
+    chosen_module_ids: [ID.skill],
+  });
+  const app = assembleApplication(planFromVerdict(verdict, MODULES), MODULES, POSTING);
+  const parts = app.body.split("\n\n");
+  assert.equal(parts[parts.length - 2], CV_LINE, "the CV line is not in the CV line's position");
+  assert.equal(parts[parts.length - 1], "I would be glad to talk further.");
+});
+
+test("no cv_link module means no CV line and NO gap marker", () => {
+  // The asymmetry with intro/closing, pinned. A letter with no opening has a
+  // structural hole; one with no CV line does not — and the send gate already
+  // blocks on a missing CV module, so a marker here would double-report it and
+  // would stop an ATS draft (whose form has its own upload field) being pasted.
+  const verdict = scored({ module_slots_needed: ["skill"], chosen_module_ids: [ID.skill] });
+  const plan = planFromVerdict(verdict, NO_CV_MODULES);
+  assert.deepEqual(plan.missing_slots, [], "an absent CV module produced a gap");
+  assert.ok(!JSON.stringify(plan.slots).includes("cv_link"), "an unfillable slot was still asked for");
+  const app = assembleApplication(plan, NO_CV_MODULES, POSTING);
+  assert.ok(!app.body.includes("[GAP"), app.body);
+});
+
+test("a cv_link the model named is overridden by the rule, and never duplicated", () => {
+  // Same guarantee as the intro: the workflow validates ids against the FULL
+  // catalog, so a framing id can survive parsing and must not survive framing.
+  const verdict = scored({ chosen_module_ids: [ID.cvLink, ID.skill] });
+  const plan = planFromVerdict(verdict, MODULES);
+  assert.deepEqual(
+    plan.chosen.filter((id) => id === ID.cvLink),
+    [ID.cvLink],
+    "the CV module was duplicated",
+  );
+});
+
+test("a model that asks for cv_link gets no gap when the catalog has none", () => {
+  // The slot is stripped as a framing slot before `knownSlotsOnly`'s output is
+  // used, so the model asking for it changes nothing either way.
+  const verdict = scored({
+    module_slots_needed: ["skill", "cv_link"],
+    chosen_module_ids: [ID.skill],
+  });
+  assert.deepEqual(planFromVerdict(verdict, NO_CV_MODULES).missing_slots, []);
+});
+
 test("a catalog with no closing still gaps at the end", () => {
   const noClosing = MODULES.filter((m) => m.slot !== "closing");
   const verdict = scored({ module_slots_needed: ["skill"], chosen_module_ids: [ID.skill] });
@@ -557,10 +638,11 @@ test("the assembled body is exactly header + framed prose + gap markers", () => 
       "I am a software engineer working on applied machine learning.\n\n" +
       "Day to day I write Python, and train models with PyTorch.\n\n" +
       "I built Nexus, a suite of Tauri desktop apps sharing one backend.\n\n" +
+      `${CV_LINE}\n\n` +
       "I would be glad to talk further.\n\n" +
       "[GAP: no module for 'education']",
   );
-  assert.deepEqual(app.module_ids, [ID.introEn, ID.skill, ID.project, ID.closingEn]);
+  assert.deepEqual(app.module_ids, [ID.introEn, ID.skill, ID.project, ID.cvLink, ID.closingEn]);
   assert.deepEqual(app.missing_slots, ["education"]);
 });
 

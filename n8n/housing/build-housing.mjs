@@ -105,6 +105,18 @@ const TARGETS = [
     mustInline: "buildUnknownIntervalEmail",
     gmail: true,
   },
+  {
+    template: "housing-egmont.template.json",
+    output: "housing-egmont.json",
+    source: "extract.js",
+    placeholder: "__EXTRACT_JS__",
+    // Only the status-check Code node inlines a shared source; the compose
+    // node builds its own tiny escapeHtml rather than pulling in the whole of
+    // notify-housing.js for one helper — this template has no __NOTIFY_JS__
+    // placeholder at all, on purpose.
+    mustInline: "egmontRoundStatus",
+    gmail: true,
+  },
 ];
 
 /**

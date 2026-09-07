@@ -332,6 +332,57 @@ function factRow(label, valueHtml) {
   );
 }
 
+/** A pay-range bound, or null. Guards against a non-finite value reaching a template literal as "NaN". */
+function payNumOrNull(v) {
+  return typeof v === "number" && Number.isFinite(v) ? v : null;
+}
+
+/** `42000` → `"42"`, `42500` → `"42.5"` — thousands, trimmed to one decimal only when it is not a round figure. */
+function payThousands(n) {
+  const k = n / 1000;
+  return Number.isInteger(k) ? String(k) : k.toFixed(1);
+}
+
+/** One half of a pay range ("42–50k kr/md", "42k+ kr/md", "op til 50k kr/md"), or null if neither bound is stated. */
+function formatMonthlyPay(min, max) {
+  if (min !== null && max !== null) return `${payThousands(min)}–${payThousands(max)}k kr/md`;
+  if (min !== null) return `${payThousands(min)}k+ kr/md`;
+  if (max !== null) return `op til ${payThousands(max)}k kr/md`;
+  return null;
+}
+
+/** Same shape as `formatMonthlyPay`, unscaled — an hourly rate is already a small number. */
+function formatHourlyPay(min, max) {
+  if (min !== null && max !== null) return `${min}–${max} kr/t`;
+  if (min !== null) return `${min}+ kr/t`;
+  if (max !== null) return `op til ${max} kr/t`;
+  return null;
+}
+
+/**
+ * "42–50k kr/md · 230–270 kr/t" — the profile's expected-pay range, in the
+ * shape a Danish ATS form's "lønforventning" field wants pasted into it.
+ *
+ * Monthly and hourly are independent halves (a profile may state either,
+ * both, or neither — see `20260907120000_job_profile_expected_pay.sql`) and
+ * each renders only when at least one of its own bounds is present, joined
+ * with " · " when both halves have something to say. Null when neither pair
+ * holds anything — never a bare "Lønforventning:" with nothing after it,
+ * which reads as more broken than an absent row.
+ *
+ * `pay` arrives as `NotifyItem.expected_pay` from `job-ingest`
+ * (`selectNotifyCandidates`), already passed through as `number | null` — this
+ * still guards every field independently rather than trusting the wire shape,
+ * the same posture every other field on `item` gets in this file.
+ */
+function formatPayLine(pay) {
+  const p = pay || {};
+  const monthly = formatMonthlyPay(payNumOrNull(p.monthly_min), payNumOrNull(p.monthly_max));
+  const hourly = formatHourlyPay(payNumOrNull(p.hourly_min), payNumOrNull(p.hourly_max));
+  const parts = [monthly, hourly].filter(Boolean);
+  return parts.length ? parts.join(" · ") : null;
+}
+
 /**
  * Build the decision email for one queued application.
  *
@@ -368,6 +419,28 @@ export function buildDecisionEmail(item) {
   const adUrl = safeUrl(posting.url);
   const reviewUrl = safeUrl(it.review_url);
   const applicationId = clampLine(it.application_id, 64);
+
+  // The user's CV, as a stable public URL — never scraped, but run through the
+  // same `safeUrl` gate as everything else that becomes an href in this email
+  // rather than special-cased as "trusted". Absent or unusable means null, and
+  // null means render nothing: same rule as `blocking_state`, same rule as
+  // every other optional field on this row.
+  const cvUrl = safeUrl(it.cv_url);
+
+  // Most jobs here are applied for through an external ATS form, not by this
+  // workflow — `apply_channel` says so. When it is set and is not literally
+  // "email", the human reading this message IS the one submitting the
+  // application, and a CV link buried as a secondary line under "Review &
+  // decide" is the wrong shape: what they need is posting + CV + review, all
+  // equally reachable. This only engages when there is a CV link to show —
+  // with no `cvUrl` there is nothing to promote, so the layout is unchanged.
+  const isApplyKit = Boolean(cvUrl) && Boolean(channel) && channel.toLowerCase() !== "email";
+
+  // The profile's expected-pay range — the ready answer for the "expected
+  // salary" / "lønforventning" box almost every ATS form asks for, which
+  // nothing in this pipeline can otherwise fill in (it is a statement about
+  // what the candidate wants, not a fact `evaluate.js` can infer from an ad).
+  const payLine = formatPayLine(it.expected_pay);
 
   const gaps = (Array.isArray(it.missing_slots) ? it.missing_slots : [])
     .map((s) => clampLine(s, 64))
@@ -481,6 +554,7 @@ export function buildDecisionEmail(item) {
   if (location) facts.push(factRow("Location", escapeHtml(location)));
   if (channel) facts.push(factRow("Channel", escapeHtml(channel)));
   if (applyEmail) facts.push(factRow("Apply to", escapeHtml(applyEmail)));
+  if (payLine) facts.push(factRow("Lønforventning", escapeHtml(payLine)));
   if (deadline) {
     facts.push(
       factRow("Deadline", `<strong style="color:#8e2318;">${escapeHtml(deadline)}</strong>`),
@@ -511,19 +585,78 @@ export function buildDecisionEmail(item) {
   // pipeline's terminal action is mailing a stranger. So the email links to a
   // confirm page and nothing else; the state change happens behind a POST that a
   // person pressed a button for. Do not "simplify" this into one-click links.
+  // The CV link. Rendered as a secondary line under the Review button in the
+  // ordinary (this-workflow-sends-it) case, or promoted to an equal-weight
+  // button in the apply-kit case below. Either way it is the same href, the
+  // same safeUrl gate, and no state changes if it is clicked — it is a GET
+  // against a static PDF, not an approval.
+  const cvButton =
+    `<a href="${escapeHtml(cvUrl)}" ` +
+    'style="display:inline-block;background:#ffffff;color:#2f6feb;font-size:14px;font-weight:600;' +
+    'padding:11px 20px;margin:0 8px 8px 0;border-radius:8px;border:1px solid #2f6feb;' +
+    'text-decoration:none;">Download CV (PDF)</a>';
+  const cvLine =
+    `<a href="${escapeHtml(cvUrl)}" ` +
+    'style="display:inline-block;color:#2f6feb;font-size:13px;font-weight:600;text-decoration:none;' +
+    'margin-left:12px;">CV (PDF) &mdash; download for upload forms</a>';
+  const postingButton = adUrl
+    ? `<a href="${escapeHtml(adUrl)}" ` +
+      'style="display:inline-block;background:#ffffff;color:#2f6feb;font-size:14px;font-weight:600;' +
+      'padding:11px 20px;margin:0 8px 8px 0;border-radius:8px;border:1px solid #2f6feb;' +
+      'text-decoration:none;">Open posting</a>'
+    : "";
+  const reviewButton = reviewUrl
+    ? `<a href="${escapeHtml(reviewUrl)}" ` +
+      'style="display:inline-block;background:#2f6feb;color:#ffffff;font-size:14px;font-weight:600;' +
+      'padding:11px 20px;margin:0 8px 8px 0;border-radius:8px;text-decoration:none;">Review &amp; decide</a>'
+    : "";
+
   parts.push(
     '<tr><td style="padding:22px 24px 24px 24px;">' +
-      (reviewUrl
-        ? `<a href="${escapeHtml(reviewUrl)}" ` +
-          'style="display:inline-block;background:#2f6feb;color:#ffffff;font-size:15px;font-weight:600;' +
-          'padding:13px 26px;border-radius:8px;text-decoration:none;">Review &amp; decide</a>' +
-          '<div style="font-size:12px;color:#6b7280;margin-top:10px;line-height:18px;">' +
-          "Approving happens on that page, not in this email — a link that approves is a link a " +
-          "mail scanner can click for you." +
-          "</div>"
-        : '<div style="font-size:13px;color:#8e2318;font-weight:600;">' +
-          "No usable review link on this row — nothing can be approved until that is fixed." +
-          "</div>") +
+      (isApplyKit
+        ? // ATS / no-email channel: the human submits this one, not the
+          // workflow. So this is an apply kit — posting, CV, and the review
+          // link that marks it handled — rather than one button with a CV
+          // footnote.
+          '<div style="font-size:13px;color:#33383f;margin-bottom:12px;line-height:19px;">' +
+          "This one is applied for outside this workflow — open the posting, grab the CV below, " +
+          "then come back and mark it decided." +
+          "</div>" +
+          // Prominent, not a footnote: in this mode the human is about to sit in
+          // front of the ATS form's own "lønforventning" box, and this is the
+          // ready answer to paste into it — worth more than a line buried in the
+          // facts table below.
+          (payLine
+            ? '<div style="margin-bottom:12px;padding:10px 14px;background:#eef4ff;' +
+              'border:1px solid #2f6feb;border-radius:8px;font-size:13px;font-weight:600;color:#1c3fa0;">' +
+              `Din lønforventning: ${escapeHtml(payLine)}` +
+              "</div>"
+            : "") +
+          `<div>${postingButton}${cvButton}${reviewButton}</div>` +
+          (reviewUrl
+            ? '<div style="font-size:12px;color:#6b7280;margin-top:6px;line-height:18px;">' +
+              "Approving happens on that page, not in this email." +
+              "</div>"
+            : '<div style="font-size:13px;color:#8e2318;font-weight:600;margin-top:6px;">' +
+              "No usable review link on this row — nothing can be approved until that is fixed." +
+              "</div>")
+        : reviewUrl
+          ? `<a href="${escapeHtml(reviewUrl)}" ` +
+            'style="display:inline-block;background:#2f6feb;color:#ffffff;font-size:15px;font-weight:600;' +
+            'padding:13px 26px;border-radius:8px;text-decoration:none;">Review &amp; decide</a>' +
+            (cvUrl ? cvLine : "") +
+            '<div style="font-size:12px;color:#6b7280;margin-top:10px;line-height:18px;">' +
+            "Approving happens on that page, not in this email — a link that approves is a link a " +
+            "mail scanner can click for you." +
+            "</div>"
+          : '<div style="font-size:13px;color:#8e2318;font-weight:600;">' +
+            "No usable review link on this row — nothing can be approved until that is fixed." +
+            "</div>" +
+            (cvUrl
+              ? '<div style="margin-top:8px;">' +
+                `<a href="${escapeHtml(cvUrl)}" style="color:#2f6feb;font-weight:600;font-size:13px;">` +
+                "CV (PDF) &mdash; download for upload forms</a></div>"
+              : "")) +
       "</td></tr>",
   );
 
@@ -564,9 +697,21 @@ export function buildDecisionEmail(item) {
   textLines.push("");
   if (channel) textLines.push(`Channel:  ${channel}`);
   if (applyEmail) textLines.push(`Apply to: ${applyEmail}`);
+  if (payLine) textLines.push(`Lønforventning: ${payLine}`);
   if (deadline) textLines.push(`Deadline: ${deadline}`);
   textLines.push(`Ad:       ${adUrl || "(no usable link)"}`);
+  if (cvUrl) textLines.push(`CV (PDF): ${cvUrl}`);
   textLines.push("");
+  if (isApplyKit) {
+    textLines.push(
+      "This one is applied for outside this workflow — open the posting, grab the CV above, " +
+        "then come back and mark it decided.",
+    );
+    // Repeated here, prominently, for the same reason the HTML gets its own
+    // callout box: this is the ready answer for the form's own pay-expectation
+    // field, not just a fact in the table below.
+    if (payLine) textLines.push(`Din lønforventning: ${payLine}`);
+  }
   textLines.push(
     reviewUrl
       ? `Review & decide: ${reviewUrl}`

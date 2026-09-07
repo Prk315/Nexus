@@ -429,6 +429,167 @@ test("the application id is in the email so a reply can be traced to a row", () 
   assert.ok(text.includes("app-abc-123"));
 });
 
+// MARK: - buildDecisionEmail: the CV link
+
+test("no cv_url means no CV link anywhere — null is never rendered as something", () => {
+  const { html, text } = buildDecisionEmail(queued());
+  assert.ok(!html.includes("CV (PDF)"));
+  assert.ok(!html.includes("Download CV"));
+  assert.ok(!text.includes("CV (PDF)"));
+});
+
+test("a cv_url on an email-channel job is a secondary link next to Review & decide", () => {
+  const CV_URL = "https://bastianthomsen.dev/cv.pdf";
+  const { html, text } = buildDecisionEmail(queued({ cv_url: CV_URL }));
+  assert.ok(html.includes(`href="${CV_URL}"`), "CV href missing from the email");
+  assert.ok(html.includes("CV (PDF)"), "CV label missing");
+  assert.ok(html.includes(">Review &amp; decide</a>"), "the primary Review button is still there");
+  assert.ok(text.includes(`CV (PDF): ${CV_URL}`));
+  // Still one workflow-driven review button, not an apply-kit trio — the channel
+  // here is 'email' so this workflow is the one sending it.
+  assert.ok(!html.includes("Open posting"));
+});
+
+test("an unusable cv_url (javascript:) never becomes an href", () => {
+  const { html, text } = buildDecisionEmail(queued({ cv_url: "javascript:alert(1)" }));
+  assert.ok(!/href="javascript/i.test(html), "a javascript: cv_url reached an href");
+  assert.ok(!html.includes("CV (PDF)"));
+  assert.ok(!text.includes("CV (PDF)"));
+});
+
+test("an ATS / no-email channel with a cv_url reads as an apply kit: posting + CV + review", () => {
+  const CV_URL = "https://bastianthomsen.dev/cv.pdf";
+  const posting = { ...queued().posting, apply_channel: "ats" };
+  const { html, text } = buildDecisionEmail(queued({ posting, cv_url: CV_URL }));
+  assert.ok(html.includes("Open posting"), "posting link not promoted to a button");
+  assert.ok(html.includes("Download CV (PDF)"), "CV link not promoted to a button");
+  assert.ok(html.includes(">Review &amp; decide</a>"), "review link dropped from the kit");
+  assert.ok(html.includes("applied for outside this workflow"));
+  assert.ok(hrefs(html).includes(CV_URL));
+  assert.ok(hrefs(html).includes(AD_URL));
+  assert.ok(hrefs(html).includes(REVIEW_URL));
+  assert.ok(text.includes("applied for outside this workflow"));
+  assert.ok(text.includes(`CV (PDF): ${CV_URL}`));
+});
+
+test("an ATS channel with no cv_url does not switch to apply-kit framing", () => {
+  // The promotion is gated on having a CV link to show — with none, the ordinary
+  // single-button layout is unchanged rather than promoting an empty kit.
+  const posting = { ...queued().posting, apply_channel: "ats" };
+  const { html } = buildDecisionEmail(queued({ posting }));
+  assert.ok(!html.includes("applied for outside this workflow"));
+  assert.ok(!html.includes("Open posting"));
+  assert.ok(html.includes(">Review &amp; decide</a>"));
+});
+
+test("apply_channel comparison is case-insensitive — 'Email' does not trigger apply-kit framing", () => {
+  const CV_URL = "https://bastianthomsen.dev/cv.pdf";
+  const posting = { ...queued().posting, apply_channel: "Email" };
+  const { html } = buildDecisionEmail(queued({ posting, cv_url: CV_URL }));
+  assert.ok(!html.includes("Open posting"));
+  assert.ok(html.includes("CV (PDF)"));
+});
+
+test("a cv_url survives buildDecisionEmail's never-throws contract", () => {
+  const out = buildDecisionEmail({
+    cv_url: "javascript:alert(1)",
+    posting: { apply_channel: 4 },
+  });
+  assert.equal(typeof out.html, "string");
+  assert.ok(!/href="javascript/i.test(out.html));
+});
+
+// MARK: - buildDecisionEmail: the expected-pay line
+
+test("no expected_pay means no Lønforventning line anywhere", () => {
+  const { html, text } = buildDecisionEmail(queued());
+  assert.ok(!html.includes("Lønforventning"));
+  assert.ok(!html.includes("lønforventning"));
+  assert.ok(!text.includes("Lønforventning"));
+});
+
+test("both halves present renders the compact bilingual-unit line in the facts table", () => {
+  const pay = { monthly_min: 42000, monthly_max: 50000, hourly_min: 230, hourly_max: 270 };
+  const { html, text } = buildDecisionEmail(queued({ expected_pay: pay }));
+  assert.ok(html.includes("42–50k kr/md · 230–270 kr/t"), "compact pay line missing from html");
+  assert.ok(html.includes("Lønforventning"));
+  assert.ok(text.includes("Lønforventning: 42–50k kr/md · 230–270 kr/t"));
+});
+
+test("only the monthly half renders when only it is stated", () => {
+  const { html, text } = buildDecisionEmail(
+    queued({ expected_pay: { monthly_min: 42000, monthly_max: 50000, hourly_min: null, hourly_max: null } }),
+  );
+  assert.ok(html.includes("42–50k kr/md"));
+  assert.ok(!html.includes("kr/t"));
+  assert.ok(text.includes("Lønforventning: 42–50k kr/md"));
+});
+
+test("an open-ended bound renders as at-least / up-to rather than a dangling range", () => {
+  const atLeast = buildDecisionEmail(
+    queued({ expected_pay: { monthly_min: 42000, monthly_max: null } }),
+  );
+  assert.ok(atLeast.html.includes("42k+ kr/md"));
+
+  const upTo = buildDecisionEmail(queued({ expected_pay: { hourly_min: null, hourly_max: 270 } }));
+  assert.ok(upTo.html.includes("op til 270 kr/t"));
+});
+
+test("a non-round thousand keeps one decimal rather than truncating", () => {
+  const { html } = buildDecisionEmail(queued({ expected_pay: { monthly_min: 42500 } }));
+  assert.ok(html.includes("42.5k+ kr/md"));
+});
+
+test("an all-null expected_pay object renders nothing, same as absent", () => {
+  const { html, text } = buildDecisionEmail(
+    queued({ expected_pay: { monthly_min: null, monthly_max: null, hourly_min: null, hourly_max: null } }),
+  );
+  assert.ok(!html.includes("Lønforventning"));
+  assert.ok(!text.includes("Lønforventning"));
+});
+
+test("a non-finite or non-numeric bound is treated as absent, not as NaN", () => {
+  const { html } = buildDecisionEmail(
+    queued({ expected_pay: { monthly_min: Number.NaN, monthly_max: "50000", hourly_min: 230, hourly_max: 270 } }),
+  );
+  assert.ok(!html.includes("NaN"));
+  assert.ok(!html.includes("undefined"));
+  // Only the hourly half survived the guard.
+  assert.ok(html.includes("230–270 kr/t"));
+  assert.ok(!html.includes("kr/md"));
+});
+
+test("the pay line is escaped like every other interpolation, even though it is only ever digits", () => {
+  // Defense in depth: nothing here assumes the field is safe just because it is
+  // typed as a number upstream.
+  const { html } = buildDecisionEmail(queued({ expected_pay: { hourly_min: 230, hourly_max: 270 } }));
+  assert.ok(!/<script/i.test(html));
+});
+
+test("apply-kit mode promotes the pay line to a prominent callout, not just a fact row", () => {
+  const posting = { ...queued().posting, apply_channel: "ats" };
+  const { html, text } = buildDecisionEmail(
+    queued({
+      posting,
+      cv_url: "https://bastianthomsen.dev/cv.pdf",
+      expected_pay: { monthly_min: 42000, monthly_max: 50000 },
+    }),
+  );
+  assert.ok(html.includes("Din lønforventning: 42–50k kr/md"), "no prominent pay callout in apply-kit mode");
+  // Still in the facts table too — the callout is additive, not a replacement.
+  assert.ok(html.includes("Lønforventning"));
+  assert.ok(text.includes("Din lønforventning: 42–50k kr/md"));
+});
+
+test("apply-kit mode with no expected_pay renders no callout and does not crash", () => {
+  const posting = { ...queued().posting, apply_channel: "ats" };
+  const { html } = buildDecisionEmail(
+    queued({ posting, cv_url: "https://bastianthomsen.dev/cv.pdf" }),
+  );
+  assert.ok(!html.includes("Din lønforventning"));
+  assert.ok(html.includes("Open posting"));
+});
+
 test("buildDecisionEmail never throws on junk", () => {
   for (const input of [
     null,
@@ -437,6 +598,10 @@ test("buildDecisionEmail never throws on junk", () => {
     { posting: null, missing_slots: "nope", matched_skills: 4 },
     { score: "abc", body: 12, review_url: {}, posting: { title: {} } },
     { missing_slots: Array(500).fill("slot"), matched_skills: Array(500).fill("x") },
+    { expected_pay: "not an object" },
+    { expected_pay: null },
+    { expected_pay: [1, 2, 3] },
+    { expected_pay: { monthly_min: {}, hourly_max: [] } },
   ]) {
     const out = buildDecisionEmail(input);
     assert.equal(typeof out.subject, "string");

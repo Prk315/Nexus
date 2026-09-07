@@ -878,6 +878,77 @@ export function parseSdkBuildings(json, { shortWaitPks = null } = {}) {
     });
 }
 
+// MARK: - Egmont Kollegiet — application round watcher
+
+/**
+ * Egmont Kollegiet (egmontkollegiet.dk) is the prime kollegie next to campus,
+ * and unlike every lane above it takes applications in ROUNDS, not a rolling
+ * waitlist. There is no feed, no API and no historical log of past rounds —
+ * the only signal the site publishes is a sentence of prose on the homepage:
+ * "Ansøgningsrunden er lukket." while a round is shut. Whatever it says when a
+ * round is OPEN has never been observed and is not worth guessing at, so this
+ * function recognises exactly one thing and treats everything else the same.
+ *
+ * # The polarity is deliberately inverted from `cheapGateHousing`
+ *
+ * That gate's rule is "only positive evidence drops" — an unrecognised signal
+ * passes quietly, because the miss there (a radius check with no coordinates)
+ * would otherwise kill an entire lane, silently, forever. Here the failure
+ * this function exists to catch is the opposite shape: a watcher that stays
+ * quiet whenever it doesn't recognise the page is a watcher that sleeps
+ * through the one event it was built for. So the marker is the ONLY quiet
+ * outcome, and it is a narrow, exact one:
+ *
+ *   - **found** → `closed`. Nothing to do; the round is shut exactly as it
+ *     was yesterday.
+ *   - **not found** → `open_or_changed`, whatever the reason. The round may
+ *     have opened. The page may have been reworded. The site may have been
+ *     redesigned. The fetch may have returned a WAF challenge or a 5xx error
+ *     body instead of the real page. All four collapse to the same verdict,
+ *     because all four are exactly the moment a human has to look — the
+ *     absence of "closed" is the alert condition, not evidence of anything in
+ *     particular. Distinguishing them would only buy false confidence: a
+ *     "changed" verdict that pretended to know it wasn't an open round is a
+ *     guess wearing a label.
+ *
+ * # Why this takes a string, not a fetch result
+ *
+ * The caller (the workflow's Code node) is the one that knows whether a
+ * request even completed — a genuine network failure never reaches this
+ * function with real markup, and gets its own subject line one layer up.
+ * Folding that distinction in here too would mean two places deciding one
+ * thing from different signals, the exact duplication `SOURCE_KIND`'s own
+ * header warns against elsewhere in this file. `egmontRoundStatus("")` for a
+ * failed fetch and `egmontRoundStatus(realHtmlWithNoMarker)` for a redesign
+ * both correctly answer `open_or_changed` — the caller adds the "how" on top.
+ *
+ * # Why a plain substring, not a smarter parse
+ *
+ * `htmlToText` already strips tags/scripts/styles, decodes entities (numeric
+ * and the handful of named ones this file handles) and collapses whitespace —
+ * exactly the normalization every other extractor in this file relies on. A
+ * further lowercase + single-space collapse is enough to match the marker
+ * however it is capitalised, wherever in the page it sits (a sitewide banner
+ * in the nav, or the actual status line in the body — this watcher does not
+ * try to tell those apart, because doing so would require assumptions about a
+ * layout nobody has committed to keeping), and however its diacritics were
+ * written (a literal "ø" or a decimal/hex entity for it). Anything cleverer
+ * risks the one failure mode worse than a false alarm: a parser confident
+ * enough to stay quiet on a page it misread.
+ */
+const EGMONT_CLOSED_MARKER = "ansøgningsrunden er lukket";
+
+export function egmontRoundStatus(html) {
+  const normalized = htmlToText(String(html ?? ""))
+    .toLowerCase()
+    .replace(/\s+/g, " ");
+  const markerFound = normalized.includes(EGMONT_CLOSED_MARKER);
+  return {
+    status: markerFound ? "closed" : "open_or_changed",
+    marker_found: markerFound,
+  };
+}
+
 // MARK: - Dedup
 
 /**

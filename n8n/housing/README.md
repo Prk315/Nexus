@@ -4,7 +4,9 @@ Discovers Copenhagen rental listings from **lejebolig.dk** and **boligzonen.dk**
 mirrors the **mit.s.dk** (CIU) dorm catalogue, screens everything against
 rule-only criteria rows, and writes to Supabase through `housing-ingest`. A second
 workflow mails a listing alert within ten minutes of a match landing; a third
-guards the waiting-list reconfirmations that Lane A's whole value rests on.
+guards the waiting-list reconfirmations that Lane A's whole value rests on; a
+fourth watches Egmont Kollegiet's application-round page daily for the one day it
+stops saying "closed."
 
 ```
 lejebolig search  ──┐                                       Lane B — the race (30 min)
@@ -14,6 +16,9 @@ mit.s.dk JSON API ──┘                                       Lane A — the
 housing_waitlist_positions ── renewal_pending ── n8n (daily 08:00) ── reminder email
                                                                           │
                                              housing-renew confirm page ──┘  (POST only)
+
+egmontkollegiet.dk ── n8n (daily 09:00) ── "closed" marker absent? ── alert email
+                                            (no DB, no state — the page IS the state)
 
 BoligAgent / søgeagent / akutbolig alerts ── Gmail ── existing mail bus (nothing here fetches them)
 ```
@@ -33,14 +38,14 @@ argued. Read it before changing a source.
 
 | File | What |
 |---|---|
-| `extract.js` | **the canonical extractor** — pure, dependency-free |
+| `extract.js` | **the canonical extractor** — pure, dependency-free; also carries `egmontRoundStatus` |
 | `notify-housing.js` | the three emails: listing alert, renewal reminder, unknown-rule nudge |
-| `extract.test.js` | `node --test extract.test.js` — 97 cases, covering both source files |
-| `build-housing.mjs` | injects both sources into the three templates |
-| `workflows/*.template.json` | the three workflows, with `__EXTRACT_JS__` / `__NOTIFY_JS__` placeholders |
-| `workflows/housing-{harvest,notify,renewal}.json` | **generated — do not hand-edit** |
+| `extract.test.js` | `node --test extract.test.js` — 105 cases, covering both source files |
+| `build-housing.mjs` | injects the sources into the four templates, one row per workflow in `TARGETS` |
+| `workflows/*.template.json` | the four workflows, with `__EXTRACT_JS__` / `__NOTIFY_JS__` placeholders |
+| `workflows/housing-{harvest,notify,renewal,egmont}.json` | **generated — do not hand-edit** |
 | `fixtures/` | real pages and API responses captured 2026-09-06 |
-| `../job-applier/patch-deploy.mjs` | copies **all seven** workflows (four job + three housing) to `~/docker/n8n/workflows/` |
+| `../job-applier/patch-deploy.mjs` | copies **all eight** workflows (four job + four housing) to `~/docker/n8n/workflows/` |
 
 This folder sits outside the npm workspace globs (`apps/*`, `packages/*`) on
 purpose, exactly like `../job-applier`: it has no dependencies and must never be
@@ -49,10 +54,11 @@ able to break an app build.
 ## The one rule
 
 **Never edit `workflows/housing-*.json` by hand.** n8n Code nodes have no module
-system, so `extract.js` is pasted into six separate node bodies and
-`notify-housing.js` into four. Editing those copies puts ten untested forks of
-the parsing rules in the tree — the exact failure CLAUDE.md records for the stale
-Garmin bridge and the duplicated BIA constants.
+system, so `extract.js` is pasted into seven separate node bodies (six in
+`housing-harvest`, one in `housing-egmont`) and `notify-housing.js` into four.
+Editing those copies puts eleven untested forks of the parsing rules in the tree —
+the exact failure CLAUDE.md records for the stale Garmin bridge and the duplicated
+BIA constants.
 
 ```bash
 cd n8n/housing
@@ -104,15 +110,19 @@ deliberate — the alternative is a harvest that finds listings and stores none.
 ## Import order
 
 `housing-notify` and `housing-renewal` are harmless with no data — both end their
-run quietly on an empty queue. `housing-harvest` is not: it starts polling three
-sites the moment it is activated, so bring it up last and watch one manual run
-before letting the schedule have it.
+run quietly on an empty queue. `housing-egmont` is harmless too, and needs no
+Supabase config at all — it reads `egmontkollegiet.dk` and nothing else, so it can
+be imported and activated in any order relative to the rest of this folder.
+`housing-harvest` is not harmless: it starts polling three sites the moment it is
+activated, so bring it up last and watch one manual run before letting the
+schedule have it.
 
 ```bash
 # 🍎 MAC — the migration and the edge function must already be live.
 #          A deploy does not create tables; see supabase/migrations/APPLY.md.
 docker exec n8n n8n import:workflow --input=/home/node/workflows/housing-notify.json
 docker exec n8n n8n import:workflow --input=/home/node/workflows/housing-renewal.json
+docker exec n8n n8n import:workflow --input=/home/node/workflows/housing-egmont.json
 docker exec n8n n8n import:workflow --input=/home/node/workflows/housing-harvest.json
 
 # one manual run, before activating anything
@@ -121,7 +131,8 @@ docker exec n8n n8n execute --id nexus-housing-harvest
 
 Then seed at least one `housing_criteria` row and the source rows — the workflow
 holds **no configuration of its own**, and `Fan Out Sources` throws rather than
-guessing if there are no criteria.
+guessing if there are no criteria. `housing-egmont` holds no configuration either,
+by design — see the section below.
 
 ⚠️ **A workflow with `active = 1` is not necessarily running.** n8n 2.x versions
 workflows, and one is only live when `activeVersionId` is set — which
@@ -204,6 +215,58 @@ The workflow sends **no `limit`** on `renewal_pending`. That action's default is
 the maximum rather than a page, deliberately: a digest that truncated would drop
 exactly the rows furthest from their deadline, which are the ones you are least
 likely to notice are missing.
+
+## The Egmont watcher — no server state, the page IS the state
+
+Egmont Kollegiet (egmontkollegiet.dk) is the prime kollegie next to campus, and
+unlike every source above it takes applications in **rounds**, not a rolling
+waitlist — there is no position to hold and nothing to renew, only a door that
+opens without warning and closes again fast. `housing-egmont` runs once a day at
+09:00, fetches the homepage, and checks it for one sentence:
+"Ansøgningsrunden er lukket." ("the application round is closed").
+
+**The polarity is inverted from every other gate in this file.** `cheapGateHousing`
+and `egmontRoundStatus` both live by "absent is never a verdict", but they resolve
+absence in opposite directions on purpose:
+
+- A **missing** budget/radius/type signal on a listing means *unknown*, and the
+  listing **passes** — dropping it would silently kill an entire lane (neither
+  private portal publishes coordinates at all).
+- A **missing** closed-marker on the Egmont homepage means *unknown*, and the
+  watcher **alerts** — staying quiet would mean sleeping through the one event
+  this whole workflow exists to catch. The function recognises exactly one
+  string; it does not attempt to recognise an "open" one, because nobody has ever
+  seen what the site says when a round is open. Everything that isn't the closed
+  sentence — an open round, reworded prose, a redesigned page, a fetch that came
+  back as a WAF challenge or an empty body — collapses to one verdict,
+  `open_or_changed`, and that verdict is what sends the mail.
+
+**No database row, no seen-set, no `housing-ingest` call.** Every other lane in
+this folder stores what it has already told you about so it does not repeat
+itself. This one repeats itself *daily, on purpose*, for as long as the marker
+stays missing — HOUSING_PLAN.md's asymmetry again: a round is short once open, so
+an email he has already seen costs nothing next to the one that would have
+arrived zero times. The page itself is the only state that exists; there is
+nothing to seed, nothing to migrate, and nothing that can drift out of sync with
+reality the way a stored flag could.
+
+**A fetch failure gets its own honest subject rather than being dressed up as a
+positive signal.** `onError: continueRegularOutput` plus `neverError: true` on the
+HTTP node mean a timeout, a DNS failure or a non-2xx response all still reach the
+Code node as one item instead of failing the execution red — a watcher that stops
+on the first network blip is a watcher that silently stops watching. The Code node
+distinguishes "no response came back at all" from "a response came back with no
+marker in it" **only** to pick the subject line
+(`"Egmont-vagten kunne ikke læse siden"` vs. the round-looks-open one); the
+underlying `open_or_changed` verdict is identical either way, and both still mail.
+
+⚠️ **This is the one fetch in the folder that does NOT send the honest
+`NexusHousing/0.1` User-Agent.** It sends an ordinary browser UA instead. That is
+a deliberate, narrow exception to "Identify honestly" below, not an oversight: it
+is one request to one static homepage once a day, not a bot walking a catalogue,
+and the honest-UA rule exists to keep a *scraper* from reading as anonymous
+browser-spoofing at scale. A single daily page-load is not that pattern. If this
+lane ever grows into fetching more than the homepage, revisit the UA before it does.
 
 ## Politeness, and why the numbers are what they are
 
