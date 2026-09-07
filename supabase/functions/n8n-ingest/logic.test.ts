@@ -47,7 +47,10 @@ import {
   isPendingRequest,
   parsePendingRequest,
   PENDING_DEFAULT_LIMIT,
-  PENDING_MAX_LIMIT
+  PENDING_MAX_LIMIT,
+  isBriefRequest,
+  toBriefItems,
+  BRIEF_MAX_ITEMS
 } from "./logic.ts";
 
 const KEY = "x".repeat(32);
@@ -1649,4 +1652,51 @@ Deno.test("pending: nonsense is refused rather than silently defaulted", () => {
       `limit=${JSON.stringify(bad)} should be refused`,
     );
   }
+});
+
+// ───────────────────────────────────────────────────────────────────────────
+// The `brief` action
+// ───────────────────────────────────────────────────────────────────────────
+
+Deno.test("isBriefRequest only fires on an explicit action", () => {
+  assertEquals(isBriefRequest({ action: "brief" }), true);
+  assertEquals(isBriefRequest({ action: "pending" }), false);
+  assertEquals(isBriefRequest({ messages: [] }), false);
+  assertEquals(isBriefRequest({ action: "BRIEF" }), false);
+  assertEquals(isBriefRequest(null), false);
+});
+
+Deno.test("brief items drop every field that carries message content", () => {
+  // This is the assertion that matters. The widening was accepted on the basis
+  // that sender and subject leave and nothing else does; a regression here puts
+  // a body snippet and a draft reply into a Slack channel.
+  const [item] = toBriefItems([{
+    sender: "a@b.dk", subject: "Lease renewal", score: 88,
+    importance: "high", urgency: "high",
+    snippet: "SECRET BODY TEXT",
+    suggested_reply: "SECRET DRAFT IN THE USER'S VOICE",
+    raw: { gmail_message_id: "x" },
+    external_id: "x", id: "y", user_id: "z",
+  }]);
+  assertEquals(Object.keys(item).sort(), ["importance", "score", "sender", "subject", "urgency"]);
+  assertEquals("snippet" in item, false);
+  assertEquals("suggested_reply" in item, false);
+  assertEquals("raw" in item, false);
+});
+
+Deno.test("brief items are capped so a leaked key cannot page the mailbox", () => {
+  const many = Array.from({ length: 50 }, (_, i) => ({ sender: `s${i}@x.dk`, subject: `n${i}` }));
+  assertEquals(toBriefItems(many).length, BRIEF_MAX_ITEMS);
+  assertEquals(toBriefItems(many, 2).length, 2);
+});
+
+Deno.test("brief items survive missing and wrong-typed fields", () => {
+  const [item] = toBriefItems([{ sender: 123, subject: null, score: "88" }]);
+  // A non-string sender becomes "", not "123": the brief prints these straight
+  // into Slack and a coerced number reads like a real address.
+  assertEquals(item.sender, "");
+  assertEquals(item.subject, null);
+  assertEquals(item.score, null);
+  assertEquals(toBriefItems(null), []);
+  assertEquals(toBriefItems({}), []);
 });

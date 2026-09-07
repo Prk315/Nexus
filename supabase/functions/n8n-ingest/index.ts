@@ -17,7 +17,11 @@ import {
   withRules,
   isPendingRequest,
   parsePendingRequest,
-  PENDING_MAX_LIMIT
+  PENDING_MAX_LIMIT,
+  isBriefRequest,
+  toBriefItems,
+  BRIEF_MAX_ITEMS,
+  BRIEF_CATEGORIES
 } from "./logic.ts";
 
 /**
@@ -199,6 +203,67 @@ Deno.serve(async (req: Request) => {
 
     const ids = (data ?? []).map((r) => (r as { external_id: string }).external_id);
     return json({ ids, count: ids.length, limit: pending.limit });
+  }
+
+  // ── the `brief` action: mail summary for the daily Slack briefs ─────────
+  //
+  // Read-only, and answered before the write path for the same reason
+  // `pending` is: a caller asking a question must not be able to touch a row.
+  //
+  // Returns counts plus sender/subject for at most BRIEF_MAX_ITEMS messages —
+  // never `snippet`, `suggested_reply` or `raw`. See the note in logic.ts: this
+  // is a deliberate widening, capped so a leaked key cannot page through the
+  // mailbox, and it stops short of the fields that hold actual message content.
+  if (isBriefRequest(body)) {
+    const supabase = createClient(url, serviceKey);
+
+    // "Needs a reply" = still open, highest verdict first — `nulls LAST`.
+    //
+    // This ordering was `nullsFirst` on the reasoning that un-triaged mail
+    // should not be buried. Measured against the real mailbox that was plainly
+    // wrong: with 195 open messages and a drain backlog, every brief would have
+    // named five un-triaged newsletters and never once mentioned the message
+    // that actually needed answering. "We have not looked at this yet" is not a
+    // claim that it matters.
+    //
+    // The backlog still has to be visible, so it is reported as a *count*
+    // below. A number says "the queue is behind" without spending all five
+    // slots proving it.
+    const { data, error } = await supabase
+      .from("mail_messages")
+      .select("sender,subject,score,importance,urgency")
+      .eq("user_id", OWNER_UID)
+      .in("status", ["unread", "read"])
+      // Category, not score. See BRIEF_CATEGORIES: ranking by score alone put a
+      // one-time login code above everything a human was waiting on.
+      .in("category", BRIEF_CATEGORIES as unknown as string[])
+      .order("score", { ascending: false, nullsFirst: false })
+      .order("received_at", { ascending: false })
+      .limit(BRIEF_MAX_ITEMS);
+
+    const { count: openCount, error: countError } = await supabase
+      .from("mail_messages")
+      .select("id", { count: "exact", head: true })
+      .eq("user_id", OWNER_UID)
+      .in("status", ["unread", "read"]);
+
+    const { count: untriagedCount, error: untriagedError } = await supabase
+      .from("mail_messages")
+      .select("id", { count: "exact", head: true })
+      .eq("user_id", OWNER_UID)
+      .in("status", ["unread", "read"])
+      .is("score", null);
+
+    // Fail loudly. A brief that silently reports "no mail" because the query
+    // broke is worse than a brief that fails to send: the first is believed.
+    const failure = error ?? countError ?? untriagedError;
+    if (failure) return json({ error: "brief_query_failed", detail: failure.message }, 500);
+
+    return json({
+      open: openCount ?? 0,
+      untriaged: untriagedCount ?? 0,
+      items: toBriefItems(data),
+    });
   }
 
   // Sampled exactly once and threaded through, so every row in a batch shares
