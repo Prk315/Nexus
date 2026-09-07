@@ -66,6 +66,15 @@ export default defineConfig(async () => ({
     ],
   },
 
+  // The Python kernel runs in a Web Worker (src/kernel/pyodide.worker.ts).
+  // Vite's default worker format is `iife`, and Pyodide's own dynamic imports
+  // force a code-splitting build — a combination Rollup refuses outright:
+  //   Invalid value "iife" for option "worker.format" — UMD and IIFE output
+  //   formats are not supported for code-splitting builds.
+  // ESM workers are supported everywhere Vault runs (Chromium-based WebViews
+  // and modern Safari), so this is the format, not a workaround.
+  worker: { format: "es" },
+
   // Vite options tailored for Tauri development and only applied in `tauri dev` or `tauri build`
   //
   // 1. prevent Vite from obscuring rust errors

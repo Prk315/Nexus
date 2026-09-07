@@ -34,7 +34,7 @@ export type IconName =
   | "bold" | "italic" | "underline" | "strike" | "code"
   | "paragraph" | "h1" | "h2" | "h3" | "h4" | "title"
   | "bulletList" | "orderedList" | "taskList"
-  | "quote" | "codeBlock" | "divider" | "toggle"
+  | "quote" | "codeBlock" | "runCell" | "divider" | "toggle"
   | "note" | "info" | "warn" | "success" | "danger"
   | "container" | "swatch" | "share" | "copy" | "unshare"
   | "columns" | "columnAdd" | "columnRemove" | "unwrap"
@@ -76,6 +76,15 @@ const I: Record<IconName, Spec> = {
 
   quote: { d: ["M5 5 v14", "M10 8h9", "M10 12h9", "M10 16h5"] },
   codeBlock: { d: ["M3.5 5h17v14h-17z", "M9 10 L6.5 12 L9 14", "M15 10 L17.5 12 L15 14"] },
+  // ⚠️ Its own icon rather than sharing `codeBlock`, and the distinction is the
+  // whole point: a code block is inert text, a code cell EXECUTES. Same shape
+  // so they read as relatives, plus the play triangle that says one of them
+  // runs. Filled, because a play control that is merely outlined reads as
+  // disabled at 14px.
+  runCell: {
+    d: ["M3.5 5h17v14h-17z"],
+    fill: ["M10 9 L15.5 12 L10 15 z"],
+  },
   divider: { d: ["M3 12h18"] },
   toggle: { d: ["M9 6 L14.5 12 L9 18"] },
 

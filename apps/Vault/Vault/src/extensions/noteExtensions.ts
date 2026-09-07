@@ -30,6 +30,7 @@ import { BlockHandle } from "./structural/BlockHandle";
 import { NoteDocument } from "./noteDocument";
 import { FoldableHeading } from "./headingFold";
 import { SketchBlock } from "./SketchBlock";
+import { CodeCellBlock } from "./CodeCellBlock";
 import { PathfinderBlock } from "./PathfinderBlock";
 import { NoteImage } from "./noteImage";
 import { NoteCodeBlock } from "./noteCodeBlock";
@@ -38,7 +39,6 @@ import { TextStyle, Color, FontSize, FontFamily } from "@tiptap/extension-text-s
 import { KATEX_OPTS } from "../lib/katexShared";
 
 export interface NoteExtensionOpts {
-  /** Opens the math edit popover. Behaviour only — contributes no schema. */
   /** Slash commands and any other pure-behaviour extension. */
   extra?: Extensions;
   placeholder?: string;
@@ -63,10 +63,19 @@ export interface NoteExtensionOpts {
    * it is not a claim to take on trust.
    */
   collab?: Extensions;
+  /**
+   * The kernel namespace runnable code cells in this editor share.
+   *
+   * Behaviour only — `sessionId` is an extension OPTION, not a schema
+   * attribute, so `noteSchema()` (built with no options) stays identical to the
+   * schema a live editor runs and the guard keeps its guarantee. Same contract
+   * as `placeholder`.
+   */
+  cellSessionId?: string;
 }
 
 export function buildNoteExtensions(opts: NoteExtensionOpts = {}): Extensions {
-  const { extra = [], placeholder = "Write here… (type / for commands)", collab } = opts;
+  const { extra = [], placeholder = "Write here… (type / for commands)", collab, cellSessionId } = opts;
 
   return [
     NoteDocument,
@@ -103,6 +112,11 @@ export function buildNoteExtensions(opts: NoteExtensionOpts = {}): Extensions {
     // vault_content row — see SketchBlock.ts for why, and for the size cap
     // that keeps a sketch from taking the note's text down with it.
     SketchBlock,
+    // A runnable Python/SQL cell — the notebook surface. Code AND results
+    // live in the document; see CodeCellBlock.ts for why, and
+    // kernel/outputs.ts for the cap that keeps a plot from eating the
+    // note's 2 MB save budget.
+    CodeCellBlock.configure({ sessionId: cellSessionId ?? "vault-note" }),
     // A live query onto PathFinder's tasks. ONE node type carrying a `view`
     // attribute, not three — see PathfinderBlock.ts for why the three blocks the
     // slash menu offers must not be three node types.

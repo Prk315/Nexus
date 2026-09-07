@@ -278,6 +278,17 @@ function NoteEditorInner({ content, onChange, nodeId, graph, variant = "full", c
   // be invisible to undo.
   const lastEmittedRef = useRef<string>(content);
 
+  // The kernel namespace this note's code cells share. Stable for the life of
+  // the mount: `useEditor` fixes its extension list once, so a value that
+  // changed identity per render would be read once and then silently diverge
+  // from what the cells actually use.
+  //
+  // Falls back to a per-mount id because `nodeId` is optional — WorkbookEditor
+  // renders a NoteEditor per linked note with none. Two editors on the same
+  // note deliberately DO share a session: that is one notebook open twice, not
+  // two notebooks.
+  const cellSessionIdRef = useRef<string>(nodeId ?? `note-${crypto.randomUUID()}`);
+
   const editor = useEditor({
     // One shared list, also used to derive the schema the wrapper audits
     // against — see extensions/noteExtensions.ts. Do not inline extensions
@@ -288,6 +299,11 @@ function NoteEditorInner({ content, onChange, nodeId, graph, variant = "full", c
       // Empty for a private note. Supplying it also disables StarterKit's
       // undoRedo — one fused decision, see noteExtensions.ts.
       collab: collab?.extensions,
+      // Every code cell in this note shares one kernel namespace, which is what
+      // makes it a notebook rather than a page of unrelated snippets. Keyed on
+      // the note so two notes never collide; `nodeId` is optional (WorkbookEditor
+      // mounts editors without one), hence the per-mount fallback.
+      cellSessionId: cellSessionIdRef.current,
     }),
     // Under collaboration the document comes from the Y.Doc, which ySync
     // installs on first render. Passing initial content as well is at best

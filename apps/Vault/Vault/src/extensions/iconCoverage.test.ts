@@ -33,6 +33,7 @@ const SHARED: Array<{ icon: IconName; prefix: string; why: string }> = [
   { icon: "columns", prefix: "columns:", why: "the count is the label" },
   { icon: "highlighter", prefix: "highlight:", why: "the category name is the label" },
   { icon: "pageTextLarge", prefix: "noteText:", why: "four note sizes on a three-step scale" },
+  { icon: "runCell", prefix: "codeCell:", why: "the language name is the label, as with codeLang" },
 ];
 
 describe("every action has an icon from the set", () => {
