@@ -5,6 +5,7 @@ import {
   Check,
   ChevronDown,
   ChevronRight,
+  Download,
   ExternalLink,
   Loader2,
   Lock,
@@ -49,9 +50,14 @@ import {
   ago,
   attemptLine,
   chipsEqual,
+  clampPayMax,
+  clampPayMin,
   clampThreshold,
+  formatPayRange,
   isResponseStatus,
   jobsBadgeCount,
+  parsePayBound,
+  pickCvUrl,
   removeChip,
 } from "../jobs/format";
 import type {
@@ -287,6 +293,33 @@ function PostingLink({ url, label }: { url: string | null | undefined; label?: s
   );
 }
 
+/**
+ * A direct CV download link — for pasting into an ATS upload form.
+ *
+ * Most jobs here are applied for on an external site, not by this pipeline, so
+ * every card that hands over a job needs to hand over the CV too, not just the
+ * posting. `url` is derived once at the panel level (`pickCvUrl`, over the
+ * already-fetched module catalog) and threaded down; this component only
+ * renders it, the same split `PostingLink` makes.
+ */
+function CvLink({ url }: { url: string | null | undefined }) {
+  if (!url) return null;
+  return (
+    <DropdownMenu.Item asChild>
+      <a
+        href={url}
+        target="_blank"
+        rel="noopener noreferrer"
+        title="Download CV — for ATS upload forms"
+        className="inline-flex items-center gap-0.5 rounded-sm px-1 py-px text-[9px] text-muted-foreground outline-none transition-colors hover:bg-accent hover:text-foreground focus:bg-accent focus:text-foreground"
+      >
+        <Download className="h-2.5 w-2.5" />
+        CV
+      </a>
+    </DropdownMenu.Item>
+  );
+}
+
 function Disclosure({
   open,
   onToggle,
@@ -343,6 +376,8 @@ function ReviewCard({
   decision,
   busy,
   error,
+  cvUrl,
+  payLine,
   onApprove,
   onReject,
 }: {
@@ -350,6 +385,9 @@ function ReviewCard({
   decision: Decision | undefined;
   busy: boolean;
   error: string | null;
+  cvUrl: string | null;
+  /** The card's profile's expected-pay range, pre-formatted by `formatPayRange`. Null renders nothing. */
+  payLine: string | null;
   onApprove: () => void;
   onReject: () => void;
 }) {
@@ -433,6 +471,14 @@ function ReviewCard({
                 {profile}
               </span>
             )}
+            {payLine && (
+              <span
+                className="rounded-sm bg-sky-500/15 px-1.5 py-px text-[9px] font-medium text-sky-700 dark:text-sky-300"
+                title="This profile's expected-pay range — the ready answer for an ATS form's own pay-expectation field"
+              >
+                {payLine}
+              </span>
+            )}
             <span className="text-[9px] text-muted-foreground/60">
               {ago(item.approval_requested_at) || ago(item.updated_at)}
             </span>
@@ -470,6 +516,7 @@ function ReviewCard({
           <span className="px-1 text-[9px] italic text-muted-foreground/50">no body assembled</span>
         )}
         <PostingLink url={item.posting?.url} />
+        <CvLink url={cvUrl} />
         {item.module_ids.length > 0 && (
           <span className="text-[9px] text-muted-foreground/50">
             {item.module_ids.length} module{item.module_ids.length === 1 ? "" : "s"}
@@ -685,9 +732,11 @@ function AttemptLineRow({ attempt }: { attempt: JobSubmissionAttempt }) {
 function SentRow({
   item,
   loadAttempts,
+  cvUrl,
 }: {
   item: JobApplicationItem;
   loadAttempts: (id: string) => Promise<JobSubmissionAttempt[]>;
+  cvUrl: string | null;
 }) {
   const [open, setOpen] = useState(false);
   const [attempts, setAttempts] = useState<JobSubmissionAttempt[] | null>(null);
@@ -780,6 +829,7 @@ function SentRow({
               label={open ? "Hide attempts" : "Attempts"}
             />
             <PostingLink url={item.posting?.url} />
+            <CvLink url={cvUrl} />
           </div>
           {open && (
             <div className="mt-1 rounded-md border border-border bg-muted/30 px-1.5 py-1">
@@ -995,6 +1045,126 @@ function ThresholdStepper({
   );
 }
 
+/**
+ * One bound of a pay range (monthly min, monthly max, hourly min, hourly
+ * max). Committed on blur and on Enter, same discipline as `ThresholdStepper`
+ * — typing "4" on the way to "42000" must not commit 4 for a moment.
+ *
+ * Unlike the threshold, an EMPTY field here is a legitimate target state
+ * (`null` — "not stated"), not something to revert: a profile may simply not
+ * have an hourly rate. Only genuinely unparseable input (letters, a bare "-")
+ * reverts to the last stored value; `parsePayBound` is what draws that line.
+ */
+function PayBoundInput({
+  value,
+  placeholder,
+  disabled,
+  onCommit,
+}: {
+  value: number | null;
+  placeholder: string;
+  disabled: boolean;
+  onCommit: (next: number | null) => void;
+}) {
+  const [draft, setDraft] = useState(value === null ? "" : String(value));
+  const serverRef = useRef(value);
+
+  // Adopt a changed stored value only when the field is untouched — same rule
+  // as `ThresholdStepper` and `ModuleRow`'s draft adoption.
+  useEffect(() => {
+    if (value === serverRef.current) return;
+    const prevAsText = serverRef.current === null ? "" : String(serverRef.current);
+    const untouched = draft === prevAsText;
+    serverRef.current = value;
+    if (untouched) setDraft(value === null ? "" : String(value));
+  }, [value, draft]);
+
+  function commit() {
+    const trimmed = draft.trim();
+    if (trimmed === "") {
+      setDraft("");
+      if (value !== null) onCommit(null);
+      return;
+    }
+    const parsed = parsePayBound(trimmed);
+    if (parsed === null) {
+      // Unparseable — revert rather than silently clearing what was typed.
+      setDraft(value === null ? "" : String(value));
+      return;
+    }
+    setDraft(String(parsed));
+    if (parsed !== value) onCommit(parsed);
+  }
+
+  return (
+    <input
+      value={draft}
+      onChange={(e) => setDraft(e.target.value)}
+      disabled={disabled}
+      inputMode="numeric"
+      placeholder={placeholder}
+      onKeyDown={(e) => {
+        e.stopPropagation();
+        if (e.key === "Enter") {
+          e.preventDefault();
+          commit();
+        }
+      }}
+      onBlur={commit}
+      className="h-5 w-14 rounded-sm border border-border bg-background text-center text-[10px] font-medium tabular-nums text-foreground outline-none placeholder:text-muted-foreground/40 focus:border-ring disabled:opacity-50"
+    />
+  );
+}
+
+/**
+ * One pay-range row (monthly or hourly): two `PayBoundInput`s that always
+ * commit as ONE patch carrying both bounds.
+ *
+ * That "always both" is load-bearing, not stylistic: `job_profiles_expected_
+ * {monthly,hourly}_range_chk` fires the moment both halves are present and
+ * `min > max`. Writing only the edited half would let a keystroke send a
+ * patch the database rejects outright the instant it crosses the OTHER
+ * stored bound. `clampPayMin` / `clampPayMax` resolve the pair client-side
+ * first, so the write this sends can never violate that constraint.
+ */
+function PayRangeEditor({
+  label,
+  unit,
+  min,
+  max,
+  disabled,
+  onCommit,
+}: {
+  label: string;
+  unit: string;
+  min: number | null;
+  max: number | null;
+  disabled: boolean;
+  onCommit: (next: { min: number | null; max: number | null }) => void;
+}) {
+  return (
+    <div className="mt-1 flex items-center gap-1.5">
+      <span className="w-14 shrink-0 text-[9px] font-semibold uppercase tracking-wider text-muted-foreground/70">
+        {label}
+      </span>
+      <PayBoundInput
+        value={min}
+        placeholder="min"
+        disabled={disabled}
+        onCommit={(next) => onCommit(clampPayMin(next, max))}
+      />
+      <span className="text-[9px] text-muted-foreground/40">–</span>
+      <PayBoundInput
+        value={max}
+        placeholder="max"
+        disabled={disabled}
+        onCommit={(next) => onCommit(clampPayMax(next, min))}
+      />
+      <span className="text-[9px] text-muted-foreground/50">{unit}</span>
+    </div>
+  );
+}
+
 function ProfileRow({
   profile: p,
   busy,
@@ -1069,6 +1239,35 @@ function ProfileRow({
           and above — below it the draft is never raised.
         </span>
       </div>
+
+      {/*
+        The expected-pay range. Gates nothing — it is the ready answer for an
+        ATS form's own "expected salary" box, surfaced on Review cards
+        (`formatPayRange`) and in the decision email (`notify.js`'s
+        `formatPayLine`). Each bound is independently optional; committing
+        either half of a pair always sends both (`PayRangeEditor`), which is
+        what keeps a write from tripping the DB's min<=max CHECK.
+      */}
+      <PayRangeEditor
+        label="Monthly"
+        unit="kr/md"
+        min={p.expected_monthly_min}
+        max={p.expected_monthly_max}
+        disabled={busy}
+        onCommit={({ min, max }) =>
+          onPatch({ expected_monthly_min: min, expected_monthly_max: max })
+        }
+      />
+      <PayRangeEditor
+        label="Hourly"
+        unit="kr/t"
+        min={p.expected_hourly_min}
+        max={p.expected_hourly_max}
+        disabled={busy}
+        onCommit={({ min, max }) =>
+          onPatch({ expected_hourly_min: min, expected_hourly_max: max })
+        }
+      />
 
       <ChipEditor
         label="Keywords"
@@ -1484,6 +1683,29 @@ export function JobsPanel({ api }: JobsPanelProps) {
     [snapshot?.modules],
   );
 
+  /**
+   * The CV link every Review and Sent card renders. Derived from the module
+   * catalog `load()` already fetched as part of the one snapshot read — no
+   * second query, and no personal URL hardcoded in nexus-core. `null` means
+   * no enabled `cv_link` module exists yet, which `CvLink` renders as nothing.
+   */
+  const cvUrl = useMemo(() => pickCvUrl(snapshot?.modules), [snapshot?.modules]);
+
+  /**
+   * Each profile's expected-pay range, pre-formatted and keyed by profile id —
+   * built from `profiles` (the snapshot with any in-flight Profiles-tab edit
+   * laid over it) rather than raw `snapshot.profiles`, so committing a pay
+   * edit updates a Review card's chip immediately rather than waiting for a
+   * refetch. `JobApplicationItem.profile` is the narrow embed and does not
+   * carry these columns — this is the wide read the Profiles tab already
+   * fetches, reused rather than duplicated onto a second query.
+   */
+  const payLineByProfileId = useMemo(() => {
+    const map = new Map<string, string | null>();
+    for (const p of profiles) map.set(p.id, formatPayRange(p));
+    return map;
+  }, [profiles]);
+
   /** Enabled, but with an empty keyword list — a search that quietly finds nothing. */
   const profileWarnings = useMemo(
     () => profiles.filter((p) => p.enabled && (p.keywords ?? []).filter(Boolean).length === 0).length,
@@ -1658,6 +1880,8 @@ export function JobsPanel({ api }: JobsPanelProps) {
                           decision={decisions[item.id]}
                           busy={!!busyIds[item.id]}
                           error={errors[item.id] ?? null}
+                          cvUrl={cvUrl}
+                          payLine={payLineByProfileId.get(item.profile_id) ?? null}
                           onApprove={() => void decide(item.id, "approve")}
                           onReject={() => void decide(item.id, "reject")}
                         />
@@ -1704,7 +1928,12 @@ export function JobsPanel({ api }: JobsPanelProps) {
                   <>
                     <ul className="flex flex-col gap-1">
                       {sentOrdered.map((item) => (
-                        <SentRow key={item.id} item={item} loadAttempts={api.loadAttempts} />
+                        <SentRow
+                          key={item.id}
+                          item={item}
+                          loadAttempts={api.loadAttempts}
+                          cvUrl={cvUrl}
+                        />
                       ))}
                     </ul>
                     <WindowNotice truncated={snapshot.truncated.sent} cap={SENT_LIMIT} noun="applications" />

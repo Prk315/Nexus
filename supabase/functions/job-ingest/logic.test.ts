@@ -32,8 +32,13 @@ import {
   type ApplyContext,
   assembleApplication,
   bodyHasUnresolvedGaps,
+  cvUrlFromModules,
+  extractFirstUrl,
+  isUsableCvModule,
+  MAX_CV_SCAN,
   type ModuleRow,
   normalizeModulePlan,
+  pickCvLinkModule,
   pickUncontestedModule,
   collapseByPosting,
   cvGateReady,
@@ -384,6 +389,20 @@ describe("selectNotifyCandidates", () => {
     assert.equal(out.length, 2);
   });
 
+  it("carries the CV link on every item, and null when there is none", () => {
+    // Repeated per item on purpose: n8n splits `notify` into one item per email,
+    // and an item that cannot see the link cannot put it in the message.
+    const cv = "https://prk315.github.io/personal-website/cv.pdf";
+    const out = selectNotifyCandidates([draft(1), draft(2)], [match(1, 80), match(2, 90)], {
+      ...opts,
+      cvUrl: cv,
+    });
+    assert.deepEqual(out.map((i) => i.cv_url), [cv, cv]);
+    // Absent is absent — the field exists and is null, so a consumer renders
+    // nothing rather than the string "undefined".
+    assert.equal(selectNotifyCandidates([draft(1)], [match(1, 80)], opts)[0].cv_url, null);
+  });
+
   it("builds the review link server-side and url-encodes the token", () => {
     const out = selectNotifyCandidates([draft(1)], [match(1, 80)], opts);
     assert.equal(
@@ -404,6 +423,72 @@ describe("selectNotifyCandidates", () => {
     assert.deepEqual(item.matched_skills, []);
     assert.deepEqual(item.missing_skills, []);
     assert.equal(item.body, null);
+  });
+
+  it("passes the profile's expected-pay range through verbatim", () => {
+    const paid = draft(1, {
+      job_profiles: {
+        name: "AI Engineering",
+        approval_threshold: 75,
+        expected_monthly_min: 42000,
+        expected_monthly_max: 50000,
+        expected_hourly_min: 230,
+        expected_hourly_max: 270,
+      },
+    });
+    const [item] = selectNotifyCandidates([paid], [match(1, 80)], opts);
+    assert.deepEqual(item.expected_pay, {
+      monthly_min: 42000,
+      monthly_max: 50000,
+      hourly_min: 230,
+      hourly_max: 270,
+    });
+  });
+
+  it("preserves nulls rather than defaulting an unstated half to 0", () => {
+    // 0 is a real (and wrong) answer to "what do you expect to be paid" — an
+    // unstated half must render as absent, not as a free internship.
+    const halfStated = draft(1, {
+      job_profiles: { name: "AI Engineering", expected_monthly_min: 42000 },
+    });
+    const [item] = selectNotifyCandidates([halfStated], [match(1, 80)], opts);
+    assert.deepEqual(item.expected_pay, {
+      monthly_min: 42000,
+      monthly_max: null,
+      hourly_min: null,
+      hourly_max: null,
+    });
+  });
+
+  it("is all-null when the profile has no pay range, or no profile embed at all", () => {
+    assert.deepEqual(selectNotifyCandidates([draft(1)], [match(1, 80)], opts)[0].expected_pay, {
+      monthly_min: null,
+      monthly_max: null,
+      hourly_min: null,
+      hourly_max: null,
+    });
+    const orphan = draft(1, { job_profiles: null });
+    assert.deepEqual(selectNotifyCandidates([orphan], [match(1, 80)], opts)[0].expected_pay, {
+      monthly_min: null,
+      monthly_max: null,
+      hourly_min: null,
+      hourly_max: null,
+    });
+  });
+
+  it("never lets a non-finite value through as though it were a real figure", () => {
+    const junk = draft(1, {
+      job_profiles: {
+        name: "AI Engineering",
+        // deno-lint-ignore no-explicit-any
+        expected_monthly_min: Number.NaN as any,
+        // deno-lint-ignore no-explicit-any
+        expected_monthly_max: "50000" as any,
+      },
+    });
+    const [item] = selectNotifyCandidates([junk], [match(1, 80)], opts);
+    assert.equal(item.expected_pay.monthly_min, null);
+    assert.equal(item.expected_pay.monthly_max, null);
   });
 });
 
@@ -804,5 +889,193 @@ describe("gap markers distinguish two different states", () => {
     // sentence. Rewording a marker must never open the send gate.
     assert.equal(bodyHasUnresolvedGaps("x\n\n[GAP: no module chosen for 'experience']"), true);
     assert.equal(bodyHasUnresolvedGaps("x\n\n[GAP: no module for 'experience']"), true);
+  });
+});
+
+// ===========================================================================
+// MARK: - extractFirstUrl
+//
+// The CV link has to survive being pulled out of a sentence a human wrote and
+// pasted into someone else's web form. Every case below is a shape that sentence
+// actually takes.
+// ===========================================================================
+
+describe("extractFirstUrl", () => {
+  it("finds a bare host/path URL in ordinary prose", () => {
+    // The real module content. No scheme, no `www.`, a comma glued to the end.
+    assert.equal(
+      extractFirstUrl(
+        "My CV is at prk315.github.io/personal-website/cv.pdf, and I'm happy to send " +
+          "it in whatever format suits your process.",
+      ),
+      "https://prk315.github.io/personal-website/cv.pdf",
+    );
+  });
+
+  it("does not mistake sentence punctuation for a host", () => {
+    // The reason a bare candidate must carry a path: 'process.' and 'e.g.' are
+    // host-shaped, and a link to https://process/ helps nobody.
+    assert.equal(extractFirstUrl("Send it in whatever format suits your process."), null);
+    assert.equal(extractFirstUrl("Available on request, e.g. as a PDF."), null);
+    assert.equal(extractFirstUrl("I finished my B.Sc. in 2026."), null);
+  });
+
+  it("upgrades http to https and accepts www", () => {
+    // This string is pasted into a stranger's form as a link about the candidate.
+    // Plaintext is the worse default even when the server would redirect.
+    assert.equal(extractFirstUrl("CV: http://example.com/cv.pdf"), "https://example.com/cv.pdf");
+    assert.equal(extractFirstUrl("CV: www.example.com/cv.pdf"), "https://www.example.com/cv.pdf");
+    assert.equal(extractFirstUrl("CV: https://example.com/cv.pdf"), "https://example.com/cv.pdf");
+  });
+
+  it("takes the FIRST url and strips trailing punctuation and brackets", () => {
+    assert.equal(
+      extractFirstUrl("See (example.com/first.pdf) or example.com/second.pdf."),
+      "https://example.com/first.pdf",
+    );
+  });
+
+  it("returns null rather than a half-parsed link", () => {
+    // A link that goes nowhere is worse than no link: the human clicks it, gets
+    // nothing, and cannot tell whether the CV or the pipeline is broken.
+    for (const bad of [null, undefined, 42, "", "   ", "no link here", "ftp://example.com/cv"]) {
+      assert.equal(extractFirstUrl(bad), null, `expected null for ${JSON.stringify(bad)}`);
+    }
+  });
+
+  it("is bounded — a runaway string cannot be scanned or returned whole", () => {
+    const buried = `${"word ".repeat(MAX_CV_SCAN)}example.com/cv.pdf`;
+    assert.equal(extractFirstUrl(buried), null, "scanned past the bound");
+    assert.equal(extractFirstUrl(`https://example.com/${"x".repeat(4000)}`), null);
+  });
+
+  it("normalizes through the same rules as every other URL here", () => {
+    // canonicalizeUrl: tracking params stripped, fragment dropped.
+    assert.equal(
+      extractFirstUrl("https://example.com/cv.pdf?utm_source=mail#page=2"),
+      "https://example.com/cv.pdf",
+    );
+  });
+});
+
+// ===========================================================================
+// MARK: - cv_link, the third framed slot
+//
+// Added 2026-09-07. The prompt only ever offers the model `skill` / `project` /
+// `education`, so nothing chose the `cv_link` module — and once it was written
+// and enabled the pipeline sat in a state where `cvGateReady` said "sending is
+// allowed" while not one assembled letter carried the link.
+// ===========================================================================
+
+const CV_CONTENT = "My CV is at prk315.github.io/personal-website/cv.pdf.";
+
+const CATALOG_CV: ModuleRow[] = [
+  mod("i1", "intro", { sort: 0 }),
+  mod("s1", "skill"),
+  mod("cv1", "cv_link", { sort: 30, content: CV_CONTENT }),
+  mod("c1", "closing", { sort: 90 }),
+];
+
+const frame = (catalog: ModuleRow[], raw: unknown = { chosen: ["s1"], missing_slots: [] }) =>
+  normalizeModulePlan(raw, catalog, { score: 85, lang: "en", skills: [] });
+
+describe("cv_link framing", () => {
+  it("adds the CV line immediately before the closing", () => {
+    const plan = frame(CATALOG_CV);
+    assert.deepEqual(plan.chosen, ["i1", "s1", "cv1", "c1"], "wrong body order, or not picked");
+
+    const body = assembleApplication(plan, CATALOG_CV, { title: "AI Engineer" }).body;
+    const parts = body.split("\n\n");
+    assert.equal(parts[parts.length - 2], CV_CONTENT);
+    assert.equal(parts[parts.length - 1], "content of c1");
+  });
+
+  it("adds no slot and NO gap marker when the catalog has no cv_link", () => {
+    // The asymmetry with intro/closing, pinned. A letter with no opening has a
+    // structural hole in it; one with no CV line does not. And `cvGateReady`
+    // already blocks every send until a usable module exists, so a marker here
+    // would double-report that fact — and would block an ATS-channel draft a
+    // human pastes into a form that has its own CV upload field.
+    const withoutCv = CATALOG_CV.filter((m) => m.slot !== "cv_link");
+    const plan = frame(withoutCv);
+    assert.deepEqual(plan.missing_slots, []);
+    assert.ok(!plan.slots.some((s) => s.slot === "cv_link"));
+    assert.ok(!assembleApplication(plan, withoutCv, { title: "AI Engineer" }).body.includes("[GAP"));
+  });
+
+  it("refuses an enabled cv_link module that is still a [TODO stub", () => {
+    // Enabled-but-stubbed is a real state: the seeded module ships as a stub, and
+    // nothing stops someone enabling it before filling it in. Excluding it at
+    // pick time keeps the reported reason the true one — `cv_missing` from the
+    // send gate, rather than an unexplained `body_has_gaps` on a letter whose
+    // defect is that it quotes '[TODO: paste the link]' at a stranger.
+    const stub = CATALOG_CV.map((m) =>
+      m.id === "cv1" ? { ...m, content: "CV: [TODO paste the link]" } : m,
+    );
+    const plan = frame(stub);
+    assert.ok(!plan.chosen.includes("cv1"), "a [TODO stub reached a draft");
+    assert.deepEqual(plan.missing_slots, [], "and it must not leave a gap marker either");
+    assert.equal(cvGateReady(stub), false, "the gate and the picker must agree");
+  });
+
+  it("agrees with the send gate on what 'usable' means", () => {
+    assert.equal(isUsableCvModule(CATALOG_CV[2]), true);
+    assert.equal(isUsableCvModule(CATALOG_CV[1]), false, "slot must be cv_link");
+    assert.equal(isUsableCvModule({ id: "x", slot: "cv_link", content: "   " }), false);
+    assert.equal(isUsableCvModule({ id: "x", slot: "cv_link", content: null }), false);
+    // The gate is defined as `some(isUsableCvModule)`; a divergence here would
+    // mean a draft assembled without a CV line that the gate happily sends.
+    for (const catalog of [CATALOG_CV, CATALOG_CV.filter((m) => m.slot !== "cv_link")]) {
+      assert.equal(cvGateReady(catalog), catalog.some(isUsableCvModule));
+    }
+  });
+
+  it("strips a cv_link id the plan claimed, and never duplicates it", () => {
+    const plan = frame(CATALOG_CV, { chosen: ["s1", "cv1"], missing_slots: ["cv_link"] });
+    assert.deepEqual(plan.chosen.filter((id) => id === "cv1"), ["cv1"]);
+    assert.deepEqual(plan.slots.filter((s) => s.slot === "cv_link").length, 1);
+  });
+
+  it("picks by the same rule as every other framed slot", () => {
+    const tokens = new Set<string>();
+    assert.equal(pickCvLinkModule(CATALOG_CV, "en", tokens)?.id, "cv1");
+    assert.equal(pickCvLinkModule([], "en", tokens), null);
+    // Language first, exactly as for the two closings.
+    const bilingual = [...CATALOG_CV, mod("cv2", "cv_link", { sort: 30, lang: "da" })];
+    assert.equal(pickCvLinkModule(bilingual, "da", tokens)?.id, "cv2");
+    assert.equal(pickCvLinkModule(bilingual, "en", tokens)?.id, "cv1");
+  });
+
+  it("yields the CV link as a bare URL for the ATS forms", () => {
+    // Most applications here end in a form with its own "link to your CV" box,
+    // where a sentence is useless. The field is derived from the same module the
+    // letter quotes, so the two can never disagree.
+    assert.equal(
+      cvUrlFromModules(CATALOG_CV),
+      "https://prk315.github.io/personal-website/cv.pdf",
+    );
+    assert.equal(cvUrlFromModules([]), null);
+    // The [TODO stub is not a source of a link either — same predicate as the gate.
+    const stub = CATALOG_CV.map((m) =>
+      m.id === "cv1" ? { ...m, content: "CV: [TODO https://example.com/cv.pdf]" } : m,
+    );
+    assert.equal(cvUrlFromModules(stub), null);
+  });
+
+  it("falls through to the next cv module when one holds no URL", () => {
+    const catalog = [
+      mod("cvA", "cv_link", { sort: 10, content: "I will send my CV on request." }),
+      mod("cvB", "cv_link", { sort: 20, content: "CV: example.com/me.pdf" }),
+    ];
+    assert.equal(cvUrlFromModules(catalog), "https://example.com/me.pdf");
+  });
+
+  it("does not run without a score or without a chosen module", () => {
+    // Framing a failure dresses it up as a considered verdict — the same reason
+    // `evaluated_at` is not stamped without a score.
+    const noScore = normalizeModulePlan({ chosen: ["s1"] }, CATALOG_CV, { score: null });
+    assert.deepEqual(noScore.chosen, ["s1"]);
+    const noChoice = normalizeModulePlan({ chosen: [] }, CATALOG_CV, { score: 85 });
+    assert.deepEqual(noChoice.chosen, []);
   });
 });

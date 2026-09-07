@@ -168,6 +168,18 @@ export type JobProfileFull = JobProfile & {
    * dropdown.
    */
   locations: string[];
+  /**
+   * The expected-pay range, DKK — see
+   * `20260907120000_job_profile_expected_pay.sql`. All four independently
+   * nullable: a profile may state only a monthly figure, only an hourly one,
+   * both, or neither. This is the ready answer for an ATS form's own
+   * "lønforventning" box (`notify.js`'s `formatPayLine` renders the same
+   * shape into the decision email); nothing in the pipeline gates on it.
+   */
+  expected_monthly_min: number | null;
+  expected_monthly_max: number | null;
+  expected_hourly_min: number | null;
+  expected_hourly_max: number | null;
 };
 
 /**
@@ -309,8 +321,14 @@ export const JOB_POSTING_COLUMNS =
 
 export const JOB_PROFILE_COLUMNS = "id,name,enabled,sort,keywords,approval_threshold";
 
-/** The Profiles tab's read. One query, so the two extra arrays are free here. */
-export const JOB_PROFILE_FULL_COLUMNS = `${JOB_PROFILE_COLUMNS},exclude_terms,locations`;
+/**
+ * The Profiles tab's read. One query, so the two extra arrays — and the four
+ * expected-pay columns Review also reads `snapshot.profiles` for — are free
+ * here.
+ */
+export const JOB_PROFILE_FULL_COLUMNS =
+  `${JOB_PROFILE_COLUMNS},exclude_terms,locations,` +
+  "expected_monthly_min,expected_monthly_max,expected_hourly_min,expected_hourly_max";
 
 export const JOB_ATTEMPT_COLUMNS =
   "id,application_id,started_at,finished_at,ok,proof,error,created_at";

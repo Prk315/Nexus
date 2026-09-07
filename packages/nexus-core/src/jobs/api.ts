@@ -113,6 +113,18 @@ export type JobProfilePatch = {
   approval_threshold?: number;
   keywords?: string[];
   exclude_terms?: string[];
+  /**
+   * The expected-pay range, DKK — see `20260907120000_job_profile_expected_pay.sql`.
+   * Nullable, and deliberately not folded together into one "pay" object: a
+   * caller edits one bound at a time but the panel always sends BOTH halves of
+   * whichever pair it touched (see `clampPayMin` / `clampPayMax` in
+   * `jobs/format.ts`), so a write can never land a min above its own max and
+   * trip `job_profiles_expected_{monthly,hourly}_range_chk`.
+   */
+  expected_monthly_min?: number | null;
+  expected_monthly_max?: number | null;
+  expected_hourly_min?: number | null;
+  expected_hourly_max?: number | null;
 };
 
 export type JobsApi = {
@@ -503,6 +515,26 @@ export function createJobsApi(client: SupabaseClient | null | undefined): JobsAp
         update.exclude_terms = patch.exclude_terms
           .map((k) => String(k))
           .filter((k) => k.trim() !== "");
+      }
+      // The four pay-range bounds. Unlike `approval_threshold`, `null` IS a
+      // valid write here — it is how a bound gets explicitly cleared — so only
+      // a defined-but-non-finite value throws. The panel always clamps and
+      // sends both halves of whichever pair it touched (`clampPayMin` /
+      // `clampPayMax`), so by the time a patch reaches here `min <= max`
+      // already holds whenever both are present — this guard is only against
+      // a caller bypassing that, not the normal path.
+      for (const key of [
+        "expected_monthly_min",
+        "expected_monthly_max",
+        "expected_hourly_min",
+        "expected_hourly_max",
+      ] as const) {
+        const v = patch[key];
+        if (v === undefined) continue;
+        if (v !== null && !Number.isFinite(v)) {
+          throw new Error(`jobs: ${key} is not a number`);
+        }
+        update[key] = v === null ? null : Math.round(v);
       }
       if (Object.keys(update).length === 0) {
         throw new Error("jobs: profile patch had nothing to write");

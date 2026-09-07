@@ -9,7 +9,7 @@
  * exists because getting it wrong is invisible rather than loud.
  */
 
-import type { JobSubmissionAttempt } from "./types";
+import type { JobAppModule, JobSubmissionAttempt } from "./types";
 import { RESPONSE_STATUS } from "./types";
 
 // ── Relative time ─────────────────────────────────────────────────────────
@@ -99,6 +99,132 @@ export function clampThreshold(value: unknown): number | null {
         : NaN;
   if (!Number.isFinite(n)) return null;
   return Math.min(THRESHOLD_MAX, Math.max(THRESHOLD_MIN, Math.round(n)));
+}
+
+// ── Expected pay ──────────────────────────────────────────────────────────
+//
+// `job_profiles` carries an expected-pay range — monthly and hourly, DKK, all
+// four bounds independently nullable (`20260907120000_job_profile_expected_pay.sql`).
+// It gates nothing; it is the ready answer for the "expected salary" /
+// "lønforventning" box almost every ATS form asks for, which nothing in this
+// pipeline can otherwise fill in. `notify.js`'s `formatPayLine` renders the
+// same shape into the decision email — the two are independently written and
+// independently tested (that file cannot import from here, see its own
+// header), but they should read as the same feature. Port a change to one into
+// the other.
+
+/**
+ * "42–50k kr/md · 230–270 kr/t" — same rendering rule as `notify.js`'s
+ * `formatPayLine`. Each half (monthly, hourly) renders only when at least one
+ * of its own bounds is present — "42k+ kr/md" for an open lower bound, "op til
+ * 50k kr/md" for an open upper bound, "42–50k kr/md" for both — and the two
+ * halves join with " · " when both have something to say. Null when neither
+ * pair holds anything, never a label with nothing after it.
+ *
+ * Takes the DB's own column names (`expected_monthly_min`, …), not the
+ * shorter `monthly_min` keys `NotifyItem.expected_pay` nests them under — the
+ * only real caller in this package is `JobsPanel` passing a whole
+ * `JobProfileFull` row (from `snapshot.profiles`) straight through, so this
+ * matches that shape rather than making every call site remap four fields
+ * first. `notify.js`'s `formatPayLine` takes the API's nested shape because
+ * *its* caller (`buildDecisionEmail`) already has `item.expected_pay` in that
+ * form; same string output, deliberately different input shape.
+ */
+export function formatPayRange(pay: {
+  expected_monthly_min?: number | null;
+  expected_monthly_max?: number | null;
+  expected_hourly_min?: number | null;
+  expected_hourly_max?: number | null;
+} | null | undefined): string | null {
+  const p = pay ?? {};
+  const monthly = formatMonthlyPay(
+    payNumOrNull(p.expected_monthly_min),
+    payNumOrNull(p.expected_monthly_max),
+  );
+  const hourly = formatHourlyPay(
+    payNumOrNull(p.expected_hourly_min),
+    payNumOrNull(p.expected_hourly_max),
+  );
+  const parts = [monthly, hourly].filter((s): s is string => s !== null);
+  return parts.length > 0 ? parts.join(" · ") : null;
+}
+
+function payNumOrNull(v: number | null | undefined): number | null {
+  return typeof v === "number" && Number.isFinite(v) ? v : null;
+}
+
+/** `42000` → `"42"`, `42500` → `"42.5"` — thousands, one decimal only when it is not a round figure. */
+function payThousands(n: number): string {
+  const k = n / 1000;
+  return Number.isInteger(k) ? String(k) : k.toFixed(1);
+}
+
+function formatMonthlyPay(min: number | null, max: number | null): string | null {
+  if (min !== null && max !== null) return `${payThousands(min)}–${payThousands(max)}k kr/md`;
+  if (min !== null) return `${payThousands(min)}k+ kr/md`;
+  if (max !== null) return `op til ${payThousands(max)}k kr/md`;
+  return null;
+}
+
+/** Same shape as `formatMonthlyPay`, unscaled — an hourly rate is already a small number. */
+function formatHourlyPay(min: number | null, max: number | null): string | null {
+  if (min !== null && max !== null) return `${min}–${max} kr/t`;
+  if (min !== null) return `${min}+ kr/t`;
+  if (max !== null) return `op til ${max} kr/t`;
+  return null;
+}
+
+/**
+ * Parse one typed pay-bound field, or `null` for empty/unparseable input.
+ *
+ * Same "leave it alone rather than invent zero" contract as `clampThreshold`,
+ * with two differences that matter here: there is no upper bound (a salary is
+ * not a 0–100 score), and this NEVER clamps a negative into range — the caller
+ * decides what to do with an out-of-domain value, because unlike a threshold a
+ * negative salary is not "a person holding the down-arrow", it is a typo worth
+ * refusing outright rather than silently flooring to 0.
+ */
+export function parsePayBound(value: unknown): number | null {
+  const n =
+    typeof value === "number"
+      ? value
+      : typeof value === "string" && value.trim() !== ""
+        ? Number(value)
+        : NaN;
+  if (!Number.isFinite(n) || n < 0) return null;
+  return Math.round(n);
+}
+
+/**
+ * Editing the MIN of a pay pair: if the new value would land above the
+ * current max, raise the max to match rather than silently reverting the
+ * keystroke — the edit just made should win. Mirrors
+ * `job_profiles_expected_{monthly,hourly}_range_chk`, which only fires when
+ * BOTH halves are present, so a lone bound (the other null) is left alone.
+ *
+ * Always returns BOTH halves so the caller can send them as one patch: a
+ * write of `expected_monthly_min` alone, against a stored max the new min now
+ * exceeds, would trip the DB constraint and fail outright.
+ */
+export function clampPayMin(
+  next: number | null,
+  currentMax: number | null,
+): { min: number | null; max: number | null } {
+  if (next !== null && currentMax !== null && next > currentMax) {
+    return { min: next, max: next };
+  }
+  return { min: next, max: currentMax };
+}
+
+/** Same rule, edited from the other side: a max below the current min drags the min down to meet it. */
+export function clampPayMax(
+  next: number | null,
+  currentMin: number | null,
+): { min: number | null; max: number | null } {
+  if (next !== null && currentMin !== null && next < currentMin) {
+    return { min: next, max: next };
+  }
+  return { min: currentMin, max: next };
 }
 
 // ── Chip lists (keywords, exclude_terms) ──────────────────────────────────
@@ -220,6 +346,194 @@ export type AttemptLine = {
  * one testable rule rather than a chain of JSX ternaries — and so a change to
  * what n8n writes into `proof` breaks a test rather than a dropdown.
  */
+// ── The CV link ───────────────────────────────────────────────────────────
+//
+// He applies to most jobs through an external ATS form that wants a CV
+// upload, so every surface that hands him a job needs a direct download link
+// next to it. There is no dedicated column for it: `cv_link` is a THIRD framed
+// slot on `job_app_modules` (`job-ingest/logic.ts`'s `FRAMING_SLOTS`) — one
+// paragraph of freehand prose a person wrote once ("My CV is at
+// prk315.github.io/personal-website/cv.pdf, and I'm happy to send it in
+// whatever format…"), the same shape as `intro` and `closing`. So getting a
+// clickable URL out of it is two separate, separately-testable rules: find the
+// right module, then find the URL inside its prose.
+//
+// ⚠️ CANONICAL SOURCE: `supabase/functions/job-ingest/logic.ts`'s
+// `canonicalizeUrl` / `extractFirstUrl` / `isUsableCvModule` / `cvUrlFromModules`.
+// That file computes the `cv_url` the decision email actually renders (via
+// `notify_queue` → `notify.js`), so this panel's link and that email's link
+// MUST agree — a looser or stricter rule here would show no link (or a
+// different one) where the email shows the real one. nexus-core cannot import
+// a Supabase edge function, so this is a deliberate, faithful MIRROR, not an
+// independent implementation. Port any future change to those four functions
+// here too — `format.test.ts` carries the same fixture strings
+// `logic.test.ts` pins server-side (the real seeded module content included),
+// precisely so drift breaks a test here instead of showing up as "the panel
+// has no CV link but the email does."
+//
+// One deliberate, documented difference in SCOPE rather than rule: `logic.ts`
+// filters `enabled` at the SQL query (`.eq("enabled", true)`) before its pure
+// functions ever see a row, so `isUsableCvModule` itself does not re-check it.
+// This panel's `snapshot.modules` intentionally holds every module — the
+// Modules tab needs the disabled ones too — so `pickCvUrl` below applies the
+// same `enabled` filter locally. The two paths still agree on which module
+// counts once both filters are applied.
+
+/**
+ * Tracking / attribution params dropped so the same file never produces two
+ * different-looking links depending on how it was found. Exact mirror of
+ * `logic.ts`'s `STRIP_PARAMS`.
+ */
+const CV_STRIP_PARAMS = [
+  /^utm_/i,
+  /^applySourceOverride$/i,
+  /^linkref$/i,
+  /^gclid$/i,
+  /^fbclid$/i,
+  /^ref$/i,
+  /^source$/i,
+];
+
+/** A URL longer than this is a payload, not a link. Mirrors `logic.ts`'s `MAX_URL`. */
+const CV_MAX_URL = 2048;
+
+/** Prose scanned for a URL, bounded — a CV module is a paragraph, not a document. Mirrors `logic.ts`'s `MAX_CV_SCAN`. */
+export const MAX_CV_SCAN = 10_000;
+
+/** Sentence punctuation that ends up glued to a URL in ordinary prose. Mirrors `logic.ts`'s `URL_TRAILING_PUNCT`. */
+const CV_URL_TRAILING_PUNCT = /[.,;:!?)\]}>"'»]+$/;
+
+/**
+ * A scheme-prefixed URL, a `www.` one, or a bare `host.tld/path`.
+ *
+ * The bare form REQUIRES a path, and that is the whole guard: this scans a
+ * sentence a human wrote, and a bare `host.tld` with no slash matches "e.g.",
+ * "B.Sc." and the full stop ending "…suits your process." A required `/`
+ * removes that entire false-positive family at once — a CV link is a link to
+ * a file. Exact mirror of `logic.ts`'s `URL_CANDIDATE_RE`.
+ */
+const CV_URL_CANDIDATE_RE =
+  /(?:https?:\/\/|www\.)[^\s<>"']+|[a-z0-9][a-z0-9-]*(?:\.[a-z0-9-]+)+\/[^\s<>"']*/gi;
+
+/**
+ * Parse, protocol-check, tracking-strip and length-bound a URL. Exact mirror
+ * of `logic.ts`'s `canonicalizeUrl`, restricted to the two protocols this
+ * panel will ever render as an `href`.
+ */
+function canonicalizeCvUrl(raw: string): string | null {
+  if (raw.length === 0 || raw.length > CV_MAX_URL) return null;
+  let u: URL;
+  try {
+    u = new URL(raw);
+  } catch {
+    return null;
+  }
+  if (u.protocol !== "http:" && u.protocol !== "https:") return null;
+  for (const key of [...u.searchParams.keys()]) {
+    if (CV_STRIP_PARAMS.some((re) => re.test(key))) u.searchParams.delete(key);
+  }
+  u.hash = "";
+  return u.toString();
+}
+
+/**
+ * The first URL in a piece of prose, normalized to `https://`, or null.
+ *
+ * Faithful port of `logic.ts`'s `extractFirstUrl` — see the file banner above
+ * for why a divergence here is a real bug, not a style choice. Scheme-less
+ * input is assumed https rather than http; an explicit `http://` is UPGRADED,
+ * because this string is about to be pasted into someone else's form as a
+ * link about the candidate. A bare `host/path` sitting immediately after a
+ * scheme separator (`ftp://example.com/cv`) is the tail of a scheme this
+ * function does not accept, and is skipped rather than re-prefixed with
+ * `https://` — that would invent a URL the author did not write.
+ *
+ * Null for anything that is not a string, holds nothing URL-shaped, or would
+ * parse to a hostname with no dot (a word, not a host) — never an empty
+ * string, and never a guess. `it.cv_url` in `notify.js` renders the same way
+ * for the same reason: absent is absent, not "".
+ */
+export function firstLinkUrl(text: string | null | undefined): string | null {
+  if (typeof text !== "string" || text.length === 0) return null;
+  const scanned = text.length > MAX_CV_SCAN ? text.slice(0, MAX_CV_SCAN) : text;
+
+  CV_URL_CANDIDATE_RE.lastIndex = 0;
+  let match: RegExpExecArray | null;
+  while ((match = CV_URL_CANDIDATE_RE.exec(scanned)) !== null) {
+    if (scanned.slice(Math.max(0, match.index - 3), match.index) === "://") continue;
+
+    let raw = match[0].replace(CV_URL_TRAILING_PUNCT, "");
+    if (raw.length === 0 || raw.length > CV_MAX_URL) continue;
+    if (/^http:\/\//i.test(raw)) raw = `https://${raw.slice("http://".length)}`;
+    else if (!/^https:\/\//i.test(raw)) raw = `https://${raw}`;
+
+    const canonical = canonicalizeCvUrl(raw);
+    if (!canonical) continue;
+    try {
+      // A hostname with no dot is a word, not a host — `https://process/x`
+      // would otherwise parse perfectly and render a link to nowhere.
+      if (!new URL(canonical).hostname.includes(".")) continue;
+    } catch {
+      continue;
+    }
+    return canonical;
+  }
+  return null;
+}
+
+/**
+ * Is this a `cv_link` module worth reading a URL out of?
+ *
+ * Non-empty content, and no `[TODO` marker. Mirrors `logic.ts`'s
+ * `isUsableCvModule`: the seeded module ships as a stub, and nothing stops
+ * someone enabling it before filling it in. Surfacing `[TODO: paste the
+ * link]` — or a URL sitting inside one — as "the" CV link would be worse than
+ * showing none, and would disagree with the send gate, which uses the exact
+ * same predicate to decide whether a draft may go out at all.
+ */
+function isUsableCvModule(m: JobAppModule): boolean {
+  if ((m.slot ?? "").toLowerCase() !== "cv_link") return false;
+  const content = typeof m.content === "string" ? m.content : "";
+  return content.trim().length > 0 && !content.includes("[TODO");
+}
+
+/**
+ * The CV download link, derived from the module catalog — never stored
+ * anywhere of its own.
+ *
+ * Picks the enabled, usable `cv_link` module the assembler would actually
+ * choose — same `(sort, name, id)` tie-break `logic.ts`'s `byAssemblyOrder`
+ * uses server-side, so the panel and the letter agree on which module is
+ * "the" CV link when more than one is enabled — then pulls the URL out of its
+ * prose with `firstLinkUrl`, falling through to the next candidate when one
+ * holds no URL. Mirrors `logic.ts`'s `cvUrlFromModules`, with the `enabled`
+ * filter applied here explicitly — see the file banner above for why.
+ *
+ * Null for no catalog, no usable `cv_link` module, or one whose content holds
+ * nothing URL-shaped — every one of those is "nothing to show", not a guess.
+ */
+export function pickCvUrl(modules: readonly JobAppModule[] | null | undefined): string | null {
+  const candidates = (modules ?? [])
+    .filter((m) => m.enabled && isUsableCvModule(m))
+    .slice()
+    .sort((a, b) => {
+      const sa = Number.isFinite(a.sort) ? a.sort : 0;
+      const sb = Number.isFinite(b.sort) ? b.sort : 0;
+      if (sa !== sb) return sa - sb;
+      const na = a.name ?? "";
+      const nb = b.name ?? "";
+      if (na !== nb) return na < nb ? -1 : 1;
+      const ia = a.id ?? "";
+      const ib = b.id ?? "";
+      return ia < ib ? -1 : ia > ib ? 1 : 0;
+    });
+  for (const m of candidates) {
+    const url = firstLinkUrl(m.content);
+    if (url) return url;
+  }
+  return null;
+}
+
 export function attemptLine(a: JobSubmissionAttempt, now: number = Date.now()): AttemptLine {
   const outcome = attemptOutcome(a.ok);
   const when = ago(a.started_at, now) || ago(a.created_at, now);

@@ -179,8 +179,41 @@ function byAssemblyOrder(a, b) {
 // carry identical tags and differ only by language (so 3 cannot separate them),
 // while the five intros all carry `sort = 0` and differ only by tags (so 4
 // cannot). Drop either and one of the two slots silently picks alphabetically.
+//
+// # `cv_link` is the third framed slot, and it is optional
+//
+// Added 2026-09-07, for the same reason and by the same rule. The model was only
+// ever offered `skill` / `project` / `education`, so nothing chose the CV
+// paragraph — and once that module was written and enabled the pipeline reached a
+// state where the send gate said "a usable CV module exists" while not one
+// assembled letter carried the line.
+//
+// It differs from the other two in one respect: **a missing `cv_link` adds no
+// slot and therefore no gap marker.** A letter with no opening or no sign-off has
+// a structural hole in it; one with no CV line does not. And the fact is already
+// reported by the send gate (`cvGateReady` in `job-ingest/logic.ts`), which
+// blocks every send until a usable module exists — a `[GAP: cv_link]` would
+// double-report it, and would pollute the ATS-channel drafts a human pastes into
+// a form that has its own CV upload field.
+//
+// ⚠️ **One deliberate divergence from the canonical copy.** `job-ingest/logic.ts`
+// additionally refuses a `cv_link` module whose `content` contains a `[TODO`
+// marker. It cannot be mirrored here: this file runs against the metadata catalog
+// `action: "pending"` returns, which carries no `content` for ANY module (that is
+// the point — the prose never leaves Supabase), so the same filter would exclude
+// everything. So the preview may show a CV line the stored draft omits, for a
+// module that is enabled but still a stub. The canonical side is the one that
+// writes a row; a wrong preview in a terminal is the accepted cost, exactly as it
+// is for `assembleApplication` below.
 
-const FRAMING_SLOTS = ["intro", "closing"];
+/**
+ * The slots decided by rule rather than by the model. Order is body order.
+ *
+ * Two uses: modules in these slots are never shown to the model
+ * (`buildEvalPrompt`), and anything the verdict claims for one of them is
+ * stripped before the rule runs (`planFromVerdict`).
+ */
+const FRAMING_SLOTS = ["intro", "cv_link", "closing"];
 
 /**
  * The closed slot vocabulary. A slot is a KIND OF PARAGRAPH, not a skill.
@@ -199,9 +232,12 @@ const FRAMING_SLOTS = ["intro", "closing"];
  * and this is a guarantee.
  *
  * A slot survives if it is conventional or if some module in the catalog uses it.
- * That keeps a genuine whole-slot gap ("no cv_link module exists") expressible,
- * while `skill_python` is dropped — the missing *skill* is already reported in
- * `missing_skills`, which is where a skill belongs.
+ * That keeps a genuine whole-slot gap ("no portfolio_link module exists")
+ * expressible, while `skill_python` is dropped — the missing *skill* is already
+ * reported in `missing_skills`, which is where a skill belongs.
+ *
+ * `cv_link` is still listed, and still only for the framing-off path: with
+ * framing on it is stripped and re-derived like `intro` and `closing`.
  */
 const KNOWN_SLOTS = [
   "intro",
@@ -214,8 +250,11 @@ const KNOWN_SLOTS = [
   "closing",
 ];
 
-/** Body position: intro first, closing last, everything else in between. */
-const SLOT_RANK = { intro: 0, closing: 2 };
+/**
+ * Body position: intro first, closing last, everything else in between — with
+ * the CV line immediately before the sign-off, which is where a letter puts it.
+ */
+const SLOT_RANK = { intro: 0, cv_link: 2, closing: 3 };
 
 const slotOf = (m) => String(m?.slot ?? "").toLowerCase();
 const isFramingSlot = (slot) => FRAMING_SLOTS.includes(String(slot ?? "").toLowerCase());
@@ -348,7 +387,7 @@ const SYSTEM_PROMPT = [
   "  if no profile keyword and no module tag names it, it belongs in `missing_skills`. An empty",
   "  `missing_skills` next to a long `required_skills` is almost always wrong. Do not hide a real gap.",
   "- `module_slots_needed` is a list of PARAGRAPH KINDS, drawn only from this fixed vocabulary:",
-  "    skill, project, education, experience, cv_link, portfolio_link",
+  "    skill, project, education, experience, portfolio_link",
   "  It is NOT a list of skills. Never invent a slot such as \"skill_python\" or \"skill_kubernetes\" —",
   "  a missing technology belongs in `missing_skills`, not in this list. Ask for \"skill\" once, even",
   "  when several skills are involved. Three or four entries is a normal answer; ten is never one.",
@@ -356,9 +395,10 @@ const SYSTEM_PROMPT = [
   "  its id in `chosen_module_ids`. An application with an empty `chosen_module_ids` is only correct",
   "  when the catalog is genuinely irrelevant to the ad — if you scored the job above 40 and chose",
   "  nothing, you have made a mistake.",
-  "- The opening (`intro`) and sign-off (`closing`) paragraphs are added AUTOMATICALLY after you answer.",
-  "  They are not in the catalog and you must not ask for them. Spend your choices on the body of the",
-  "  application: the skill, project and education modules that evidence what the ad is asking for.",
+  "- The opening (`intro`), the CV link (`cv_link`) and the sign-off (`closing`) are added AUTOMATICALLY",
+  "  after you answer. They are not in the catalog and you must not ask for them. Spend your choices on",
+  "  the body of the application: the skill, project and education modules that evidence what the ad",
+  "  is asking for.",
   "- `chosen_module_ids` MUST be ids copied exactly from the catalog. Never invent an id.",
   "  An id you invent is discarded and its slot is reported to the user as an unwritten gap.",
   "- If no module fits a needed slot, list the slot in `module_slots_needed` and choose nothing for it.",
@@ -385,7 +425,9 @@ export function buildEvalPrompt(posting, profile, modules) {
   const pr = profile ?? {};
   // Framing modules are deliberately NOT shown. The model cannot pick an intro
   // badly if it is never offered one, which is the whole point of moving those
-  // two slots into a rule — and the tokens go to the choice it is good at.
+  // slots into a rule — and the tokens go to the choice it is good at. `cv_link`
+  // joined them on 2026-09-07, which also removes it from the prompt's slot
+  // vocabulary: a slot that is added automatically must not also be askable.
   const catalog = (Array.isArray(modules) ? modules : [])
     .filter((m) => !isFramingSlot(m?.slot))
     .sort(byAssemblyOrder)
@@ -552,10 +594,12 @@ export function parseEvalResponse(text, opts = {}) {
  *
  * ## Framing is applied here, not asked for
  *
- * When the model chose anything at all and produced a score, `intro` and
- * `closing` are decided by rule (see the FRAMING section above) rather than taken
- * from the verdict — and any intro/closing the model *did* name is stripped
- * first, so the result is exactly one of each regardless of what came back.
+ * When the model chose anything at all and produced a score, `intro`, `cv_link`
+ * and `closing` are decided by rule (see the FRAMING section above) rather than
+ * taken from the verdict — and anything the model *did* name for those slots is
+ * stripped first, so the result is at most one of each regardless of what came
+ * back. `intro` and `closing` are always requested (and gap if unfillable);
+ * `cv_link` appears only when a module exists to fill it.
  *
  * Both conditions matter. No chosen modules means the model found nothing worth
  * saying, and a letter that is an intro, a gap and a sign-off is worse than an
@@ -584,17 +628,22 @@ export function planFromVerdict(verdict, modules) {
   const framing = chosenModules.length > 0 && v.score !== null && v.score !== undefined;
   if (framing) {
     const tokens = skillTokens([...(v.matched_skills ?? []), ...(v.required_skills ?? [])]);
-    // Strip whatever the model said about these two slots. Deterministic means
+    // Strip whatever the model said about the framed slots. Deterministic means
     // deterministic: a stray intro id in the verdict must not produce two intros.
     chosenModules = chosenModules.filter((m) => !isFramingSlot(m.slot));
     needed = needed.filter((s) => !isFramingSlot(s));
-    for (const slot of FRAMING_SLOTS) {
-      const pick = pickFramingModule(catalog, slot, v.lang, tokens);
-      // A null pick leaves the slot in `needed` with nothing to fill it, which is
-      // exactly a gap — the honest answer when the catalog has no closing.
+
+    // A null intro or closing leaves the slot in `needed` with nothing to fill
+    // it, which is exactly a gap — the honest answer when the catalog has no
+    // closing. A null cv_link adds no slot at all, and so no gap marker: see the
+    // FRAMING section above for why those two cases are not the same.
+    const intro = pickFramingModule(catalog, "intro", v.lang, tokens);
+    const cvLink = pickFramingModule(catalog, "cv_link", v.lang, tokens) ?? null;
+    const closing = pickFramingModule(catalog, "closing", v.lang, tokens);
+    for (const pick of [intro, cvLink, closing]) {
       if (pick) chosenModules.push(pick);
     }
-    needed = ["intro", ...needed, "closing"];
+    needed = ["intro", ...needed, ...(cvLink ? ["cv_link"] : []), "closing"];
   }
 
   chosenModules = chosenModules.sort(byBodyOrder);
@@ -643,7 +692,8 @@ export function planFromVerdict(verdict, modules) {
  *   1. Header line: `Application: {title} — {company}`, or just the title when
  *      the company is unknown.
  *   2. Then every chosen module's `content` verbatim, in body order: intro first,
- *      closing last, everything else between, `(sort, name, id)` within a rank.
+ *      then the body, then the CV line, then the closing, `(sort, name, id)`
+ *      within a rank.
  *   3. Then one `[GAP: no module for '{slot}']` line per missing slot, in plan
  *      order.
  *   4. Parts joined by a blank line. Nothing else. No generated sentence, no

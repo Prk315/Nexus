@@ -330,13 +330,23 @@ expression resolves to empty and the Gmail node fails with an unhelpful error.
 `modules.seed.sql` seeds three modules with unresolved `[TODO: …]` markers:
 `education_stub`, `cv_link` and `portfolio_link`. The first two are seeded
 `enabled = false`, so `assembleApplication` never picks them and a draft that
-needed one shows a visible `[GAP: cv_link]` instead — which is exactly the design
-(a gap that is visibly a gap beats a paragraph that is invisibly a lie).
+needed one shows a visible `[GAP: …]` marker instead — which is exactly the
+design (a gap that is visibly a gap beats a paragraph that is invisibly a lie).
 
-**Do not enable `cv_link` until a real CV link replaces the stub.** Enabling it
-with the marker still in place puts the literal string `[TODO: add a link to or
-attachment reference for an actual CV…]` into an email to a company. The gap is
-the safe failure; the enabled stub is not.
+⚠️ **`cv_link` stopped working that way on 2026-09-07** and now has its own rule.
+It is a *framed* slot, decided like `intro` and `closing` rather than chosen by
+the model, and it is the one framed slot that is **optional**: with no usable
+module the CV line is simply absent, with **no** `[GAP: cv_link]` marker. A
+letter with no opening has a structural hole in it; one with no CV line does not,
+the send gate below already blocks on it, and a marker would additionally block
+the ATS-channel drafts a human pastes into a form that has its own upload field.
+
+A `cv_link` module that is enabled but still holds a `[TODO` marker is refused at
+pick time by `job-ingest/logic.ts` — so it can no longer reach an email, and the
+reported reason stays the true one (`cv_missing` from the gate, rather than an
+unexplained `body_has_gaps`). Fill it in before enabling it anyway: the n8n-side
+preview in `evaluate.js` runs on a catalog with no `content` and cannot apply
+that filter, so a dry run will show a line the stored draft omits.
 
 ⚠️ **And check `closing_en` before the first send.** It is seeded
 `enabled = true` and its content *still contains* a `[TODO: portfolio/GitHub link
