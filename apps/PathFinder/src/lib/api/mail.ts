@@ -38,13 +38,109 @@
 // here compares them, which is why nothing here needs a cast; `getUserId()`
 // returns the uid as a string and `createTask` writes it into a text column.
 
-import { supabase } from "./_shared";
+import { supabase, getUserId } from "./_shared";
 import { createTask, deleteTask, getTask } from "./tasks";
 import { mailToTaskPayload, type ConvertibleMail } from "../mailConvert";
 import type { Task } from "../../types";
 
 /** The table n8n writes and the header reads. */
 const MAIL_TABLE = "mail_messages";
+
+/** The plan every mail-born task files under, so Workspace can filter them. */
+const MAILS_PLAN_TITLE = "Mails";
+const MAILS_PLAN_TABLE = "pf_plans";
+
+/** The columns `pickMailsPlan` needs to choose among candidate rows. */
+export type MailsPlanCandidate = { id: number; status: string; created_at: string };
+
+/**
+ * Chooses which existing 'Mails' plan row future conversions should file
+ * into, when the lookup finds more than one — a duplicate created by a race
+ * between two conversions, or an old one someone archived.
+ *
+ * Prefers `status = 'active'`; among rows tied on that, the earliest
+ * `created_at` — the same "oldest wins" rule as picking a stable home rather
+ * than whichever row happens to sort last. `created_at` is a Postgres
+ * timestamp rendered as ISO-8601 by PostgREST, so a lexicographic compare
+ * agrees with chronological order without parsing a `Date`.
+ */
+export function pickMailsPlan(rows: MailsPlanCandidate[]): MailsPlanCandidate | null {
+  let best: MailsPlanCandidate | null = null;
+  for (const r of rows) {
+    if (!best) { best = r; continue; }
+    const rActive = r.status === "active";
+    const bestActive = best.status === "active";
+    if (rActive !== bestActive) {
+      if (rActive) best = r;
+      continue;
+    }
+    if (r.created_at < best.created_at) best = r;
+  }
+  return best;
+}
+
+/**
+ * Module-scope cache for the resolved plan id: one lookup per session, not
+ * one per conversion. Only ever set on success — see `ensureMailsPlan`.
+ */
+let mailsPlanIdCache: number | null = null;
+
+/**
+ * Get-or-create for the single 'Mails' plan, so a mail converted to a task
+ * lands somewhere PathFinder's Workspace can filter by plan instead of as a
+ * plan-less orphan.
+ *
+ * Same shape as this file's other idempotent write — `convertMailToTask`
+ * re-reads `mail_messages.task_id` before deciding to act rather than trusting
+ * a cached guess — applied to plans instead of tasks: check for an existing
+ * row before minting a new one, under the same RLS the rest of `pf_plans`
+ * reads with, and don't pay for the round trip on every conversion once the
+ * id is known.
+ *
+ * ─── Failure posture ────────────────────────────────────────────────────────
+ *
+ * If the lookup or the creation throws — RLS misconfigured, the network down,
+ * anything — this returns `null` rather than propagating. A mail task filed
+ * without a plan beats no task at all; `convertMailToTask` treats `null` as
+ * "omit plan_id" and still creates the task. Nothing is cached on failure, so
+ * the next conversion tries again rather than being stuck with a bad answer
+ * for the rest of the session.
+ */
+async function ensureMailsPlan(): Promise<number | null> {
+  if (mailsPlanIdCache != null) return mailsPlanIdCache;
+  try {
+    const { data, error } = await supabase
+      .from(MAILS_PLAN_TABLE)
+      .select("id, status, created_at")
+      .eq("title", MAILS_PLAN_TITLE);
+    if (error) throw error;
+
+    let plan = pickMailsPlan((data ?? []) as MailsPlanCandidate[]);
+    if (!plan) {
+      const created = await supabase
+        .from(MAILS_PLAN_TABLE)
+        .insert({
+          user_id: getUserId(),
+          title: MAILS_PLAN_TITLE,
+          status: "active",
+          description: "Tasks created by converting a triaged mail.",
+        })
+        .select("id, status, created_at")
+        .single();
+      if (created.error) throw created.error;
+      plan = created.data as MailsPlanCandidate;
+    }
+
+    mailsPlanIdCache = plan.id;
+    return mailsPlanIdCache;
+  } catch (e) {
+    // Non-fatal by design — see the doc comment above. Logged so a persistent
+    // misconfiguration (e.g. RLS blocking the insert) is at least visible
+    // somewhere, rather than silently piling up plan-less mail tasks forever.
+    console.error("[mail] could not resolve the 'Mails' plan; filing this task without one.", e);
+    return null;
+  }
+}
 
 /**
  * Every rejection from this module is an `Error`, which is a deliberate
@@ -103,6 +199,12 @@ export type MailConvertIO = {
   readLink: (mailId: string) => Promise<MailLinkState>;
   /** Writes the back-link only if it is still unset. Resolves to rows matched. */
   linkMail: (mailId: string, taskId: number) => Promise<number>;
+  /**
+   * Resolves the 'Mails' plan's id, creating it on first use. Never rejects —
+   * see `ensureMailsPlan`'s failure posture — so `convertMailToTask` treats
+   * `null` as "file this task without a plan" rather than a reason to fail.
+   */
+  getMailsPlanId: () => Promise<number | null>;
   createTask: typeof createTask;
   getTask: typeof getTask;
   deleteTask: typeof deleteTask;
@@ -133,6 +235,8 @@ const liveIO: MailConvertIO = {
     if (error) throw fail("Could not link the mail to its task.", error);
     return (data ?? []).length;
   },
+
+  getMailsPlanId: ensureMailsPlan,
 
   createTask,
   getTask,
@@ -193,7 +297,12 @@ export const convertMailToTask = async (
   // it convertible again. A dangling id is not a state this table can be in.
   if (existing.taskId != null) return io.getTask(existing.taskId);
 
-  const task = await io.createTask(mailToTaskPayload(mail));
+  // Belt-and-suspenders on top of `ensureMailsPlan`'s own internal catch: even
+  // a `getMailsPlanId` override that throws outright (as a test double might)
+  // must not fail the conversion — a mail task with no plan_id beats no task.
+  const planId = await io.getMailsPlanId().catch(() => null);
+  const payload = mailToTaskPayload(mail);
+  const task = await io.createTask(planId != null ? { ...payload, plan_id: planId } : payload);
 
   // A thrown link is not more informative than a zero match — both mean "the
   // local result does not tell us what the database did" — so they share the
