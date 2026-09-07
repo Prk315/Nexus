@@ -35,6 +35,7 @@ import {
   cheapGateHousing,
   dedupeKeyHousing,
   deriveHousingType,
+  egmontRoundStatus,
   extractBoligzonenListing,
   extractLejeboligDescription,
   extractRealEstateListingLd,
@@ -1062,4 +1063,85 @@ test("formatYmd trims a timestamp to a date and leaves anything else alone", () 
   assert.equal(formatYmd("2026-09-20"), "2026-09-20");
   assert.equal(formatYmd("snarest muligt"), "snarest muligt");
   assert.equal(formatYmd(null), null);
+});
+
+// MARK: - Egmont Kollegiet round watcher
+//
+// Every case below names the failure it exists to prevent, same rule as the
+// rest of this file. The polarity under test is the whole point: only the
+// exact CLOSED marker is quiet, everything else — absent, reworded, empty,
+// differently capitalised, entity-encoded — must alarm.
+
+test("the closed marker, verbatim, reads as closed", () => {
+  const html = "<html><body><p>Ansøgningsrunden er lukket.</p></body></html>";
+  const result = egmontRoundStatus(html);
+  assert.equal(result.status, "closed");
+  assert.equal(result.marker_found, true);
+});
+
+test("the marker is case-insensitive", () => {
+  const html = "<body><h2>ANSØGNINGSRUNDEN ER LUKKET</h2></body>";
+  assert.equal(egmontRoundStatus(html).status, "closed");
+
+  const mixed = "<body>AnsøgningsRunden ER lukket</body>";
+  assert.equal(egmontRoundStatus(mixed).status, "closed");
+});
+
+test("the marker still matches when ø is written as an HTML entity", () => {
+  // A decimal entity (&#248;) and a hex one (&#xf8;) for ø — decodeEntities
+  // handles both, and this is the same normalization every other extractor in
+  // this file already relies on to read Danish markup.
+  const decimal = "<p>Ans&#248;gningsrunden er lukket.</p>";
+  assert.equal(egmontRoundStatus(decimal).status, "closed");
+
+  const hex = "<p>Ans&#xf8;gningsrunden er lukket.</p>";
+  assert.equal(egmontRoundStatus(hex).status, "closed");
+});
+
+test("no marker at all reads as open_or_changed, not closed", () => {
+  // This is the case a round opening actually produces: the closed sentence is
+  // simply gone. Reporting "closed" here is the bug this whole function exists
+  // to avoid — a watcher that assumes closed on silence sleeps through the one
+  // event it was built for.
+  const html = "<html><body><h1>Egmont Kollegiet</h1><p>Velkommen.</p></body></html>";
+  const result = egmontRoundStatus(html);
+  assert.equal(result.status, "open_or_changed");
+  assert.equal(result.marker_found, false);
+});
+
+test("reworded prose reads as open_or_changed", () => {
+  // The site rewording "lukket" to something else (a redesign, a copy change)
+  // must not silently continue reporting closed — the fixed string is a
+  // narrow, exact match on purpose.
+  const html = "<p>Der er i øjeblikket ingen ledige ansøgningsrunder.</p>";
+  assert.equal(egmontRoundStatus(html).status, "open_or_changed");
+});
+
+test("empty html reads as open_or_changed", () => {
+  // The shape a failed fetch, a blocked request or a blank response all take.
+  // Absence of the marker — for any reason — is the alert condition.
+  for (const v of ["", null, undefined]) {
+    const result = egmontRoundStatus(v);
+    assert.equal(result.status, "open_or_changed");
+    assert.equal(result.marker_found, false);
+  }
+});
+
+test("an error page in place of the real one reads as open_or_changed", () => {
+  // A WAF challenge or a 5xx body is real markup with a real fetch, but it is
+  // not the homepage, and it certainly doesn't carry the closed sentence.
+  const waf = "<html><body><h1>403 Forbidden</h1><p>Access denied.</p></body></html>";
+  assert.equal(egmontRoundStatus(waf).status, "open_or_changed");
+});
+
+test("the marker matches equally from a nav banner or the page body", () => {
+  // This function does a plain substring search on normalized full-page text
+  // and deliberately does not try to distinguish a sitewide banner from the
+  // actual status line — doing so would depend on a layout nobody has
+  // committed to keeping.
+  const inNav = '<nav><span class="banner">Ansøgningsrunden er lukket</span></nav><body>Velkommen.</body>';
+  assert.equal(egmontRoundStatus(inNav).status, "closed");
+
+  const inBody = '<nav>Velkommen</nav><body><p>Ansøgningsrunden er lukket.</p></body>';
+  assert.equal(egmontRoundStatus(inBody).status, "closed");
 });

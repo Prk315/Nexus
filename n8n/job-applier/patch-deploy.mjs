@@ -6,7 +6,7 @@
  *   node patch-deploy.mjs --check    # verify the deploy copies are current, write nothing
  *   node patch-deploy.mjs job-apply  # just one, by name
  *
- * It covers **both** pipelines — the four job workflows in this folder and the two
+ * It covers **both** pipelines — the four job workflows in this folder and the four
  * housing workflows in `../housing/` — because the two patches are properties of
  * *this n8n instance*, not of a pipeline: the Gmail credential id is a row id in
  * this instance's database and the CLI trigger is an affordance of this machine's
@@ -39,9 +39,9 @@
  *
  * # The list is data, not code
  *
- * Six workflows now share this patcher. Nothing below is keyed to a particular
+ * Eight workflows now share this patcher. Nothing below is keyed to a particular
  * one: the CLI trigger is wired by *finding* the schedule trigger rather than by
- * naming it, so adding a seventh workflow means adding a row to `WORKFLOWS` and
+ * naming it, so adding a ninth workflow means adding a row to `WORKFLOWS` and
  * nothing else. A hard-coded node name ("Every 4 Hours") was the first thing that
  * would have had to be copy-pasted-and-edited per workflow, and a stale one there
  * fails by wiring the CLI trigger to nothing at all.
@@ -49,10 +49,10 @@
  * `dir` is the one field that had to be added when the housing pipeline arrived,
  * and it is deliberately a *relative source* path rather than an absolute one:
  * the deploy directory stays flat (n8n imports by filename), so a workflow's
- * folder decides where it is read from and nothing else. That means the six names
- * share one namespace — a `housing-harvest.json` and a `job-harvest.json` cannot
- * collide, but two folders offering the same name would, silently, with the last
- * one winning. The duplicate check below refuses that.
+ * folder decides where it is read from and nothing else. That means the eight
+ * names share one namespace — a `housing-harvest.json` and a `job-harvest.json`
+ * cannot collide, but two folders offering the same name would, silently, with
+ * the last one winning. The duplicate check below refuses that.
  */
 
 import { readFileSync, writeFileSync, existsSync } from "node:fs";
@@ -89,6 +89,7 @@ const WORKFLOWS = [
   { name: "housing-harvest", dir: "../housing", builder: "build-housing.mjs", gmail: false },
   { name: "housing-notify", dir: "../housing", builder: "build-housing.mjs", gmail: true },
   { name: "housing-renewal", dir: "../housing", builder: "build-housing.mjs", gmail: true },
+  { name: "housing-egmont", dir: "../housing", builder: "build-housing.mjs", gmail: true },
 ];
 
 // The deploy directory is flat, so two folders offering the same workflow name
