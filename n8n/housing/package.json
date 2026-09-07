@@ -1,0 +1,9 @@
+{
+  "name": "@nexus/housing",
+  "private": true,
+  "type": "module",
+  "description": "Housing-listing extraction and listing-alert email for the n8n housing pipeline. Deliberately outside the npm workspace globs (apps/*, packages/*) so it has no dependencies and cannot break an app build.",
+  "scripts": {
+    "test": "node --test extract.test.js"
+  }
+}

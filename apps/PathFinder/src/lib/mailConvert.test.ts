@@ -2,7 +2,7 @@ import { describe, it, expect } from "vitest";
 import {
   mailToTaskPayload, mailNotes, NO_SUBJECT_TITLE, type ConvertibleMail,
 } from "./mailConvert";
-import { convertMailToTask, type MailConvertIO } from "./api/mail";
+import { convertMailToTask, pickMailsPlan, type MailConvertIO, type MailsPlanCandidate } from "./api/mail";
 import type { Task } from "../types";
 
 const mail = (o: Partial<ConvertibleMail> = {}): ConvertibleMail => ({
@@ -193,6 +193,71 @@ describe("mailNotes", () => {
 });
 
 // ═══════════════════════════════════════════════════════════════════════════
+// Filing mail-born tasks under the 'Mails' plan
+// ═══════════════════════════════════════════════════════════════════════════
+
+const planRow = (o: Partial<MailsPlanCandidate>): MailsPlanCandidate => ({
+  id: 1, status: "active", created_at: "2026-01-01T00:00:00+00:00", ...o,
+});
+
+describe("pickMailsPlan", () => {
+  it("returns null when no candidate exists", () => {
+    expect(pickMailsPlan([])).toBeNull();
+  });
+
+  it("returns the only row there is", () => {
+    const row = planRow({ id: 9 });
+    expect(pickMailsPlan([row])).toBe(row);
+  });
+
+  it("prefers an active row over an inactive one, regardless of order", () => {
+    const inactive = planRow({ id: 1, status: "archived", created_at: "2026-01-01T00:00:00+00:00" });
+    const active = planRow({ id: 2, status: "active", created_at: "2026-06-01T00:00:00+00:00" });
+    expect(pickMailsPlan([inactive, active])?.id).toBe(2);
+    expect(pickMailsPlan([active, inactive])?.id).toBe(2);
+  });
+
+  it("tie-breaks two active rows on the earliest created_at", () => {
+    const older = planRow({ id: 1, created_at: "2026-01-01T00:00:00+00:00" });
+    const newer = planRow({ id: 2, created_at: "2026-06-01T00:00:00+00:00" });
+    expect(pickMailsPlan([newer, older])?.id).toBe(1);
+  });
+
+  it("falls back to the earliest inactive row when nothing is active", () => {
+    // No active candidate at all — still picks a stable, deterministic answer
+    // rather than the first or last one PostgREST happened to return.
+    const older = planRow({ id: 1, status: "archived", created_at: "2026-01-01T00:00:00+00:00" });
+    const newer = planRow({ id: 2, status: "archived", created_at: "2026-06-01T00:00:00+00:00" });
+    expect(pickMailsPlan([newer, older])?.id).toBe(1);
+  });
+});
+
+describe("convertMailToTask — filing under the 'Mails' plan", () => {
+  it("sets plan_id on the created task when the plan resolves", async () => {
+    const h = io({ getMailsPlanId: async () => 42 });
+    await convertMailToTask(mail(), h.io);
+    expect(h.created).toEqual([{ ...mailToTaskPayload(mail()), plan_id: 42 }]);
+  });
+
+  it("omits plan_id — never fails the conversion — when the plan lookup rejects", async () => {
+    // A throwing override stands in for `ensureMailsPlan`'s own internal catch
+    // misbehaving, or a future refactor removing it. Either way, a mail task
+    // with no plan beats no task at all.
+    const h = io({ getMailsPlanId: async () => { throw new Error("RLS denied"); } });
+    const out = await convertMailToTask(mail(), h.io);
+    expect(out.id).toBe(100);
+    expect(h.created).toEqual([mailToTaskPayload(mail())]);
+    expect("plan_id" in (h.created[0] as object)).toBe(false);
+  });
+
+  it("omits plan_id when no plan has ever been resolved (the default stub)", async () => {
+    const h = io();
+    await convertMailToTask(mail(), h.io);
+    expect(h.created).toEqual([mailToTaskPayload(mail())]);
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
 // The conversion
 // ═══════════════════════════════════════════════════════════════════════════
 
@@ -230,6 +295,9 @@ function io(over: Partial<MailConvertIO> = {}, initial: { exists?: boolean; link
       row.link = taskId;
       return 1;
     },
+    // Default: no 'Mails' plan resolved. Individual tests override this to
+    // exercise the plan_id-set and plan_id-omitted paths explicitly.
+    getMailsPlanId: async () => null,
     createTask: (async (payload: unknown) => {
       created.push(payload);
       return task(nextId++);

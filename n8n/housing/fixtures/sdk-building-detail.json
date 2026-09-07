@@ -1,0 +1,53 @@
+{
+ "previous_building_pk": 41,
+ "next_building_pk": 44,
+ "pk": 43,
+ "publishtime": "2018-09-25T15:37:10+02:00",
+ "name": "Den Grønne Trekant",
+ "zipcode": 2100,
+ "construction_year": null,
+ "municipality": "Københavns",
+ "land_register_id": null,
+ "desc_address": "Aldersrogade, Rovsingsgade, Vermundsgade",
+ "cats_allowed": "not_allowed",
+ "dogs_allowed": "not_allowed",
+ "parking": false,
+ "elevator": false,
+ "common_room": true,
+ "courtyard": false,
+ "playground": false,
+ "laundry": true,
+ "smoke_free": false,
+ "temporary_housing": true,
+ "energy_category": null,
+ "latitude": "55.70662900",
+ "longitude": "12.54910100",
+ "description": "<p><strong style=\"box-sizing: border-box; font-weight: bolder; color: rgb(17, 17, 17); font-family: Montserrat, sans-serif; font-style: normal; font-variant-ligatures: normal; font-variant-caps: normal; letter-spacing: normal; orphans: 2; text-align: start; text-indent: 0px; text-transform: none; white-space: normal; widows: 2; word-spacing: 0px; -webkit-text-stroke-width: 0px; text-decoration-thickness: initial; text-decoration-style: initial; text-decoration-color: initial; font-size: 24px;\">OBS – Tidsbegrænsede lejemål til den 31. december 2027.</strong></p><p><a href=\"https://www.s.dk/midlertidige-boliger/\">Læs\nmere om midlertidig udlejning her</a>.</p><p><span><br></span></p><table border=\"0\" cellpadding=\"0\" cellspacing=\"0\" width=\"417\" style=\"width: 416px;\"><tbody><tr height=\"20\"><td height=\"20\" class=\"xl66\" style=\"width: 63.7019%;\">Eget køkken<br></td>\n            \n            \n            <td class=\"xl72\">\n            \n            \n            &nbsp;ja<br></td>\n        </tr>\n        <tr height=\"20\">\n            <td height=\"20\" class=\"xl66\">Fælles køkken</td>\n            \n            \n            <td class=\"xl72\">\n            \n            \n            &nbsp;nej&nbsp;<br></td>\n        </tr>\n        <tr height=\"20\">\n            <td height=\"20\" class=\"xl66\">Eget\n                toilet<span>&nbsp;</span></td>\n            \n            \n            <td class=\"xl72\">&nbsp;ja</td>\n        </tr>\n        <tr height=\"20\">\n            <td height=\"20\" class=\"xl66\">Eget bad</td>\n            \n            \n            <td class=\"xl72\">&nbsp;ja&nbsp;<div style=\"color:rgba(0,0,0,0.01);width:0;height:0\">&nbsp;<br></div></td>\n        </tr>\n\n    </tbody>\n</table><p><br></p><p>Det er\n  ikke muligt at estimere <a href=\"https://www.s.dk/raad-og-vejledning/\" target=\"_blank\">ventetiden </a>på denne ejendom.</p><br><p><span>Boligerne udlejes på tidsbegrænsede kontrakter uden ret til genhusning.\nDu er selv ansvarlig for at finde et nyt sted at bo, når lejeperioden ophører</span></p><p>\n<span class=\"fontstyle0\">Grundet en forestående helhedsplan i afdelingen, udlejes boligen på midlertidig kontrakt til den 31. december 2027. Bo-Vest har i den forbindelse oplyst, at det ikke kan forventes<br>at boligen vil være nyistandsat ved indflytning.</span></p><p>Aldersrogade består af 42 ungdomsboliger mellem 512 andre lejemål. Bebyggelsen består af 18 blokke grupperet således, at der dannes 6 afskærmede gårde.</p>\n\n<p>Alle ungdomsboliger er i stueetagen. En del har udgang til lille \"have\". Bebyggelsen opvarmes med fjernvarme, og der er etableret varmegenvinding med indblæsning af friskluft.</p>\n<p>&nbsp;Boligerne har trinettekøkken, bad og toilet.</p>\n<p>Der er fællesrum og vaskeri.</p>\n<p>Der må ikke bo børn.</p>\n<p>Der må ikke holdes husdyr.</p>\n<p><br></p><p>Administrator: <a href=\"https://www.domea.dk/\" target=\"_blank\">Domea</a></p>",
+ "is_ssl_enabled": true,
+ "has_one_room_tenancy": true,
+ "app_committee": {
+  "pk": 1,
+  "name": "CIU - Centralindstillingsudvalget",
+  "abbreviation": "CIU"
+ },
+ "administrator": {
+  "pk": 17,
+  "name": "Domea/Bo-Vita",
+  "abbreviation": "Domea",
+  "phone": "61900500",
+  "email": "udlejning@bo-vita.dk"
+ },
+ "status": "published",
+ "room_counts": [
+  1,
+  2
+ ],
+ "rent_range": {
+  "min": 2402,
+  "max": 7274
+ },
+ "area_range": {
+  "min": 29,
+  "max": 68
+ }
+}
