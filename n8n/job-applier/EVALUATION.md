@@ -359,9 +359,29 @@ the Ollama node is sized for that, not for inference.
   containing invalid JavaScript, and n8n reports that as a runtime error three
   nodes into a scheduled run at 03:00, to nobody.
 
-## Not built yet
+## Built since this file first said "not built yet"
 
-The `JobsPanel` (reading `job_matches` + `job_applications`), any notion of
-*sending* an application, and the `job_assemble` / `job_submit` request kinds.
-Autonomy stays deliberately undecided until there is a real scored queue with
-real drafts to look at — which is now one harvest away.
+`JobsPanel` reads `job_matches` + `job_applications`
+(`packages/nexus-core/src/components/JobsPanel.tsx`). Sending exists as
+`job-notify` → human approval → `job-apply`, described in `README.md` §Phase 3.
+`cv_link` became a third framed slot, so an assembled letter now quotes the CV
+rather than merely being gated on one existing.
+
+Two things this file's rules gained afterwards, both worth knowing here:
+
+- **A relevance floor sits under the model's choices** (`applyRelevanceFloor`,
+  in `logic.ts` and mirrored in `evaluate.js`). It removes body modules the
+  verdict evidences nothing for — the `skill_rust_systems`-for-a-GenAI-role
+  problem this file used to list as still open. It is deliberately conservative:
+  it may drop padding, and it may never empty a slot, because guard 1 refuses to
+  send a body carrying a `[GAP` marker and a tag heuristic must not be able to
+  silently close the send path.
+- **The CV is modular too**, in its own table and its own assembler — `CV.md`.
+  Deliberately *not* in `job_app_modules`: `knownSlotsOnly` unions the slot
+  vocabulary with whatever the catalog uses, so a CV row there would become a
+  slot the model may ask for, and a CV line could be pasted into a letter.
+
+## Still open
+
+Autonomy. `job-apply` is inactive by choice, and the module library has not been
+read end to end by the person whose name is on it.

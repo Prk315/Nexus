@@ -16,6 +16,17 @@ the DB directly (SQL editor, or a panel once one exists), not by re-editing
 this Markdown and expecting it to sync. Treat this file as the *first draft*
 and the seed's own commentary, not an ongoing dual-write target.
 
+## ⚠️ Two things this file predates
+
+- **The CV is modular now**, in its own table with its own assembler — see
+  `CV.md`. `cv_link` (below) is unchanged and unrelated: it is the *URL* a letter
+  quotes and the send gate reads, not the CV document itself.
+- **A relevance floor** (`applyRelevanceFloor`) now sits under the model's body
+  choices, dropping modules the verdict evidences nothing for. It cannot empty a
+  slot. One consequence for anyone writing modules: **tags decide reachability**,
+  so an under-tagged module becomes unreachable and an over-tagged one surfaces
+  for ads it should not.
+
 ## ⚠️ Superseded in part — changelog, 2026-09-01
 
 The library below is the **seed**, and the database has since moved past it. Per

@@ -528,7 +528,31 @@ which are why the lookarounds exist.
 - **Inside the container, `localhost` is the container.** Relevant from phase 2:
   Ollama is `http://host.docker.internal:11434`, and it must bind `0.0.0.0`.
 
+## The CV
+
+The letter is assembled from modules; **so is the CV** — see `CV.md`. Entries
+live in `job_cv_entries`, `cv.js` selects and renders them, and `cv-build.mjs`
+writes a tailored `.tex`/`.html`/`.pdf` per posting.
+
+`cv_link` is a separate thing and still the send gate: it is the *URL* an
+assembled letter quotes, and `cvGateReady` skips every application with
+`cv_missing` until an enabled `cv_link` module holds one that is not a `[TODO`
+stub. Generating a CV does not host it — see `CV.md` §Publishing.
+
 ## Not built yet
 
-The `JobsPanel` in `NexusHeader`. Harvesting (phase 1), scoring (phase 2) and the
-decision/send loop (phase 3) are in the tree; the panel that reads the rows is not.
+Nothing in phases 1–3 is outstanding. `JobsPanel` **is** built
+(`packages/nexus-core/src/components/JobsPanel.tsx`, plus `jobs/{api,format,
+score,types}.ts`) and reads `job_matches` + `job_applications`; the phase-3 send
+loop landed with `job-notify` / `job-apply`.
+
+What is genuinely outstanding is not code:
+
+- **The CV PDF is not hosted.** `prk315.github.io/personal-website/cv.pdf`
+  404s — the site repo carries no PDF at all. This is what keeps `cv_link`
+  disabled and therefore what keeps the send path closed.
+- **`job-apply` is dormant on purpose.** Step 5 of the activation order above is
+  the one irreversible action in the pipeline.
+- **Nobody has read the module library end to end.** Every enabled module is
+  prose drafted from facts supplied in conversation. Factually his, but unread —
+  which matters more than adding more modules does.
