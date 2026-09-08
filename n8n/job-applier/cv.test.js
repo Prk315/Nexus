@@ -37,33 +37,89 @@ import { CV_ENTRIES, CV_FOOTER } from "./cv-entries.js";
 
 // MARK: - Fidelity
 //
+// ⚠️ **This invariant changed once, deliberately, and the reason matters.**
+//
+// While `cv-entries.js` was verbatim from `cv_2026.tex`, the test pinned whole
+// SENTENCES: modularising the CV was a refactor, so no word was allowed to move.
+// The prose has since been rewritten to read like a professional CV, which
+// retires that particular assertion — pinning sentences would now only pin the
+// rewrite against itself.
+//
+// What must still hold, and is what this list now encodes, is the stronger and
+// more permanent property: **no fact may be added or lost.** Organisations,
+// dates, the degree, project names and technologies are what a CV is read for
+// and what a reader will check. Prose may be sharpened; the record may not move.
+//
 // Every string below is copied out of `JobSearch/cv_2026.tex` by hand. That is
 // the point: if these are ever derived from `cv-entries.js` the test becomes
 // circular and asserts only that the catalog equals itself.
 
 const FACTS_FROM_THE_REAL_CV = [
+  // Identity and contact.
   "Bastian Rønfeldt Thomsen",
   "+45 42 66 08 98",
   "Bastianrthomsen@gmail.com",
-  "Machine learning and data science student who builds systems end to end",
+  "Copenhagen, Denmark",
+  // Every project named on the real CV.
   "Autonomous Game Entities",
-  "quadrupedal rig learns locomotion via RL",
   "Nexus — Personal Software Ecosystem",
-  "one component library, one IPC layer",
   "University Knowledge Graph",
-  "topologically sorted into a dependency DAG",
   "MIRTE Robot",
-  "state is a distribution, sensor readings update belief",
-  "Instructor — High Performance Programming and Systems",
-  "Teach performance-oriented systems programming to undergraduates",
-  "Engineer Company — Conscription",
-  "Danish Armed Forces",
-  "BSc Machine Learning and Data Science",
+  // Every organisation and date range.
   "University of Copenhagen",
+  "Danish Armed Forces",
+  "2026 – Present",
+  "2022 – 2023",
+  "2023 – 2026",
+  // The qualification, and the roles, exactly as claimed.
+  "BSc Machine Learning and Data Science",
+  "In Progress",
+  "Instructor — High Performance Programming and Systems",
+  "Engineer Company — Conscription",
+  // Coursework.
   "Hybrid Quantum Programming",
+  "Robot Systems and Vision",
+  "Machine Learning A",
+  "Database Systems",
+  "MSc in Quantum Information",
+  // The skills lines, which are a factual inventory and must survive verbatim.
   "Rust, TypeScript, Python, SQL, C, Swift, F#",
   "Unreal Engine, three.js / WebGL, real-time rendering",
+  "PyTorch, scikit-learn, reinforcement learning",
+  "PostgreSQL / Supabase, Tauri, Docker, Git, REST APIs, n8n, ETL pipelines",
+  // Load-bearing technical claims that a reader would ask about in an interview.
+  "topologically sorted into a dependency DAG",
+  "Rust, reinforcement learning, Unreal Engine",
+  "DAG, Markov chains, Kalman filters, local LLMs",
+  "Robotics, computer vision, probabilistic state estimation",
 ];
+
+/**
+ * Claims that must NOT appear, because nobody has established them.
+ *
+ * A rewrite for tone is exactly where inflation enters a CV, and it enters as
+ * seniority, headcount and scale — none of which is in any source document. This
+ * list is the cheap guard against the next edit reaching for them.
+ */
+const CLAIMS_NOBODY_MADE = [
+  "senior",
+  "lead engineer",
+  "led a team",
+  "managed a team",
+  "years of experience",
+  "shipped to production for",
+  "million",
+  "startup founder",
+  "award",
+  "certified",
+];
+
+test("the rewritten prose adds no claim nobody made", () => {
+  const doc = `${renderHtml(assembleCv(CV_ENTRIES))} ${renderLatex(assembleCv(CV_ENTRIES))}`.toLowerCase();
+  for (const claim of CLAIMS_NOBODY_MADE) {
+    assert.ok(!doc.includes(claim), `unestablished claim reached the CV: ${claim}`);
+  }
+});
 
 test("an unranked build carries every fact the real CV carries", () => {
   const cv = assembleCv(CV_ENTRIES);

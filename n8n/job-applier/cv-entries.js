@@ -1,29 +1,55 @@
 /**
  * The CV catalog — canonical source.
  *
- * ⚠️ **Every string in this file is lifted verbatim from
- * `JobSearch/cv_2026.tex` (1 Sep 2026).** Nothing here was written by a model,
- * summarised, re-phrased or extrapolated. That is the same rule the letter
- * modules are held to, and it matters more here rather than less: a CV is read
- * as a record of fact, so a sentence nobody wrote is not a stylistic problem but
- * a false claim with his name on it.
+ * # ⚠️ Status of this prose: DRAFTED, not yet reviewed by the person named in it
  *
- * The only additions are `tags`, `sort` and `pinned` — metadata *about* the
- * entries, used to decide which ones a given posting sees. Tags are derived from
- * what an entry already says. An entry is never tagged with a technology its own
- * text does not mention, because a tag is what makes the entry reachable, and a
- * tag that overstates is how an ad for something he has not done pulls up an
- * entry claiming he has.
+ * The first version of this file was verbatim from `JobSearch/cv_2026.tex`
+ * (1 Sep 2026). It is no longer. The text below was **rewritten to read like a
+ * professional CV** — sharper verbs, the engineering decision in front of the
+ * artefact, and the strongest facts pulled up the page. That rewrite was drafted
+ * by Claude on request.
  *
- * `cv-seed.mjs` generates the SQL for `job_cv_entries` from this file, and
- * `cv.test.js` reads it directly. One source, so the seed and the tests cannot
- * disagree about what the CV says.
+ * That distinction is worth keeping, because the whole pipeline turns on knowing
+ * which prose a human wrote. `MODULES.md` records the same status for the letter
+ * modules and flags reading them end to end as worth an hour. The same applies
+ * here, and more so: a CV is read as a record of fact.
  *
- * ## Where the em dashes come from
+ * # The line that was not crossed
  *
- * `cv_2026.tex` writes `---`; this file stores the real character. The LaTeX
- * renderer emits it as-is and `inputenc utf8` handles it, so the typeset result
- * is identical and the HTML renderer gets correct text instead of three hyphens.
+ * **No fact was added.** Every organisation, date, technology, project and claim
+ * below already appears in `cv_2026.tex`, in `JobSearch/background information/`,
+ * or in the repository the work describes. What changed is which facts lead,
+ * how specific they are allowed to be, and how much abstraction sits in front of
+ * them.
+ *
+ * Concretely, the four things the rewrite actually does:
+ *
+ *   1. **Stops leading with "student".** The old profile opened "Machine
+ *      learning and data science student who…", which frames a person by what
+ *      they are enrolled in rather than what they build. The degree is still
+ *      there, one clause later, and the instructor post — the strongest single
+ *      credential on the page and previously buried in Experience — now appears
+ *      in the first paragraph.
+ *   2. **Puts the decision before the artefact.** "Six apps on one schema" says
+ *      what exists; "designed and built solo, and used every day" says something
+ *      about the person. Bullets now lead with the choice made or the problem
+ *      solved.
+ *   3. **Replaces abstraction with the specific thing that happened.** The
+ *      graph-view bullet now names the two-`THREE`-instances render-loop bug,
+ *      which is documented in CLAUDE.md and is far better evidence than "custom
+ *      physics forces". The conscription bullet loses its LinkedIn cadence.
+ *   4. **Under-sells nothing that is true.** The instructor line now says the
+ *      post was taken while still completing the degree — inferable from the
+ *      dates already on the page (BSc 2023–2026, instructor 2026–), and the
+ *      thing that makes the line land.
+ *
+ * ⚠️ **Tags are metadata, not claims, and they are the reachability mechanism.**
+ * An entry is never tagged with a technology its own text does not mention: a
+ * tag is what makes an entry surface for an ad, so an over-tagged entry is how a
+ * posting for something he has not done pulls up an entry implying he has.
+ *
+ * `cv-seed.mjs` generates the SQL from this file and `cv.test.js` reads it
+ * directly, so the seed and the tests cannot disagree about what the CV says.
  */
 
 /** @typedef {{name: string, section: string, title?: string, meta?: string,
@@ -71,9 +97,9 @@ export const CV_ENTRIES = [
     name: "profile_main",
     section: "profile",
     meta:
-      "Machine learning and data science student who builds systems end to end and runs them in production — on my own hardware, for myself, every day. Rust and TypeScript across a six-application ecosystem on one Postgres backend; local LLM inference as infrastructure rather than demo; reinforcement learning for game entities exported into Unreal. I care about the failure modes that only show up once something is actually running.",
+      "I build software end to end and run it in production on my own hardware, every day. A six-application desktop and mobile ecosystem on one Postgres schema; local LLM pipelines doing real classification work; reinforcement-learning agents whose policies export into Unreal Engine. Finishing a BSc in Machine Learning and Data Science at the University of Copenhagen, where I also teach the systems and performance course. I care most about the failure modes that only appear once something is really running.",
     bullets: [
-      "Looking for: a team to build something worth building — games, real-time systems, or applied AI",
+      "Looking for: a team building something worth building — games, real-time systems, or applied AI",
     ],
     pinned: true,
     sort: 0,
@@ -87,8 +113,8 @@ export const CV_ENTRIES = [
     title: "Autonomous Game Entities",
     meta: "Rust, reinforcement learning, Unreal Engine",
     bullets: [
-      "Custom Rust simulation and training loop; quadrupedal rig learns locomotion via RL",
-      "Trained policies exported into Unreal — built pipeline-first, so the crossing is reproducible",
+      "Simulation and RL training loop written from scratch in Rust; a quadrupedal rig learns locomotion from reward alone",
+      "Policies export into Unreal Engine through a pipeline built before the first agent ran, so a result can be reproduced rather than rescued from a checkpoint",
     ],
     tags: [
       "rust",
@@ -110,10 +136,10 @@ export const CV_ENTRIES = [
     title: "Nexus — Personal Software Ecosystem",
     meta: "Rust (Tauri 2), React 19, TypeScript, Supabase",
     bullets: [
-      "Six interconnected desktop/mobile apps on one Postgres schema (~100 tables), one component library, one IPC layer — built solo, used daily",
-      "RLS scoped to auth.uid(), forward-only migrations, trigger-maintained invariants; native iOS app with WidgetKit widgets and a background macOS daemon",
-      "Real-time 3D graph view (three.js / react-three-fiber) with custom physics forces and live IPC-driven node state",
-      "Local LLM pipelines (Ollama + Qwen via n8n) doing production classification and extraction; models return checkable verdicts, never final prose",
+      "Six interconnected desktop and mobile apps on one Postgres schema (~100 tables), one component library, one IPC layer — built solo, used daily",
+      "Row-level security scoped to auth.uid(), forward-only migrations against a database every branch shares, and trigger-maintained invariants where correctness cannot be left to the client",
+      "Real-time 3D graph view (three.js / react-three-fiber) with custom layout forces, debugged at the render loop: two THREE instances were corrupting simulation state every frame",
+      "Local LLM pipelines (Ollama + Qwen via n8n) doing production classification and extraction; the model returns a checkable verdict, never final prose",
     ],
     tags: [
       "rust",
@@ -146,7 +172,7 @@ export const CV_ENTRIES = [
     title: "University Knowledge Graph",
     meta: "DAG, Markov chains, Kalman filters, local LLMs",
     bullets: [
-      "Every concept across every course topologically sorted into a dependency DAG, generating linearised learning paths and a retention schedule — targeting recall, not just first exposure",
+      "Every concept across every course topologically sorted into a dependency DAG, producing linearised learning paths and a retention schedule — the target is recall months later, not first exposure",
     ],
     tags: ["dag", "markov", "kalman", "llm", "algorithms", "graph", "data", "ml", "python"],
     sort: 30,
@@ -157,7 +183,7 @@ export const CV_ENTRIES = [
     title: "MIRTE Robot",
     meta: "Robotics, computer vision, probabilistic state estimation",
     bullets: [
-      "Software and hardware augmentation, designed probabilistic-first: state is a distribution, sensor readings update belief",
+      "Extended the platform in software and hardware, designed probabilistic-first: state is a distribution, and a sensor reading updates belief rather than replacing it",
     ],
     tags: ["robotics", "computer vision", "vision", "probabilistic", "estimation", "sensors"],
     sort: 40,
@@ -170,7 +196,9 @@ export const CV_ENTRIES = [
     title: "Instructor — High Performance Programming and Systems",
     org: "University of Copenhagen",
     dates: "2026 – Present",
-    bullets: ["Teach performance-oriented systems programming to undergraduates"],
+    bullets: [
+      "Teach performance-oriented systems programming to undergraduates; appointed while still completing the degree",
+    ],
     tags: ["teaching", "systems", "performance", "hpc", "c"],
     sort: 10,
   },
@@ -180,9 +208,12 @@ export const CV_ENTRIES = [
     title: "Engineer Company — Conscription",
     org: "Danish Armed Forces",
     dates: "2022 – 2023",
-    bullets: [
-      "Executed under pressure in resource-constrained environments; adapted to plans that stopped matching reality on contact",
-    ],
+    // No bullet, deliberately. The old one ("executed under pressure in
+    // resource-constrained environments…") was the only line on the page that
+    // said nothing specific, and it is the first thing a reader discounts. The
+    // header line still carries the fact and still explains the 2022–23 gap,
+    // which is the whole reason the entry is here.
+    bullets: [],
     tags: ["teamwork", "leadership"],
     sort: 20,
   },
