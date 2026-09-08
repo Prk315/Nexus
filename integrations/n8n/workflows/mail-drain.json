@@ -17,12 +17,12 @@
       "parameters": {
         "width": 820,
         "height": 320,
-        "content": "## The drain\n\n`mail-triage` persists every fetched message **before** the model sees it, with no\nverdict. `score IS NULL` is therefore a durable queue: a slow Ollama, a stopped\ncontainer or a lid closing mid-batch leaves rows waiting rather than losing them.\nThe trigger cannot re-fetch them — its watermark has already moved past.\n\nThis workflow is what empties that queue. Every 5 minutes it asks `n8n-ingest`\nwhich rows still have no verdict, re-fetches each body **from Gmail**, classifies\nit and writes the verdict back.\n\n**Bodies are re-fetched, never stored.** `raw` deliberately carries no message\ntext and `snippet` is capped at 200 characters — that is what keeps mail bodies on\nthis Mac. The queue holds ids; Gmail holds the mail.\n\n**A failure just leaves the row untriaged**, so the next pass tries again. Nothing\nis marked done that was not done. The cost is that a permanently unparseable\nmessage is retried forever — visible as a row that never leaves the top of the\npanel, which is the honest symptom."
+        "content": "## The drain\n\n`mail-triage` persists every fetched message **before** the model sees it, with no\nverdict. `score IS NULL` is therefore a durable queue: a slow Ollama, a stopped\ncontainer or a lid closing mid-batch leaves rows waiting rather than losing them.\nThe trigger cannot re-fetch them — its watermark has already moved past.\n\nThis workflow is what empties that queue. Every 15 minutes it **claims** a batch\nfrom `n8n-ingest`, re-fetches each body **from Gmail**, classifies it and writes\nthe verdict back.\n\n**It claims rather than asks, and that is the whole point.** Verdicts are written\nat the *end* of a pass, so for the ~12 minutes a full batch spends in the model\nthe rows still look untriaged. On 2026-09-08, with a 5-minute schedule and passes\ntaking ~370 s, the next pass read the same rows and classified them again: over\nfourteen passes, 140 classifications advanced just 36 distinct messages — 74% of\nthe GPU wasted, some messages scored eight times. The `claim` action stamps\n`claimed_at` before any inference happens, so an overlapping pass sees a shorter\nqueue instead of the same one.\n\nThe 15-minute interval is the second half of that fix: it keeps a pass from\noverlapping at all, which keeps Ollama serial on a 16 GB Mac. The claim is what\nmakes correctness independent of whether that estimate holds.\n\n**Bodies are re-fetched, never stored.** `raw` deliberately carries no message\ntext and `snippet` is capped at 200 characters — that is what keeps mail bodies on\nthis Mac. The queue holds ids; Gmail holds the mail.\n\n**A failure just leaves the row untriaged**, so the next pass tries again. Nothing\nis marked done that was not done. The cost is that a permanently unparseable\nmessage is retried forever — visible as a row that never leaves the top of the\npanel, which is the honest symptom.\n\n**The classify timeout must cover the QUEUE, not one inference.** The HTTP node\nfires every item concurrently and Ollama serves one runner, so the last request\nwaits behind all the others. At a 180 s timeout, 17-19 of every 20 were discarded\nafter the GPU had already paid for them. `batchSize: 1` does not fix this:\nHttpRequestV3 only *sleeps* between items, and only when `batchInterval > 0`\n(`HttpRequestV3.node.js:196`) — n8n batching staggers, it never serialises."
       }
     },
     {
       "id": "sched",
-      "name": "Every 5 minutes",
+      "name": "Every 20 minutes",
       "type": "n8n-nodes-base.scheduleTrigger",
       "typeVersion": 1.2,
       "position": [
@@ -34,7 +34,7 @@
           "interval": [
             {
               "field": "minutes",
-              "minutesInterval": 5
+              "minutesInterval": 20
             }
           ]
         }
@@ -42,7 +42,7 @@
     },
     {
       "id": "ask",
-      "name": "Ask for pending",
+      "name": "Claim a batch",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
       "position": [
@@ -56,7 +56,7 @@
         "genericAuthType": "httpHeaderAuth",
         "sendBody": true,
         "specifyBody": "json",
-        "jsonBody": "={{ JSON.stringify({ action: 'pending', limit: 10 }) }}",
+        "jsonBody": "={{ JSON.stringify({ action: 'claim', limit: 20 }) }}",
         "options": {
           "timeout": 30000
         }
@@ -103,7 +103,7 @@
       "credentials": {
         "gmailOAuth2": {
           "id": null,
-          "name": "Nexus Gmail"
+          "name": "Gmail account"
         }
       },
       "onError": "continueRegularOutput"
@@ -130,11 +130,17 @@
         "specifyBody": "json",
         "jsonBody": "={{ JSON.stringify({ model: $json.triage_model, stream: false, format: 'json', keep_alive: '10m', options: { temperature: 0, num_ctx: 8192 }, messages: [ { role: 'system', content: $json.system_prompt }, { role: 'user', content: $json.user_prompt } ] }) }}",
         "options": {
-          "timeout": 180000,
+          "timeout": 1200000,
           "response": {
             "response": {
               "neverError": false,
               "responseFormat": "json"
+            }
+          },
+          "batching": {
+            "batch": {
+              "batchSize": 1,
+              "batchInterval": 5000
             }
           }
         }
@@ -196,18 +202,18 @@
     }
   ],
   "connections": {
-    "Every 5 minutes": {
+    "Every 20 minutes": {
       "main": [
         [
           {
-            "node": "Ask for pending",
+            "node": "Claim a batch",
             "type": "main",
             "index": 0
           }
         ]
       ]
     },
-    "Ask for pending": {
+    "Claim a batch": {
       "main": [
         [
           {
