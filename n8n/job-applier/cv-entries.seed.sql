@@ -32,7 +32,7 @@ values
     null,
     null,
     '{}',
-    $cv${"items":[{"icon":"map-marker-alt","text":"Copenhagen, Denmark"},{"icon":"phone","text":"+45 42 66 08 98"},{"icon":"envelope","text":"Bastianrthomsen@gmail.com","url":"mailto:Bastianrthomsen@gmail.com"}],"links":[{"icon":"github","label":"github.com/Prk315","url":"https://github.com/Prk315"},{"icon":"linkedin","label":"LinkedIn","url":"https://www.linkedin.com/in/bastian-thomsen-167652205"},{"icon":"globe","label":"Portfolio","url":"https://prk315.github.io/personal-website/"}]}$cv$::jsonb,
+    $cv${"items":[{"icon":"map-marker-alt","text":"Copenhagen, Denmark"},{"icon":"phone","text":"+45 42 66 08 98","private":true},{"icon":"envelope","text":"Bastianrthomsen@gmail.com","url":"mailto:Bastianrthomsen@gmail.com"}],"links":[{"icon":"github","label":"github.com/Prk315","url":"https://github.com/Prk315"},{"icon":"linkedin","label":"LinkedIn","url":"https://www.linkedin.com/in/bastian-thomsen-167652205"},{"icon":"globe","label":"Portfolio","url":"https://prk315.github.io/personal-website/"}]}$cv$::jsonb,
     '{}',
     $cv$en$cv$,
     true,

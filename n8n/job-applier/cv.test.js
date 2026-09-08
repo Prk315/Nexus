@@ -156,6 +156,40 @@ test("an unranked build keeps the catalog's own order inside a section", () => {
   );
 });
 
+// MARK: - The public copy
+//
+// A CV emailed to a named employer and a CV sitting at a public URL are not the
+// same disclosure. The second is permanent, indexed and harvested, so the phone
+// number is marked `private` and dropped from it.
+
+test("a public copy carries no private contact detail", () => {
+  const cv = assembleCv(CV_ENTRIES, { publicCopy: true });
+  const docs = [renderLatex(cv), renderHtml(cv)];
+  for (const doc of docs) {
+    assert.ok(!doc.includes("42 66 08 98"), "the phone number reached a public build");
+    // Everything else a reader needs must survive.
+    assert.ok(doc.includes(escapeHtml("Bastianrthomsen@gmail.com")) || doc.includes("Bastianrthomsen@gmail.com"));
+    assert.ok(doc.includes("Copenhagen, Denmark"));
+    assert.ok(doc.includes("Prk315"));
+  }
+});
+
+test("the default build still carries the phone", () => {
+  const tex = renderLatex(assembleCv(CV_ENTRIES));
+  assert.ok(tex.includes("42 66 08 98"), "a direct copy must keep it");
+});
+
+test("a public build does not contaminate the next build", () => {
+  // CV_ENTRIES is a module-level constant shared by every build in the process.
+  // Filtering it in place would strip the phone from the copy emailed to a
+  // person, and only on runs where a public build happened to come first.
+  assembleCv(CV_ENTRIES, { publicCopy: true });
+  assert.ok(renderLatex(assembleCv(CV_ENTRIES)).includes("42 66 08 98"));
+
+  const contact = CV_ENTRIES.find((e) => e.name === "contact_main");
+  assert.equal(contact.data.items.length, 3, "the catalog itself must be untouched");
+});
+
 // MARK: - Relevance
 
 test("a game posting leads with the game work, without changing a word of it", () => {

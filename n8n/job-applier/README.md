@@ -548,9 +548,12 @@ loop landed with `job-notify` / `job-apply`.
 
 What is genuinely outstanding is not code:
 
-- **The CV PDF is not hosted.** `prk315.github.io/personal-website/cv.pdf`
-  404s — the site repo carries no PDF at all. This is what keeps `cv_link`
-  disabled and therefore what keeps the send path closed.
+- **`cv_link` is still disabled, but hosting is no longer why.**
+  `prk315.github.io/personal-website/cv.pdf` **resolves** — checked live
+  2026-09-08, HTTP 200, added to the site repo on 7 Sep. An earlier version of
+  this line said it 404s; that was read from a stale local checkout one commit
+  behind origin. Enabling `cv_link` now waits only on the decision to open the
+  send path, not on anything being published.
 - **`job-apply` is dormant on purpose.** Step 5 of the activation order above is
   the one irreversible action in the pipeline.
 - **Nobody has read the module library end to end.** Every enabled module is

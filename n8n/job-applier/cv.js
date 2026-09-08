@@ -171,7 +171,20 @@ export function assembleCv(entries, opts = {}) {
   const lang = opts.lang ? str(opts.lang).toLowerCase() : null;
   const budget = opts.budget && typeof opts.budget === "object" ? opts.budget : {};
 
-  const usable = arr(entries).filter((e) => e && e.enabled !== false && sectionOf(e));
+  let usable = arr(entries).filter((e) => e && e.enabled !== false && sectionOf(e));
+
+  // A copy destined for a public URL drops contact details marked `private`.
+  // Cloned rather than mutated: `CV_ENTRIES` is a module-level constant shared
+  // by every build in the process, and filtering it in place would silently
+  // strip the phone number from the NEXT build too — including the one being
+  // emailed to a person.
+  if (opts.publicCopy) {
+    usable = usable.map((e) => {
+      const items = arr(e?.data?.items);
+      if (items.length === 0 || !items.some((i) => i && i.private)) return e;
+      return { ...e, data: { ...e.data, items: items.filter((i) => !i.private) } };
+    });
+  }
 
   const sections = [];
   const included = [];

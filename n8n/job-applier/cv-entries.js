@@ -73,7 +73,12 @@ export const CV_ENTRIES = [
     data: {
       items: [
         { icon: "map-marker-alt", text: "Copenhagen, Denmark" },
-        { icon: "phone", text: "+45 42 66 08 98" },
+        // ⚠️ `private` means "not in a copy that gets hosted at a public URL".
+        // A phone number emailed to a named employer and a phone number sitting
+        // on a crawlable GitHub Pages file are not the same disclosure: the
+        // second is permanent, indexed, and harvested. It stays in the copies
+        // that go to a person, and `--public` drops it from the one on the web.
+        { icon: "phone", text: "+45 42 66 08 98", private: true },
         {
           icon: "envelope",
           text: "Bastianrthomsen@gmail.com",

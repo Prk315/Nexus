@@ -50,7 +50,12 @@ for (const raw of argv.filter((_, i) => argv[i - 1] === "--budget")) {
 const out = resolve(flag("out", "build/cv"));
 const lang = flag("lang", "en");
 
-const cv = assembleCv(CV_ENTRIES, { skills, lang, budget });
+// `--public` builds the copy that gets hosted at a URL anyone can fetch, and
+// drops every contact detail marked `private` in the catalog. Default is off:
+// the common case is a document going to a named person.
+const publicCopy = has("public");
+
+const cv = assembleCv(CV_ENTRIES, { skills, lang, budget, publicCopy });
 const tex = renderLatex(cv, { footer: CV_FOOTER });
 const html = renderHtml(cv, { title: "Bastian Rønfeldt Thomsen — CV" });
 
@@ -60,6 +65,7 @@ writeFileSync(`${out}.html`, html);
 
 console.log(`skills   : ${skills.length ? skills.join(", ") : "(none — unranked)"}`);
 console.log(`ranked   : ${cv.ranked}`);
+console.log(`audience : ${publicCopy ? "PUBLIC — private contact details dropped" : "direct"}`);
 for (const s of cv.sections) {
   console.log(`  ${s.section.padEnd(11)} ${s.entries.map((e) => e.name).join(", ")}`);
 }

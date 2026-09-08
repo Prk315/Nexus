@@ -133,17 +133,49 @@ Generating a CV does not host one, and hosting is the live blocker.
 `cvGateReady` is guard 4 of `planApplyQueue`: while no **enabled** `cv_link`
 module holds content that is not a `[TODO` stub, every application is skipped
 with `cv_missing`. The `cv_link` text points at
-`prk315.github.io/personal-website/cv.pdf`, and **that URL 404s** — the site
-repo (`~/Repositories/personal-website`) contains no PDF at all.
+`prk315.github.io/personal-website/cv.pdf`.
+
+⚠️ **That URL already resolves.** Checked live on 2026-09-08: HTTP 200,
+`application/pdf`, 85,693 bytes, `last-modified` 7 Sep — added to the site repo
+by commit `0e8da61` and printed from a browser rather than typeset. Earlier
+notes in this repo (including a previous version of this section) said it 404s.
+They were reading a **stale local checkout** of `personal-website` whose `main`
+was one commit behind origin, which is exactly the shape of mistake that ends in
+overwriting somebody's file.
+
+Two consequences worth being explicit about:
+
+- **The hosting blocker is already gone.** Enabling `cv_link` no longer waits on
+  anything being published. It waits only on the decision to open the send path.
+- **Publishing is now a REPLACEMENT.** Check what is live before pushing over it.
 
 So the order is:
 
-1. Build the CV you actually want to publish as the general one:
-   `node cv-build.mjs --pdf --out build/cv`
-2. Copy it into the site repo as `cv.pdf`, commit, push, and **wait for Pages to
-   deploy**.
-3. Open the URL and confirm it resolves to the right document.
-4. Only then enable the `cv_link` module.
+1. `curl -I https://prk315.github.io/personal-website/cv.pdf` — see what is
+   there now, and when it changed.
+2. `git -C ~/Repositories/personal-website fetch` **before branching.** The
+   local checkout goes stale, and a branch cut from a stale `main` turns a
+   replacement into an apparent addition.
+3. Build the copy that goes on the web:
+   `node cv-build.mjs --public --out cv --pdf` — see §The public copy.
+4. Copy it in as `cv.pdf`, commit on a branch, open a PR, merge, and **wait for
+   Pages to deploy**.
+5. Open the URL and confirm it resolves to the document you meant.
+6. Only then enable the `cv_link` module.
+
+## The public copy
+
+`--public` drops every contact detail marked `private` in the catalog. Today
+that is the phone number, and the reason is a real distinction rather than
+squeamishness: a number emailed to a named employer is a disclosure to one
+company, and a number on a GitHub Pages file is permanent, indexed and
+harvested. The direct builds — the ones a human attaches to an application or
+uploads to an ATS — keep it.
+
+⚠️ The filter **clones** rather than mutating: `CV_ENTRIES` is a module-level
+constant shared by every build in the process, so filtering it in place would
+strip the phone from the *next* build too, and only on runs where a public build
+happened to come first. There is a test named after that.
 
 ⚠️ **Step 4 is the act that opens the send path**, and step 3 is not optional.
 A live gate pointing at a 404 is worse than a closed one: the letter quotes the
