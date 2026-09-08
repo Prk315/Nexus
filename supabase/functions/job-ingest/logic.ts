@@ -562,6 +562,76 @@ export function tagOverlap(module: ModuleRow, tokens: Set<string>): number {
 }
 
 /**
+ * Drop body modules the verdict evidences nothing for — but never open a hole.
+ *
+ * The model picks `skill` and `project` modules, and it occasionally picks one
+ * with no bearing on the ad: `skill_rust_systems` for a GenAI role,
+ * `skill_ios_mobile` for a Data Engineer one. Unlike the intro/closing problem
+ * that `FRAMING_SLOTS` solved, this one *is* a judgement about the ad, so it
+ * stays with the model — this is a floor under that judgement, not a
+ * replacement for it.
+ *
+ * ## Why it removes padding rather than enforcing a threshold
+ *
+ * ⚠️ Guard 1 of `planApplyQueue` refuses to send a body containing any `[GAP`
+ * marker. So a floor that empties a slot does not merely produce a thinner
+ * letter — it converts "sends a slightly off letter" into "never sends", with
+ * `body_has_gaps` as the only trace. That is too big a consequence to hang on a
+ * tag-overlap heuristic.
+ *
+ * So the rule is per slot, and it is conservative by construction:
+ *
+ *   - a module with **no tags** is always kept. It cannot be judged, and absent
+ *     is not zero — the same rule `aggregate` follows for nulls;
+ *   - a module with **at least one evidenced tag** is kept;
+ *   - if that would empty a slot, the **single best** module in it is kept
+ *     instead of all of them. The slot keeps a paragraph, so no new gap appears
+ *     and nothing that used to send stops sending; the padding still goes.
+ *
+ * With no skill tokens at all there is no evidence to judge against, so the
+ * floor abstains entirely rather than deleting the whole body on an empty set.
+ *
+ * Framing modules pass through untouched — `intro`, `cv_link` and `closing` are
+ * chosen by rule further down and are not the model's to justify.
+ */
+export function applyRelevanceFloor(chosen: ModuleRow[], tokens: Set<string>): ModuleRow[] {
+  if (tokens.size === 0) return chosen;
+
+  const framing = chosen.filter((m) => isFramingSlot(m.slot));
+  const body = chosen.filter((m) => !isFramingSlot(m.slot));
+
+  const bySlot = new Map<string, ModuleRow[]>();
+  for (const m of body) {
+    const slot = slotOf(m);
+    const bucket = bySlot.get(slot);
+    if (bucket) bucket.push(m);
+    else bySlot.set(slot, [m]);
+  }
+
+  const kept: ModuleRow[] = [];
+  for (const bucket of bySlot.values()) {
+    const survivors = bucket.filter(
+      (m) => !Array.isArray(m?.tags) || m.tags.length === 0 || tagOverlap(m, tokens) > 0,
+    );
+    if (survivors.length > 0) {
+      kept.push(...survivors);
+      continue;
+    }
+    // Nothing in this slot is evidenced. Keep the least-bad one rather than the
+    // whole bucket: the slot stays filled, so the send path is unchanged.
+    const best = bucket.slice().sort((a, b) => {
+      const oa = tagOverlap(a, tokens);
+      const ob = tagOverlap(b, tokens);
+      if (oa !== ob) return ob - oa;
+      return byAssemblyOrder(a, b);
+    })[0];
+    if (best) kept.push(best);
+  }
+
+  return [...framing, ...kept];
+}
+
+/**
  * Pick the one module framing the application at `slot`, or null if the catalog
  * has none — in which case the slot stays a visible gap, exactly as if the model
  * had asked for something nobody has written yet.
@@ -835,12 +905,16 @@ export function normalizeModulePlan(
       if (typeof id === "string") claimed.add(id);
     }
   }
-  let chosenModules = catalog.filter((m) => claimed.has(m.id));
+  const tokens = skillTokens(opts.skills);
+
+  // The floor runs BEFORE the framing gate, so a plan whose only surviving
+  // module was padding is honestly empty rather than framed. It cannot empty a
+  // slot the model filled — see `applyRelevanceFloor`.
+  let chosenModules = applyRelevanceFloor(catalog.filter((m) => claimed.has(m.id)), tokens);
 
   const framing =
     chosenModules.length > 0 && opts.score !== null && opts.score !== undefined;
   if (framing) {
-    const tokens = skillTokens(opts.skills);
     const lang = opts.lang ?? null;
     // Strip whatever arrived for the framed slots. Deterministic means
     // deterministic: a stray intro id must not produce two intros, and a plan

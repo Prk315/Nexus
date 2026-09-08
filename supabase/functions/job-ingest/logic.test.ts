@@ -37,6 +37,7 @@ import {
   isUsableCvModule,
   MAX_CV_SCAN,
   type ModuleRow,
+  applyRelevanceFloor,
   normalizeModulePlan,
   pickCvLinkModule,
   pickUncontestedModule,
@@ -859,6 +860,104 @@ describe("uncontested slot back-fill", () => {
     );
     assert.equal(pickUncontestedModule(CATALOG_ONE_EXP, "education", new Set()), null);
     assert.equal(pickUncontestedModule(CATALOG_ONE_EXP, "experience", new Set(["e1"])), null);
+  });
+});
+
+// ===========================================================================
+// The relevance floor. The property that matters most is the NEGATIVE one:
+// tightening selection must not open a gap, because guard 1 refuses to send a
+// body containing one. Every test below that asserts a module was dropped has a
+// sibling asserting the slot still got filled.
+// ===========================================================================
+
+describe("relevance floor", () => {
+  const GENAI = new Set(["genai", "llm", "python", "pytorch"]);
+
+  it("drops a body module the verdict evidences nothing for", () => {
+    const rust = mod("m_rust", "skill", { tags: ["rust", "systems", "tauri"] });
+    const llm = mod("m_llm", "skill", { tags: ["llm", "python"] });
+    const kept = applyRelevanceFloor([rust, llm], GENAI);
+    assert.deepEqual(
+      kept.map((m) => m.id),
+      ["m_llm"],
+    );
+  });
+
+  it("keeps an untagged module — it cannot be judged, and absent is not zero", () => {
+    const untagged = mod("m_plain", "skill", { tags: [] });
+    const rust = mod("m_rust", "skill", { tags: ["rust"] });
+    const kept = applyRelevanceFloor([untagged, rust], GENAI);
+    assert.deepEqual(
+      kept.map((m) => m.id),
+      ["m_plain"],
+    );
+  });
+
+  it("keeps the single best module rather than emptying a slot", () => {
+    // Neither is evidenced. Dropping both would add `[GAP: ...]` to the body and
+    // guard 1 would then refuse to send a letter that used to go out.
+    const rust = mod("m_rust", "skill", { tags: ["rust"], sort: 10 });
+    const ios = mod("m_ios", "skill", { tags: ["ios", "swift"], sort: 11 });
+    const kept = applyRelevanceFloor([rust, ios], GENAI);
+    assert.equal(kept.length, 1, "the slot must keep a paragraph");
+    assert.equal(kept[0].id, "m_rust", "ties break by (sort, name, id)");
+  });
+
+  it("judges each slot on its own — a dead skill does not take a live project with it", () => {
+    const rust = mod("m_rust", "skill", { tags: ["rust"] });
+    const llmProj = mod("p_llm", "project", { tags: ["llm"] });
+    const iosProj = mod("p_ios", "project", { tags: ["ios"] });
+    const kept = applyRelevanceFloor([rust, llmProj, iosProj], GENAI).map((m) => m.id);
+    assert.ok(kept.includes("m_rust"), "the only skill survives as least-bad");
+    assert.ok(kept.includes("p_llm"));
+    assert.ok(!kept.includes("p_ios"), "an evidenced sibling exists, so padding goes");
+  });
+
+  it("abstains entirely when there are no skill tokens to judge against", () => {
+    const all = [mod("a", "skill", { tags: ["rust"] }), mod("b", "project", { tags: ["ios"] })];
+    assert.deepEqual(applyRelevanceFloor(all, new Set()), all);
+  });
+
+  it("never touches framing modules", () => {
+    const intro = mod("i1", "intro", { tags: ["gamedev"], sort: 0 });
+    const cv = mod("cv1", "cv_link", { tags: ["resume"], sort: 30 });
+    const closing = mod("c1", "closing", { tags: ["availability"], sort: 90 });
+    const kept = applyRelevanceFloor([intro, cv, closing], GENAI).map((m) => m.id);
+    assert.deepEqual(kept, ["i1", "cv1", "c1"]);
+  });
+
+  it("does not add a missing slot to a real plan", () => {
+    // The end-to-end property: an off-target skill is dropped, but because it
+    // was the only one the slot is still filled and `missing_slots` is empty.
+    const catalog = [
+      mod("i1", "intro", { sort: 0 }),
+      mod("m_rust", "skill", { tags: ["rust"] }),
+      mod("c1", "closing", { sort: 90 }),
+    ];
+    const plan = normalizeModulePlan({ chosen: ["m_rust"], slots: [{ slot: "skill" }] }, catalog, {
+      score: 85,
+      lang: "en",
+      skills: ["genai", "llm"],
+    });
+    assert.deepEqual(plan.missing_slots, [], "no gap may be opened by the floor");
+    assert.ok(plan.chosen.includes("m_rust"));
+  });
+
+  it("removes padding from a plan while keeping the evidenced module", () => {
+    const catalog = [
+      mod("i1", "intro", { sort: 0 }),
+      mod("m_llm", "skill", { tags: ["llm", "python"], sort: 13 }),
+      mod("m_ios", "skill", { tags: ["ios", "swift"], sort: 14 }),
+      mod("c1", "closing", { sort: 90 }),
+    ];
+    const plan = normalizeModulePlan({ chosen: ["m_llm", "m_ios"] }, catalog, {
+      score: 85,
+      lang: "en",
+      skills: ["llm", "python"],
+    });
+    assert.ok(plan.chosen.includes("m_llm"));
+    assert.ok(!plan.chosen.includes("m_ios"), "unevidenced padding is dropped");
+    assert.deepEqual(plan.missing_slots, []);
   });
 });
 

@@ -327,6 +327,55 @@ function tagOverlap(module, tokens) {
 }
 
 /**
+ * Drop body modules the verdict evidences nothing for — but never open a hole.
+ *
+ * Mirror of `applyRelevanceFloor` in `job-ingest/logic.ts`, which is canonical
+ * and is the only copy that writes a row. This one exists so the plan n8n posts
+ * already matches what the server will re-derive: the two must agree, or the
+ * preview shows a letter that is not the one stored.
+ *
+ * Per slot: keep untagged modules (they cannot be judged), keep modules with at
+ * least one evidenced tag, and if that would empty a slot keep the single best
+ * instead of all of them. Emptying a slot would add a `[GAP` marker, which
+ * guard 1 of the send path refuses outright — too large a consequence to hang
+ * on a tag heuristic. With no tokens the floor abstains.
+ */
+function applyRelevanceFloor(chosen, tokens) {
+  if (tokens.size === 0) return chosen;
+
+  const framing = chosen.filter((m) => isFramingSlot(m.slot));
+  const body = chosen.filter((m) => !isFramingSlot(m.slot));
+
+  const bySlot = new Map();
+  for (const m of body) {
+    const slot = slotOf(m);
+    const bucket = bySlot.get(slot);
+    if (bucket) bucket.push(m);
+    else bySlot.set(slot, [m]);
+  }
+
+  const kept = [];
+  for (const bucket of bySlot.values()) {
+    const survivors = bucket.filter(
+      (m) => !Array.isArray(m?.tags) || m.tags.length === 0 || tagOverlap(m, tokens) > 0,
+    );
+    if (survivors.length > 0) {
+      kept.push(...survivors);
+      continue;
+    }
+    const best = bucket.slice().sort((a, b) => {
+      const oa = tagOverlap(a, tokens);
+      const ob = tagOverlap(b, tokens);
+      if (oa !== ob) return ob - oa;
+      return byAssemblyOrder(a, b);
+    })[0];
+    if (best) kept.push(best);
+  }
+
+  return [...framing, ...kept];
+}
+
+/**
  * Pick the one module that frames the application at `slot`, or null if the
  * catalog has none — in which case the slot stays a visible gap, exactly as if
  * the model had asked for something unwritten.
@@ -621,13 +670,20 @@ export function planFromVerdict(verdict, modules) {
   const chosenIds = new Set(
     (Array.isArray(v.chosen_module_ids) ? v.chosen_module_ids : []).map((id) => String(id)),
   );
-  let chosenModules = catalog.filter((m) => chosenIds.has(String(m.id)));
+  const tokens = skillTokens([...(v.matched_skills ?? []), ...(v.required_skills ?? [])]);
+
+  // Runs before the framing gate, so a plan whose only surviving module was
+  // padding is honestly empty rather than framed. It cannot empty a slot the
+  // model filled — see `applyRelevanceFloor`.
+  let chosenModules = applyRelevanceFloor(
+    catalog.filter((m) => chosenIds.has(String(m.id))),
+    tokens,
+  );
 
   let needed = knownSlotsOnly(boundedList(v.module_slots_needed), catalog);
 
   const framing = chosenModules.length > 0 && v.score !== null && v.score !== undefined;
   if (framing) {
-    const tokens = skillTokens([...(v.matched_skills ?? []), ...(v.required_skills ?? [])]);
     // Strip whatever the model said about the framed slots. Deterministic means
     // deterministic: a stray intro id in the verdict must not produce two intros.
     chosenModules = chosenModules.filter((m) => !isFramingSlot(m.slot));
@@ -743,6 +799,7 @@ export function assembleApplication(plan, modules, posting) {
 export const __internal = {
   boundedText,
   boundedList,
+  applyRelevanceFloor,
   byAssemblyOrder,
   byBodyOrder,
   clampScore,

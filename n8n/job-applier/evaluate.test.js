@@ -33,6 +33,7 @@ import {
   parseEvalResponse,
   planFromVerdict,
   truncateOnWhitespace,
+  __internal,
 } from "./evaluate.js";
 
 // MARK: - Fixtures
@@ -729,4 +730,63 @@ test("assembleApplication never throws on junk", () => {
     assert.equal(typeof out.body, "string");
     assert.ok(Array.isArray(out.module_ids));
   }
+});
+
+// MARK: - The relevance floor
+//
+// Mirrors the canonical suite in `job-ingest/logic.test.ts`. The property worth
+// protecting is the NEGATIVE one: the floor removes padding and must never open
+// a gap, because guard 1 of the send path refuses any body containing one.
+
+test("relevance floor drops an unevidenced module when an evidenced sibling exists", () => {
+  const { applyRelevanceFloor } = __internal;
+  const tokens = new Set(["llm", "python"]);
+  const rust = { id: "m_rust", name: "m_rust", slot: "skill", tags: ["rust"], sort: 10 };
+  const llm = { id: "m_llm", name: "m_llm", slot: "skill", tags: ["llm"], sort: 13 };
+  assert.deepEqual(
+    applyRelevanceFloor([rust, llm], tokens).map((m) => m.id),
+    ["m_llm"],
+  );
+});
+
+test("relevance floor keeps one module rather than emptying a slot", () => {
+  const { applyRelevanceFloor } = __internal;
+  const tokens = new Set(["genai"]);
+  const rust = { id: "m_rust", name: "m_rust", slot: "skill", tags: ["rust"], sort: 10 };
+  const ios = { id: "m_ios", name: "m_ios", slot: "skill", tags: ["ios"], sort: 11 };
+  const kept = applyRelevanceFloor([rust, ios], tokens);
+  assert.equal(kept.length, 1, "the slot must keep a paragraph");
+  assert.equal(kept[0].id, "m_rust");
+});
+
+test("relevance floor keeps an untagged module and abstains with no tokens", () => {
+  const { applyRelevanceFloor } = __internal;
+  const plain = { id: "plain", name: "plain", slot: "skill", tags: [], sort: 10 };
+  const rust = { id: "m_rust", name: "m_rust", slot: "skill", tags: ["rust"], sort: 11 };
+  assert.deepEqual(
+    applyRelevanceFloor([plain, rust], new Set(["genai"])).map((m) => m.id),
+    ["plain"],
+  );
+  assert.deepEqual(applyRelevanceFloor([plain, rust], new Set()), [plain, rust]);
+});
+
+test("the floor opens no gap in a real plan", () => {
+  const catalog = [
+    { id: "i1", name: "intro_ai_en", slot: "intro", tags: ["llm"], lang: "en", sort: 0 },
+    { id: "m_rust", name: "skill_rust", slot: "skill", tags: ["rust"], lang: "en", sort: 10 },
+    { id: "c1", name: "closing_en", slot: "closing", tags: [], lang: "en", sort: 90 },
+  ];
+  const plan = planFromVerdict(
+    {
+      score: 85,
+      lang: "en",
+      matched_skills: ["genai"],
+      required_skills: ["llm"],
+      chosen_module_ids: ["m_rust"],
+      module_slots_needed: ["skill"],
+    },
+    catalog,
+  );
+  assert.deepEqual(plan.missing_slots, [], "the floor must not open a gap");
+  assert.ok(plan.chosen.includes("m_rust"));
 });
