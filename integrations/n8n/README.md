@@ -133,8 +133,14 @@ $ docker exec n8n wget -qO- http://host.docker.internal:11434/api/tags
 
 ### 3. The Gmail credential
 
-In n8n: **Credentials → New → Gmail OAuth2 API**, and name it exactly
-**`Nexus Gmail`** so the imported workflow binds to it.
+In n8n: **Credentials → New → Gmail OAuth2 API**. On this instance it is called
+**`Gmail account`**, which is what the workflow JSONs name.
+
+The name is a fallback, not the binding — `import-workflow.sh` resolves credentials by
+**type** and rewrites the id. But keep it accurate anyway: this README told you to call
+it `Nexus Gmail` for weeks while the instance actually had `Gmail account`, which is
+harmless right up until something has to resolve by name, and then it is a 0-second
+failure with a misleading message.
 
 Google Cloud Console side: create an OAuth client (type *Web application*),
 enable the **Gmail API**, and add n8n's callback URL — shown on the credential
@@ -719,7 +725,7 @@ import always arrives with `{"id": null}` and n8n resolves credentials by **id**
 by name, so a perfectly-named credential still reports "uses invalid credential" until
 you select it on the node.
 
-## Three n8n traps that cost a morning
+## Four n8n traps that cost a morning
 
 ### A workflow with `active = 1` is not necessarily active
 
@@ -822,17 +828,41 @@ console.log('PUBLISHED (trigger):\n  '+refs(h.nodes).join('\n  '));"
 ```
 
 The fix is to make the credential ids part of an actual import, so n8n creates a real
-version, and then publish that:
+version, and then publish that. **Use the script — do not do this by hand:**
 
 ```bash
-# resolve {"id": null} to the real ids in a COPY — never commit instance ids to the repo
-docker cp /tmp/mail-triage.resolved.json n8n:/tmp/wf.json
-docker compose exec -T n8n n8n import:workflow --input=/tmp/wf.json
-docker compose exec -T n8n n8n publish:workflow --id nexusMailTriage1
-docker compose restart n8n
+./import-workflow.sh workflows/mail-drain.json nexusMailDrain1
 ```
 
+It resolves `{"id": null}` against the live instance into a temporary copy, imports,
+publishes and restarts. Instance ids are never written back to the repo.
+
 Then re-run the comparison above and confirm the **published** side carries real ids.
+
+### The same error message, a completely different cause
+
+`uses invalid credential` also appears when the credential reference is genuinely
+unbound — and then it fails *every* run, triggered or manual, which is how you tell the
+two apart.
+
+The workflow JSONs here carry `{"id": null}` deliberately: credential ids are instance
+state and do not belong in git. But **`import:workflow` takes that null literally.** The
+node imports bound to nothing, the import reports success, `publish` reports success,
+the startup log lists the workflow as activated — and every scheduled pass dies in 0 s.
+
+This is exactly what happened on 2026-09-08 while shipping the drain claim. The import
+was correct in every respect the checks covered: the classify prompt was diffed against
+the live copy first, the published snapshot was confirmed to carry the new nodes, and
+the startup log confirmed activation. The diff compared node **`parameters`**, and
+`credentials` sits outside `parameters` — so the one field the import destroyed was the
+one field not being compared.
+
+A second, quieter version of the same trap: the JSONs referenced the Gmail credential by
+the name `"Nexus Gmail"`, but the credential on this instance is called `"Gmail
+account"`. A stale name is harmless while ids are bound and fatal the moment resolution
+has to fall back to the name. Names in the repo are now aligned to the instance.
+
+**If you diff a workflow before importing, diff whole nodes, not `parameters`.**
 
 Genuine OAuth expiry does exist and looks different: it fails manual runs too. Google
 expires refresh tokens for apps left in **Testing**, so publish the consent screen
