@@ -18,6 +18,10 @@ import {
   isPendingRequest,
   parsePendingRequest,
   PENDING_MAX_LIMIT,
+  isClaimRequest,
+  parseClaimRequest,
+  CLAIM_MAX_LIMIT,
+  CLAIM_STALE_MINUTES,
   isBriefRequest,
   toBriefItems,
   BRIEF_MAX_ITEMS,
@@ -203,6 +207,44 @@ Deno.serve(async (req: Request) => {
 
     const ids = (data ?? []).map((r) => (r as { external_id: string }).external_id);
     return json({ ids, count: ids.length, limit: pending.limit });
+  }
+
+  // ── the `claim` action: take a batch of the queue ───────────────────────
+  //
+  // What `pending` is to a question, this is to a commitment. The drain calls
+  // this instead, and the rows it gets back are stamped `claimed_at` before a
+  // single byte of inference happens — so the next pass, which on a backlog
+  // starts while this one is still running, sees a shorter queue rather than
+  // the same one.
+  //
+  // Kept separate from `pending` on purpose: the heartbeat and the briefs ask
+  // how deep the queue is, and that must stay side-effect free.
+  //
+  // The atomicity is in Postgres, not here. `claim_untriaged_mail` does the
+  // select and the stamp in one statement under `for update skip locked`;
+  // doing it as a read followed by a write from this function would leave
+  // exactly the race it is meant to close.
+  if (isClaimRequest(body)) {
+    const claim = parseClaimRequest(body);
+    if (!claim.ok) return json({ error: claim.error, max: CLAIM_MAX_LIMIT }, 400);
+
+    const supabase = createClient(url, serviceKey);
+    const { data, error } = await supabase.rpc("claim_untriaged_mail", {
+      // Owner stamped here, never taken from the caller. The function is
+      // `security definer` and takes a user id, so this literal is the only
+      // thing standing between a leaked key and another account's rows.
+      p_user: OWNER_UID,
+      p_limit: claim.limit,
+      p_stale: `${CLAIM_STALE_MINUTES} minutes`,
+    });
+
+    // Same reasoning as `pending`: a failed claim must not read as an empty
+    // queue. A drain that treated an error as "nothing to do" would report
+    // itself healthy on every pass while the backlog sat untouched.
+    if (error) return json({ error: "claim_failed", detail: error.message }, 500);
+
+    const ids = (data ?? []).map((r) => (r as { external_id: string }).external_id);
+    return json({ ids, count: ids.length, limit: claim.limit, claimed: true });
   }
 
   // ── the `brief` action: mail summary for the daily Slack briefs ─────────

@@ -1417,6 +1417,88 @@ export function parsePendingRequest(body: unknown): ParsedPending {
 }
 
 // ───────────────────────────────────────────────────────────────────────────
+// The `claim` action — take a batch, so two passes cannot do the same work
+// ───────────────────────────────────────────────────────────────────────────
+//
+// `pending` answers a question and touches nothing, and that property is worth
+// keeping: the heartbeat and the briefs ask how deep the queue is, and asking
+// must stay free of side effects. So claiming is a **separate action** rather
+// than a flag on `pending`. The two differ in kind, not degree — one reports,
+// one takes responsibility for a batch.
+//
+// # Why this exists
+//
+// The drain used to read `pending` and classify what came back. A pass over ten
+// messages takes ~370 s; the schedule fired every 300 s. The second pass read
+// the same unscored rows the first was still working through — verdicts are
+// written at the end, so nothing said "taken" — and re-ran the model over them.
+// Measured over fourteen passes: 140 classifications, 36 distinct messages
+// advanced, 74% of the GPU wasted, some messages classified eight times.
+//
+// The interval is now wider than a pass, which alone would make collisions
+// rare. This makes them impossible, which matters because the interval is a
+// guess about inference speed and inference speed is not constant.
+//
+// # What it returns
+//
+// External ids and nothing else, exactly like `pending`. Claiming widens what a
+// leaked key can *do* (mark rows as taken, which a subsequent claim will undo
+// after the staleness window) but not what it can *read*. No sender, no
+// subject, no snippet.
+
+/** Rows one drain pass takes when it does not say otherwise. */
+export const CLAIM_DEFAULT_LIMIT = 20;
+
+/**
+ * Hard ceiling on one claim.
+ *
+ * At roughly 37 s per message measured on the local 7B, 100 rows is over an
+ * hour of continuous inference — longer than any sane schedule, and long enough
+ * that the staleness window would start reclaiming rows the pass is still
+ * working on. Kept equal to PENDING_MAX_LIMIT so the two actions cannot drift
+ * into disagreeing about how big a batch may be.
+ */
+export const CLAIM_MAX_LIMIT = PENDING_MAX_LIMIT;
+
+/**
+ * How long a claim is honoured before another pass may take the row.
+ *
+ * Must exceed the longest realistic pass or a slow batch gets stolen from
+ * underneath itself — reintroducing the exact duplicate-work bug this fixes,
+ * only harder to see. CLAIM_MAX_LIMIT messages at the *observed* 37 s average
+ * is ~62 min, but a full-size batch is not the normal case; a 20-row pass is
+ * ~12 min. Thirty minutes sits above that with room, and below the point where
+ * a genuinely dead pass parks its rows for an unhelpfully long time.
+ */
+export const CLAIM_STALE_MINUTES = 30;
+
+export type ParsedClaim =
+  | { ok: true; limit: number }
+  | { ok: false; error: "invalid_limit" };
+
+/** True when the body is taking a batch rather than asking about the queue. */
+export function isClaimRequest(body: unknown): boolean {
+  return typeof body === "object" && body !== null &&
+    (body as { action?: unknown }).action === "claim";
+}
+
+/**
+ * Validate a `claim` request.
+ *
+ * Same contract as `parsePendingRequest`: absent means default, nonsense is an
+ * error rather than a silent clamp.
+ */
+export function parseClaimRequest(body: unknown): ParsedClaim {
+  const raw = (body as { limit?: unknown } | null)?.limit;
+  if (raw === undefined || raw === null) return { ok: true, limit: CLAIM_DEFAULT_LIMIT };
+
+  const n = typeof raw === "number" ? raw : typeof raw === "string" ? Number(raw) : NaN;
+  if (!Number.isFinite(n) || !Number.isInteger(n) || n < 1) return { ok: false, error: "invalid_limit" };
+
+  return { ok: true, limit: Math.min(n, CLAIM_MAX_LIMIT) };
+}
+
+// ───────────────────────────────────────────────────────────────────────────
 // The `brief` action — mail summary for the daily Slack briefs
 // ───────────────────────────────────────────────────────────────────────────
 //

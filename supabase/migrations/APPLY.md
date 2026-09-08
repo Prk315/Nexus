@@ -812,3 +812,60 @@ drop function if exists public.pf_agent_brief(text);
 
 Nothing else references it; the only consumers are `.claude/skills/brief` and a
 pointer in CLAUDE.md.
+
+## §14 — The drain claim (`20260908154000_mail_drain_claim.sql`)
+
+**Already applied to production on 2026-09-08**, unlike most entries here — the
+fix is inert without it and the bug it closes was actively burning GPU.
+
+### What it adds
+
+`mail_messages.claimed_at`, a partial index on the queue predicate, and
+`claim_untriaged_mail(uuid, int, interval)`.
+
+### Why
+
+`mail-drain` read `score IS NULL` and wrote every verdict at the *end* of the
+pass, so for the ~12 minutes a batch spent in the model its rows still looked
+untriaged. With a 5-minute schedule and ~370-second passes, the next pass read
+the same rows and classified them again. Measured over fourteen consecutive
+passes: **140 classifications, 36 distinct messages advanced — 74% wasted**,
+some messages scored eight times.
+
+Invisible until a backlog existed: an empty queue drains in about a second and
+never overlaps.
+
+### Verification
+
+```sql
+-- Two claims in a row must not return the same rows. This is the whole point;
+-- under the old read path they returned identical ids.
+with a as (select external_id from claim_untriaged_mail('<uid>'::uuid, 5)),
+     b as (select external_id from claim_untriaged_mail('<uid>'::uuid, 5))
+select (select count(*) from a) as first,
+       (select count(*) from b) as second,
+       (select count(*) from (select * from a intersect select * from b) x) as overlap;
+
+-- Only the service role may call it. It is SECURITY DEFINER and takes a user
+-- id, so a broader grant would let any caller stamp another account's rows.
+select grantee from information_schema.role_routine_grants
+ where routine_name = 'claim_untriaged_mail';
+```
+
+Expect `overlap = 0`, and grantees `postgres` + `service_role` only — never
+`anon` or `authenticated`.
+
+Reset a test claim with
+`update mail_messages set claimed_at = null where score is null;` — safe,
+because an unclaimed unscored row is exactly what the queue means.
+
+### Rolling back
+
+```sql
+drop function if exists public.claim_untriaged_mail(uuid, int, interval);
+drop index if exists public.mail_messages_drain_queue_idx;
+alter table public.mail_messages drop column if exists claimed_at;
+```
+
+Roll the workflow back too, or the drain posts `{"action":"claim"}` to a
+function that no longer knows the verb and every pass 500s.

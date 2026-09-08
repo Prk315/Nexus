@@ -852,8 +852,8 @@ The pipeline is now split at the write:
 mail-triage   Gmail ─┬─► persist rows with NO verdict      (fast, no model)
                      └─► classify ──► write verdicts       (best effort)
 
-mail-drain    every 5 min ──► "which rows have no verdict?" ──► re-fetch body
-                          ──► classify ──► write verdicts
+mail-drain    every 15 min ──► CLAIM a batch of unverdicted rows ──► re-fetch body
+                           ──► classify ──► write verdicts
 ```
 
 **`score IS NULL` is the queue.** That is not a new state bolted on: it is what the column
@@ -885,12 +885,63 @@ Ordering is `received_at` ascending, so a backlog drains oldest-first. After a n
 asleep the morning's mail is classified in the order it arrived, rather than leaving the
 oldest — the most likely to be waited on — until last.
 
+`pending` is **read-only, deliberately**. The heartbeat and the briefs use it to ask how
+deep the queue is, and asking must never move a row. The drain uses `claim` instead.
+
+### The `claim` action, and the 74% that was being wasted
+
+`{"action":"claim","limit":N}` returns the same ids-only shape as `pending`, but stamps
+`claimed_at` on every row it hands out, atomically, before any inference happens.
+
+It exists because the drain used to call `pending` and that was a genuine bug, invisible
+until a backlog existed:
+
+- verdicts are written in one upsert at the **end** of a pass;
+- a pass over ten messages takes **~370 s** on the local 7B;
+- the schedule fired every **300 s**.
+
+So the next pass started while the first was still mid-inference, read the very same
+unscored rows — nothing said *taken* — and ran the model over them again. Measured on
+2026-09-08 across fourteen consecutive passes: **140 classifications performed, 36
+distinct messages advanced.** 74% of the GPU wasted, individual messages classified up to
+eight times. Throughput was ~6 messages/hour on hardware that manages ~90.
+
+Two changes close it, and both are needed:
+
+1. **The interval is now 15 minutes**, comfortably longer than a pass. This keeps Ollama
+   serial, which matters on a 16 GB machine.
+2. **The drain claims instead of asking.** The interval is a *guess* about how long
+   inference takes, and that guess is wrong the moment a message is long, Ollama is cold
+   or the Mac is busy. The claim makes correctness independent of the guess.
+
+Atomicity lives in Postgres, not the workflow: `claim_untriaged_mail` does the select and
+the stamp in one statement under `for update skip locked` — the same primitive
+`n8n_requests` uses to hand work to n8n exactly once. Two callers cannot get the same row.
+
+A claim is honoured for **30 minutes**, then the row is reclaimable. That second arm is
+not optional: an n8n restart kills in-flight executions without unwinding anything (see
+the 0-second executions in `execution_entity` every time the container bounces), and
+without a staleness window those rows would sit claimed and unscored forever.
+
+Verify it in one query — under the old read path these returned identical ids:
+
+```sql
+with a as (select external_id from claim_untriaged_mail('<uid>'::uuid, 5)),
+     b as (select external_id from claim_untriaged_mail('<uid>'::uuid, 5))
+select (select count(*) from (select * from a intersect select * from b) x) as overlap;
+```
+
+`overlap` must be 0.
+
 ### What happens when the model fails on a message
 
 Nothing is marked done. The row keeps `score IS NULL` and the next pass tries again.
 
-The cost, stated plainly: a permanently unparseable message is retried every 5 minutes
-forever, burning roughly 24 s of inference each time. The symptom is honest — a row that
+The cost, stated plainly: a permanently unparseable message is retried forever, burning
+roughly 37 s of inference each time. It is now retried at most once every 30 minutes
+rather than every 5 — the claim it takes on a failed pass still stands until the
+staleness window expires, which turns an unparseable message from a hot loop into a slow
+drip. The symptom is honest — a row that
 never leaves the top of the panel — but if you see one, that is what it is. The
 alternative designs were worse: giving up silently would lose mail, and scoring from the
 subject line alone would produce a verdict indistinguishable from a real one.
