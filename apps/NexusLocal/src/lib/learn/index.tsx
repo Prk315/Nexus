@@ -31,6 +31,7 @@
  */
 
 import { CourseProvider } from "./CourseContext";
+import { DailyPanel } from "./DailyPanel";
 import { PathPanel } from "./PathPanel";
 import { ReviewPanel } from "./ReviewPanel";
 import { InfinitePanel } from "./InfinitePanel";
@@ -43,6 +44,10 @@ export function LearnPage() {
     <CourseProvider>
       <div className="-mx-6 -mb-6 flex-1 overflow-y-auto bg-[#F6F5F1] text-[#1A1A24]">
         <div className="mx-auto flex max-w-xl flex-col gap-6 px-4 pb-16 pt-6 sm:px-6 md:max-w-2xl md:gap-10 md:px-8 md:pb-24 md:pt-10">
+          {/* Outside the course-scoped panels below on purpose — the daily
+              lesson spans every enrolled course, so a course switch must not
+              hide the assignment that is due tomorrow. See DailyPanel.tsx. */}
+          <DailyPanel />
           <PathPanel />
           <ReviewPanel />
           <ChallengePanel />
