@@ -594,6 +594,72 @@ Also pinned: ⚡ chapter checkpoints are suppressed for chapters whose scoped
 drill pool is empty (LA 0); eksamensværksteder scale to every chapter with
 mastered units (LA 1/3/4 now; parent_unit_id = the chapter's last lr_unit row).
 
+## Path doctrine: general → specific (pinned, 2026-08-21 — LA exam retrospective)
+
+The LA course carried its user to a perfect oral exam, and the one structural
+lesson from the retrospective is ORDERING: the path taught specifics early
+(algorithms, computations per chapter) and let the general picture emerge late.
+Future paths (DBMS Section 2 onward, every new course) invert this:
+
+- **Chapter openers state the organizing idea first** — the general theorem,
+  the why-this-chapter-exists claim, the map of what will specialize it —
+  BEFORE any computational unit. A learner should meet "rank measures
+  everything" before Gauss-elimination mechanics, not after.
+- **Unit order within a chapter descends**: general/structural units first,
+  computational/technique units after, applications last.
+- **The DAG should encode this**: general concepts are prereqs of their
+  specializations, so prereq-gating naturally enforces the descent — when
+  authoring new concept graphs, draw the general→specific edges explicitly
+  rather than only technique-chains.
+- Exam evidence backs it: the oral format rewards exactly the ability to
+  descend from the organizing claim to the detail on request; a path shaped
+  the same way rehearses that motion daily.
+
+## Vault Learn & Retain v2 — the observatory (pinned, 2026-08-21)
+
+Vault is the ENDPOINT of the Learn & Retain project (user's original intent —
+NexusLocal Learn is the supplemented workbench, Vault the home). The iframe
+over generated `public/conceptmap.html` is replaced by NATIVE Vault React
+views reading the lr_* tables live. Decisions locked 2026-08-21: native
+rebuild · all four feature pillars · Vault-native dark aesthetic.
+
+**GOAL REVISED (user, 2026-08-21 evening): full parity, not just observatory.**
+Vault Learn & Retain should ultimately carry ALL of NexusLocal's Learn
+functionality (units/player, decks, socratic, challenges, workshops, Samlet
+prøve, Generalprøve — the complete learning loop, writes included), plus a
+revival of the old L&R UI's lost surfaces (the Learn roadmap with unit
+actions, the Dashboard stat panels, the Retain review tab from the generated
+pages). The P2–P4 read-only phases below remain valid stepping stones, but
+"read-only window" is no longer the end state — plan the port so shared logic
+(layers, answers, memory, aggregateTest, referenceData) moves into a shared
+package rather than being forked. Scope and phasing to be designed next
+session.
+
+Phases (each releasable):
+- **P1 — the living map**: `apps/Vault/Vault/src/learn/` — LearnMode shell
+  replacing the iframe (App.tsx keeps its appMode toggle, minimal diff — the
+  drawing sessions churn that file), 3D force-graph of the full 1,067-concept
+  multi-course DAG (Vault already ships react-force-graph-3d + the three
+  dedupe), per-course constellation colors, switchable LENSES: mastery
+  (Beta mean), heat (decayed live client-side), importance (PageRank),
+  retention (lr_retained_concept). Node inspector panel: title, kind,
+  description/statement, prereq neighborhood, memory state. Course filter.
+  Read-only; the learning loop stays in NexusLocal.
+- **P2 — course dashboards**: per-course stats read from lr_*: units
+  mastered, deck/challenge/socratic/workshop/Samlet prøve state, streak,
+  due queue (lr_learn_state verdict), recent attempts.
+- **P3 — dispositions & formelsamling**: the six lr_disposition beat lists
+  browsable and cross-linked to map nodes; the theorem/definition library
+  (same theory-box derivation as NexusLocal's referenceData.ts) searchable,
+  nodes link into it.
+- **P4 — polish/cross-links**: map→formelsamling→disposition navigation,
+  Generalprøve rehearsal history (lr_rehearsal_run) once P2 rounds exist.
+
+Data access: Vault's existing authenticated supabase client — lr_* policies
+are role-agnostic `USING (true)`, so no second client needed. All derived
+math (heat decay, mastery mean, stability) mirrors memory.ts semantics —
+port the formulas, never invent.
+
 ## Arbejdsrum — exercise workspace + math writer (pinned, 2026-08-17)
 
 A user-experience layer on SOLVING, applied wherever a drill/exercise renders
@@ -758,6 +824,150 @@ source_slug → lr_item.slug or NULL for generated, format, content jsonb,
 status draft|live, authored_by, created_at), anon_all RLS like siblings.
 Entry point: a Sprint card on the Learn page (renders when the course has
 any live/draft sprint drills; KLADDE chip while drafts).
+
+## Dagens lektion — daily course-oriented lessons (pinned, 2026-09-09)
+
+A single bounded session per day, built from the concept DAG and aimed at the
+courses actually being taken this term. `DailyPanel` sits **above** the course
+switcher; everything else on this page answers "where am I in this course", and
+this one answers "what should I do now".
+
+### Why it exists: the review brain cannot see the courses that matter
+
+`learn-evaluate` selects over `lr_retained_concept` — concepts of a **mastered
+unit**. That is right for LA and DBMS, which have hand-authored unit paths. It
+also means it is structurally blind to every book-ingested course: Probabilistic
+Robotics has 231 concepts, 369 prereq edges and **zero units**, so nothing in it
+can ever reach `lr_retained_concept`, and no amount of studying REX would put a
+single entry in `lr_learn_state.due_concepts`.
+
+Authoring a 28-unit path takes weeks; a term takes four months. So the daily
+lesson selects over `lr_memory_state` scoped by **enrollment** instead of by unit
+mastery. The hand-authored path is still the better product where it exists —
+this is what the graph can give you on the day the book lands.
+
+Consequence: heat for these concepts is never decayed by `learn-evaluate`
+either. `learn-daily` decays **on read** and does not write it back — two
+server-side writers on `heat` next to the client's grading path is a lost-update
+race for nothing, since decay is a pure function of elapsed time.
+
+### The three things the graph cannot tell you (`lr_course_enrollment`)
+
+1. **Where the course is.** A DAG frontier has no notion of "the lecture has not
+   been there yet", so a pure graph walk serves chapter 9 in teaching week 2.
+   `term_start` + `week1_chapter` + `chapters_per_week` give a chapter ceiling;
+   `chapter_override` wins when the real pace diverges, which it always
+   eventually does.
+2. **What today is for.** `lecture_dow` / `exercise_dow` decide the **phase** —
+   `prime` (≤1 day before a lecture, allowed one chapter past the ceiling),
+   `consolidate` (≤1 day before an exercise class, or ≤2 days after a lecture),
+   `maintain` otherwise. Exercise-class readiness outranks lecture priming: that
+   is where you must *perform*. This is derived, never a preference — "new
+   material or review today?" has a calendar answer.
+3. **Which course matters most.** Graded events come from the course's
+   PathFinder plan (`plan_id`, a soft join like `pf_task_sessions.cal_block_id`).
+   ⚠️ Attendance rows ("Lecture: MatAn3") are excluded by title, or every course
+   is urgent every day and urgency means nothing. Tokens are short enough to
+   survive a typo — the live plan holds "Home Assignmetn 1", and an urgency
+   signal that misses on one transposed letter is worse than one that
+   occasionally over-fires. The matching task is recorded in the verdict.
+
+⚠️ `lecture_dow`/`exercise_dow` are **0 = Sunday**, matching
+`pf_recurring_cal_blocks` and explicitly not ISO 1–7.
+
+### `lr_daily_lesson` — one stored row per day
+
+Written **only** by the `learn-daily` edge function (`*/30 * * * *`, so a course
+enrolled at noon has a lesson within the half hour rather than tomorrow; it is a
+one-select no-op when the row exists).
+
+Stored rather than computed on open, and the first reason is the load-bearing
+one: **the lesson must be the same lesson at 08:00 and at 20:00.** A selector run
+client-side re-rolls on every mount — heat has decayed, an attempt has landed —
+so a half-finished session could never be resumed and "dagens lektion" would
+quietly become a different set of cards. Stability is the product. Second: no
+client derives the lesson, for the same reason no client derives blocking policy.
+Third: `courses` records **why** the day looks like this (phase, chapter window,
+the graded event that pulled a course up) and the panel shows it — a daily system
+that cannot explain itself gets ignored inside a week.
+
+⚠️ Not seeded, and `learn-daily` **refuses to write an empty lesson**. Missing
+means "no lesson computed", never "nothing to do today"; a zero-card row is
+indistinguishable from "færdig ✓" and would stamp a fresh `generated_at` over a
+day the generator never ran. The `blocking_state` rule, again.
+
+**Progress lives in `lr_attempt_log`**, not in the row: `item_ref =
+daily:<date>:<cardId>:<concept_id>`. Writing ticks back into the `cards` array
+would be a read-modify-write race between Mac and phone — and `learn-evaluate`
+already derives `streak_days` from attempt DAYS, so finishing a daily lesson
+feeds the existing streak with no new code and no second definition of a study
+day.
+
+### Cards are deterministic, and that is a lane not a placeholder
+
+Generated from the DAG rows themselves — `title`, `description`, `source_ref`
+and the prereq edges. No model call: it costs nothing, cannot invent a definition
+the book never gave, works offline, and is a real loop (read → retrieve →
+connect). LLM-drafted drills are strictly additive later, landing in
+`lr_unit_content` as `draft` under the existing human-curation gate.
+
+| kind | what | grading |
+|---|---|---|
+| `read` | the statement | **exposure only** — heat, no α/β |
+| `recall` | name → definition | reveal, 4-way self-grade |
+| `cloze` | term or payload blanked | reveal, 4-way self-grade |
+| `link` | "why is X a prerequisite of Y?" | reveal, 4-way self-grade |
+
+⚠️ **`read` deliberately bypasses `applyGrade`.** A card whose whole interaction
+is "read this, tap Videre" demonstrates nothing; running it through the grading
+path would add competence evidence for every concept merely *seen*, and
+competence is what decides when a concept next comes back — so the review
+schedule would stretch for material never once retrieved. Heat is the right
+channel, and the retrieval card immediately after is the assessment. A new
+concept therefore costs **two** card slots, which is why the quota is divided
+before the pair is built; without that every day came out double its stated
+length and `minutes_target` was decoration.
+
+`link` is the card only a graph can produce, and the reason to build this on a
+DAG at all.
+
+### Four rules the live data forced
+
+- **A strict prereq gate starves on day one.** Enrolling a course means zero
+  memory rows for all of it, so "every prerequisite known" admits only the
+  graph's roots. Readiness is a **fraction**, not a gate: fully-ready concepts
+  first, partially-ready next, chapter order after that. The DAG decides the
+  ORDER; it may not decide to hand back an empty day. Which happened is reported
+  as `gate: strict | relaxed` rather than hidden.
+- **Structural sections are not concepts.** The ingest keeps "ACKNOWLEDGMENTS",
+  "INTRODUCTION", "Example" — real rows (PageRank even scores `PR 2.1
+  INTRODUCTION` at 0.95) that make an empty prompt. Filtered at selection, not
+  at ingest: the graphs are committed and several cost a night of judging, and
+  this is presentation rather than a claim the row is wrong.
+- ⚠️ **Some books store the statement AS the title.** Kalkulus is a Norwegian
+  theorem text whose concepts came out `title = "n forskjellige gjenstander kan
+  arrangeres etter"` with the description being that same sentence plus four
+  words — so a "recall" card shows its own answer. `isStatement` (title is a
+  prefix of the description) switches those to a **tail cloze**: same row,
+  opposite card, and a genuinely good one.
+- **A tail cloze may only be applied to a single statement.** On a paragraph it
+  produces "…Examples of successful robot ____" with 200 characters as the
+  answer — unanswerable, which is worse than no card, because the learner grades
+  it "vidste ikke" and the memory model records a failure that was the card's
+  fault. Bounded by `STATEMENT_MAX_CHARS`/`STATEMENT_MAX_BLANK`; a named concept
+  that fails both cloze paths falls back to plain recall, which is always fair.
+
+### Enrolled today
+
+| label | `c_id` | book | prefix | DAG |
+|---|---|---|---|---|
+| REX | 5 | Probabilistic Robotics | `PR` | 369 edges ✅ |
+| MatAn | 6 | Kalkulus | `KAL` | edges pending |
+| MLA | 9 | Deep Learning | `DLK` | edges pending |
+
+A course with no edges still works — prereqs only affect ORDER, and readiness
+falls back to chapter order. Committing its DAG improves sequencing and lights up
+`link` cards; nothing has to change in the app.
 
 ## Conventions that bite (from CLAUDE.md — enforced)
 

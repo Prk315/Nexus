@@ -2417,7 +2417,7 @@ primary checkout too; copy it into a worktree or every test importing
 
 ## Scheduled server-side work (pg_cron)
 
-Four jobs run in the database, and this is the pattern for anything that must happen
+Five jobs run in the database, and this is the pattern for anything that must happen
 while every device is asleep:
 
 | Job | Every | Function |
@@ -2426,6 +2426,7 @@ while every device is asleep:
 | `protocol-bodyscan-sync` | 10 min | `bodyscan-sync` — decodes raw BLE scale captures |
 | `nexus-focus-evaluate` | 5 min | `focus-evaluate` — writes `blocking_state` |
 | `nexus-learn-evaluate` | ~15 min | `learn-evaluate` — writes `lr_learn_state` |
+| `nexus-learn-daily` | 30 min | `learn-daily` — writes one `lr_daily_lesson` row per day |
 
 ⚠️ **Mail triage is deliberately NOT on this list.** It runs in n8n on the Mac, so it
 stops when the Mac sleeps — the exact failure this table exists to work around. The
