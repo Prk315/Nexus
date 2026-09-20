@@ -7935,6 +7935,50 @@ body.vault-block-dragging .tt-bubble {
 .parsed-margins-on .parsed-content::before { left: 430px; }
 .parsed-margins-on .parsed-content::after { right: 430px; }
 
+/* ── Concept panel: the theory database as a sidebar tab ────────────────── */
+.concept-panel { display: flex; flex-direction: column; min-height: 0; flex: 1; }
+.concept-controls { display: flex; gap: 6px; padding: 8px 10px 4px; align-items: center; }
+.concept-search {
+  flex: 1; min-width: 0; font: inherit; padding: 5px 8px;
+  border: 1px solid var(--border-base, var(--border-legacy)); border-radius: 6px;
+  background: transparent; color: inherit;
+}
+.concept-zoom { display: flex; gap: 2px; }
+.concept-zoom button {
+  font: inherit; font-size: 0.85em; padding: 3px 6px; cursor: pointer;
+  border: 1px solid var(--border-base, var(--border-legacy)); border-radius: 5px;
+  background: transparent; color: inherit;
+}
+.concept-chips { display: flex; flex-wrap: wrap; gap: 4px; padding: 4px 10px 8px; }
+.concept-chip {
+  font: inherit; font-size: 0.8em; padding: 2px 8px; cursor: pointer;
+  border: 1px solid var(--chip); color: var(--chip); border-radius: 999px;
+  background: transparent;
+}
+.concept-chip.active { background: var(--chip); color: var(--on-accent); }
+.concept-list { flex: 1; overflow-y: auto; min-height: 0; padding-bottom: 24px; }
+.concept-item { border-top: 1px solid var(--border-base, var(--border-legacy)); }
+.concept-head {
+  display: flex; gap: 6px; align-items: baseline; width: 100%; text-align: left;
+  font: inherit; padding: 7px 10px; cursor: pointer; border: none; background: none;
+  color: inherit;
+}
+.concept-item.open .concept-head { background: color-mix(in oklab, currentColor 6%, transparent); }
+.concept-badge {
+  font-size: 0.72em; font-weight: 700; letter-spacing: 0.04em; text-transform: uppercase;
+  color: var(--chip); white-space: nowrap;
+}
+.concept-num { font-weight: 700; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.concept-title {
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; opacity: 0.75; min-width: 0;
+}
+.concept-body { padding: 2px 12px 12px; line-height: 1.5; }
+.concept-body p { margin: 0 0 0.6em; }
+/* KaTeX display blocks inside a narrow panel must scroll, never widen it. */
+.concept-body .katex-display { overflow-x: auto; overflow-y: hidden; }
+.concept-proof summary { cursor: pointer; font-weight: 600; margin: 4px 0; }
+.concept-empty { padding: 18px 14px; opacity: 0.6; }
+
 .margin-ink-canvas {
   position: absolute;
   inset: 0;
