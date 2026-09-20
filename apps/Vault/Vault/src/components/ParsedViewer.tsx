@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, useCallback } from "react";
+import { useEffect, useLayoutEffect, useRef, useState, useCallback } from "react";
 import katex from "katex";
 import "katex/dist/katex.min.css";
 import { HighlighterCatEditor } from "./HighlighterCatEditor";
@@ -110,11 +110,87 @@ export function ParsedViewer({ content, nodeId }: Props) {
     setOutline(items);
   }, [content]);
 
-  // font scale → root font-size (KaTeX is em-based, so math scales too)
-  useEffect(() => {
-    if (rootRef.current) rootRef.current.style.fontSize = `${(BASE_FONT * fontScale).toFixed(1)}px`;
+  // font scale → root font-size (KaTeX is em-based, so math scales too).
+  //
+  // ⚠️ Scaling REFLOWS the whole document, and scrollTop is a pixel offset
+  // into it — keep the offset and the same pixel now points at a different
+  // paragraph, so zooming used to teleport the reader. The fix is an anchor:
+  // before applying the new size, record which block sits at the top of the
+  // viewport (binary search over offsetTop — the content is thousands of
+  // siblings) and how far into it the view is, as a FRACTION of the block
+  // (fractions survive reflow; pixel deltas scale). After the style lands,
+  // scroll so that block is back at the same fraction. useLayoutEffect keeps
+  // capture → apply → restore inside one frame, so nothing flashes.
+  const prevScaleRef = useRef<number | null>(null);
+  useLayoutEffect(() => {
+    const root = rootRef.current, sc = scrollRef.current;
+    if (!root) return;
+    const rescaling = prevScaleRef.current !== null
+      && prevScaleRef.current !== fontScale && sc && root.children.length > 0;
+    let anchor: { el: HTMLElement; frac: number } | null = null;
+    if (rescaling && sc) {
+      const kids = root.children;
+      const target = sc.scrollTop + root.offsetTop;
+      let lo = 0, hi = kids.length - 1;
+      while (lo < hi) {
+        const mid = (lo + hi + 1) >> 1;
+        if ((kids[mid] as HTMLElement).offsetTop <= target) lo = mid; else hi = mid - 1;
+      }
+      const el = kids[lo] as HTMLElement;
+      anchor = { el, frac: el.offsetHeight > 0 ? (target - el.offsetTop) / el.offsetHeight : 0 };
+    }
+    root.style.fontSize = `${(BASE_FONT * fontScale).toFixed(1)}px`;
+    if (anchor && sc) {
+      // Reading offsetTop after the style write forces the reflow we need.
+      sc.scrollTop = anchor.el.offsetTop + anchor.frac * anchor.el.offsetHeight - root.offsetTop;
+    }
+    prevScaleRef.current = fontScale;
     localStorage.setItem(`nexus.parsed.font.${nodeId}`, String(fontScale));
   }, [fontScale, content, nodeId]);
+
+  // ── Pinch-to-zoom on the reading surface (iPad) ──
+  // Two fingers on the book adjust the SAME fontScale the A−/A+ buttons use,
+  // instead of falling through to Safari's whole-app visual-viewport zoom.
+  // Native pinch is suppressed only when two touches are actually on the
+  // page (non-passive touchmove + gesturestart preventDefault — React's
+  // touch listeners are passive, same constraint as MarginInkLayer's stylus
+  // handler). One finger still scrolls natively. The reflow anchoring above
+  // makes the continuous rescale hold position.
+  useEffect(() => {
+    const sc = scrollRef.current;
+    if (!sc) return;
+    let startDist = 0, startScale = 1;
+    const dist = (t: TouchList) =>
+      Math.hypot(t[0].clientX - t[1].clientX, t[0].clientY - t[1].clientY);
+    const onTouchStart = (e: TouchEvent) => {
+      if (e.touches.length === 2) {
+        startDist = dist(e.touches);
+        startScale = Number(rootRef.current?.style.fontSize?.replace("px", "") || BASE_FONT) / BASE_FONT;
+      }
+    };
+    const onTouchMove = (e: TouchEvent) => {
+      if (e.touches.length !== 2 || !startDist) return;
+      e.preventDefault();
+      const raw = startScale * (dist(e.touches) / startDist);
+      const stepped = Math.round(raw / FONT_STEP) * FONT_STEP;
+      const next = Math.min(FONT_MAX, Math.max(FONT_MIN, +stepped.toFixed(2)));
+      setFontScale(prev => (prev === next ? prev : next));
+    };
+    const onTouchEnd = (e: TouchEvent) => { if (e.touches.length < 2) startDist = 0; };
+    const onGesture = (e: Event) => e.preventDefault();  // Safari's proprietary path
+    sc.addEventListener("touchstart", onTouchStart, { passive: true });
+    sc.addEventListener("touchmove", onTouchMove, { passive: false });
+    sc.addEventListener("touchend", onTouchEnd, { passive: true });
+    sc.addEventListener("gesturestart", onGesture as EventListener);
+    sc.addEventListener("gesturechange", onGesture as EventListener);
+    return () => {
+      sc.removeEventListener("touchstart", onTouchStart);
+      sc.removeEventListener("touchmove", onTouchMove);
+      sc.removeEventListener("touchend", onTouchEnd);
+      sc.removeEventListener("gesturestart", onGesture as EventListener);
+      sc.removeEventListener("gesturechange", onGesture as EventListener);
+    };
+  }, [content]);
 
   // ── Highlighter categories ─────────────────────────────────────────────────
   useEffect(() => {
