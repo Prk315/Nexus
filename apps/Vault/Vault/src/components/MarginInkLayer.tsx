@@ -110,6 +110,14 @@ function serialize(d: MarginData): string {
   });
 }
 
+// ⚠️ The backing store may never exceed a screen-sized box. The canvas is a
+// replaced element, so if any stylesheet change ever lets it fall back to its
+// intrinsic (attribute) size again, resize() reading rect×dpr becomes a
+// doubling feedback loop on retina displays — see .margin-ink-canvas in
+// App.css. This clamp turns that failure back into a drawable canvas instead
+// of a dead compositor layer. 8192 covers a 4K portrait display at dpr 2.
+const MAX_CANVAS_DIM = 8192;
+
 type UndoOp = { kind: "add"; id: string } | { kind: "erase"; strokes: MarginStroke[] };
 
 // ── Component ────────────────────────────────────────────────────────────────
@@ -151,8 +159,8 @@ export const MarginInkLayer = forwardRef<MarginInkHandle, Props>(function Margin
     if (canvas) {
       const dpr = window.devicePixelRatio || 1;
       const rect = canvas.getBoundingClientRect();
-      canvas.width = Math.max(1, Math.round(rect.width * dpr));
-      canvas.height = Math.max(1, Math.round(rect.height * dpr));
+      canvas.width = Math.min(MAX_CANVAS_DIM, Math.max(1, Math.round(rect.width * dpr)));
+      canvas.height = Math.min(MAX_CANVAS_DIM, Math.max(1, Math.round(rect.height * dpr)));
     }
   }, [contentEl]);
 
@@ -192,8 +200,8 @@ export const MarginInkLayer = forwardRef<MarginInkHandle, Props>(function Margin
     function resize() {
       const dpr = window.devicePixelRatio || 1;
       const rect = canvas!.getBoundingClientRect();
-      canvas!.width = Math.max(1, Math.round(rect.width * dpr));
-      canvas!.height = Math.max(1, Math.round(rect.height * dpr));
+      canvas!.width = Math.min(MAX_CANVAS_DIM, Math.max(1, Math.round(rect.width * dpr)));
+      canvas!.height = Math.min(MAX_CANVAS_DIM, Math.max(1, Math.round(rect.height * dpr)));
       dirtyRef.current = true;
     }
     resize();
