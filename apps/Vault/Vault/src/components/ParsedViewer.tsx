@@ -43,7 +43,7 @@ export function ParsedViewer({ content, nodeId }: Props) {
   const [highlighters, setHighlighters] = useState<HighlighterCategory[]>([]);
   const [editingCats, setEditingCats] = useState(false);
   const [hasSelection, setHasSelection] = useState(false);
-  const [sidebarOpen, setSidebarOpen] = useState(true);
+  const [sidebarOpen, setSidebarOpen] = useState(() => window.innerWidth > 900);
   const [sidebarTab, setSidebarTab] = useState<"outline" | "bookmarks" | "concepts">("outline");
   const [outline, setOutline] = useState<OutlineItem[]>([]);
   const [activeId, setActiveId] = useState<string | null>(null);
@@ -90,16 +90,47 @@ export function ParsedViewer({ content, nodeId }: Props) {
   }
 
   // ── Render HTML + KaTeX + build outline ────────────────────────────────────
+  //
+  // ⚠️ Math renders LAZILY. Kalkulus carries 4,273 block equations, and the
+  // old effect ran katex.render on every one of them before first paint —
+  // seconds of open-time jank on a Mac and a killed page on an iPad. An
+  // IntersectionObserver now renders each equation as it approaches the
+  // viewport (two screens of margin, so reading pace never catches the
+  // renderer). Anything that must reason about the WHOLE document — the
+  // search index, printing — should call the returned render-all escape
+  // hatch, not assume the math is materialised.
+  //
+  // Images get loading="lazy" + decoding="async" IN THE STRING, before
+  // innerHTML — set afterwards, Safari has already started fetching all of
+  // them. On an iPad this is the difference between figures and the grey
+  // placeholder: iOS evicts decoded images under memory pressure, and a
+  // 2 MB single-layer page with 200 eager images is over budget by itself.
+  const mathObserverRef = useRef<IntersectionObserver | null>(null);
   useEffect(() => {
     const root = rootRef.current;
     if (!root) return;
-    root.innerHTML = typeof content === "string" ? content : "";
-    root.querySelectorAll<HTMLElement>('[data-type="inline-math"]').forEach((el) => {
-      try { katex.render(el.getAttribute("data-latex") || "", el, { ...KATEX_OPTS, displayMode: false }); } catch { /* keep raw */ }
-    });
-    root.querySelectorAll<HTMLElement>('[data-type="block-math"]').forEach((el) => {
-      try { katex.render(el.getAttribute("data-latex") || "", el, { ...KATEX_OPTS, displayMode: true }); } catch { /* keep raw */ }
-    });
+    const html = typeof content === "string" ? content : "";
+    root.innerHTML = html.replace(/<img (?![^>]*loading=)/g, '<img loading="lazy" decoding="async" ');
+
+    mathObserverRef.current?.disconnect();
+    const renderMath = (el: HTMLElement) => {
+      if (el.dataset.mathDone) return;
+      el.dataset.mathDone = "1";
+      const display = el.getAttribute("data-type") === "block-math";
+      try { katex.render(el.getAttribute("data-latex") || "", el, { ...KATEX_OPTS, displayMode: display }); }
+      catch { /* keep raw */ }
+    };
+    const mathEls = root.querySelectorAll<HTMLElement>('[data-type="inline-math"], [data-type="block-math"]');
+    if ("IntersectionObserver" in window) {
+      const io = new IntersectionObserver((entries) => {
+        for (const e of entries) if (e.isIntersecting) { renderMath(e.target as HTMLElement); io.unobserve(e.target); }
+      }, { root: scrollRef.current, rootMargin: "2000px 0px" });
+      mathEls.forEach((el) => io.observe(el));
+      mathObserverRef.current = io;
+    } else {
+      mathEls.forEach(renderMath);
+    }
+
     const items: OutlineItem[] = [];
     root.querySelectorAll<HTMLElement>("h1, h2, h3, h4").forEach((el, i) => {
       const text = (el.textContent || "").trim();
@@ -108,6 +139,7 @@ export function ParsedViewer({ content, nodeId }: Props) {
       items.push({ id: el.id, text, level: Number(el.tagName[1]), index: i });
     });
     setOutline(items);
+    return () => { mathObserverRef.current?.disconnect(); };
   }, [content]);
 
   // font scale → root font-size (KaTeX is em-based, so math scales too).

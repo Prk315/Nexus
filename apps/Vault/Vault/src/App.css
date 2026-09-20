@@ -165,6 +165,7 @@ body {
 
 /* Flex-sibling resize handle (for panels that are themselves scroll containers) */
 .pv-resize {
+  position: relative;
   flex: 0 0 5px;
   align-self: stretch;
   cursor: col-resize;
@@ -178,6 +179,14 @@ body {
 .pv-resize:active {
   background: var(--accent, var(--handle));
   opacity: 0.5;
+}
+/* A 5px strip is a mouse target. The pseudo-element widens the TOUCH hit
+   area to 24px without moving the visible line — same trick as every
+   grabber on the iPad. */
+.pv-resize::after {
+  content: "";
+  position: absolute;
+  inset: 0 -10px;
 }
 
 .sidebar-hidden {
@@ -8017,6 +8026,17 @@ body.vault-block-dragging .tt-bubble {
 }
 .parsed-margin-dot.active { border-color: var(--fg-main); box-shadow: 0 0 0 1px var(--bg-base); }
 
+/* ⚠️ content-visibility is the load-bearing iPad fix. A parsed book is a
+   2 MB single layer — thousands of blocks, hundreds of figures — and iOS
+   Safari's per-page memory budget evicts decoded images first, which reads
+   as "no pictures render". Skipping offscreen layout/paint keeps the live
+   set a few screens wide. The intrinsic-size estimate keeps the scrollbar
+   from thrashing as blocks materialise. */
+.parsed-content > * {
+  content-visibility: auto;
+  contain-intrinsic-size: auto 48px;
+}
+
 .parsed-outline {
   flex: 0 0 auto;
   width: 260px;
@@ -8026,6 +8046,21 @@ body.vault-block-dragging .tt-bubble {
   padding: 12px 8px 60px;
   position: relative;
 }
+@media (max-width: 900px) {
+  .parsed-body { position: relative; }
+  /* On an iPad the outline is a drawer OVER the page, not a column beside
+     it — beside, it leaves a phone-width strip of book. ◧ summons it. */
+  .parsed-outline {
+    position: absolute;
+    inset: 0 auto 0 0;
+    z-index: 30;
+    width: min(320px, 85vw) !important;
+    flex-basis: auto !important;
+    box-shadow: var(--shadow-lg);
+  }
+  .pv-resize { display: none; }
+}
+
 .parsed-outline-title {
   font-size: 11px;
   font-weight: 700;
