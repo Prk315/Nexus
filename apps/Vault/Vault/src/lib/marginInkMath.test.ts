@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { coalescedOf, emaNext, pressureOf, segmentWidths } from "./marginInkMath";
+import { coalescedOf, emaNext, overscanCovers, pressureOf, segmentWidths, strokeBounds } from "./marginInkMath";
 
 describe("coalescedOf", () => {
   // ⚠️ The empty-array trap is the reason this helper exists: `?? [e]` does
@@ -61,5 +61,24 @@ describe("segmentWidths", () => {
   it("returns one width per segment", () => {
     const pts = new Array(5 * 3).fill(0.5);
     expect(segmentWidths(pts, 2)).toHaveLength(4);
+  });
+});
+
+describe("overscanCovers", () => {
+  it("covers inside the apron, fails just past it", () => {
+    expect(overscanCovers(0, 273, 273)).toBe(true);
+    expect(overscanCovers(0, -273, 273)).toBe(true);
+    expect(overscanCovers(0, 274, 273)).toBe(false);
+  });
+});
+
+describe("strokeBounds", () => {
+  it("bounds the points and pads by half the rendered width", () => {
+    const [l, t, r, b] = strokeBounds([10, 20, 0.5, 30, 40, 0.5], 4);
+    expect(l).toBe(7); expect(t).toBe(17); expect(r).toBe(33); expect(b).toBe(43);
+  });
+  it("a stroke fully outside a rect stays outside after padding", () => {
+    const [l] = strokeBounds([1000, 0, 0.5], 10);
+    expect(l).toBeGreaterThan(900);
   });
 });

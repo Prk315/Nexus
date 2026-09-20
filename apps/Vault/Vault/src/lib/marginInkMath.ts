@@ -51,3 +51,27 @@ export function segmentWidths(pts: number[], base: number, widthMul = 1): number
   }
   return out;
 }
+
+/** Does a dry layer rendered at content-offset `offK` still cover the
+ *  viewport at offset `offN`, given `ov` css-px of overscan per side?
+ *  Coverage fails exactly when the view has scrolled past the pre-rendered
+ *  apron — the re-render trigger, quantised from every-frame to
+ *  every-`ov`-pixels. */
+export function overscanCovers(offK: number, offN: number, ov: number): boolean {
+  return Math.abs(offN - offK) <= ov;
+}
+
+/** Axis-aligned bounds of a stored stroke, padded by its worst-case rendered
+ *  width — the culling key that keeps a dry re-render proportional to the ink
+ *  NEAR the viewport instead of the ink in the whole book. */
+export function strokeBounds(pts: number[], maxWidth: number): [number, number, number, number] {
+  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+  for (let i = 0; i < pts.length; i += 3) {
+    if (pts[i] < minX) minX = pts[i];
+    if (pts[i] > maxX) maxX = pts[i];
+    if (pts[i + 1] < minY) minY = pts[i + 1];
+    if (pts[i + 1] > maxY) maxY = pts[i + 1];
+  }
+  const pad = maxWidth / 2 + 1;
+  return [minX - pad, minY - pad, maxX + pad, maxY + pad];
+}

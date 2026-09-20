@@ -1,6 +1,6 @@
 import { forwardRef, useEffect, useImperativeHandle, useRef } from "react";
 import * as api from "../lib/api";
-import { coalescedOf, emaNext, pressureOf, segmentWidths } from "../lib/marginInkMath";
+import { coalescedOf, emaNext, overscanCovers, pressureOf, segmentWidths, strokeBounds } from "../lib/marginInkMath";
 
 // ── Data types ──────────────────────────────────────────────────────────────
 // Document coords = position relative to `.parsed-content`'s own top-left
@@ -261,18 +261,21 @@ export const MarginInkLayer = forwardRef<MarginInkHandle, Props>(function Margin
   // now be interactive) and whenever nodeId's freshly-loaded data lands.
   useEffect(() => { dirtyRef.current = true; }, [enabled]);
 
-  // ── rAF redraw loop, split wet/dry. The DRY layer (committed strokes) is
-  // cached on an offscreen canvas keyed by (data version, size, scroll
-  // offset); the live canvas each frame is one blit plus the WET stroke, its
-  // predicted tail, and the eraser ring. Before the split, every frame while
-  // drawing re-stroked every committed stroke — cost that grew with the
-  // amount of ink on the page, which is the shape of latency that creeps in
-  // over a term of margin notes. Document→viewport translation still comes
-  // from live bounding rects, so scroll in both axes and column centering
-  // keep working with no manual bookkeeping. ──
+  // ── rAF redraw loop, split wet/dry — and the dry layer is deliberately
+  // NOT re-rendered per scroll frame. It carries half a viewport of overscan
+  // per side and is only rebuilt when the view scrolls past that apron, when
+  // the data version moves, or when the canvas resizes; a scroll frame inside
+  // the apron is a single offset blit. Rebuilds themselves cull by stroke
+  // bounding box, so their cost tracks the ink NEAR the viewport, not the ink
+  // in the whole book. (The first cut of this split re-rendered on every
+  // scroll frame and touched every stroke — strictly more work while
+  // scrolling than the code it replaced. Caught on review; the apron and the
+  // culling are the fix.) Document→viewport translation still comes from
+  // live bounding rects each paint. ──
   useEffect(() => {
     const dry = document.createElement("canvas");
-    let dryKey = { ver: -1, w: 0, h: 0, ox: NaN, oy: NaN };
+    let dryKey = { ver: -1, w: 0, h: 0, ox: NaN, oy: NaN, ov: 0 };
+    const boundsCache = new WeakMap<MarginStroke, [number, number, number, number]>();
     function loop() {
       if (dirtyRef.current) {
         const canvas = canvasRef.current;
@@ -290,20 +293,37 @@ export const MarginInkLayer = forwardRef<MarginInkHandle, Props>(function Margin
             const offsetX = contentRect.left - canvasRect.left;
             const offsetY = contentRect.top - canvasRect.top;
 
+            const ov = Math.round(canvasRect.height / 2); // apron per side, css px
             const ver = dataVerRef.current;
-            if (dryKey.ver !== ver || dryKey.w !== canvas.width || dryKey.h !== canvas.height
-                || dryKey.ox !== offsetX || dryKey.oy !== offsetY) {
-              dry.width = canvas.width;
-              dry.height = canvas.height;
+            const sizeStale = dry.width !== canvas.width + 2 * ov * dpr
+                           || dry.height !== canvas.height + 2 * ov * dpr;
+            if (dryKey.ver !== ver || sizeStale
+                || !overscanCovers(dryKey.ox, offsetX, ov)
+                || !overscanCovers(dryKey.oy, offsetY, ov)) {
+              if (sizeStale) {           // reallocation clears; otherwise clear by hand
+                dry.width = canvas.width + 2 * ov * dpr;
+                dry.height = canvas.height + 2 * ov * dpr;
+              }
               const dctx = dry.getContext("2d")!;
               dctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-              dctx.clearRect(0, 0, dry.width / dpr, dry.height / dpr);
-              const strokes = dataRef.current.strokes;
-              for (const st of strokes) if (st.tool === "highlighter") drawMarginStroke(dctx, st, offsetX, offsetY);
-              for (const st of strokes) if (st.tool !== "highlighter") drawMarginStroke(dctx, st, offsetX, offsetY);
-              dryKey = { ver, w: canvas.width, h: canvas.height, ox: offsetX, oy: offsetY };
+              if (!sizeStale) dctx.clearRect(0, 0, dry.width / dpr, dry.height / dpr);
+              // Cull to the apron rect, in document coords.
+              const docL = -offsetX - ov, docT = -offsetY - ov;
+              const docR = docL + dry.width / dpr, docB = docT + dry.height / dpr;
+              const visible: MarginStroke[] = [];
+              for (const st of dataRef.current.strokes) {
+                let b = boundsCache.get(st);
+                if (!b) { b = strokeBounds(st.pts, st.width * 4.5); boundsCache.set(st, b); }
+                if (b[2] >= docL && b[0] <= docR && b[3] >= docT && b[1] <= docB) visible.push(st);
+              }
+              const dox = offsetX + ov, doy = offsetY + ov;
+              for (const st of visible) if (st.tool === "highlighter") drawMarginStroke(dctx, st, dox, doy);
+              for (const st of visible) if (st.tool !== "highlighter") drawMarginStroke(dctx, st, dox, doy);
+              dryKey = { ver, w: canvas.width, h: canvas.height, ox: offsetX, oy: offsetY, ov };
             }
-            ctx.drawImage(dry, 0, 0);
+            // Blit the apron with the scroll delta since the key was cut.
+            ctx.drawImage(dry, ((offsetX - dryKey.ox) - dryKey.ov) * dpr,
+                               ((offsetY - dryKey.oy) - dryKey.ov) * dpr);
 
             ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
             const wet = currentStrokeRef.current;
