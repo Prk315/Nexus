@@ -1,0 +1,89 @@
+{
+ "v": 1,
+ "items": [
+  {
+   "number": "2.1",
+   "title": "probability distribution A probability distribution P over",
+   "type": "definition",
+   "statement": "probability distribution\n\nA probability distribution P over $(\\Omega, S)$ is a mapping from events in S to real values that satisfies the following conditions:\n\n- $P(\\alpha) \\geq 0$ for all $\\alpha \\in S$ .\n- $P(\\Omega) = 1$ .\n- If $\\alpha, \\beta \\in S$ and $\\alpha \\cap \\beta = \\emptyset$ , then $P(\\alpha \\cup \\beta) = P(\\alpha) + P(\\beta)$ .\n\nThe first condition states that probabilities are not negative. The second states that the \"trivial event,\" which allows all possible outcomes, has the maximal possible probability of 1. The third condition states that the probability that one of two mutually disjoint events will occur is the sum of the probabilities of each event. These two conditions imply many other conditions. Of particular interest are $P(\\emptyset) = 0$ , and $P(\\alpha \\cup \\beta) = P(\\alpha) + P(\\beta) - P(\\alpha \\cap \\beta)$ .",
+   "proof": null
+  },
+  {
+   "number": "2.2",
+   "title": "independent events We say that an event",
+   "type": "definition",
+   "statement": "independent events\n\nWe say that an event $\\alpha$ is independent of event $\\beta$ in P, denoted $P \\models (\\alpha \\perp \\beta)$ , if $P(\\alpha \\mid \\beta) = P(\\alpha)$ or if $P(\\beta) = 0$ .\n\nWe can also provide an alternative definition for the concept of independence:\n\nProposition 2.1\n\nA distribution P satisfies $(\\alpha \\perp \\beta)$ if and only if $P(\\alpha \\cap \\beta) = P(\\alpha)P(\\beta)$ .\n\nPROOF Consider first the case where $P(\\beta)=0$ ; here, we also have $P(\\alpha\\cap\\beta)=0$ , and so the equivalence immediately holds. When $P(\\beta)\\neq 0$ , we can use the chain rule; we write $P(\\alpha\\cap\\beta)=P(\\alpha\\mid\\beta)P(\\beta)$ . Since $\\alpha$ is independent of $\\beta$ , we have that $P(\\alpha\\mid\\beta)=P(\\alpha)$ . Thus, $P(\\alpha\\cap\\beta)=P(\\alpha)P(\\beta)$ . Conversely, suppose that $P(\\alpha\\cap\\beta)=P(\\alpha)P(\\beta)$ . Then, by definition, we have that\n\n$$P(\\alpha \\mid \\beta) = \\frac{P(\\alpha \\cap \\beta)}{P(\\beta)} = \\frac{P(\\alpha)P(\\beta)}{P(\\beta)} = P(\\alpha).$$\n\nAs an immediate consequence of this alternative definition, we see that independence is a symmetric notion. That is, $(\\alpha \\perp \\beta)$ implies $(\\beta \\perp \\alpha)$ .\n\nExample 2.3\n\nFor example, suppose that we toss two coins, and let $\\alpha$ be the event \"the first toss results in a head\" and $\\beta$ the event \"the second toss results in a head.\" It is not hard to convince ourselves that we expect that these two events to be independent. Learning that $\\beta$ is true would not change our probability of $\\alpha$ . In this case, we see two different physical processes (that is, coin tosses) leading to the events, which makes it intuitive that the probabilities of the two are independent. In certain cases, the same process can lead to independent events. For example, consider the even",
+   "proof": null
+  },
+  {
+   "number": "2.4",
+   "title": "conditional independence observed variable marginal independence Let",
+   "type": "definition",
+   "statement": "conditional independence\n\nobserved variable marginal independence Let X,Y,Z be sets of random variables. We say that X is conditionally independent of Y given Z in a distribution P if P satisfies $(X = x \\perp Y = y \\mid Z = z)$ for all values $x \\in Val(X)$ , $y \\in Val(Y)$ , and $z \\in Val(Z)$ . The variables in the set Z are often said to be observed. If the set Z is empty, then instead of writing $(X \\perp Y \\mid \\emptyset)$ , we write $(X \\perp Y)$ and say that X and Y are marginally independent.\n\nThus, an independence statement over random variables is a universal quantification over all possible values of the random variables.\n\nThe alternative characterization of conditional independence follows immediately:",
+   "proof": null
+  },
+  {
+   "number": "2.5",
+   "title": "positive distribution A distribution P is said",
+   "type": "definition",
+   "statement": "positive distribution A distribution P is said to be positive if for all events $\\alpha \\in \\mathcal{S}$ such that $\\alpha \\neq \\emptyset$ , we have that $P(\\alpha) > 0$ .\n\nFor positive distributions, we also have the following property:\n\nintersection\n\n• Intersection: For positive distributions, and for mutually disjoint sets X, Y, Z, W:\n\n$$(X \\perp Y \\mid Z, W) \\& (X \\perp W \\mid Z, Y) \\Longrightarrow (X \\perp Y, W \\mid Z). \\tag{2.11}$$\n\nThe proof of these properties is not difficult. For example, to prove Decomposition, assume that $(X \\perp Y, W \\mid Z)$ holds. Then, from the definition of conditional independence, we have that $P(X,Y,W \\mid Z) = P(X \\mid Z)P(Y,W \\mid Z)$ . Now, using basic rules of probability and arithmetic, we can show\n\n$$P(X,Y \\mid Z) = \\sum_{w} P(X,Y,w \\mid Z)$$\n\n$$= \\sum_{w} P(X \\mid Z)P(Y,w \\mid Z)$$\n\n$$= P(X \\mid Z)\\sum_{w} P(Y,w \\mid Z)$$\n\n$$= P(X \\mid Z)P(Y \\mid Z).$$\n\nThe only property we used here is called \"reasoning by cases\" (see exercise 2.6). We conclude that $(X \\perp Y \\mid Z)$ .",
+   "proof": null
+  },
+  {
+   "number": "2.7",
+   "title": "Gaussian distribution A random variable X has",
+   "type": "definition",
+   "statement": "Gaussian distribution A random variable X has a Gaussian distribution with mean $\\mu$ and variance $\\sigma^2$ , denoted $X \\sim \\mathcal{N}(\\mu; \\sigma^2)$ , if it has the PDF\n\n$$p(x) = \\frac{1}{\\sqrt{2\\pi}\\sigma} e^{-\\frac{(x-\\mu)^2}{2\\sigma^2}}.$$\n\nstandard Gaussian A standard Gaussian is one with mean 0 and variance 1.\n\nA Gaussian distribution has a bell-like curve, where the mean parameter $\\mu$ controls the location of the peak, that is, the value for which the Gaussian gets its maximum value. The variance parameter $\\sigma^2$ determines how peaked the Gaussian is: the smaller the variance, the\n\n\n\n**Figure 2.2 Example PDF of three Gaussian distributions**\n\nmore peaked the Gaussian. Figure 2.2 shows the probability density function of a few different Gaussian distributions.\n\nMore technically, the probability density function is specified as an exponential, where the expression in the exponent corresponds to the square of the number of standard deviations σ that x is away from the mean µ. The probability of x decreases exponentially with the square of its deviation from the mean, as measured in units of its standard deviation.",
+   "proof": null
+  },
+  {
+   "number": "2.8",
+   "title": "joint density function",
+   "type": "definition",
+   "statement": "*Let* P *be a joint distribution over continuous random variables* X1,...,Xn*. A function* p(x1,...,xn) joint density *is a* joint density function *of* X1,...,Xn *if*\n\n- *•* p(x1,...,xn) ≥ 0 *for all values* x1,...,xn *of* X1,...,Xn*.*\n- *•* p *is an integrable function.*\n- *For any choice of* a1,...,an*, and* b1,...,bn*,*\n\n$$P(a_1 \\le X_1 \\le b_1, \\dots, a_n \\le X_n \\le b_n) = \\int_{a_1}^{b_1} \\dots \\int_{a_n}^{b_n} p(x_1, \\dots, x_n) dx_1 \\dots dx_n.$$\n\nThus, a joint density specifies the probability of any joint event over the variables of interest.\n\nBoth the uniform distribution and the Gaussian distribution have natural extensions to the multivariate case. The definition of a multivariate uniform distribution is straightforward. We defer the definition of the multivariate Gaussian to section 7.1.\n\nFrom the joint density we can derive the marginal density of any random variable by integrating out the other variables. Thus, for example, if p(x, y) is the joint density of X and Y , then\n\n$$p(x) = \\int_{-\\infty}^{\\infty} p(x, y) dy.$$\n\nTo see why this equality holds, note that the event $a \\leq X \\leq b$ is, by definition, equal to the event \" $a \\leq X \\leq b$ and $-\\infty \\leq Y \\leq \\infty$ .\" This rule is the direct analogue of marginalization for discrete variables. Note that, as with discrete probability distributions, we abuse notation a bit and use p to denote both the joint density of X and Y and the marginal density of X. In cases where the distinction is not clear, we use subscripts, so that $p_X$ will be the marginal density, of X, and X, and X, the joint density.",
+   "proof": null
+  },
+  {
+   "number": "4.4",
+   "title": "Let P be a positive distribution. If",
+   "type": "theorem",
+   "statement": "*Let* P *be a positive distribution. If* P *satisfies* Ip(H)*, then* P *satisfies* I(H)*.*",
+   "proof": "We want to prove that for all disjoint sets X,Y , Z:"
+  },
+  {
+   "number": "4.9",
+   "title": "If a distribution PB factorizes according to",
+   "type": "theorem",
+   "statement": "*If a distribution* PB *factorizes according to* G*, then* G *is an I-map for* P*.*",
+   "proof": "As in proposition 4.10, let U = X ∪Y ∪Z, let U∗ = U ∪*Ancestors*U , let GU∗ = G+[U] be the induced graph over U∗, and let H be the moralized graph M[GU∗ ]. Let PU∗ be the Bayesian network distribution defined over GU∗ in the obvious way: the CPD for any variable in U∗ is the same as in B. Because U∗ is upwardly closed, all variables used in these CPDs are in U∗."
+  },
+  {
+   "number": "4.12",
+   "title": "Every undirected chordal graph H has a",
+   "type": "theorem",
+   "statement": "*Every undirected chordal graph* H *has a clique tree* T *.*",
+   "proof": "We prove the theorem by induction on the number of nodes in the graph. The base case of a single node is trivial. Now, consider a chordal graph H of size > 1. If H consists of a single clique, then the theorem holds trivially. Therefore, consider the case where we have at least two nodes X1, X2 that are not connected directly by an edge. Assume that X1 and X2"
+  },
+  {
+   "number": "2.5",
+   "title": "If X and Y are independent, then",
+   "type": "proposition",
+   "statement": "*If* X *and* Y *are independent, then*\n\n$$\\mathbf{E}[X \\cdot Y] = \\mathbf{E}[X] \\cdot \\mathbf{E}[Y].$$\n\nconditional We often also use the expectation given some evidence. The *conditional expectation* of X expectation given y is\n\n$$\\mathbf{E}_{P}[X \\mid \\mathbf{y}] = \\sum_{x} x \\cdot P(x \\mid \\mathbf{y}).$$",
+   "proof": null
+  },
+  {
+   "number": "4.1",
+   "title": "The following three statements are equivalent for",
+   "type": "corollary",
+   "statement": "*The following three statements are equivalent for a positive distribution* P*:*\n\n- *1.* P |= Iℓ(H)*.*\n- *2.* P |= Ip(H)*.*\n- *3.* P |= I(H)*.*\n\nThis equivalence relies on the positivity assumption. In particular, for nonpositive distributions, we can provide examples of a distribution P that satisfies one of these properties, but not the stronger one.",
+   "proof": null
+  },
+  {
+   "number": "3.1",
+   "title": "Let G∗ be a P-map of a",
+   "type": "lemma",
+   "statement": "*Let* G∗ *be a P-map of a distribution* P*, and let* X *and* Y *be two variables such that* X → Y *is in* G∗*. Then,* P ̸|= (X ⊥ Y | U) *for any set* U *that does not include* X *and* Y *.*\n\n> Proof Assume that that X → Y ∈ G∗, and let U be a set of variables. According to dseparation the trail X → Y cannot be blocked by the evidence set U. Thus, X and Y are not d-separated by U. Since G∗ is a P-map of P, we have that P ̸|= (X ⊥ Y | U).\n\n> This lemma implies that if X and Y are adjacent in G∗, all conditional independence queries that involve both of them would fail. Conversely, if X and Y are not adjacent in G, we would hope to be able to find a set of variables that makes these two variables conditionally independent. Indeed, as we now show, we can provide a precise characterization of such a set:",
+   "proof": null
+  }
+ ]
+}

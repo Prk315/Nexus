@@ -8,6 +8,7 @@ import { useResizableWidth } from "../hooks/useResizableWidth";
 import type { VaultGraph, HighlighterCategory } from "../types";
 import { KATEX_OPTS } from "../lib/katexShared";
 import { MarginInkLayer, type MarginInkHandle } from "./MarginInkLayer";
+import { ConceptPanel } from "./ConceptPanel";
 
 interface Props {
   content: string;               // pre-rendered full-fidelity HTML (see md ingest)
@@ -43,10 +44,10 @@ export function ParsedViewer({ content, nodeId }: Props) {
   const [editingCats, setEditingCats] = useState(false);
   const [hasSelection, setHasSelection] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(true);
-  const [sidebarTab, setSidebarTab] = useState<"outline" | "bookmarks">("outline");
+  const [sidebarTab, setSidebarTab] = useState<"outline" | "bookmarks" | "concepts">("outline");
   const [outline, setOutline] = useState<OutlineItem[]>([]);
   const [activeId, setActiveId] = useState<string | null>(null);
-  const outlineResize = useResizableWidth("nexus.parsed.outlineWidth", 260, 180, 520);
+  const outlineResize = useResizableWidth("nexus.parsed.outlineWidth", 260, 180, 760);
   const [bookmarks, setBookmarks] = useState<Set<string>>(new Set());
   const [fontScale, setFontScale] = useState(() => {
     const v = Number(localStorage.getItem(`nexus.parsed.font.${nodeId}`));
@@ -395,8 +396,11 @@ export function ParsedViewer({ content, nodeId }: Props) {
             <div className="parsed-outline-tabs">
               <button className={sidebarTab === "outline" ? "active" : ""} onClick={() => setSidebarTab("outline")}>Outline</button>
               <button className={sidebarTab === "bookmarks" ? "active" : ""} onClick={() => setSidebarTab("bookmarks")}>★ {bookmarks.size || ""}</button>
+              <button className={sidebarTab === "concepts" ? "active" : ""} onClick={() => setSidebarTab("concepts")}>Concepts</button>
             </div>
-            {sidebarTab === "outline" ? (
+            {sidebarTab === "concepts" ? (
+              <ConceptPanel nodeId={nodeId} />
+            ) : sidebarTab === "outline" ? (
               outline.map((h) => (
                 <div key={h.id} className={`parsed-outline-row${activeId === h.id ? " active" : ""}`}>
                   <button className={`parsed-outline-item pv-ol-${h.level}`} onClick={() => scrollToHeading(h)} title={h.text}>{h.text}</button>
