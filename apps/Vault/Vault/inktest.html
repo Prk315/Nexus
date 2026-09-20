@@ -1,0 +1,12 @@
+<!doctype html>
+<!-- Manual/automated test harness for MarginInkLayer. Served by `vite` in dev
+     only (the production build's single entry is index.html) — mounts the
+     REAL component against a fake book column so ink can be tested without a
+     session or a Parsed node. -->
+<html>
+  <head><meta charset="utf-8"><title>margin ink harness</title></head>
+  <body style="margin:0">
+    <div id="root"></div>
+    <script type="module" src="/src/inktest.tsx"></script>
+  </body>
+</html>

@@ -1,5 +1,6 @@
 import { forwardRef, useEffect, useImperativeHandle, useRef } from "react";
 import * as api from "../lib/api";
+import { coalescedOf, emaNext, overscanCovers, pressureOf, segmentWidths, strokeBounds } from "../lib/marginInkMath";
 
 // ── Data types ──────────────────────────────────────────────────────────────
 // Document coords = position relative to `.parsed-content`'s own top-left
@@ -85,20 +86,40 @@ function drawMarginStroke(ctx: CanvasRenderingContext2D, s: MarginStroke, offset
     return;
   }
 
-  ctx.beginPath();
-  ctx.moveTo(px(0), py(0));
-  for (let i = 1; i < n - 1; i++) {
-    const mx = (px(i) + px(i + 1)) / 2;
-    const my = (py(i) + py(i + 1)) / 2;
-    const avgP = (pp(i - 1) + pp(i)) / 2;
-    ctx.lineWidth = Math.max(s.width * widthMul * (0.5 + avgP), 0.5);
-    ctx.quadraticCurveTo(px(i), py(i), mx, my);
+  if (isHl) {
+    // One path, one stroke: with 0.35 alpha, per-segment strokes would stack
+    // darker at every joint. A highlighter is uniform-width anyway.
+    ctx.lineWidth = Math.max(s.width * widthMul, 0.5);
+    ctx.beginPath();
+    ctx.moveTo(px(0), py(0));
+    for (let i = 1; i < n - 1; i++) {
+      ctx.quadraticCurveTo(px(i), py(i), (px(i) + px(i + 1)) / 2, (py(i) + py(i + 1)) / 2);
+    }
+    ctx.quadraticCurveTo(px(n - 2), py(n - 2), px(n - 1), py(n - 1));
+    ctx.stroke();
+    ctx.restore();
+    return;
   }
-  const last = n - 1, prev = n - 2;
-  const avgP = (pp(prev) + pp(last)) / 2;
-  ctx.lineWidth = Math.max(s.width * widthMul * (0.5 + avgP), 0.5);
-  ctx.quadraticCurveTo(px(prev), py(prev), px(last), py(last));
-  ctx.stroke();
+
+  // ⚠️ Pen: one stroke() PER SEGMENT, because canvas 2D honours a single
+  // lineWidth per stroke call — the old code assigned lineWidth while
+  // building one long path, which silently applied only the LAST value and
+  // rendered every stroke uniform. Pressure was cosmetically dead. Round
+  // caps make consecutive opaque segments join seamlessly; midpoint
+  // quadratics keep the polyline smooth at 60 Hz mouse rates while the
+  // coalesced 240 Hz Pencil samples barely need it.
+  const widths = segmentWidths(s.pts, s.width, widthMul);
+  let sx = px(0), sy = py(0);
+  for (let i = 1; i < n; i++) {
+    const ex = i < n - 1 ? (px(i) + px(i + 1)) / 2 : px(i);
+    const ey = i < n - 1 ? (py(i) + py(i + 1)) / 2 : py(i);
+    ctx.lineWidth = widths[i - 1];
+    ctx.beginPath();
+    ctx.moveTo(sx, sy);
+    ctx.quadraticCurveTo(px(i), py(i), ex, ey);
+    ctx.stroke();
+    sx = ex; sy = ey;
+  }
   ctx.restore();
 }
 
@@ -133,6 +154,23 @@ export const MarginInkLayer = forwardRef<MarginInkHandle, Props>(function Margin
   const rafRef = useRef<number>(0);
 
   const currentStrokeRef = useRef<MarginStroke | null>(null);
+  // Committed-ink cache: a data version stamps every mutation of dataRef, and
+  // the paint loop keeps an offscreen canvas of the committed strokes keyed on
+  // (version, size, scroll offset). While the pen is down each frame is one
+  // blit plus the wet stroke — the #102 lesson from the Canvas ink work:
+  // per-frame cost must not scale with everything drawn so far.
+  const dataVerRef = useRef(0);
+  // Predicted Pencil samples: preview-only tail that cuts perceived latency.
+  // Overwritten every move and never pushed into the stroke, so a
+  // misprediction can never enter the committed ink.
+  const predictedRef = useRef<{ x: number; y: number }[]>([]);
+  // Smoothed pressure state for the stroke in progress: the Pencil reports
+  // pressure in visible quantisation steps at 240 Hz, and raw values render
+  // as a width staircase.
+  const penEmaRef = useRef(0.5);
+  // Last eraser position (doc coords) — an iPad has no cursor, so the ring
+  // drawn at this point is the only feedback of where the eraser bites.
+  const erasePosRef = useRef<{ x: number; y: number } | null>(null);
   const isDrawingRef = useRef(false);
   const isErasingRef = useRef(false);
   const erasedThisGestureRef = useRef<MarginStroke[]>([]);
@@ -178,6 +216,7 @@ export const MarginInkLayer = forwardRef<MarginInkHandle, Props>(function Margin
       } catch { /* corrupt or missing — start fresh */ }
       if (!cancelled) {
         dataRef.current = d;
+        dataVerRef.current++;
         undoStackRef.current = [];
         dirtyRef.current = true;
       }
@@ -222,30 +261,107 @@ export const MarginInkLayer = forwardRef<MarginInkHandle, Props>(function Margin
   // now be interactive) and whenever nodeId's freshly-loaded data lands.
   useEffect(() => { dirtyRef.current = true; }, [enabled]);
 
-  // ── rAF redraw loop: full repaint, translating document→viewport via the
-  // live bounding rects of the canvas and `.parsed-content` each paint. This
-  // is robust to scroll in both axes and to the column being centered — no
-  // manual scrollTop bookkeeping needed. ──
+  // ── rAF redraw loop, split wet/dry — and the dry layer is deliberately
+  // NOT re-rendered per scroll frame. It carries half a viewport of overscan
+  // per side and is only rebuilt when the view scrolls past that apron, when
+  // the data version moves, or when the canvas resizes; a scroll frame inside
+  // the apron is a single offset blit. Rebuilds themselves cull by stroke
+  // bounding box, so their cost tracks the ink NEAR the viewport, not the ink
+  // in the whole book. (The first cut of this split re-rendered on every
+  // scroll frame and touched every stroke — strictly more work while
+  // scrolling than the code it replaced. Caught on review; the apron and the
+  // culling are the fix.) Document→viewport translation still comes from
+  // live bounding rects each paint. ──
   useEffect(() => {
+    const dry = document.createElement("canvas");
+    let dryKey = { ver: -1, w: 0, h: 0, ox: NaN, oy: NaN, ov: 0 };
+    const boundsCache = new WeakMap<MarginStroke, [number, number, number, number]>();
     function loop() {
       if (dirtyRef.current) {
         const canvas = canvasRef.current;
         const content = contentElRef.current;
         if (canvas) {
-          const ctx = canvas.getContext("2d")!;
+          // desynchronized: a latency hint the compositor may honour by
+          // skipping a frame of buffering; ignored where unsupported.
+          const ctx = canvas.getContext("2d", { desynchronized: true })!;
           const dpr = window.devicePixelRatio || 1;
-          ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-          ctx.clearRect(0, 0, canvas.width / dpr, canvas.height / dpr);
+          ctx.setTransform(1, 0, 0, 1, 0, 0);
+          ctx.clearRect(0, 0, canvas.width, canvas.height);
           if (content) {
             const canvasRect = canvas.getBoundingClientRect();
             const contentRect = content.getBoundingClientRect();
             const offsetX = contentRect.left - canvasRect.left;
             const offsetY = contentRect.top - canvasRect.top;
-            const strokes = dataRef.current.strokes;
-            // Highlighters underlay, pens on top.
-            for (const s of strokes) if (s.tool === "highlighter") drawMarginStroke(ctx, s, offsetX, offsetY);
-            for (const s of strokes) if (s.tool !== "highlighter") drawMarginStroke(ctx, s, offsetX, offsetY);
-            if (currentStrokeRef.current) drawMarginStroke(ctx, currentStrokeRef.current, offsetX, offsetY);
+
+            const ov = Math.round(canvasRect.height / 2); // apron per side, css px
+            const ver = dataVerRef.current;
+            const sizeStale = dry.width !== canvas.width + 2 * ov * dpr
+                           || dry.height !== canvas.height + 2 * ov * dpr;
+            if (dryKey.ver !== ver || sizeStale
+                || !overscanCovers(dryKey.ox, offsetX, ov)
+                || !overscanCovers(dryKey.oy, offsetY, ov)) {
+              if (sizeStale) {           // reallocation clears; otherwise clear by hand
+                dry.width = canvas.width + 2 * ov * dpr;
+                dry.height = canvas.height + 2 * ov * dpr;
+              }
+              const dctx = dry.getContext("2d")!;
+              dctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+              if (!sizeStale) dctx.clearRect(0, 0, dry.width / dpr, dry.height / dpr);
+              // Cull to the apron rect, in document coords.
+              const docL = -offsetX - ov, docT = -offsetY - ov;
+              const docR = docL + dry.width / dpr, docB = docT + dry.height / dpr;
+              const visible: MarginStroke[] = [];
+              for (const st of dataRef.current.strokes) {
+                let b = boundsCache.get(st);
+                if (!b) { b = strokeBounds(st.pts, st.width * 4.5); boundsCache.set(st, b); }
+                if (b[2] >= docL && b[0] <= docR && b[3] >= docT && b[1] <= docB) visible.push(st);
+              }
+              const dox = offsetX + ov, doy = offsetY + ov;
+              for (const st of visible) if (st.tool === "highlighter") drawMarginStroke(dctx, st, dox, doy);
+              for (const st of visible) if (st.tool !== "highlighter") drawMarginStroke(dctx, st, dox, doy);
+              dryKey = { ver, w: canvas.width, h: canvas.height, ox: offsetX, oy: offsetY, ov };
+            }
+            // Blit the apron with the scroll delta since the key was cut.
+            ctx.drawImage(dry, ((offsetX - dryKey.ox) - dryKey.ov) * dpr,
+                               ((offsetY - dryKey.oy) - dryKey.ov) * dpr);
+
+            ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+            const wet = currentStrokeRef.current;
+            if (wet) {
+              drawMarginStroke(ctx, wet, offsetX, offsetY);
+              const pred = predictedRef.current;
+              if (pred.length && wet.pts.length >= 3) {
+                // The predicted tail rides at reduced alpha so a misprediction
+                // reads as a ghost for one frame, never as committed ink.
+                const lx = offsetX + wet.pts[wet.pts.length - 3];
+                const ly = offsetY + wet.pts[wet.pts.length - 2];
+                const lp = wet.pts[wet.pts.length - 1];
+                ctx.save();
+                ctx.globalAlpha = wet.tool === "highlighter" ? 0.2 : 0.6;
+                ctx.strokeStyle = wet.color;
+                ctx.lineCap = "round";
+                ctx.lineJoin = "round";
+                ctx.lineWidth = Math.max(wet.width * (wet.tool === "highlighter" ? 3 : 1) * (0.5 + lp), 0.5);
+                ctx.beginPath();
+                ctx.moveTo(lx, ly);
+                for (const pt2 of pred) ctx.lineTo(offsetX + pt2.x, offsetY + pt2.y);
+                ctx.stroke();
+                ctx.restore();
+              }
+            }
+            const ep = erasePosRef.current;
+            if (ep) {
+              // The iPad has no cursor, so this ring is the only statement of
+              // where the eraser bites — same affordance as the Canvas ink
+              // eraser.
+              ctx.save();
+              ctx.strokeStyle = "rgba(120,120,130,0.9)";
+              ctx.lineWidth = 1;
+              ctx.beginPath();
+              ctx.arc(offsetX + ep.x, offsetY + ep.y, ERASER_RADIUS, 0, Math.PI * 2);
+              ctx.stroke();
+              ctx.restore();
+            }
           }
         }
         dirtyRef.current = false;
@@ -296,6 +412,7 @@ export const MarginInkLayer = forwardRef<MarginInkHandle, Props>(function Margin
     } else {
       dataRef.current = { ...dataRef.current, strokes: [...dataRef.current.strokes, ...op.strokes] };
     }
+    dataVerRef.current++;
     dirtyRef.current = true;
     scheduleSave(dataRef.current);
   }
@@ -337,6 +454,7 @@ export const MarginInkLayer = forwardRef<MarginInkHandle, Props>(function Margin
     if (removed.length) {
       erasedThisGestureRef.current.push(...removed);
       dataRef.current = { ...dataRef.current, strokes: remaining };
+      dataVerRef.current++;
       dirtyRef.current = true;
     }
   }
@@ -348,11 +466,13 @@ export const MarginInkLayer = forwardRef<MarginInkHandle, Props>(function Margin
     e.preventDefault();
     try { (e.target as HTMLCanvasElement).setPointerCapture(e.pointerId); } catch { /* ignore */ }
     const pt = toDoc(e.clientX, e.clientY);
-    const pressure = e.pressure > 0 ? e.pressure : 0.5;
+    const pressure = pressureOf(e);
+    penEmaRef.current = pressure;
 
     if (tool === "eraser") {
       isErasingRef.current = true;
       erasedThisGestureRef.current = [];
+      erasePosRef.current = pt;
       eraseAt(pt);
     } else {
       isDrawingRef.current = true;
@@ -372,18 +492,27 @@ export const MarginInkLayer = forwardRef<MarginInkHandle, Props>(function Margin
     if (isErasingRef.current) {
       if (e.buttons === 0) return;
       e.preventDefault();
-      eraseAt(toDoc(e.clientX, e.clientY));
+      // Sweep every coalesced sample — at Pencil speeds the parent event
+      // alone skips whole strokes between 60 Hz frames.
+      for (const ev of coalescedOf(e.nativeEvent)) {
+        eraseAt(toDoc(ev.clientX, ev.clientY));
+      }
+      erasePosRef.current = toDoc(e.clientX, e.clientY);
+      dirtyRef.current = true;
       return;
     }
     if (!isDrawingRef.current || !currentStrokeRef.current) return;
     e.preventDefault();
-    const events = e.nativeEvent.getCoalescedEvents?.() ?? [e.nativeEvent];
     const pts = currentStrokeRef.current.pts;
-    for (const ev of events) {
+    for (const ev of coalescedOf(e.nativeEvent)) {
       const pt = toDoc(ev.clientX, ev.clientY);
-      const pressure = ev.pressure > 0 ? ev.pressure : 0.5;
-      pts.push(pt.x, pt.y, pressure);
+      penEmaRef.current = emaNext(penEmaRef.current, pressureOf(ev));
+      pts.push(pt.x, pt.y, penEmaRef.current);
     }
+    // Preview-only latency cut: draw the browser's predicted samples as the
+    // stroke's tail, replaced wholesale on the next real move.
+    predictedRef.current = (e.nativeEvent.getPredictedEvents?.() ?? [])
+      .map(ev => toDoc(ev.clientX, ev.clientY));
     dirtyRef.current = true;
   }
 
@@ -396,6 +525,7 @@ export const MarginInkLayer = forwardRef<MarginInkHandle, Props>(function Margin
         scheduleSave(dataRef.current);
       }
       erasedThisGestureRef.current = [];
+      erasePosRef.current = null;
       dirtyRef.current = true;
       return;
     }
@@ -405,9 +535,11 @@ export const MarginInkLayer = forwardRef<MarginInkHandle, Props>(function Margin
     currentStrokeRef.current = null;
     if (stroke && stroke.pts.length >= 3) {
       dataRef.current = { ...dataRef.current, strokes: [...dataRef.current.strokes, stroke] };
+      dataVerRef.current++;
       pushUndo({ kind: "add", id: stroke.id });
       scheduleSave(dataRef.current);
     }
+    predictedRef.current = [];
     dirtyRef.current = true;
   }
 
