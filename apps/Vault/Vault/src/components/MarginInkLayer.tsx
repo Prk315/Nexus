@@ -398,15 +398,20 @@ export const MarginInkLayer = forwardRef<MarginInkHandle, Props>(function Margin
   // book. Must be a native non-passive listener — React's touch listeners
   // are passive. (Same trick as PdfViewer.tsx's annotCanvasRef effect.) ──
   useEffect(() => {
-    const canvas = canvasRef.current;
-    if (!canvas || !enabled) return;
+    const surface = scrollEl;
+    if (!surface) return;
     const onTouchMove = (e: TouchEvent) => {
+      // Palm lock: while the pen is committed to a stroke, a resting palm's
+      // touches must not pan the page out from under it — writing a margin
+      // note would otherwise scroll the book mid-word. Finger scrolling
+      // resumes the moment the pen lifts.
+      if (isDrawingRef.current || isErasingRef.current) { e.preventDefault(); return; }
       const touches = Array.from(e.touches) as Array<Touch & { touchType?: string }>;
       if (touches.some(t => t.touchType === "stylus")) e.preventDefault();
     };
-    canvas.addEventListener("touchmove", onTouchMove, { passive: false });
-    return () => canvas.removeEventListener("touchmove", onTouchMove);
-  }, [enabled]);
+    surface.addEventListener("touchmove", onTouchMove, { passive: false });
+    return () => surface.removeEventListener("touchmove", onTouchMove);
+  }, [scrollEl]);
 
   // ── Doc-coord conversion ──
   function toDoc(clientX: number, clientY: number): { x: number; y: number } {
@@ -448,10 +453,11 @@ export const MarginInkLayer = forwardRef<MarginInkHandle, Props>(function Margin
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Cmd/Ctrl+Z undoes the last margin op — only while margins mode is active,
-  // capture phase so it doesn't leak into other editors' own undo handling.
+  // Cmd/Ctrl+Z undoes the last margin op. Ink is always live now, so this is
+  // gated on the component being mounted (ParsedViewer fills the pane — no
+  // other editor's undo is reachable while a book is open), capture phase so
+  // it doesn't leak into global handlers.
   useEffect(() => {
-    if (!enabled) return;
     function onKeyDown(e: KeyboardEvent) {
       if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "z") {
         e.preventDefault();
@@ -461,7 +467,7 @@ export const MarginInkLayer = forwardRef<MarginInkHandle, Props>(function Margin
     document.addEventListener("keydown", onKeyDown, true);
     return () => document.removeEventListener("keydown", onKeyDown, true);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [enabled]);
+  }, []);
 
   // ── Eraser ──
   function eraseAt(pt: { x: number; y: number }) {
@@ -478,12 +484,28 @@ export const MarginInkLayer = forwardRef<MarginInkHandle, Props>(function Margin
     }
   }
 
-  // ── Pointer capture (pen + mouse only — touch always scrolls the book) ──
-  function onPointerDown(e: React.PointerEvent<HTMLCanvasElement>) {
-    if (!enabled) return;
+  // ── Pointer capture — pen-first, on the SCROLL CONTAINER, not the canvas ──
+  //
+  // ⚠️ The old model made drawing a MODE: the canvas flipped to
+  // pointer-events:auto and ate every event — links, text selection, the
+  // facit <details> — which is why ink had to hide behind a "Margins"
+  // button. The rule the user actually wants (and GoodNotes ships) is
+  // per-POINTER, which CSS cannot express: the PEN always draws, TOUCH
+  // always navigates, and a pen tap on a paragraph makes a dot rather than
+  // following a link — deliberate, that is what the finger is for. So the
+  // canvas stays pointer-events:none forever and these listeners live on
+  // the scroll container, deciding by pointerType:
+  //   pen   → always captured, always draws (any position, any time)
+  //   touch → never captured (scrolls; palm-locked while the pen is down)
+  //   mouse → draws only in wide-margins mode, so desktop text selection
+  //           and link clicks keep working on an ordinary read
+  function onPointerDown(e: PointerEvent) {
     if (e.pointerType === "touch") return;
+    if (e.pointerType === "mouse" && !enabled) return;
+    const surface = scrollEl;
+    if (!surface) return;
     e.preventDefault();
-    try { (e.target as HTMLCanvasElement).setPointerCapture(e.pointerId); } catch { /* ignore */ }
+    try { surface.setPointerCapture(e.pointerId); } catch { /* ignore */ }
     const pt = toDoc(e.clientX, e.clientY);
     const pressure = pressureOf(e);
     penEmaRef.current = pressure;
@@ -506,14 +528,14 @@ export const MarginInkLayer = forwardRef<MarginInkHandle, Props>(function Margin
     dirtyRef.current = true;
   }
 
-  function onPointerMove(e: React.PointerEvent<HTMLCanvasElement>) {
+  function onPointerMove(e: PointerEvent) {
     if (e.pointerType === "touch") return;
     if (isErasingRef.current) {
       if (e.buttons === 0) return;
       e.preventDefault();
       // Sweep every coalesced sample — at Pencil speeds the parent event
       // alone skips whole strokes between 60 Hz frames.
-      for (const ev of coalescedOf(e.nativeEvent)) {
+      for (const ev of coalescedOf(e)) {
         eraseAt(toDoc(ev.clientX, ev.clientY));
       }
       erasePosRef.current = toDoc(e.clientX, e.clientY);
@@ -523,19 +545,19 @@ export const MarginInkLayer = forwardRef<MarginInkHandle, Props>(function Margin
     if (!isDrawingRef.current || !currentStrokeRef.current) return;
     e.preventDefault();
     const pts = currentStrokeRef.current.pts;
-    for (const ev of coalescedOf(e.nativeEvent)) {
+    for (const ev of coalescedOf(e)) {
       const pt = toDoc(ev.clientX, ev.clientY);
       penEmaRef.current = emaNext(penEmaRef.current, pressureOf(ev));
       pts.push(pt.x, pt.y, penEmaRef.current);
     }
     // Preview-only latency cut: draw the browser's predicted samples as the
     // stroke's tail, replaced wholesale on the next real move.
-    predictedRef.current = (e.nativeEvent.getPredictedEvents?.() ?? [])
+    predictedRef.current = (e.getPredictedEvents?.() ?? [])
       .map(ev => toDoc(ev.clientX, ev.clientY));
     dirtyRef.current = true;
   }
 
-  function onPointerUp(e: React.PointerEvent<HTMLCanvasElement>) {
+  function onPointerUp(e: PointerEvent) {
     if (e.pointerType === "touch") return;
     if (isErasingRef.current) {
       isErasingRef.current = false;
@@ -562,14 +584,26 @@ export const MarginInkLayer = forwardRef<MarginInkHandle, Props>(function Margin
     dirtyRef.current = true;
   }
 
-  return (
-    <canvas
-      ref={canvasRef}
-      className={`margin-ink-canvas${enabled ? " margin-ink-active" : ""}`}
-      onPointerDown={onPointerDown}
-      onPointerMove={onPointerMove}
-      onPointerUp={onPointerUp}
-      onPointerCancel={onPointerUp}
-    />
-  );
+  // Native listeners, re-attached when the closed-over tool/color/enabled
+  // change (a render-rate concern only — attaching four listeners is
+  // nothing). pointerdown must be non-passive to preventDefault the pen's
+  // default gestures; React's synthetic handlers can't sit on the scroll
+  // container anyway, ParsedViewer owns that element.
+  useEffect(() => {
+    const surface = scrollEl;
+    if (!surface) return;
+    surface.addEventListener("pointerdown", onPointerDown);
+    surface.addEventListener("pointermove", onPointerMove);
+    surface.addEventListener("pointerup", onPointerUp);
+    surface.addEventListener("pointercancel", onPointerUp);
+    return () => {
+      surface.removeEventListener("pointerdown", onPointerDown);
+      surface.removeEventListener("pointermove", onPointerMove);
+      surface.removeEventListener("pointerup", onPointerUp);
+      surface.removeEventListener("pointercancel", onPointerUp);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [scrollEl, enabled, tool, color]);
+
+  return <canvas ref={canvasRef} className="margin-ink-canvas" />;
 });

@@ -539,28 +539,27 @@ export function ParsedViewer({ content, nodeId }: Props) {
         ))}
         <button className="tt-btn" onClick={() => setEditingCats((v) => !v)} type="button" title="Edit highlighters">✎</button>
         <div className="tt-sep" />
-        {/* margin notes */}
-        <button className={`tt-btn${marginsOn ? " active" : ""}`} onClick={() => setMarginsOn((v) => !v)} type="button" title="Margin notes">✎ Margins</button>
-        {marginsOn && (
-          <>
-            <button className={`tt-btn${marginTool === "pen" ? " active" : ""}`} onClick={() => setMarginTool("pen")} type="button" title="Pen">Pen</button>
-            <button className={`tt-btn${marginTool === "highlighter" ? " active" : ""}`} onClick={() => setMarginTool("highlighter")} type="button" title="Highlighter">High</button>
-            <button className={`tt-btn${marginTool === "eraser" ? " active" : ""}`} onClick={() => setMarginTool("eraser")} type="button" title="Eraser">Erase</button>
-            <span className="parsed-margin-colors">
-              {MARGIN_COLORS.map((c) => (
-                <button
-                  key={c}
-                  className={`parsed-margin-dot${marginColor === c ? " active" : ""}`}
-                  style={{ background: c }}
-                  onClick={() => setMarginColor(c)}
-                  type="button"
-                  title={c}
-                />
-              ))}
-            </span>
-            <button className="tt-btn" onClick={() => marginInkRef.current?.undo()} type="button" title="Undo last margin stroke">↶</button>
-          </>
-        )}
+        {/* Ink. The pen ALWAYS draws (touch always navigates — MarginInkLayer
+            decides per pointer type), so the tools are permanently in reach:
+            there is no mode to enter. "Margins" is a LAYOUT toggle only —
+            wide note aprons beside the column, plus mouse drawing on desktop. */}
+        <button className={`tt-btn${marginTool === "pen" ? " active" : ""}`} onClick={() => setMarginTool("pen")} type="button" title="Pen">Pen</button>
+        <button className={`tt-btn${marginTool === "highlighter" ? " active" : ""}`} onClick={() => setMarginTool("highlighter")} type="button" title="Highlighter">High</button>
+        <button className={`tt-btn${marginTool === "eraser" ? " active" : ""}`} onClick={() => setMarginTool("eraser")} type="button" title="Eraser">Erase</button>
+        <span className="parsed-margin-colors">
+          {MARGIN_COLORS.map((c) => (
+            <button
+              key={c}
+              className={`parsed-margin-dot${marginColor === c ? " active" : ""}`}
+              style={{ background: c }}
+              onClick={() => setMarginColor(c)}
+              type="button"
+              title={c}
+            />
+          ))}
+        </span>
+        <button className="tt-btn" onClick={() => marginInkRef.current?.undo()} type="button" title="Undo last stroke">↶</button>
+        <button className={`tt-btn${marginsOn ? " active" : ""}`} onClick={() => setMarginsOn((v) => !v)} type="button" title="Wide margins beside the column for note-taking">⇔ Margins</button>
       </div>
       {editingCats && (
         <HighlighterCatEditor cats={highlighters} onChange={persistHighlighters} onClose={() => setEditingCats(false)} />
