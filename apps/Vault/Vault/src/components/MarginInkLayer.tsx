@@ -276,10 +276,29 @@ export const MarginInkLayer = forwardRef<MarginInkHandle, Props>(function Margin
     const dry = document.createElement("canvas");
     let dryKey = { ver: -1, w: 0, h: 0, ox: NaN, oy: NaN, ov: 0 };
     const boundsCache = new WeakMap<MarginStroke, [number, number, number, number]>();
+    let idleClear = false; // canvas known blank — skip per-frame work on inkless books
     function loop() {
       if (dirtyRef.current) {
         const canvas = canvasRef.current;
         const content = contentElRef.current;
+        // Fast path: nothing stored, nothing wet. Without it every scroll
+        // frame of an UNMARKED book still paid two getBoundingClientRect
+        // reads plus a full-viewport retina clear+blit — pure overhead in
+        // exactly the common case. Clear once, then stay asleep until ink
+        // exists again (dirtyRef keeps being set by scroll, so idleClear is
+        // what actually gates the work).
+        if (canvas && !dataRef.current.strokes.length && !currentStrokeRef.current && !erasePosRef.current) {
+          if (!idleClear) {
+            const ctx = canvas.getContext("2d", { desynchronized: true })!;
+            ctx.setTransform(1, 0, 0, 1, 0, 0);
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            idleClear = true;
+          }
+          dirtyRef.current = false;
+          rafRef.current = requestAnimationFrame(loop);
+          return;
+        }
+        idleClear = false;
         if (canvas) {
           // desynchronized: a latency hint the compositor may honour by
           // skipping a frame of buffering; ignored where unsupported.
