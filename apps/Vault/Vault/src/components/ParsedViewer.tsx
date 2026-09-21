@@ -112,6 +112,34 @@ export function ParsedViewer({ content, nodeId }: Props) {
     const html = typeof content === "string" ? content : "";
     root.innerHTML = html.replace(/<img (?![^>]*loading=)/g, '<img loading="lazy" decoding="async" ');
 
+    // ⚠️ Batch the flat block stream into <section> shells. content-visibility
+    // is the load-bearing iPad fix, but applied per block it hands WebKit
+    // ~7,000 tracked elements whose skip/render bookkeeping runs during every
+    // scroll — measured on the iPad simulator as the dominant residual cost
+    // (frames slow with NO long script tasks). ~100 sections cut at chapter
+    // boundaries give the same off-screen skipping at 1/70th the bookkeeping.
+    // Sections are unstyled block wrappers, so layout geometry is unchanged;
+    // headings keep their ids for the outline, and geometry reads on hidden
+    // content still force materialisation per the c-v spec.
+    if (root.children.length > 200) {
+      const kids = Array.from(root.children);
+      const frag = document.createDocumentFragment();
+      let sec: HTMLElement | null = null;
+      let count = 0;
+      for (const el of kids) {
+        const tag = el.tagName;
+        if (!sec || tag === "H1" || tag === "H2" || count >= 80) {
+          sec = document.createElement("section");
+          sec.className = "pv-sec";
+          frag.appendChild(sec);
+          count = 0;
+        }
+        sec.appendChild(el);
+        count++;
+      }
+      root.appendChild(frag);
+    }
+
     mathObserverRef.current?.disconnect();
     const renderMath = (el: HTMLElement) => {
       if (el.dataset.mathDone) return;
@@ -122,8 +150,23 @@ export function ParsedViewer({ content, nodeId }: Props) {
     };
     const mathEls = root.querySelectorAll<HTMLElement>('[data-type="inline-math"], [data-type="block-math"]');
     if ("IntersectionObserver" in window) {
+      // ⚠️ Approaching equations are QUEUED, not rendered in the observer
+      // callback. A fast flick brings dozens into the apron in one tick, and
+      // rendering them synchronously is a 100ms+ burst in a single frame —
+      // measured on the iPad simulator as most of the residual scroll jank.
+      // A few per frame keeps every frame short; the queue drains in well
+      // under the time the apron buys.
+      const queue: HTMLElement[] = [];
+      let pumping = 0;
+      const pump = () => {
+        pumping = 0;
+        const batch = queue.splice(0, 4);
+        for (const el of batch) renderMath(el);
+        if (queue.length) pumping = requestAnimationFrame(pump);
+      };
       const io = new IntersectionObserver((entries) => {
-        for (const e of entries) if (e.isIntersecting) { renderMath(e.target as HTMLElement); io.unobserve(e.target); }
+        for (const e of entries) if (e.isIntersecting) { queue.push(e.target as HTMLElement); io.unobserve(e.target); }
+        if (queue.length && !pumping) pumping = requestAnimationFrame(pump);
       }, { root: scrollRef.current, rootMargin: "2000px 0px" });
       mathEls.forEach((el) => io.observe(el));
       mathObserverRef.current = io;
@@ -161,14 +204,20 @@ export function ParsedViewer({ content, nodeId }: Props) {
       && prevScaleRef.current !== fontScale && sc && root.children.length > 0;
     let anchor: { el: HTMLElement; frac: number } | null = null;
     if (rescaling && sc) {
-      const kids = root.children;
       const target = sc.scrollTop + root.offsetTop;
-      let lo = 0, hi = kids.length - 1;
-      while (lo < hi) {
-        const mid = (lo + hi + 1) >> 1;
-        if ((kids[mid] as HTMLElement).offsetTop <= target) lo = mid; else hi = mid - 1;
-      }
-      const el = kids[lo] as HTMLElement;
+      // Binary search by offsetTop; sections are unpositioned wrappers, so
+      // every block's offsetTop resolves against the same offsetParent and
+      // the search can descend section → block for a paragraph-sized anchor.
+      const pick = (kids: HTMLCollection): HTMLElement => {
+        let lo = 0, hi = kids.length - 1;
+        while (lo < hi) {
+          const mid = (lo + hi + 1) >> 1;
+          if ((kids[mid] as HTMLElement).offsetTop <= target) lo = mid; else hi = mid - 1;
+        }
+        return kids[lo] as HTMLElement;
+      };
+      let el = pick(root.children);
+      if (el.classList.contains("pv-sec") && el.children.length) el = pick(el.children);
       anchor = { el, frac: el.offsetHeight > 0 ? (target - el.offsetTop) / el.offsetHeight : 0 };
     }
     root.style.fontSize = `${(BASE_FONT * fontScale).toFixed(1)}px`;
@@ -304,22 +353,43 @@ export function ParsedViewer({ content, nodeId }: Props) {
   }, []);
 
   // ── Scroll-spy for the outline ─────────────────────────────────────────────
+  //
+  // ⚠️ NOT a scroll listener. The old spy walked the headings calling
+  // getBoundingClientRect per heading on EVERY scroll event — and under
+  // content-visibility a geometry read forces the hidden block to lay out,
+  // so each scroll event forced layout of every heading-block above the
+  // reading position. Measured on the iPad simulator that was 193 ms per
+  // frame; the spy alone was most of "can barely interact". An
+  // IntersectionObserver reports crossings with geometry ATTACHED (no
+  // forced layout, no per-scroll work): a heading is "passed" when it sits
+  // above the top band, and the active section is the last passed one in
+  // document order.
   useEffect(() => {
     const scroller = scrollRef.current;
-    if (!scroller || outline.length === 0) return;
-    function onScroll() {
-      const top = scroller!.getBoundingClientRect().top;
-      let current: string | null = outline[0]?.id ?? null;
-      for (const it of outline) {
-        const el = document.getElementById(it.id);
-        if (el && el.getBoundingClientRect().top <= top + 60) current = it.id;
-        else break;
+    const root = rootRef.current;
+    if (!scroller || !root || outline.length === 0) return;
+    const order = new Map(outline.map((it, i) => [it.id, i]));
+    const passed = new Array<boolean>(outline.length).fill(false);
+    let raf = 0;
+    const recompute = () => {
+      raf = 0;
+      let current = 0;
+      for (let i = 0; i < passed.length; i++) if (passed[i]) current = i;
+      setActiveId(outline[current]?.id ?? null);
+    };
+    const io = new IntersectionObserver((entries) => {
+      for (const e of entries) {
+        const i = order.get((e.target as HTMLElement).id);
+        if (i === undefined || !e.rootBounds) continue;
+        passed[i] = e.boundingClientRect.top <= e.rootBounds.top + 60;
       }
-      setActiveId(current);
+      if (!raf) raf = requestAnimationFrame(recompute);
+    }, { root: scroller, rootMargin: "60px 0px -100% 0px" });
+    for (const it of outline) {
+      const el = document.getElementById(it.id);
+      if (el) io.observe(el);
     }
-    onScroll();
-    scroller.addEventListener("scroll", onScroll, { passive: true });
-    return () => scroller.removeEventListener("scroll", onScroll);
+    return () => { io.disconnect(); if (raf) cancelAnimationFrame(raf); };
   }, [outline]);
 
   function scrollToHeading(item: OutlineItem) {

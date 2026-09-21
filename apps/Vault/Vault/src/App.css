@@ -8032,9 +8032,14 @@ body.vault-block-dragging .tt-bubble {
    as "no pictures render". Skipping offscreen layout/paint keeps the live
    set a few screens wide. The intrinsic-size estimate keeps the scrollbar
    from thrashing as blocks materialise. */
-.parsed-content > * {
+.parsed-content > .pv-sec {
   content-visibility: auto;
-  contain-intrinsic-size: auto 48px;
+  /* c-v tracks SECTIONS (~80 blocks each, cut at chapter boundaries by
+     ParsedViewer), not individual blocks — 7,000 tracked siblings made the
+     skip/render bookkeeping itself the scroll cost on an iPad. `auto`
+     remembers a section's real size once rendered; 7000px estimates a
+     never-seen section (~80 blocks × ~90px measured tablet average). */
+  contain-intrinsic-size: auto 7000px;
 }
 
 .parsed-outline {
