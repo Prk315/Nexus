@@ -92,7 +92,7 @@ function Rig() {
   const [content, setContent] = useState<string | null>(null);
   const [err, setErr] = useState<string | null>(null);
   useEffect(() => {
-    fetch("http://localhost:8899/pgm-1.html")
+    fetch(`http://localhost:8899/pgm-1.html?v=${Date.now()}`)
       .then(r => { if (!r.ok) throw new Error(String(r.status)); return r.text(); })
       .then(setContent)
       .catch(e => { setErr(String(e)); post({ fatal: "fixture: " + String(e) }); });

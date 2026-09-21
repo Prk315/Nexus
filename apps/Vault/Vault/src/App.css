@@ -8021,6 +8021,16 @@ body.vault-block-dragging .tt-bubble {
   padding: 0;
   cursor: pointer;
 }
+
+/* Finger-sized reader toolbar. .tt-btn's 4px×8px @13px is mouse ergonomics;
+   on a coarse pointer the same controls are the book's ONLY chrome and every
+   miss scrolls or draws instead. Scoped to the parsed toolbar — the rest of
+   the app keeps its density. */
+@media (pointer: coarse) {
+  .parsed-toolbar .tt-btn { padding: 9px 12px; font-size: 15px; }
+  .parsed-toolbar .parsed-margin-dot { width: 20px; height: 20px; }
+  .parsed-toolbar { gap: 4px; row-gap: 2px; }
+}
 .parsed-margin-dot.active { border-color: var(--fg-main); box-shadow: 0 0 0 1px var(--bg-base); }
 
 /* ⚠️ content-visibility is the load-bearing iPad fix. A parsed book is a
@@ -8188,6 +8198,13 @@ body.vault-block-dragging .tt-bubble {
 .parsed-content h3 { font-size: 1.15em; }
 .parsed-content h4 { font-size: 1.02em; }
 .parsed-content p { margin: 0.75em 0; }
+/* Marker's `> ` inset commentary (definitions' running text, asides) — a
+   quiet indent, not a styled callout: it is book text, not UI. */
+.parsed-content blockquote {
+  margin: 0.75em 0 0.75em 0.2em;
+  padding-left: 0.9em;
+  border-left: 2.5px solid var(--border-base, var(--border-legacy));
+}
 .parsed-content ul,
 .parsed-content ol { margin: 0.6em 0; padding-left: 1.6em; }
 .parsed-content li { margin: 0.25em 0; }
