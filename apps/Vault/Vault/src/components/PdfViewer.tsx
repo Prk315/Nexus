@@ -17,6 +17,8 @@ import { exportAnnotatedPdf } from "../lib/pdfExport";
 import { PdfTextAnnotationLayer } from "./PdfTextAnnotationLayer";
 import type { TextAnnotation, TextAnnotations } from "./PdfTextAnnotationLayer";
 import { PdfSidebarPanel } from "./PdfSidebarPanel";
+import { PdfParsedPanel } from "./PdfParsedPanel";
+import { parseCompanion, type Companion } from "../lib/hybridPdf";
 import { PdfSearchOverlay } from "./PdfSearchOverlay";
 
 // Vite ?url import for the PDF.js worker
@@ -859,6 +861,26 @@ export function PdfViewer({ content: pdfPath, nodeId }: Props) {
   const [renderScale, setRenderScale] = useState(1.0);
   const [confirmClear, setConfirmClear] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(true);
+  // ── Hybrid: the parsed DATA layer beside the PDF's pixels ──
+  // A `{nodeId}_companion` row names the parsed node(s) behind this book and
+  // their chapter→page ranges. No row -> the toggle never renders: absent is
+  // "this book has no parsed layer", not an empty panel.
+  const [companion, setCompanion] = useState<Companion | null>(null);
+  const [parsedOpen, setParsedOpen] = useState(() => localStorage.getItem("vault.pdf.parsedOpen") === "1");
+  useEffect(() => {
+    let cancelled = false;
+    setCompanion(null);
+    (async () => {
+      try {
+        const raw = await api.readContent(`${nodeId}_companion`);
+        if (!cancelled) setCompanion(parseCompanion(raw));
+      } catch { if (!cancelled) setCompanion(null); }
+    })();
+    return () => { cancelled = true; };
+  }, [nodeId]);
+  useEffect(() => {
+    localStorage.setItem("vault.pdf.parsedOpen", parsedOpen ? "1" : "0");
+  }, [parsedOpen]);
   const [bookmarks, setBookmarks]   = useState<Set<number>>(new Set());
   const [currentPage, setCurrentPage] = useState(0);
   // null = indicator display; non-null string = editing mode with that value
@@ -1578,6 +1600,15 @@ export function PdfViewer({ content: pdfPath, nodeId }: Props) {
           >
             ◧
           </button>
+          {companion && (
+            <button
+              className={`pdf-tb-btn${parsedOpen ? " active" : ""}`}
+              onClick={() => setParsedOpen(o => !o)}
+              title="Parsed layer — selectable text, copyable LaTeX, concepts, search"
+            >
+              ◨ Parsed
+            </button>
+          )}
         </div>
 
         <div className="pdf-tb-sep" />
@@ -1969,6 +2000,13 @@ export function PdfViewer({ content: pdfPath, nodeId }: Props) {
             </div>
           </div>
         </div>
+        {parsedOpen && companion && (
+          <PdfParsedPanel
+            companion={companion}
+            currentPage={currentPage}
+            onGoToPage={scrollToPage}
+          />
+        )}
       </div>
     </div>
   );

@@ -8006,6 +8006,78 @@ body.vault-block-dragging .tt-bubble {
   z-index: 2;
   pointer-events: none; /* capture lives on the scroll container, per pointer type */
 }
+/* ── Hybrid PDF: the parsed data layer beside the pixels ─────────────── */
+.pdf-parsed-panel {
+  width: min(420px, 40vw);
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  border-left: 1px solid var(--border-base, var(--border-legacy));
+  background: var(--bg-raised);
+}
+.pdf-parsed-scroll { flex: 1; overflow-y: auto; min-height: 0; }
+/* The slice reuses the book's own typography but fills the panel column —
+   the 720px reading measure belongs to the full-page viewer, not here. */
+.pdf-parsed-panel .parsed-content.pdf-parsed-slice {
+  max-width: none;
+  margin: 0;
+  padding: 6px 16px 24px;
+  font-size: 14.5px;
+}
+.pdf-parsed-slice img { max-width: 100%; height: auto; }
+.pdf-parsed-range {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 16px;
+  font-size: 11.5px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--fg-ghost);
+  background: var(--bg-raised);
+  border-bottom: 1px solid var(--border-base, var(--border-legacy));
+}
+.pv-copied { color: var(--accent); text-transform: none; letter-spacing: 0; font-weight: 600; }
+.pv-copy-math { cursor: pointer; border-radius: 4px; }
+.pv-copy-math:hover { background: color-mix(in oklab, var(--accent) 10%, transparent); }
+.pv-search-hit {
+  display: flex;
+  gap: 10px;
+  align-items: baseline;
+  width: 100%;
+  text-align: left;
+  background: none;
+  border: none;
+  border-bottom: 1px solid var(--border-base, var(--border-legacy));
+  padding: 9px 16px;
+  cursor: pointer;
+  font-size: 12.5px;
+  line-height: 1.45;
+  color: var(--fg-main, inherit);
+}
+.pv-search-hit:hover:not(:disabled) { background: color-mix(in oklab, var(--accent) 6%, transparent); }
+.pv-search-hit:disabled { cursor: default; opacity: 0.6; }
+.pv-search-page { flex: none; font-weight: 600; color: var(--accent); min-width: 44px; }
+.pv-search-snippet { min-width: 0; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
+@media (max-width: 900px) {
+  /* Same overlay treatment as the parsed reader's sidebar: on a narrow
+     iPad the panel floats over the page instead of crushing it. */
+  .pdf-viewer-body { position: relative; }
+  .pdf-parsed-panel {
+    position: absolute;
+    right: 0;
+    top: 0;
+    bottom: 0;
+    width: min(380px, 88vw);
+    z-index: 30;
+    box-shadow: var(--shadow-lg);
+  }
+}
+
 /* Mouse drawing is live in wide-margins mode — say so with the cursor. */
 .parsed-scroll.parsed-margins-on { cursor: crosshair; }
 
