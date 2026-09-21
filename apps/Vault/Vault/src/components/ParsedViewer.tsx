@@ -202,31 +202,70 @@ export function ParsedViewer({ content, nodeId }: Props) {
     if (!root) return;
     const rescaling = prevScaleRef.current !== null
       && prevScaleRef.current !== fontScale && sc && root.children.length > 0;
-    let anchor: { el: HTMLElement; frac: number } | null = null;
+
+    // ⚠️ The anchor lives ENTIRELY in getBoundingClientRect space. The first
+    // version restored via offsetTop arithmetic and teleported the reader by
+    // hundreds of thousands of pixels: with content-visibility sections, a
+    // font-size change makes the FORCED layout (what offsetTop reports —
+    // skipped sections re-estimated at the new size) disagree with the
+    // PAINTED layout (what the user sees — placeholder sizes still in
+    // effect), and scrolling to the forced answer lands in the gap between
+    // the two. Traced on the simulator: one A+ at scrollTop 1.66M moved the
+    // view +178k px while every offsetTop read insisted nothing was wrong.
+    // gBCR is the painted truth, so the anchor pins the block's VISUAL
+    // position instead, as a delta — and keeps pinning for ~1.5 s, because
+    // sections above re-materialise at the new size one by one and each
+    // shift moves the anchor again (Safari has no scroll anchoring). It
+    // stops the moment scrollTop changes without us: the user's own scroll
+    // wins over ours.
+    let anchor: { el: HTMLElement; frac: number; pin: number } | null = null;
     if (rescaling && sc) {
-      const target = sc.scrollTop + root.offsetTop;
-      // Binary search by offsetTop; sections are unpositioned wrappers, so
-      // every block's offsetTop resolves against the same offsetParent and
-      // the search can descend section → block for a paragraph-sized anchor.
+      const scTop = sc.getBoundingClientRect().top;
+      // Binary search by VISUAL top (monotone over siblings), descending
+      // section → block so the anchor is paragraph-sized.
       const pick = (kids: HTMLCollection): HTMLElement => {
         let lo = 0, hi = kids.length - 1;
         while (lo < hi) {
           const mid = (lo + hi + 1) >> 1;
-          if ((kids[mid] as HTMLElement).offsetTop <= target) lo = mid; else hi = mid - 1;
+          if ((kids[mid] as HTMLElement).getBoundingClientRect().top <= scTop) lo = mid; else hi = mid - 1;
         }
         return kids[lo] as HTMLElement;
       };
       let el = pick(root.children);
       if (el.classList.contains("pv-sec") && el.children.length) el = pick(el.children);
-      anchor = { el, frac: el.offsetHeight > 0 ? (target - el.offsetTop) / el.offsetHeight : 0 };
+      const r = el.getBoundingClientRect();
+      const frac = r.height > 0 ? (scTop - r.top) / r.height : 0;
+      anchor = { el, frac, pin: scTop };
     }
+
     root.style.fontSize = `${(BASE_FONT * fontScale).toFixed(1)}px`;
+
+    let raf = 0;
     if (anchor && sc) {
-      // Reading offsetTop after the style write forces the reflow we need.
-      sc.scrollTop = anchor.el.offsetTop + anchor.frac * anchor.el.offsetHeight - root.offsetTop;
+      const { el, frac, pin } = anchor;
+      let lastSet = NaN;
+      const correct = () => {
+        const r = el.getBoundingClientRect();
+        // Where the anchored fraction of the block currently sits, versus
+        // where the viewport top is — the delta IS the drift.
+        const d = r.top + frac * r.height - pin;
+        if (Math.abs(d) > 0.5) {
+          sc.scrollTop += d;
+          lastSet = sc.scrollTop;
+        }
+      };
+      correct(); // same layout pass — nothing flashes
+      const t0 = performance.now();
+      const settle = () => {
+        if (!Number.isNaN(lastSet) && Math.abs(sc.scrollTop - lastSet) > 4) return;
+        correct();
+        if (performance.now() - t0 < 1500) raf = requestAnimationFrame(settle);
+      };
+      raf = requestAnimationFrame(settle);
     }
     prevScaleRef.current = fontScale;
     localStorage.setItem(`nexus.parsed.font.${nodeId}`, String(fontScale));
+    return () => cancelAnimationFrame(raf);
   }, [fontScale, content, nodeId]);
 
   // ── Pinch-to-zoom on the reading surface (iPad) ──

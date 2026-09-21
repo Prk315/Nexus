@@ -1,6 +1,7 @@
 import { forwardRef, useEffect, useImperativeHandle, useRef } from "react";
+import { createPortal } from "react-dom";
 import * as api from "../lib/api";
-import { coalescedOf, emaNext, overscanCovers, pressureOf, segmentWidths, strokeBounds } from "../lib/marginInkMath";
+import { coalescedOf, emaNext, pressureOf, segmentWidths, strokeBounds } from "../lib/marginInkMath";
 
 // ── Data types ──────────────────────────────────────────────────────────────
 // Document coords = position relative to `.parsed-content`'s own top-left
@@ -160,10 +161,6 @@ export const MarginInkLayer = forwardRef<MarginInkHandle, Props>(function Margin
   // blit plus the wet stroke — the #102 lesson from the Canvas ink work:
   // per-frame cost must not scale with everything drawn so far.
   const dataVerRef = useRef(0);
-  // Predicted Pencil samples: preview-only tail that cuts perceived latency.
-  // Overwritten every move and never pushed into the stroke, so a
-  // misprediction can never enter the committed ink.
-  const predictedRef = useRef<{ x: number; y: number }[]>([]);
   // Smoothed pressure state for the stroke in progress: the Pencil reports
   // pressure in visible quantisation steps at 240 Hz, and raw values render
   // as a width staircase.
@@ -192,14 +189,7 @@ export const MarginInkLayer = forwardRef<MarginInkHandle, Props>(function Margin
   // this is the belt-and-braces re-measure once the real element is in.
   useEffect(() => {
     contentElRef.current = contentEl;
-    dirtyRef.current = true;
-    const canvas = canvasRef.current;
-    if (canvas) {
-      const dpr = window.devicePixelRatio || 1;
-      const rect = canvas.getBoundingClientRect();
-      canvas.width = Math.min(MAX_CANVAS_DIM, Math.max(1, Math.round(rect.width * dpr)));
-      canvas.height = Math.min(MAX_CANVAS_DIM, Math.max(1, Math.round(rect.height * dpr)));
-    }
+    needPlaceRef.current = true;
   }, [contentEl]);
 
   // ── Load on mount / nodeId change ──
@@ -232,164 +222,171 @@ export const MarginInkLayer = forwardRef<MarginInkHandle, Props>(function Margin
     };
   }, [nodeId]);
 
-  // ── Canvas sizing (devicePixelRatio-aware) ──
+  // ── Placement: the canvas LIVES IN THE SCROLL LAYER ────────────────────────
+  //
+  // ⚠️ This is the fix for ink visibly lagging the page. The previous canvas
+  // was viewport-fixed and repainted from a scroll listener — but iPadOS
+  // scrolls on the compositor thread, so JS sees the scroll AFTER the page
+  // has already moved and the ink snaps into place a frame late, every
+  // frame. Now the canvas is absolutely positioned INSIDE the scroll
+  // container at a document offset, covering the viewport plus one viewport
+  // of apron each side: the compositor moves ink and text as one layer and
+  // a scroll frame costs NOTHING here. JS only acts when the view nears the
+  // apron edge, when data changes, or while a stroke is wet.
+  //
+  // The content-origin offsets (offX/offY) are measured ONCE per placement:
+  // canvas and content share the scroll layer, so their relative position is
+  // scroll-invariant — the per-frame getBoundingClientRect pair is gone.
+  const placeRef = useRef({ top: 0, cssW: 0, cssH: 0, dpr: 1, offX: 0, offY: 0, valid: false });
+  const needPlaceRef = useRef(true);
+  // How many points of the wet stroke are already on the canvas — pen ink is
+  // drawn INCREMENTALLY in the pointer handler (lowest latency, no clear),
+  // and a full repaint resets this to "all of them".
+  const wetDrawnRef = useRef(0);
+
   useEffect(() => {
-    const canvas = canvasRef.current;
-    if (!canvas) return;
-    function resize() {
+    const sc = scrollEl;
+    if (!sc) return;
+    const boundsCache = new WeakMap<MarginStroke, [number, number, number, number]>();
+
+    function place(canvas: HTMLCanvasElement) {
+      const content = contentElRef.current;
       const dpr = window.devicePixelRatio || 1;
-      const rect = canvas!.getBoundingClientRect();
-      canvas!.width = Math.min(MAX_CANVAS_DIM, Math.max(1, Math.round(rect.width * dpr)));
-      canvas!.height = Math.min(MAX_CANVAS_DIM, Math.max(1, Math.round(rect.height * dpr)));
+      const vh = Math.max(1, sc!.clientHeight);
+      const cssW = Math.max(1, Math.min(sc!.scrollWidth, Math.floor(MAX_CANVAS_DIM / dpr)));
+      const cssH = Math.max(1, Math.min(3 * vh, Math.floor(MAX_CANVAS_DIM / dpr), Math.max(vh, sc!.scrollHeight)));
+      const top = Math.max(0, Math.min(sc!.scrollTop - vh, sc!.scrollHeight - cssH));
+      canvas.style.top = `${top}px`;
+      canvas.style.left = "0px";
+      canvas.style.width = `${cssW}px`;
+      canvas.style.height = `${cssH}px`;
+      const bw = Math.max(1, Math.round(cssW * dpr));
+      const bh = Math.max(1, Math.round(cssH * dpr));
+      if (canvas.width !== bw) canvas.width = bw;
+      if (canvas.height !== bh) canvas.height = bh;
+      const cr = content?.getBoundingClientRect();
+      const kr = canvas.getBoundingClientRect();
+      placeRef.current = {
+        top, cssW, cssH, dpr,
+        offX: cr && kr ? cr.left - kr.left : 0,
+        offY: cr && kr ? cr.top - kr.top : 0,
+        valid: true,
+      };
+      needPlaceRef.current = false;
       dirtyRef.current = true;
     }
-    resize();
-    const ro = new ResizeObserver(resize);
-    ro.observe(canvas);
-    return () => ro.disconnect();
-  }, []);
 
-  // ── Repaint on scroll (both axes — margins mode adds horizontal scroll too) ──
-  useEffect(() => {
-    if (!scrollEl) return;
-    function onScroll() { dirtyRef.current = true; }
-    scrollEl.addEventListener("scroll", onScroll, { passive: true });
-    return () => scrollEl.removeEventListener("scroll", onScroll);
-  }, [scrollEl]);
+    function covered(): boolean {
+      const p = placeRef.current;
+      if (!p.valid) return false;
+      const vh = sc!.clientHeight;
+      const topGap = sc!.scrollTop - p.top;
+      const botGap = p.top + p.cssH - (sc!.scrollTop + vh);
+      if (topGap < vh * 0.33 && p.top > 0) return false;
+      if (botGap < vh * 0.33 && p.top + p.cssH < sc!.scrollHeight - 1) return false;
+      return true;
+    }
 
-  // Repaint when capture toggles (pointer-events / cursor change, strokes may
-  // now be interactive) and whenever nodeId's freshly-loaded data lands.
-  useEffect(() => { dirtyRef.current = true; }, [enabled]);
+    function repaint(canvas: HTMLCanvasElement) {
+      const ctx = canvas.getContext("2d", { desynchronized: true });
+      if (!ctx) return;
+      const p = placeRef.current;
+      ctx.setTransform(1, 0, 0, 1, 0, 0);
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      ctx.setTransform(p.dpr, 0, 0, p.dpr, 0, 0);
+      // Cull to the canvas' own document rect — cost tracks the ink NEAR the
+      // viewport, never the ink in the whole book.
+      const docL = -p.offX, docT = -p.offY;
+      const docR = docL + p.cssW, docB = docT + p.cssH;
+      const visible: MarginStroke[] = [];
+      for (const st of dataRef.current.strokes) {
+        let b = boundsCache.get(st);
+        if (!b) { b = strokeBounds(st.pts, st.width * 4.5); boundsCache.set(st, b); }
+        if (b[2] >= docL && b[0] <= docR && b[3] >= docT && b[1] <= docB) visible.push(st);
+      }
+      for (const st of visible) if (st.tool === "highlighter") drawMarginStroke(ctx, st, p.offX, p.offY);
+      for (const st of visible) if (st.tool !== "highlighter") drawMarginStroke(ctx, st, p.offX, p.offY);
+      const wet = currentStrokeRef.current;
+      if (wet) {
+        drawMarginStroke(ctx, wet, p.offX, p.offY);
+        wetDrawnRef.current = wet.pts.length / 3;
+      }
+      const ep = erasePosRef.current;
+      if (ep) {
+        // The iPad has no cursor, so this ring is the only statement of
+        // where the eraser bites.
+        ctx.save();
+        ctx.strokeStyle = "rgba(120,120,130,0.9)";
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        ctx.arc(p.offX + ep.x, p.offY + ep.y, ERASER_RADIUS, 0, Math.PI * 2);
+        ctx.stroke();
+        ctx.restore();
+      }
+    }
 
-  // ── rAF redraw loop, split wet/dry — and the dry layer is deliberately
-  // NOT re-rendered per scroll frame. It carries half a viewport of overscan
-  // per side and is only rebuilt when the view scrolls past that apron, when
-  // the data version moves, or when the canvas resizes; a scroll frame inside
-  // the apron is a single offset blit. Rebuilds themselves cull by stroke
-  // bounding box, so their cost tracks the ink NEAR the viewport, not the ink
-  // in the whole book. (The first cut of this split re-rendered on every
-  // scroll frame and touched every stroke — strictly more work while
-  // scrolling than the code it replaced. Caught on review; the apron and the
-  // culling are the fix.) Document→viewport translation still comes from
-  // live bounding rects each paint. ──
-  useEffect(() => {
-    const dry = document.createElement("canvas");
-    let dryKey = { ver: -1, w: 0, h: 0, ox: NaN, oy: NaN, ov: 0 };
-    const boundsCache = new WeakMap<MarginStroke, [number, number, number, number]>();
-    let idleClear = false; // canvas known blank — skip per-frame work on inkless books
     function loop() {
-      if (dirtyRef.current) {
-        const canvas = canvasRef.current;
-        const content = contentElRef.current;
-        // Fast path: nothing stored, nothing wet. Without it every scroll
-        // frame of an UNMARKED book still paid two getBoundingClientRect
-        // reads plus a full-viewport retina clear+blit — pure overhead in
-        // exactly the common case. Clear once, then stay asleep until ink
-        // exists again (dirtyRef keeps being set by scroll, so idleClear is
-        // what actually gates the work).
-        if (canvas && !dataRef.current.strokes.length && !currentStrokeRef.current && !erasePosRef.current) {
-          if (!idleClear) {
-            const ctx = canvas.getContext("2d", { desynchronized: true })!;
-            ctx.setTransform(1, 0, 0, 1, 0, 0);
-            ctx.clearRect(0, 0, canvas.width, canvas.height);
-            idleClear = true;
-          }
-          dirtyRef.current = false;
-          rafRef.current = requestAnimationFrame(loop);
-          return;
-        }
-        idleClear = false;
-        if (canvas) {
-          // desynchronized: a latency hint the compositor may honour by
-          // skipping a frame of buffering; ignored where unsupported.
-          const ctx = canvas.getContext("2d", { desynchronized: true })!;
-          const dpr = window.devicePixelRatio || 1;
-          ctx.setTransform(1, 0, 0, 1, 0, 0);
-          ctx.clearRect(0, 0, canvas.width, canvas.height);
-          if (content) {
-            const canvasRect = canvas.getBoundingClientRect();
-            const contentRect = content.getBoundingClientRect();
-            const offsetX = contentRect.left - canvasRect.left;
-            const offsetY = contentRect.top - canvasRect.top;
-
-            const ov = Math.round(canvasRect.height / 2); // apron per side, css px
-            const ver = dataVerRef.current;
-            const sizeStale = dry.width !== canvas.width + 2 * ov * dpr
-                           || dry.height !== canvas.height + 2 * ov * dpr;
-            if (dryKey.ver !== ver || sizeStale
-                || !overscanCovers(dryKey.ox, offsetX, ov)
-                || !overscanCovers(dryKey.oy, offsetY, ov)) {
-              if (sizeStale) {           // reallocation clears; otherwise clear by hand
-                dry.width = canvas.width + 2 * ov * dpr;
-                dry.height = canvas.height + 2 * ov * dpr;
-              }
-              const dctx = dry.getContext("2d")!;
-              dctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-              if (!sizeStale) dctx.clearRect(0, 0, dry.width / dpr, dry.height / dpr);
-              // Cull to the apron rect, in document coords.
-              const docL = -offsetX - ov, docT = -offsetY - ov;
-              const docR = docL + dry.width / dpr, docB = docT + dry.height / dpr;
-              const visible: MarginStroke[] = [];
-              for (const st of dataRef.current.strokes) {
-                let b = boundsCache.get(st);
-                if (!b) { b = strokeBounds(st.pts, st.width * 4.5); boundsCache.set(st, b); }
-                if (b[2] >= docL && b[0] <= docR && b[3] >= docT && b[1] <= docB) visible.push(st);
-              }
-              const dox = offsetX + ov, doy = offsetY + ov;
-              for (const st of visible) if (st.tool === "highlighter") drawMarginStroke(dctx, st, dox, doy);
-              for (const st of visible) if (st.tool !== "highlighter") drawMarginStroke(dctx, st, dox, doy);
-              dryKey = { ver, w: canvas.width, h: canvas.height, ox: offsetX, oy: offsetY, ov };
-            }
-            // Blit the apron with the scroll delta since the key was cut.
-            ctx.drawImage(dry, ((offsetX - dryKey.ox) - dryKey.ov) * dpr,
-                               ((offsetY - dryKey.oy) - dryKey.ov) * dpr);
-
-            ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-            const wet = currentStrokeRef.current;
-            if (wet) {
-              drawMarginStroke(ctx, wet, offsetX, offsetY);
-              const pred = predictedRef.current;
-              if (pred.length && wet.pts.length >= 3) {
-                // The predicted tail rides at reduced alpha so a misprediction
-                // reads as a ghost for one frame, never as committed ink.
-                const lx = offsetX + wet.pts[wet.pts.length - 3];
-                const ly = offsetY + wet.pts[wet.pts.length - 2];
-                const lp = wet.pts[wet.pts.length - 1];
-                ctx.save();
-                ctx.globalAlpha = wet.tool === "highlighter" ? 0.2 : 0.6;
-                ctx.strokeStyle = wet.color;
-                ctx.lineCap = "round";
-                ctx.lineJoin = "round";
-                ctx.lineWidth = Math.max(wet.width * (wet.tool === "highlighter" ? 3 : 1) * (0.5 + lp), 0.5);
-                ctx.beginPath();
-                ctx.moveTo(lx, ly);
-                for (const pt2 of pred) ctx.lineTo(offsetX + pt2.x, offsetY + pt2.y);
-                ctx.stroke();
-                ctx.restore();
-              }
-            }
-            const ep = erasePosRef.current;
-            if (ep) {
-              // The iPad has no cursor, so this ring is the only statement of
-              // where the eraser bites — same affordance as the Canvas ink
-              // eraser.
-              ctx.save();
-              ctx.strokeStyle = "rgba(120,120,130,0.9)";
-              ctx.lineWidth = 1;
-              ctx.beginPath();
-              ctx.arc(offsetX + ep.x, offsetY + ep.y, ERASER_RADIUS, 0, Math.PI * 2);
-              ctx.stroke();
-              ctx.restore();
-            }
-          }
-        }
-        dirtyRef.current = false;
+      const canvas = canvasRef.current;
+      if (canvas) {
+        if (needPlaceRef.current) place(canvas);
+        if (dirtyRef.current) { repaint(canvas); dirtyRef.current = false; }
       }
       rafRef.current = requestAnimationFrame(loop);
     }
+    needPlaceRef.current = true;
     rafRef.current = requestAnimationFrame(loop);
-    return () => cancelAnimationFrame(rafRef.current);
-  }, []);
+
+    // Scrolling does NO painting — it only asks "is the apron still under
+    // the viewport?", and only a crossing schedules a re-place.
+    const onScroll = () => { if (!covered()) needPlaceRef.current = true; };
+    sc.addEventListener("scroll", onScroll, { passive: true });
+    const ro = new ResizeObserver(() => { needPlaceRef.current = true; });
+    ro.observe(sc);
+    if (contentEl) ro.observe(contentEl);
+    return () => {
+      cancelAnimationFrame(rafRef.current);
+      sc.removeEventListener("scroll", onScroll);
+      ro.disconnect();
+    };
+  }, [scrollEl, contentEl]);
+
+  // Incremental wet-pen rendering, straight from the pointer handler: no
+  // clear, no rAF wait — new segments land on the canvas the moment the
+  // event arrives, and the canonical redraw on pointerup replaces them.
+  // (Highlighters can't join incrementally — 0.35 alpha stacks at every
+  // joint — so they take the full-repaint path per frame instead.)
+  function wetAppend() {
+    const wet = currentStrokeRef.current;
+    const canvas = canvasRef.current;
+    const p = placeRef.current;
+    if (!wet || !canvas || !p.valid) { dirtyRef.current = true; return; }
+    const ctx = canvas.getContext("2d", { desynchronized: true });
+    if (!ctx) return;
+    ctx.setTransform(p.dpr, 0, 0, p.dpr, 0, 0);
+    ctx.globalAlpha = 1;
+    ctx.strokeStyle = wet.color;
+    ctx.fillStyle = wet.color;
+    ctx.lineCap = "round";
+    ctx.lineJoin = "round";
+    const pts = wet.pts;
+    const n = pts.length / 3;
+    if (wetDrawnRef.current === 0 && n >= 1) {
+      const r = Math.max((wet.width * (0.5 + pts[2])) / 2, 0.5);
+      ctx.beginPath();
+      ctx.arc(p.offX + pts[0], p.offY + pts[1], r, 0, Math.PI * 2);
+      ctx.fill();
+      wetDrawnRef.current = 1;
+    }
+    for (let i = Math.max(1, wetDrawnRef.current); i < n; i++) {
+      const avg = (pts[(i - 1) * 3 + 2] + pts[i * 3 + 2]) / 2;
+      ctx.lineWidth = Math.max(wet.width * (0.5 + avg), 0.5);
+      ctx.beginPath();
+      ctx.moveTo(p.offX + pts[(i - 1) * 3], p.offY + pts[(i - 1) * 3 + 1]);
+      ctx.lineTo(p.offX + pts[i * 3], p.offY + pts[i * 3 + 1]);
+      ctx.stroke();
+    }
+    wetDrawnRef.current = n;
+  }
 
   // ── iPad Safari + Apple Pencil: a Pencil drag is also reported as a touch,
   // and by default that touch pans the scroll container, cancelling the
@@ -524,6 +521,9 @@ export const MarginInkLayer = forwardRef<MarginInkHandle, Props>(function Margin
         width: BASE_WIDTH,
         pts: [pt.x, pt.y, pressure],
       };
+      wetDrawnRef.current = 0;
+      if (tool === "highlighter") dirtyRef.current = true; else wetAppend();
+      return;
     }
     dirtyRef.current = true;
   }
@@ -550,11 +550,8 @@ export const MarginInkLayer = forwardRef<MarginInkHandle, Props>(function Margin
       penEmaRef.current = emaNext(penEmaRef.current, pressureOf(ev));
       pts.push(pt.x, pt.y, penEmaRef.current);
     }
-    // Preview-only latency cut: draw the browser's predicted samples as the
-    // stroke's tail, replaced wholesale on the next real move.
-    predictedRef.current = (e.getPredictedEvents?.() ?? [])
-      .map(ev => toDoc(ev.clientX, ev.clientY));
-    dirtyRef.current = true;
+    if (currentStrokeRef.current.tool === "highlighter") dirtyRef.current = true;
+    else wetAppend();
   }
 
   function onPointerUp(e: PointerEvent) {
@@ -580,7 +577,7 @@ export const MarginInkLayer = forwardRef<MarginInkHandle, Props>(function Margin
       pushUndo({ kind: "add", id: stroke.id });
       scheduleSave(dataRef.current);
     }
-    predictedRef.current = [];
+    wetDrawnRef.current = 0;
     dirtyRef.current = true;
   }
 
@@ -605,5 +602,9 @@ export const MarginInkLayer = forwardRef<MarginInkHandle, Props>(function Margin
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [scrollEl, enabled, tool, color]);
 
-  return <canvas ref={canvasRef} className="margin-ink-canvas" />;
+  // Portaled INTO the scroll container: the canvas must live in the scroll
+  // layer for the compositor to move it with the text (see placement above).
+  return scrollEl
+    ? createPortal(<canvas ref={canvasRef} className="margin-ink-canvas" />, scrollEl)
+    : null;
 });
