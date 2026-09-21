@@ -8002,18 +8002,15 @@ body.vault-block-dragging .tt-bubble {
      blank. Pinning the CSS box breaks the loop. */
   width: 100%;
   height: 100%;
-  pointer-events: none; /* margins off (or read-only): strokes still render, no capture */
+  /* ⚠️ Permanently pass-through. Ink capture lives on the SCROLL CONTAINER
+     (MarginInkLayer's native listeners decide per pointer type: pen draws,
+     touch navigates, mouse only in wide-margins mode) — a capturing canvas
+     was what forced drawing behind a mode button, eating links, text
+     selection and the facit <details> whenever it was on. */
+  pointer-events: none;
 }
-.margin-ink-canvas.margin-ink-active {
-  pointer-events: auto;
-  /* Allow native finger pan/scroll (both axes — margins mode adds
-     horizontal scroll); MarginInkLayer's own non-passive touchmove listener
-     preventDefaults only stylus touches so Safari doesn't cancel the Pencil
-     stroke mid-draw. touch-action:none here would block finger-scrolling
-     the book entirely, which is the opposite of the intent. */
-  touch-action: pan-x pan-y;
-  cursor: crosshair;
-}
+/* Mouse drawing is live in wide-margins mode — say so with the cursor. */
+.parsed-scroll.parsed-margins-on { cursor: crosshair; }
 
 .parsed-margin-colors { display: inline-flex; align-items: center; gap: 4px; padding: 0 4px; }
 .parsed-margin-dot {
