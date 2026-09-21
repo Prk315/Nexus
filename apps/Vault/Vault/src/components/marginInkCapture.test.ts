@@ -68,8 +68,13 @@ async function mount(enabled: boolean) {
       color: "#000",
     }),
   );
-  // flush effects (listener attachment) — rAF/setTimeout(0) in domSetup
-  await new Promise((r) => setTimeout(r, 25));
+  // Wait for the PORTALED canvas to land in the scroll container — that is
+  // proof the commit happened — then one more macrotask for the listener
+  // effect. A fixed delay here flaked on the suite's first test.
+  for (let i = 0; i < 100 && !scroll.querySelector("canvas"); i++) {
+    await new Promise((r) => setTimeout(r, 5));
+  }
+  await new Promise((r) => setTimeout(r, 15));
   return { scroll, ink };
 }
 

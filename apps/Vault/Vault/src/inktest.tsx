@@ -43,4 +43,43 @@ function Harness() {
     </div>
   );
 }
+// Self-test (?auto=1): synthesise a pen stroke on the scroll container and
+// read the canvas back — asserts the whole chain (per-pointer capture →
+// placement in the scroll layer → doc-coord painting) in real WebKit, and
+// that the ink RIDES THE SCROLL: after scrolling, the same document point
+// must still be inked. POSTs to the :8899 sidecar like readertest.
+async function autotest() {
+  if (!location.search.includes("auto=1")) return;
+  const post = (d: unknown) =>
+    fetch("http://localhost:8899/log", { method: "POST", body: JSON.stringify(d) }).catch(() => {});
+  const frame = () => new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)));
+  await new Promise(r => setTimeout(r, 800));
+  const sc = document.querySelector(".parsed-scroll") as HTMLElement;
+  const cv = document.querySelector(".margin-ink-canvas") as HTMLCanvasElement;
+  if (!sc || !cv) { post({ ink: "missing elements" }); return; }
+  const r = sc.getBoundingClientRect();
+  const pev = (type: string, x: number, y: number) =>
+    new PointerEvent(type, { bubbles: true, cancelable: true, clientX: x, clientY: y,
+      pointerId: 7, pointerType: "pen", pressure: 0.6, buttons: 1 });
+  sc.dispatchEvent(pev("pointerdown", r.left + 100, r.top + 100));
+  for (let i = 1; i <= 20; i++) sc.dispatchEvent(pev("pointermove", r.left + 100 + i * 5, r.top + 100 + i * 3));
+  sc.dispatchEvent(pev("pointerup", r.left + 200, r.top + 160));
+  await frame();
+  const sample = (vx: number, vy: number) => {
+    const cr = cv.getBoundingClientRect();
+    const sx = Math.round((vx - cr.left) * (cv.width / cr.width));
+    const sy = Math.round((vy - cr.top) * (cv.height / cr.height));
+    const d = cv.getContext("2d")!.getImageData(Math.max(0, sx - 8), Math.max(0, sy - 8), 16, 16).data;
+    let hit = false;
+    for (let i = 3; i < d.length; i += 4) if (d[i] > 0) { hit = true; break; }
+    return hit;
+  };
+  const midX = r.left + 150, midY = r.top + 130;
+  const inked = sample(midX, midY);
+  sc.scrollTop += 300;
+  await frame(); await frame();
+  const inkedAfterScroll = sample(midX, midY - 300);
+  post({ stage: "ink", count: (window as any).__harness.count(), inked, inkedAfterScroll });
+}
+autotest();
 createRoot(document.getElementById("root")!).render(<Harness />);

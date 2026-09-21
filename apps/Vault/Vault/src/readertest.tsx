@@ -66,6 +66,53 @@ async function autotest() {
   cd.sort((a, b) => a - b);
   const cq = (p: number) => Math.round(cd[Math.floor(p * cd.length)] || 0);
 
+  // zoom anchor drift: pick the element at the top of the viewport, zoom
+  // two steps in and (after the settle window) two steps out — the same
+  // element must still sit at the top. This measures the "zooming changes
+  // my location" bug end-to-end, INCLUDING the late shifts from
+  // content-visibility sections re-materialising at the new font size.
+  const scr = sc.getBoundingClientRect();
+  const elAtTop = (): Element | null => {
+    for (const s of pc.children) {
+      const sr = s.getBoundingClientRect();
+      if (sr.bottom < scr.top) continue;
+      for (const b of s.children) {
+        const r = b.getBoundingClientRect();
+        if (r.bottom > scr.top + 10) return b;
+      }
+      return s;
+    }
+    return null;
+  };
+  const btn = (label: string) =>
+    [...document.querySelectorAll("button")].find(b => b.textContent === label);
+  const anchorEl = elAtTop();
+  const top0 = anchorEl ? anchorEl.getBoundingClientRect().top : NaN;
+  let zoomDriftIn = NaN, zoomDriftBack = NaN;
+  const trace: Record<string, number> = {
+    st0: Math.round(sc.scrollTop), sh0: Math.round(sc.scrollHeight),
+  };
+  const mark = (k: string) => {
+    trace[`st_${k}`] = Math.round(sc.scrollTop);
+    trace[`sh_${k}`] = Math.round(sc.scrollHeight);
+    if (anchorEl) trace[`a_${k}`] = Math.round(anchorEl.getBoundingClientRect().top);
+  };
+  if (anchorEl && btn("A+") && btn("A−")) {
+    btn("A+")!.click();
+    await new Promise(r => setTimeout(r, 60)); mark("in1_60ms");
+    await new Promise(r => setTimeout(r, 90));
+    btn("A+")!.click();
+    await new Promise(r => setTimeout(r, 60)); mark("in2_60ms");
+    await new Promise(r => setTimeout(r, 540)); mark("in2_600ms");
+    await new Promise(r => setTimeout(r, 1200)); mark("in2_1800ms");
+    zoomDriftIn = Math.round(anchorEl.getBoundingClientRect().top - top0);
+    btn("A−")!.click();
+    await new Promise(r => setTimeout(r, 150));
+    btn("A−")!.click();
+    await new Promise(r => setTimeout(r, 1800)); mark("back_1800ms");
+    zoomDriftBack = Math.round(anchorEl.getBoundingClientRect().top - top0);
+  }
+
   // what materialised
   const imgs = [...pc.querySelectorAll("img")];
   const mathDone = pc.querySelectorAll("[data-math-done]").length;
@@ -83,6 +130,7 @@ async function autotest() {
       failed: imgs.filter(i => i.complete && i.naturalWidth === 0).length,
     },
     math: { total: mathTotal, rendered: mathDone },
+    zoom: { driftIn: zoomDriftIn, driftBack: zoomDriftBack, top0: Math.round(top0), ...trace },
     viewport: { w: innerWidth, h: innerHeight, dpr: devicePixelRatio },
     ua: navigator.userAgent.slice(0, 80),
   });
