@@ -10,7 +10,8 @@ import { createPathfinderApi } from "@nexus/core/pathfinder";
 import { loadSupabaseConfig } from "./config.ts";
 import { AuthError, exitCodeFor, oneLine, UserError } from "./errors.ts";
 import { header, printJson } from "./output.ts";
-import { registerPfCommands } from "./pf/commands.ts";
+import { registerPfCommands, type PfDeps } from "./pf/commands.ts";
+import { registerBoardCommand } from "./board/command.ts";
 import { deleteProfile, listProfiles, loginCommandFor, profilePath, readProfile, resolveProfileName, writeProfile } from "./profiles.ts";
 import { prompt, promptSecret } from "./prompt.ts";
 import { makeClient, profileFromSession, requireSession } from "./session.ts";
@@ -107,7 +108,9 @@ registerVaultCommands(program, {
   },
 });
 
-registerPfCommands(program, {
+// One PathFinder session factory, shared by `pf ...` and `board` so the two
+// cannot drift over which account they open or how the brief is fetched.
+const pfDeps: PfDeps = {
   async open(flag) {
     const name = resolveProfileName(flag);
     const ctx = await requireSession(name);
@@ -123,7 +126,10 @@ registerPfCommands(program, {
       },
     };
   },
-});
+};
+
+registerPfCommands(program, pfDeps);
+registerBoardCommand(program, pfDeps);
 
 // ── run ──────────────────────────────────────────────────────────────────────
 
