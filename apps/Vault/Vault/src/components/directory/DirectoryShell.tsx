@@ -1,0 +1,381 @@
+import { ReactNode, Suspense, useMemo, useState } from "react";
+import { VaultGraph } from "../../types";
+import { lazyWithReload } from "../../lib/lazyLoad";
+import { DirectoryTree } from "./DirectoryTree";
+import type { ImportKind } from "./DirectoryTree";
+import { FolderDirectory } from "./FolderDirectory";
+import { Minimap } from "./Minimap";
+import { containingFolder, descendantSubgraph, tagSubgraph } from "./subgraph";
+import { useElementSize } from "./useDirectory";
+import type { LayoutMode } from "./useDirectory";
+
+// GraphView pulls react-force-graph-2d, so it rides the same lazy path App.tsx
+// uses for it. Two lazyWithReload calls on one module share a chunk.
+const GraphView = lazyWithReload(() => import("../GraphView").then((m) => ({ default: m.GraphView })));
+
+// ── The prototype shell ─────────────────────────────────────────────────────
+//
+//   ———————————————— header ————————————————
+//   [ sidebar ] [ graph view                ]
+//   [ sidebar ] [ graph view                ]
+//   [ sidebar ] [ folder directory          ]
+//
+// The sidebar spans all three rows and stays resizable; the graph takes rows
+// 1–2 of the two right-hand columns and the folder directory row 3.
+
+/** What the main graph is currently showing. */
+export type Focus =
+  | { type: "all" }
+  | { type: "folder"; id: string }
+  | { type: "tag"; tag: string };
+
+/** How many tags are worth drawing as clusters before the canvas is soup. */
+const MAX_CLUSTERS = 8;
+
+interface Props {
+  graph: VaultGraph;
+  graphData: { nodes: any[]; links: any[] };
+  selectedId: string | null;
+  currentUserId?: string | null;
+
+  sidebarWidth: number;
+  sidebarDragging: boolean;
+  onStartResize: (e: React.PointerEvent) => void;
+
+  sidebarView: "list" | "graph" | "tags";
+  onSidebarView: (v: "list" | "graph" | "tags") => void;
+  /** Rendered under the sidebar header when the theme panel is open. */
+  themeSlot?: ReactNode;
+  themeOpen: boolean;
+  onToggleTheme: () => void;
+  /** The existing TagsPanel, wired by App — this shell owns no tag state. */
+  tagsSlot: ReactNode;
+
+  expanded: Set<string>;
+  onToggleExpanded: (id: string) => void;
+  onSelect: (id: string) => void;
+  onDelete: (id: string) => void;
+  /** parentId === null makes a root node — what the removed block could do. */
+  onCreate: (parentId: string | null, name: string, kind: string) => void;
+  /** Routes to App's existing import handlers; it owns the file inputs. */
+  onImport: (parentId: string | null, kind: ImportKind) => void;
+  importingParsed?: boolean;
+  onUnlink?: (parentId: string, childId: string) => void;
+  onToggleShare?: (id: string, isShared: boolean) => void;
+
+  linkMode: boolean;
+  linkSource: string | null;
+  onToggleLinkMode: () => void;
+  onGraphNodeClick: (id: string) => void;
+  onDeleteEdge: (a: string, b: string) => void;
+  onSavePositions: (nodes: any[]) => void;
+
+  onOpenSearch: () => void;
+  layout: LayoutMode;
+  onLayout: (m: LayoutMode) => void;
+}
+
+export function DirectoryShell(props: Props) {
+  const {
+    graph,
+    graphData,
+    selectedId,
+    currentUserId,
+    sidebarWidth,
+    sidebarDragging,
+    onStartResize,
+    sidebarView,
+    onSidebarView,
+    themeSlot,
+    themeOpen,
+    onToggleTheme,
+    tagsSlot,
+    expanded,
+    onToggleExpanded,
+    onSelect,
+    onDelete,
+    onCreate,
+    onImport,
+    importingParsed,
+    onUnlink,
+    onToggleShare,
+    linkMode,
+    linkSource,
+    onToggleLinkMode,
+    onGraphNodeClick,
+    onDeleteEdge,
+    onSavePositions,
+    onOpenSearch,
+    layout,
+    onLayout,
+  } = props;
+
+  const [focus, setFocus] = useState<Focus>({ type: "all" });
+  /** null = the top of the vault. Follows the focus, or the selection. */
+  const [openFolder, setOpenFolder] = useState<string | null>(null);
+
+  const graphCell = useElementSize<HTMLDivElement>();
+  const sideCell = useElementSize<HTMLDivElement>();
+
+  // ── What the graph shows ──────────────────────────────────────────────────
+  // Everything outside the focus is HIDDEN, not dimmed: the point of pressing a
+  // folder is that what is left on screen is the answer.
+  const visible = useMemo(() => {
+    if (focus.type === "folder") return new Set(descendantSubgraph(graph, focus.id).nodeIds);
+    if (focus.type === "tag") return new Set(tagSubgraph(graph, focus.tag).nodeIds);
+    return null;
+  }, [graph, focus]);
+
+  const focusedData = useMemo(() => {
+    if (!visible) return graphData;
+    const end = (v: any) => (typeof v === "object" && v ? v.id : v);
+    return {
+      nodes: graphData.nodes.filter((n: any) => visible.has(n.id)),
+      links: graphData.links.filter(
+        (l: any) => visible.has(end(l.source)) && visible.has(end(l.target)),
+      ),
+    };
+  }, [graphData, visible]);
+
+  // Tags worth drawing as clusters, most-used first.
+  const clusterTags = useMemo(() => {
+    const counts = new Map<string, number>();
+    for (const n of focusedData.nodes as any[]) {
+      for (const t of n.tags ?? []) counts.set(t, (counts.get(t) ?? 0) + 1);
+    }
+    return [...counts.entries()]
+      .filter(([, c]) => c > 1)
+      .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
+      .slice(0, MAX_CLUSTERS)
+      .map(([t]) => t);
+  }, [focusedData]);
+
+  function focusFolder(id: string) {
+    setFocus({ type: "folder", id });
+    setOpenFolder(id);
+  }
+
+  function focusTag(tag: string) {
+    setFocus((f) => (f.type === "tag" && f.tag === tag ? { type: "all" } : { type: "tag", tag }));
+  }
+
+  function resetFocus() {
+    setFocus({ type: "all" });
+  }
+
+  function selectNode(id: string) {
+    onSelect(id);
+    const folder = containingFolder(graph, id);
+    setOpenFolder(folder);
+  }
+
+  // The pane follows the SELECTION, not the graph focus: picking a note in
+  // another branch while zoomed should show where that note lives, otherwise
+  // the pane is describing something nobody is looking at. Focusing a folder
+  // sets both, so pressing a folder still moves the pane.
+  const currentFolder = openFolder;
+  const focusLabel =
+    focus.type === "folder"
+      ? graph.nodes[focus.id]?.name ?? "—"
+      : focus.type === "tag"
+        ? `#${focus.tag}`
+        : null;
+
+  // Changing what is on screen should re-frame it; the key is what changed.
+  const fitSignal = `${focus.type}:${focus.type === "folder" ? focus.id : focus.type === "tag" ? focus.tag : ""}:${focusedData.nodes.length}`;
+
+  return (
+    <div className="dir-shell">
+      <header className="vault-header">
+        <span className="vault-header-brand">Vault</span>
+        <div className="sidebar-toggle vault-header-switch">
+          <button className={sidebarView === "list" ? "active" : ""} onClick={() => onSidebarView("list")}>
+            List
+          </button>
+          <button className={sidebarView === "graph" ? "active" : ""} onClick={() => onSidebarView("graph")}>
+            Graph
+          </button>
+          <button className={sidebarView === "tags" ? "active" : ""} onClick={() => onSidebarView("tags")}>
+            Tags
+          </button>
+        </div>
+        <button className="vault-search-stub" onClick={onOpenSearch} title="Search (⌘S)">
+          <span>Search the vault</span>
+          <kbd>⌘S</kbd>
+        </button>
+        <div className="vault-header-right">
+          <button
+            className={`sidebar-theme-btn${themeOpen ? " active" : ""}`}
+            onClick={onToggleTheme}
+            title="Colour scheme"
+            aria-pressed={themeOpen}
+          >
+            ◐
+          </button>
+          <button
+            className="vault-layout-btn"
+            onClick={() => onLayout(layout === "grid" ? "classic" : "grid")}
+            title="Switch between the directory prototype and the existing layout"
+          >
+            {layout === "grid" ? "Classic layout" : "Directory layout"}
+          </button>
+        </div>
+      </header>
+
+      <div className="dir-grid">
+        <aside
+          className="dir-sidebar"
+          style={{
+            width: sidebarWidth,
+            minWidth: sidebarWidth,
+            transition: sidebarDragging ? "none" : undefined,
+          }}
+        >
+          <div className="resize-handle" onPointerDown={onStartResize} title="Drag to resize" />
+          {themeOpen ? themeSlot : null}
+          {sidebarView === "list" ? (
+            <div className="dtree-scroll">
+              <DirectoryTree
+                graph={graph}
+                selectedId={selectedId}
+                expanded={expanded}
+                currentUserId={currentUserId}
+                onSelect={selectNode}
+                onToggle={onToggleExpanded}
+                onDelete={onDelete}
+                onCreate={onCreate}
+                onImport={onImport}
+                importingParsed={importingParsed}
+                onUnlink={onUnlink}
+                onToggleShare={onToggleShare}
+                onFocusFolder={focusFolder}
+              />
+            </div>
+          ) : sidebarView === "tags" ? (
+            tagsSlot
+          ) : (
+            <div className="dir-side-graph" ref={sideCell.ref}>
+              {sideCell.size.width > 0 && (
+                <Suspense fallback={<div className="loading-state">Loading graph…</div>}>
+                  <GraphView
+                    graph={graph}
+                    graphData={graphData}
+                    selectedId={selectedId}
+                    linkMode={linkMode}
+                    linkSource={linkSource}
+                    width={sideCell.size.width}
+                    height={sideCell.size.height}
+                    hideToolbar
+                    onNodeClick={onGraphNodeClick}
+                    onEngineStop={() => onSavePositions(graphData.nodes)}
+                    onToggleLinkMode={onToggleLinkMode}
+                  />
+                </Suspense>
+              )}
+            </div>
+          )}
+        </aside>
+
+        <section className="dir-graph" aria-label="Graph">
+          <div className="dir-graph-bar">
+            <div className="dir-focus">
+              <button
+                className={`dir-focus-chip${focus.type === "all" ? " is-current" : ""}`}
+                onClick={resetFocus}
+              >
+                All
+              </button>
+              {focusLabel && (
+                <>
+                  <span className="dir-crumb-sep">/</span>
+                  <span className="dir-focus-chip is-current">{focusLabel}</span>
+                  <span className="dir-focus-count">{focusedData.nodes.length} nodes</span>
+                </>
+              )}
+            </div>
+            <div className="dir-tagbar">
+              {clusterTags.map((tag) => (
+                <button
+                  key={tag}
+                  className={`dir-tag-chip${focus.type === "tag" && focus.tag === tag ? " is-current" : ""}`}
+                  onClick={() => focusTag(tag)}
+                  style={
+                    graph.tag_colors[tag]
+                      ? { borderColor: graph.tag_colors[tag], color: graph.tag_colors[tag] }
+                      : undefined
+                  }
+                  title={`Show only #${tag}`}
+                >
+                  {tag}
+                </button>
+              ))}
+            </div>
+            <button
+              className={`gtb-btn${linkMode ? " active" : ""}`}
+              onClick={onToggleLinkMode}
+              title={linkMode ? "Cancel linking" : "Link two nodes"}
+              aria-label="Link two nodes"
+              aria-pressed={linkMode}
+            >
+              ⊸
+            </button>
+            {linkMode && (
+              <span className="gtb-hint">{linkSource ? "Select target…" : "Select source…"}</span>
+            )}
+          </div>
+
+          <div className="dir-graph-canvas" ref={graphCell.ref}>
+            {graphCell.size.width > 0 && (
+              <Suspense fallback={<div className="loading-state">Loading graph…</div>}>
+                <GraphView
+                  graph={graph}
+                  graphData={focusedData}
+                  selectedId={selectedId}
+                  linkMode={linkMode}
+                  linkSource={linkSource}
+                  width={graphCell.size.width}
+                  height={graphCell.size.height}
+                  hideToolbar
+                  clusterTags={clusterTags}
+                  onClusterClick={focusTag}
+                  onBackgroundClick={resetFocus}
+                  fitSignal={fitSignal}
+                  emptyMessage={
+                    Object.keys(graph.nodes).length === 0
+                      ? "No nodes in vault yet"
+                      : "Nothing here — press All to go back"
+                  }
+                  onNodeClick={(id) => {
+                    onGraphNodeClick(id);
+                    setOpenFolder(containingFolder(graph, id));
+                  }}
+                  onEngineStop={() => onSavePositions(focusedData.nodes)}
+                  onToggleLinkMode={onToggleLinkMode}
+                  onDeleteEdge={onDeleteEdge}
+                />
+              </Suspense>
+            )}
+            <Minimap
+              graph={graph}
+              currentId={focus.type === "folder" ? focus.id : null}
+              onPick={focusFolder}
+              onReset={resetFocus}
+            />
+          </div>
+        </section>
+
+        <FolderDirectory
+          graph={graph}
+          folderId={currentFolder}
+          selectedId={selectedId}
+          onOpenFolder={(id) => {
+            setOpenFolder(id);
+            if (id) focusFolder(id);
+            else resetFocus();
+          }}
+          onSelect={selectNode}
+        />
+      </div>
+    </div>
+  );
+}
