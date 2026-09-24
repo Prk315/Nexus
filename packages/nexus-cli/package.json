@@ -1,0 +1,30 @@
+{
+  "name": "@nexus/cli",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Terminal CLI for the Nexus monorepo: Vault notes and PathFinder tasks, for Claude Code and shell scripts.",
+  "type": "module",
+  "engines": {
+    "node": ">=24"
+  },
+  "bin": {
+    "nexus": "./bin/nexus.js"
+  },
+  "scripts": {
+    "nexus": "tsx src/index.ts",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit -p tsconfig.json"
+  },
+  "dependencies": {
+    "@supabase/supabase-js": "^2.111.0",
+    "commander": "^15.0.0",
+    "mdast-util-from-markdown": "^2.0.3",
+    "tsx": "^4.23.15"
+  },
+  "devDependencies": {
+    "@types/mdast": "^4.0.4",
+    "@types/node": "^24.0.0",
+    "typescript": "^5.8.3",
+    "vitest": "^2.1.9"
+  }
+}
