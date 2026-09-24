@@ -13,7 +13,7 @@
 import { type ReactNode } from "react";
 import type { VaultGraph } from "../../types";
 import type { Detail } from "./lod";
-import { GAP, isLeaf, type GridNode, type LeafNode } from "./model";
+import { isLeaf, type GridNode, type LeafNode } from "./model";
 import { PlaceholderCard, leafName, rendererFor } from "./renderers";
 
 /**
@@ -27,7 +27,7 @@ import { PlaceholderCard, leafName, rendererFor } from "./renderers";
  */
 function AttributeStrip({ grid, graph }: { grid: GridNode; graph?: VaultGraph }) {
   return (
-    <div className="surface-attrs" style={{ gap: GAP / 2 }}>
+    <div className="surface-attrs">
       {grid.children.map((attr) => (
         <div key={attr.id} className="surface-attr">
           <span className="surface-attr-name">

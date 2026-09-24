@@ -3,15 +3,15 @@
   "root": {
     "kind": "grid",
     "id": "surface",
-    "pos": { "x": 0, "y": 0, "w": 6, "h": 6 },
+    "pos": { "x": 0, "y": 0, "w": 3, "h": 5 },
     "viewport": "pan-zoom",
-    "cols": 6,
-    "rows": 6,
+    "cols": 3,
+    "rows": 5,
     "children": [
       {
         "kind": "grid",
         "id": "left-column",
-        "pos": { "x": 0, "y": 0, "w": 2, "h": 4 },
+        "pos": { "x": 0, "y": 0, "w": 1, "h": 4 },
         "viewport": "scroll",
         "cols": 1,
         "rows": 5,
@@ -25,7 +25,7 @@
             "attributes": {
               "kind": "grid",
               "id": "reader-1-attrs",
-              "pos": { "x": 0, "y": 0, "w": 1, "h": 1 },
+              "pos": { "x": 0, "y": 0, "w": 2, "h": 1 },
               "viewport": "fixed",
               "cols": 2,
               "rows": 1,
@@ -52,7 +52,7 @@
       {
         "kind": "grid",
         "id": "right-workspace",
-        "pos": { "x": 2, "y": 0, "w": 4, "h": 4 },
+        "pos": { "x": 1, "y": 0, "w": 2, "h": 4 },
         "viewport": "pan-zoom",
         "cols": 2,
         "rows": 4,
@@ -76,7 +76,7 @@
       {
         "kind": "leaf",
         "id": "note-1",
-        "pos": { "x": 2, "y": 4, "w": 2, "h": 1 },
+        "pos": { "x": 0, "y": 4, "w": 3, "h": 1 },
         "renderer": "note",
         "state": { "name": "Session notes" }
       }

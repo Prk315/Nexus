@@ -22,7 +22,7 @@ import {
   type FocusState,
 } from "./focus";
 import { cellRect, describeSize, detailFor, gridExtent, visibleIndices } from "./lod";
-import { isGrid, type Brick, type GridNode, type Path } from "./model";
+import { CELL_H, CELL_W, isGrid, type Brick, type GridNode, type Path, type Pos } from "./model";
 import { LeafView } from "./LeafView";
 import { leafName } from "./renderers";
 
@@ -36,6 +36,34 @@ function brickLabel(brick: Brick, graph?: VaultGraph): string {
 function brickMeta(brick: Brick): string {
   const kind = isGrid(brick) ? `container · ${brick.viewport}` : brick.renderer;
   return `${kind} · ${describeSize(brick.pos)}`;
+}
+
+/**
+ * The cell rhythm, drawn ONLY on the footprint a brick actually occupies.
+ *
+ * There is no grid pattern on the surface itself and none on a container's
+ * empty space: an infinite ruled background advertises cells nobody has used,
+ * which is the visual form of wasted space. A container's cells are visible
+ * because its children sit on them; a component's cells are visible because it
+ * draws its own divisions. Nothing else is ruled.
+ *
+ * Returns undefined for a 1×1 brick — it is exactly one cell, and its own
+ * border already says so.
+ */
+function cellLines(pos: Pos): React.CSSProperties | undefined {
+  if (pos.w <= 1 && pos.h <= 1) return undefined;
+  const layers: string[] = [];
+  if (pos.w > 1) {
+    layers.push(
+      `repeating-linear-gradient(to right, transparent 0 ${CELL_W - 1}px, var(--border-faint) ${CELL_W - 1}px ${CELL_W}px)`
+    );
+  }
+  if (pos.h > 1) {
+    layers.push(
+      `repeating-linear-gradient(to bottom, transparent 0 ${CELL_H - 1}px, var(--border-faint) ${CELL_H - 1}px ${CELL_H}px)`
+    );
+  }
+  return { backgroundImage: layers.join(",") };
 }
 
 export function GridView({
@@ -53,6 +81,13 @@ export function GridView({
 }) {
   const hostRef = useRef<HTMLDivElement>(null);
   const [size, setSize] = useState({ w: 0, h: 0 });
+  // The ResizeObserver is installed once, so it must not close over the first
+  // render's `dispatch`/`path`. Refs keep the effect's dependency list empty
+  // without letting it report a stale path after a tree edit renumbers one.
+  const dispatchRef = useRef(dispatch);
+  dispatchRef.current = dispatch;
+  const pathRef = useRef(path);
+  pathRef.current = path;
 
   const focused = isFocusedGrid(focus, path);
   const view = viewFor(focus, path);
@@ -62,17 +97,22 @@ export function GridView({
   const detail = detailFor(effectiveZoom(focus, path));
   const extent = gridExtent(grid.cols, grid.rows);
 
-  // Measured for culling. Zero until the observer fires, which visibleIndices
-  // reads as "not measured yet" and keeps everything.
+  // Measured for culling AND for the pan clamp, which is a statement about the
+  // window and so cannot be computed from the document. Zero until the observer
+  // fires, which both visibleIndices and clampView read as "not measured yet".
   useLayoutEffect(() => {
     const el = hostRef.current;
     if (!el) return;
+    const report = (w: number, h: number) => {
+      setSize({ w, h });
+      dispatchRef.current({ type: "setViewport", path: pathRef.current, w, h });
+    };
     const ro = new ResizeObserver(([entry]) => {
       const r = entry.contentRect;
-      setSize({ w: r.width, h: r.height });
+      report(r.width, r.height);
     });
     ro.observe(el);
-    setSize({ w: el.clientWidth, h: el.clientHeight });
+    report(el.clientWidth, el.clientHeight);
     return () => ro.disconnect();
   }, []);
 
@@ -135,7 +175,15 @@ export function GridView({
               className={`surface-brick${selected ? " is-selected" : ""}${
                 inComponent ? " is-component" : ""
               }`}
-              style={{ left: rect.x, top: rect.y, width: rect.w, height: rect.h }}
+              style={{
+                left: rect.x,
+                top: rect.y,
+                width: rect.w,
+                height: rect.h,
+                // A container's cells are drawn by the children standing on
+                // them, so only a component rules its own footprint.
+                ...(isGrid(child) ? null : cellLines(child.pos)),
+              }}
             >
               {/* The title bar is the brick's handle: it selects without
                   entering, so a mouse can put focus on a container in order to

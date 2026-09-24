@@ -8,6 +8,7 @@ import {
   findFreeCell,
   gridAt,
   gridLevel,
+  isWholeCell,
   makeGrid,
   makeLeaf,
   MAX_GRID_DEPTH,
@@ -179,6 +180,20 @@ describe("placement", () => {
     expect(placementOk(g, 0, { x: 0, y: 0, w: 1, h: 0 })).toBe(false); // zero height
   });
 
+  it("refuses anything that does not sit on whole cells", () => {
+    expect(isWholeCell({ x: 0, y: 0, w: 1, h: 1 })).toBe(true);
+    expect(isWholeCell({ x: 3, y: 2, w: 2, h: 4 })).toBe(true);
+    expect(isWholeCell({ x: 0.5, y: 0, w: 1, h: 1 })).toBe(false);
+    expect(isWholeCell({ x: 0, y: 0, w: 1.5, h: 1 })).toBe(false);
+    expect(isWholeCell({ x: 0, y: 0, w: 0, h: 1 })).toBe(false); // no zero-size brick
+    expect(isWholeCell({ x: 0, y: 0, w: 1, h: -1 })).toBe(false);
+
+    // And the grid refuses to place one.
+    const g = gridAt(fixture().root, [1])!;
+    expect(placementOk(g, 0, { x: 0.5, y: 0, w: 1, h: 1 })).toBe(false);
+    expect(placementOk(g, 0, { x: 0, y: 0, w: 1.25, h: 1 })).toBe(false);
+  });
+
   it("moves a child and refuses a move onto a sibling", () => {
     const g = gridAt(fixture().root, [1])!; // b at y0, c at y1
     expect(moveChild(g, 0, 0, 1)).toBeNull(); // b down onto c
@@ -218,6 +233,51 @@ describe("adding bricks", () => {
     const narrow = grid("n", [0, 0, 1, 4]);
     const { grid: next } = addChild(narrow, (pos) => makeGrid("g", pos), 2, 2);
     expect(next.children[0].pos.w).toBe(1);
+  });
+
+  it("floors a fractional request to whole cells", () => {
+    const g = grid("g", [0, 0, 4, 4]);
+    const { grid: next } = addChild(g, (pos) => makeLeaf("x", pos), 2.7, 1.2);
+    expect(next.children[0].pos).toEqual({ x: 0, y: 0, w: 2, h: 1 });
+    expect(isWholeCell(next.children[0].pos)).toBe(true);
+  });
+
+  it("never yields a brick smaller than one cell", () => {
+    const g = grid("g", [0, 0, 4, 4]);
+    const { grid: next } = addChild(g, (pos) => makeLeaf("x", pos), 0, 0.4);
+    expect(next.children[0].pos).toEqual({ x: 0, y: 0, w: 1, h: 1 });
+  });
+});
+
+describe("whole-cell placement is an invariant, not a convention", () => {
+  it("holds across a long run of moves, resizes and adds", () => {
+    let g = grid("g", [0, 0, 6, 6], [leaf("a", 0, 0), leaf("b", 2, 2, 2, 2)]);
+    const dirs: Array<[number, number]> = [[1, 0], [0, 1], [-1, 0], [0, -1]];
+    for (let i = 0; i < 40; i++) {
+      const [dx, dy] = dirs[i % 4];
+      g = moveChild(g, i % g.children.length, dx, dy) ?? g;
+      g = resizeChild(g, i % g.children.length, dx, dy) ?? g;
+      if (i % 7 === 0) g = addChild(g, (pos) => makeLeaf(`n${i}`, pos), 1, 1).grid;
+    }
+    expect(g.children.length).toBeGreaterThan(2);
+    for (const c of g.children) {
+      expect(isWholeCell(c.pos), `${c.id} at ${JSON.stringify(c.pos)}`).toBe(true);
+      // And still inside the grid it belongs to.
+      expect(c.pos.x + c.pos.w).toBeLessThanOrEqual(g.cols);
+      expect(c.pos.y + c.pos.h).toBeLessThanOrEqual(g.rows);
+    }
+  });
+
+  it("rejects stored content carrying a fractional pos", () => {
+    const s = {
+      v: 1,
+      root: {
+        ...grid("root", [0, 0, 4, 4], [{ ...leaf("half", 0, 0), pos: { x: 0.5, y: 0, w: 1, h: 1 } }]),
+        viewport: "pan-zoom",
+      },
+    };
+    expect(validateSurface(s)).toMatch(/half/);
+    expect(parseSurfaceContent(JSON.stringify(s)).kind).toBe("invalid");
   });
 });
 
@@ -293,5 +353,33 @@ describe("the shipped demo fixture", () => {
 
   it("stays inside the depth cap", () => {
     expect(maxGridDepth((JSON.parse(raw) as Surface).root)).toBeLessThanOrEqual(MAX_GRID_DEPTH);
+  });
+
+  it("sits on whole cells throughout", () => {
+    const walk = (b: any): void => {
+      expect(isWholeCell(b.pos), `${b.id} at ${JSON.stringify(b.pos)}`).toBe(true);
+      if (b.kind === "grid") b.children.forEach(walk);
+      else if (b.attributes) walk(b.attributes);
+    };
+    walk((JSON.parse(raw) as Surface).root);
+  });
+
+  it("gives no container a footprint wider than its own columns", () => {
+    // A container 2 root-cells wide whose inner grid is 1 column renders 320px
+    // of content in a 640px box — half of it empty, with cell lines under
+    // nothing. Cells are one fixed size everywhere, so a container's footprint
+    // and its `cols`×`rows` are the same measurement and must agree.
+    const walk = (b: any): void => {
+      if (b.kind !== "grid") {
+        if (b.attributes) walk(b.attributes);
+        return;
+      }
+      expect(b.cols, `${b.id} cols vs footprint`).toBe(b.pos.w);
+      // Height may exceed the footprint — that is what a scroll container is.
+      expect(b.rows, `${b.id} rows vs footprint`).toBeGreaterThanOrEqual(b.pos.h);
+      b.children.forEach(walk);
+    };
+    const root = (JSON.parse(raw) as Surface).root;
+    root.children.forEach(walk);
   });
 });

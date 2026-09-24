@@ -58,13 +58,25 @@ export interface Surface {
 // ── Absolute cell geometry ───────────────────────────────────────────────────
 // One cell is the same number of pixels everywhere at zoom 1; zoom is applied
 // as a CSS transform on the focused grid's content, so these never change.
+//
+// ⚠️ There is no gap between cells, and that is a decision rather than an
+// omission. A brick's pixel size must be an EXACT multiple of the cell — with a
+// gap it is `w*CELL + (w-1)*GAP`, which is a multiple of nothing, and two
+// bricks that look adjacent have dead pixels between them that belong to no
+// cell. Cells tile exactly, bricks share a 1px border, and the border IS the
+// grid line (see surface.css). Simple, clean, no wasted space.
 
 export const CELL_W = 320;
 export const CELL_H = 240;
-export const GAP = 12;
 
 /** Three grid levels. Root is level 1. */
 export const MAX_GRID_DEPTH = 3;
+
+// Zoom stops. Declared here rather than in focus.ts because lod.ts needs them
+// for zoom-to-fit and focus.ts imports lod.ts for the clamp — putting them at
+// the bottom of the dependency graph is what keeps that from being a cycle.
+export const MIN_ZOOM = 0.15;
+export const MAX_ZOOM = 3;
 
 export function isGrid(b: Brick): b is GridNode {
   return b.kind === "grid";
@@ -216,23 +228,61 @@ export function overlaps(a: Pos, b: Pos): boolean {
   );
 }
 
+/**
+ * A brick occupies WHOLE cells: integer origin, integer size, at least 1×1.
+ *
+ * Checked rather than assumed because `pos` arrives from stored JSON as well as
+ * from the reducer, and a fractional `x` is the one thing that would put a
+ * brick's edge inside a cell — which then reads as a gap the grid lines do not
+ * explain. Enforced on the way in (`validateSurface`), on every move and resize
+ * (`placementOk`), and on every add (`addChild`).
+ */
+export function isWholeCell(pos: Pos): boolean {
+  return (
+    Number.isInteger(pos.x) &&
+    Number.isInteger(pos.y) &&
+    Number.isInteger(pos.w) &&
+    Number.isInteger(pos.h) &&
+    pos.w >= 1 &&
+    pos.h >= 1
+  );
+}
+
 function inBounds(grid: GridNode, pos: Pos): boolean {
   return (
+    isWholeCell(pos) &&
     pos.x >= 0 &&
     pos.y >= 0 &&
-    pos.w >= 1 &&
-    pos.h >= 1 &&
     pos.x + pos.w <= grid.cols &&
     pos.y + pos.h <= grid.rows
   );
 }
 
-/** Would `pos` at `index` collide with any sibling, or leave the grid? */
+/** Would `pos` at `index` collide with any sibling, leave the grid, or straddle a cell? */
 export function placementOk(grid: GridNode, index: number, pos: Pos): boolean {
   if (!inBounds(grid, pos)) return false;
   return grid.children.every(
     (c, i) => i === index || !overlaps(pos, c.pos)
   );
+}
+
+/**
+ * The bounding box of everything actually placed in a grid, in CELLS.
+ *
+ * `null` for an empty grid — "no content" is not "content of zero size", and
+ * the pan clamp needs to tell them apart so an empty surface is not pinned to
+ * its top-left corner.
+ */
+export function contentBounds(grid: GridNode): Pos | null {
+  if (grid.children.length === 0) return null;
+  let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+  for (const c of grid.children) {
+    x0 = Math.min(x0, c.pos.x);
+    y0 = Math.min(y0, c.pos.y);
+    x1 = Math.max(x1, c.pos.x + c.pos.w);
+    y1 = Math.max(y1, c.pos.y + c.pos.h);
+  }
+  return { x: x0, y: y0, w: x1 - x0, h: y1 - y0 };
 }
 
 /**
@@ -296,15 +346,23 @@ export function findFreeCell(
   return { x: 0, y: grid.rows, rows: grid.rows + h };
 }
 
-/** Append a brick into the first free slot, growing the grid if it must. */
+/**
+ * Append a brick into the first free slot, growing the grid if it must.
+ *
+ * The requested size is floored to whole cells and clipped to the grid's width,
+ * so no caller can introduce a fractional brick — the model is the only place
+ * this has to be right, because the renderer derives pixels from `pos` alone.
+ */
 export function addChild(
   grid: GridNode,
   make: (pos: Pos) => Brick,
   w: number,
   h: number
 ): { grid: GridNode; index: number } {
-  const slot = findFreeCell(grid, Math.min(w, grid.cols), h);
-  const pos: Pos = { x: slot.x, y: slot.y, w: Math.min(w, grid.cols), h };
+  const cw = Math.max(1, Math.min(Math.floor(w), grid.cols));
+  const ch = Math.max(1, Math.floor(h));
+  const slot = findFreeCell(grid, cw, ch);
+  const pos: Pos = { x: slot.x, y: slot.y, w: cw, h: ch };
   const child = make(pos);
   return {
     grid: { ...grid, rows: slot.rows, children: [...grid.children, child] },
@@ -371,7 +429,11 @@ function validPos(v: any): v is Pos {
   return (
     v &&
     typeof v === "object" &&
-    ["x", "y", "w", "h"].every((k) => Number.isFinite(v[k]))
+    ["x", "y", "w", "h"].every((k) => Number.isFinite(v[k])) &&
+    // Whole cells, checked at the door. A stored fractional pos would render a
+    // brick whose edges do not line up with the cell lines drawn under it, and
+    // no amount of care downstream recovers from that.
+    isWholeCell(v as Pos)
   );
 }
 
