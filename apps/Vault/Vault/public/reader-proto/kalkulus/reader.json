@@ -1,0 +1,1889 @@
+{
+ "v": 1,
+ "title": "Kalkulus",
+ "author": "Tom Lindstrøm",
+ "source": {
+  "pdf": "Kalkulus.pdf",
+  "pdfPages": 840,
+  "extractor": "PyMuPDF 1.26.5",
+  "renderScale": 2,
+  "latexIsTranscribed": true,
+  "generatedAt": "2026-09-24T10:55:48+00:00"
+ },
+ "pages": [
+  {
+   "n": 0,
+   "pdfPage": 27,
+   "printedPage": 27,
+   "note": "Chapter 1 opens: display heading, epigraph, first section heading",
+   "image": "/reader-proto/kalkulus/p27.png",
+   "width": 1078,
+   "height": 1475,
+   "blocks": [
+    {
+     "bbox": [
+      136.3,
+      80.5,
+      619.8,
+      259.8
+     ],
+     "text": "1 Naturlige tall",
+     "fontSize": 179.3,
+     "type": "heading",
+     "level": 1,
+     "heading": "1 Naturlige tall",
+     "id": "p27-b0",
+     "html": "<h1>1 Naturlige tall</h1>"
+    },
+    {
+     "bbox": [
+      676.9,
+      476.9,
+      915.2,
+      513.8
+     ],
+     "text": "De naturlige tallene har Vårherre skapt, alt annet er menneskeverk.",
+     "fontSize": 15.9,
+     "type": "paragraph",
+     "id": "p27-b1",
+     "html": "<p>De naturlige tallene har Vårherre skapt, alt annet er menneskeverk.</p>"
+    },
+    {
+     "bbox": [
+      676.9,
+      523.3,
+      907.5,
+      539.2
+     ],
+     "text": "— Leopold Kronecker (1823–91)",
+     "fontSize": 15.9,
+     "type": "paragraph",
+     "id": "p27-b2",
+     "html": "<p>— Leopold Kronecker (1823–91)</p>"
+    },
+    {
+     "bbox": [
+      257.4,
+      571.7,
+      937.7,
+      735.1
+     ],
+     "text": "I dette og de to neste kapitlene skal vi se litt på ulike tallsystemer – først naturlige tall, så reelle tall og til slutt komplekse tall. Mye av dette stoffet vil være nytt for de fleste, men noe kan nok være kjent fra før. Det kan være lurt å lese grundig igjennom de kjente delene også, slik at vi kan bli enige om en felles språkbruk og notasjon. Har du ikke gjort det allerede, er det også en god idé å lese gjennom innledningen om hvordan man studerer matematikk før du fortsetter. I tillegg til nyttige tips studietips gir den viktig informasjon om hvordan boken er bygd opp og hvordan stoffet presenteres.",
+     "fontSize": 19.9,
+     "type": "paragraph",
+     "id": "p27-b3",
+     "html": "<p>I dette og de to neste kapitlene skal vi se litt på ulike tallsystemer – først naturlige tall, så reelle tall og til slutt komplekse tall. Mye av dette stoffet vil være nytt for de fleste, men noe kan nok være kjent fra før. Det kan være lurt å lese grundig igjennom de kjente delene også, slik at vi kan bli enige om en felles språkbruk og notasjon. Har du ikke gjort det allerede, er det også en god idé å lese gjennom innledningen om hvordan man studerer matematikk før du fortsetter. I tillegg til nyttige tips studietips gir den viktig informasjon om hvordan boken er bygd opp og hvordan stoffet presenteres.</p>"
+    },
+    {
+     "bbox": [
+      144,
+      773.9,
+      592.3,
+      802.6
+     ],
+     "text": "1.1 Grunnleggende egenskaper",
+     "fontSize": 28.7,
+     "type": "heading",
+     "level": 2,
+     "heading": "1.1 Grunnleggende egenskaper",
+     "id": "p27-b4",
+     "html": "<h2>1.1 Grunnleggende egenskaper</h2>"
+    },
+    {
+     "bbox": [
+      257.4,
+      818,
+      512.8,
+      837.9
+     ],
+     "text": "De tallene vi bruker når vi teller",
+     "fontSize": 19.9,
+     "type": "paragraph",
+     "id": "p27-b5",
+     "html": "<p>De tallene vi bruker når vi teller</p>"
+    },
+    {
+     "bbox": [
+      514.5,
+      861,
+      680.6,
+      881
+     ],
+     "text": "1, 2, 3, 4, 5, 6, . . .",
+     "fontSize": 19.9,
+     "type": "math",
+     "latex": "1, 2, 3, 4, 5, 6, . . .",
+     "id": "p27-b6",
+     "html": "<div class=\"rb-math\">1, 2, 3, 4, 5, 6, . . .</div>"
+    },
+    {
+     "bbox": [
+      257.4,
+      900.1,
+      912.8,
+      924.9
+     ],
+     "text": "kalles de naturlige tallene. Mengden av alle naturlige tall betegner vi med N; altså",
+     "fontSize": 19.9,
+     "type": "paragraph",
+     "id": "p27-b7",
+     "html": "<p>kalles de naturlige tallene. Mengden av alle naturlige tall betegner vi med N; altså</p>"
+    },
+    {
+     "bbox": [
+      494.6,
+      943.6,
+      700.5,
+      967.9
+     ],
+     "text": "N = {1, 2, 3, 4, 5, 6, . . . }.",
+     "fontSize": 19.9,
+     "type": "math",
+     "latex": "N = {1, 2, 3, 4, 5, 6, . . . }.",
+     "id": "p27-b8",
+     "html": "<div class=\"rb-math\">N = {1, 2, 3, 4, 5, 6, . . . }.</div>"
+    },
+    {
+     "bbox": [
+      257.4,
+      987,
+      774.9,
+      1011.8
+     ],
+     "text": "Tar vi også med 0 og negative tall, får vi mengden Z av hele tall:",
+     "fontSize": 19.9,
+     "type": "paragraph",
+     "id": "p27-b9",
+     "html": "<p>Tar vi også med 0 og negative tall, får vi mengden Z av hele tall:</p>"
+    },
+    {
+     "bbox": [
+      444.8,
+      1030.5,
+      750.3,
+      1054.8
+     ],
+     "text": "Z = {. . . , −3, −2, −1, 0, 1, 2, 3, . . . }.",
+     "fontSize": 19.9,
+     "type": "math",
+     "latex": "Z = {. . . , -3, -2, -1, 0, 1, 2, 3, . . . }.",
+     "id": "p27-b10",
+     "html": "<div class=\"rb-math\">Z = {. . . , −3, −2, −1, 0, 1, 2, 3, . . . }.</div>"
+    },
+    {
+     "bbox": [
+      257.4,
+      1078.8,
+      937.7,
+      1337.8
+     ],
+     "text": "De naturlige tallene har vært kjent i alle større kulturer i tusenvis av år, og de er en av grunnstenene som all matematikk er bygd på. Vi skal ofte bruke notasjon av typen n ∈N og n ∈Z for å uttrykke at n er henholdvis et naturlig og et helt tall. En av de viktigste egenskapene ved naturlige tall er delelighet. Forsøker vi å dele ett naturlig tall a med et annet b, så vil i noen tilfeller divisjonen «gå opp», og vi får et helt tall q til svar. I andre tilfeller går divisjonen ikke opp, og vi må nøye oss med et svar som er en brøk eller et desimaltall. Når divisjonen «går opp», sier vi at a er delelig med b. Uttrykt på en annen måte; a er delelig med b dersom det finnes et helt tall q slik at a = qb. For eksempel er 12 delelig med 3 siden 12 = 4 · 3, men 13 er ikke delelig med 3 siden det ikke finnes noe helt tall q slik at 13 = q · 3. Dersom a er delelig med b, sier vi også at b deler a.",
+     "fontSize": 19.9,
+     "type": "paragraph",
+     "id": "p27-b11",
+     "html": "<p>De naturlige tallene har vært kjent i alle større kulturer i tusenvis av år, og de er en av grunnstenene som all matematikk er bygd på. Vi skal ofte bruke notasjon av typen n ∈N og n ∈Z for å uttrykke at n er henholdvis et naturlig og et helt tall. En av de viktigste egenskapene ved naturlige tall er delelighet. Forsøker vi å dele ett naturlig tall a med et annet b, så vil i noen tilfeller divisjonen «gå opp», og vi får et helt tall q til svar. I andre tilfeller går divisjonen ikke opp, og vi må nøye oss med et svar som er en brøk eller et desimaltall. Når divisjonen «går opp», sier vi at a er delelig med b. Uttrykt på en annen måte; a er delelig med b dersom det finnes et helt tall q slik at a = qb. For eksempel er 12 delelig med 3 siden 12 = 4 · 3, men 13 er ikke delelig med 3 siden det ikke finnes noe helt tall q slik at 13 = q · 3. Dersom a er delelig med b, sier vi også at b deler a.</p>"
+    }
+   ]
+  },
+  {
+   "n": 1,
+   "pdfPage": 53,
+   "printedPage": 53,
+   "note": "Section 1.4 opens mid-page; Pascal's triangle (figur 1.4.1) above it",
+   "image": "/reader-proto/kalkulus/p53.png",
+   "width": 1078,
+   "height": 1475,
+   "blocks": [
+    {
+     "bbox": [
+      394.1,
+      172.1,
+      801,
+      374.2
+     ],
+     "text": "1 1 1 1 2 1 1 3 3 1 1 4 6 4 1 1 5 10 10 5 1 1 6 15 20 15 6 1 1 7 21 35 35 21 7 1 1 8 28 56 70 56 28 8 1 . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . .",
+     "fontSize": 17.9,
+     "type": "paragraph",
+     "id": "p53-b0",
+     "html": "<p>1 1 1 1 2 1 1 3 3 1 1 4 6 4 1 1 5 10 10 5 1 1 6 15 20 15 6 1 1 7 21 35 35 21 7 1 1 8 28 56 70 56 28 8 1 . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . .</p>"
+    },
+    {
+     "bbox": [
+      553.5,
+      391.6,
+      641.5,
+      411.5
+     ],
+     "text": "Figur 1.4.1",
+     "fontSize": 19.9,
+     "type": "figure",
+     "label": "Figur 1.4.1",
+     "id": "p53-b1",
+     "html": "<figcaption>Figur 1.4.1</figcaption>"
+    },
+    {
+     "bbox": [
+      281.8,
+      458.5,
+      522.7,
+      511.8
+     ],
+     "text": "c) Forklar hvorfor n ∑",
+     "fontSize": 19.9,
+     "type": "paragraph",
+     "id": "p53-b2",
+     "html": "<p>c) Forklar hvorfor n ∑</p>"
+    },
+    {
+     "type": "math",
+     "bbox": [
+      493.8,
+      482.8,
+      751.1,
+      539.1
+     ],
+     "text": "(x k )( y n −k ) = (x + y n ) . k=0",
+     "latex": "\\left(x \\\\ k \\right)\\left( \\\\ y \\\\ n -k \\right) \\\\ = \\\\ \\left(x + y \\\\ n \\right) \\\\ . k=0",
+     "fontSize": 19.9,
+     "id": "p53-b3",
+     "html": "<div class=\"rb-math\">(x k )( y n −k ) = (x + y n ) . k=0</div>"
+    },
+    {
+     "bbox": [
+      307.2,
+      550.4,
+      937.7,
+      594.2
+     ],
+     "text": "(Denne formelen ble bevist av den kinesiske matematikeren Shih-Chiech Chu i 1303.)",
+     "fontSize": 19.9,
+     "type": "paragraph",
+     "id": "p53-b4",
+     "html": "<p>(Denne formelen ble bevist av den kinesiske matematikeren Shih-Chiech Chu i 1303.)</p>"
+    },
+    {
+     "bbox": [
+      144,
+      633.1,
+      711.8,
+      661.8
+     ],
+     "text": "1.4 Pascals trekant og binomialformelen",
+     "fontSize": 28.7,
+     "type": "heading",
+     "level": 2,
+     "heading": "1.4 Pascals trekant og binomialformelen",
+     "id": "p53-b5",
+     "html": "<h2>1.4 Pascals trekant og binomialformelen</h2>"
+    },
+    {
+     "bbox": [
+      257.4,
+      676.3,
+      704.9,
+      719.7
+     ],
+     "text": "Vi vet alle at (a + b)2 = a2 + 2ab + b2,",
+     "fontSize": 19.9,
+     "type": "math",
+     "latex": "Vi vet alle at \\\\ (a + b)^{2}= a^{2}+ 2ab + b^{2},",
+     "id": "p53-b6",
+     "html": "<div class=\"rb-math\">Vi vet alle at (a + b)2 = a2 + 2ab + b2,</div>"
+    },
+    {
+     "bbox": [
+      257.4,
+      728.8,
+      909.5,
+      756
+     ],
+     "text": "men hva er (a + b)n for høyere verdier av eksponenten n? Det er lett å regne ut at",
+     "fontSize": 19.9,
+     "type": "paragraph",
+     "id": "p53-b7",
+     "html": "<p>men hva er (a + b)n for høyere verdier av eksponenten n? Det er lett å regne ut at</p>"
+    },
+    {
+     "type": "math",
+     "bbox": [
+      421.7,
+      771.5,
+      772.4,
+      836.3
+     ],
+     "text": "(a + b)3 = a3 + 3a2b + 3ab2 + b3 (a + b)4 = a4 + 4a3b + 6a2b2 + 4ab3 + b4",
+     "latex": "(a + b)^{3}= a^{3}+ 3a^{2}b + 3ab^{2}+ b^{3} (a + b)^{4}= a^{4}+ 4a^{3}b + 6a^{2}b^{2}+ 4ab^{3}+ b^{4}",
+     "fontSize": 19.9,
+     "id": "p53-b8",
+     "html": "<div class=\"rb-math\">(a + b)3 = a3 + 3a2b + 3ab2 + b3 (a + b)4 = a4 + 4a3b + 6a2b2 + 4ab3 + b4</div>"
+    },
+    {
+     "bbox": [
+      257.4,
+      857.8,
+      937.7,
+      1239.4
+     ],
+     "text": "og nå begynner du kanskje å se hva mønsteret er; dersom vi multipliserer ut (a + b)n, får vi først an, så et ledd av typen an−1b, så ett av typen an−2b2, så ett av typen an−3b3, og så videre bortover til bn. Spørsmålet er bare hvilke tall som skal stå foran hvert av leddene. Disse tallene kalles koeffisientene, og de kan finnes på en rask og effektiv måte ved hjelp av trekanten på figur 1.4.1. La oss først finne ut hvordan denne trekanten er bygd opp. Vi ser at første og siste tall på hver linje alltid er et ett-tall. Videre legger vi merke til at de andre tallene på figuren alltid er summen av de to tallene som står på skrå rett ovenfor – for eksempel er det første 21-tallet i linje 8 summen av tallene 6 og 15 på linje 7. Har vi først innsett dette systemet, kan vi fortsette trekanten så langt nedover vi måtte ønske (prøv å fylle ut to linjer til). Men hvordan kan vi så bruke figur 1.4.1 til å regne ut uttrykk av typen (a + b)n? Ser vi på den tredje, fjerde og femte linjen, gjenkjenner vi koeffisientene fra formlene for (a + b)2, (a + b)3 og (a + b)4 ovenfor. Dette mønsteret er allmenngyldig. Ønsker vi for eksempel å finne hva (a + b)7 er, så går vi inn i den åttende linjen (8 = 7 + 1) i trekanten. Der finner vi tallene 1, 7, 21, 35, 35, 21, 7, 1, og det betyr at",
+     "fontSize": 19.9,
+     "type": "paragraph",
+     "id": "p53-b9",
+     "html": "<p>og nå begynner du kanskje å se hva mønsteret er; dersom vi multipliserer ut (a + b)n, får vi først an, så et ledd av typen an−1b, så ett av typen an−2b2, så ett av typen an−3b3, og så videre bortover til bn. Spørsmålet er bare hvilke tall som skal stå foran hvert av leddene. Disse tallene kalles koeffisientene, og de kan finnes på en rask og effektiv måte ved hjelp av trekanten på figur 1.4.1. La oss først finne ut hvordan denne trekanten er bygd opp. Vi ser at første og siste tall på hver linje alltid er et ett-tall. Videre legger vi merke til at de andre tallene på figuren alltid er summen av de to tallene som står på skrå rett ovenfor – for eksempel er det første 21-tallet i linje 8 summen av tallene 6 og 15 på linje 7. Har vi først innsett dette systemet, kan vi fortsette trekanten så langt nedover vi måtte ønske (prøv å fylle ut to linjer til). Men hvordan kan vi så bruke figur 1.4.1 til å regne ut uttrykk av typen (a + b)n? Ser vi på den tredje, fjerde og femte linjen, gjenkjenner vi koeffisientene fra formlene for (a + b)2, (a + b)3 og (a + b)4 ovenfor. Dette mønsteret er allmenngyldig. Ønsker vi for eksempel å finne hva (a + b)7 er, så går vi inn i den åttende linjen (8 = 7 + 1) i trekanten. Der finner vi tallene 1, 7, 21, 35, 35, 21, 7, 1, og det betyr at</p>"
+    },
+    {
+     "bbox": [
+      292.1,
+      1254.7,
+      903,
+      1282.8
+     ],
+     "text": "(a + b)7 = a7 + 7a6b + 21a5b2 + 35a4b3 + 35a3b4 + 21a2b5 + 7ab6 + b7.",
+     "fontSize": 19.9,
+     "type": "math",
+     "latex": "(a + b)^{7}= a^{7}+ 7a^{6}b + 21a^{5}b^{2}+ 35a^{4}b^{3}+ 35a^{3}b^{4}+ 21a^{2}b^{5}+ 7ab^{6}+ b^{7}.",
+     "id": "p53-b10",
+     "html": "<div class=\"rb-math\">(a + b)7 = a7 + 7a6b + 21a5b2 + 35a4b3 + 35a3b4 + 21a2b5 + 7ab6 + b7.</div>"
+    },
+    {
+     "bbox": [
+      257.4,
+      1304.2,
+      881.8,
+      1327.1
+     ],
+     "text": "Generelt er tallene i den (n + 1)-te linjen koeffisientene til leddene i (a + b)n.",
+     "fontSize": 19.9,
+     "type": "paragraph",
+     "id": "p53-b11",
+     "html": "<p>Generelt er tallene i den (n + 1)-te linjen koeffisientene til leddene i (a + b)n.</p>"
+    }
+   ]
+  },
+  {
+   "n": 2,
+   "pdfPage": 54,
+   "printedPage": 54,
+   "note": "1.4.1 Eksempel and 1.4.2 Binomialformelen — the binomial theorem",
+   "image": "/reader-proto/kalkulus/p54.png",
+   "width": 1078,
+   "height": 1475,
+   "blocks": [
+    {
+     "bbox": [
+      257.4,
+      175.4,
+      739.4,
+      243.3
+     ],
+     "text": "1.4.1 Eksempel Regn ut (x −2y)5. Setter vi a = x og b = −2y, så gir sjette linje i trekanten",
+     "fontSize": 19.9,
+     "type": "concept",
+     "heading": "1.4.1 Eksempel",
+     "id": "p54-b0",
+     "html": "<p class=\"rb-concept\">1.4.1 Eksempel Regn ut (x −2y)5. Setter vi a = x og b = −2y, så gir sjette linje i trekanten</p>",
+     "concept": "example",
+     "label": "Eksempel 1.4.1"
+    },
+    {
+     "type": "math",
+     "bbox": [
+      340.1,
+      256.3,
+      855,
+      349.8
+     ],
+     "text": "(x −2y)5 = x5 + 5x4(−2y) + 10x3(−2y)2 + 10x2(−2y)3 + 5x(−2y)4 + (−2y)5 = x5 −10x4y + 40x3y2 −80x2y3 + 80xy4 −32y5.",
+     "latex": "(x -2y)^{5}= x^{5}+ 5x^{4}(-2y) + 10x^{3}(-2y)^{2} + 10x^{2}(-2y)^{3}+ 5x(-2y)^{4}+ (-2y)^{5} = x^{5}-10x^{4}y + 40x^{3}y^{2}-80x^{2}y^{3}+ 80xy^{4}-32y^{5}.",
+     "fontSize": 19.9,
+     "id": "p54-b1",
+     "html": "<div class=\"rb-math\">(x −2y)5 = x5 + 5x4(−2y) + 10x3(−2y)2 + 10x2(−2y)3 + 5x(−2y)4 + (−2y)5 = x5 −10x4y + 40x3y2 −80x2y3 + 80xy4 −32y5.</div>"
+    },
+    {
+     "bbox": [
+      257.4,
+      434.5,
+      937.7,
+      598.2
+     ],
+     "text": "Figur 1.4.1 blir ofte kalt Pascals trekant etter den franske religionsfilosofen, matematikeren og fysikeren Blaise Pascal (1623–62), men den var kjent lenge før hans tid. Pascals trekant er nyttig når vi skal regne ut en ikke altfor høy potens av a + b, men den er ikke så effektiv hvis vi bare er interessert i ett enkelt ledd, for eksempel koeffisienten til leddet a1037b2 i formelen for (a+b)1039. Det er også en del teoretiske spørsmål som Pascals trekant ikke er så velegnet til å besvare. Det vi trenger, er en formel som forteller oss hva koeffisienten til an−ibi blir når vi regner ut (a + b)n.",
+     "fontSize": 19.9,
+     "type": "paragraph",
+     "id": "p54-b2",
+     "html": "<p>Figur 1.4.1 blir ofte kalt Pascals trekant etter den franske religionsfilosofen, matematikeren og fysikeren Blaise Pascal (1623–62), men den var kjent lenge før hans tid. Pascals trekant er nyttig når vi skal regne ut en ikke altfor høy potens av a + b, men den er ikke så effektiv hvis vi bare er interessert i ett enkelt ledd, for eksempel koeffisienten til leddet a1037b2 i formelen for (a+b)1039. Det er også en del teoretiske spørsmål som Pascals trekant ikke er så velegnet til å besvare. Det vi trenger, er en formel som forteller oss hva koeffisienten til an−ibi blir når vi regner ut (a + b)n.</p>"
+    },
+    {
+     "bbox": [
+      259.37799072265625,
+      614.8460083007812,
+      935.7080078125,
+      879.6640014648438
+     ],
+     "text": "1.4.2 Binomialformelen Når vi multipliserer ut (a + b)n, er koeffisienten til an−ibi lik binomialkoeffisienten (n i ) . Altså er",
+     "fontSize": 19.9,
+     "type": "concept",
+     "heading": "1.4.2 Binomialformelen",
+     "id": "p54-b3",
+     "html": "<p class=\"rb-concept\">1.4.2 Binomialformelen Når vi multipliserer ut (a + b)n, er koeffisienten til an−ibi lik binomialkoeffisienten (n i ) . Altså er</p>",
+     "concept": "theorem",
+     "label": "1.4.2",
+     "name": "Binomialformelen"
+    },
+    {
+     "type": "math",
+     "bbox": [
+      299.2,
+      732.7,
+      894.9,
+      848.9
+     ],
+     "text": "n ∑ (n i ) an−ibi = an + nan−1b + n(n −1) (a + b)n = 1 · 2 an−2b2 + · · · i=0 + (n i ) an−ibi + · · · + nabn−1 + bn",
+     "latex": "n \\\\ \\sum \\left(n \\\\ i \\right) \\\\ a^{n-i}b^{i}= a^{n}+ na^{n-1}b +n(n -1) (a + b)^{n}= 1 \\cdot 2 \\\\ a^{n-2}b^{2}+ \\cdot \\cdot \\cdot i=0 + \\\\ \\left(n \\\\ i \\right) \\\\ a^{n-i}b^{i}+ \\cdot \\cdot \\cdot + nab^{n-1}+ b^{n}",
+     "fontSize": 19.9,
+     "id": "p54-b4",
+     "html": "<div class=\"rb-math\">n ∑ (n i ) an−ibi = an + nan−1b + n(n −1) (a + b)n = 1 · 2 an−2b2 + · · · i=0 + (n i ) an−ibi + · · · + nabn−1 + bn</div>"
+    },
+    {
+     "bbox": [
+      257.4,
+      896.9,
+      937.7,
+      1013
+     ],
+     "text": "Et toleddet uttrykk av typen a + b kalles et binom, og det er nå lett å skjønne hvor binomialkoeffisientene har fått navnet sitt fra – de er rett og slett koeffisientene som fremkommer når vi regner ut en potens av et binom. Formelen ovenfor kalles av og til Newtons binomialformel etter Isaac Newton (1642–1727), men formelen var kjent før ham, blant annet av Pascal.",
+     "fontSize": 19.9,
+     "type": "paragraph",
+     "id": "p54-b5",
+     "html": "<p>Et toleddet uttrykk av typen a + b kalles et binom, og det er nå lett å skjønne hvor binomialkoeffisientene har fått navnet sitt fra – de er rett og slett koeffisientene som fremkommer når vi regner ut en potens av et binom. Formelen ovenfor kalles av og til Newtons binomialformel etter Isaac Newton (1642–1727), men formelen var kjent før ham, blant annet av Pascal.</p>"
+    },
+    {
+     "bbox": [
+      257.4,
+      1056.6,
+      937.7,
+      1186.9
+     ],
+     "text": "1.4.3 Eksempel Vi kan nå regne ut koeffisienten til a1037b2 i uttrykket for (a + b)1039 som vi spurte om ovenfor. Den er lik (1039 2",
+     "fontSize": 19.9,
+     "type": "concept",
+     "heading": "1.4.3 Eksempel",
+     "id": "p54-b6",
+     "html": "<p class=\"rb-concept\">1.4.3 Eksempel Vi kan nå regne ut koeffisienten til a1037b2 i uttrykket for (a + b)1039 som vi spurte om ovenfor. Den er lik (1039 2</p>",
+     "concept": "example",
+     "label": "Eksempel 1.4.3"
+    },
+    {
+     "type": "math",
+     "bbox": [
+      507.1,
+      1139.6,
+      742.5,
+      1186.9
+     ],
+     "text": ") = 1039 · 1038 1 · 2 = 539 241.",
+     "latex": "\\right) \\\\ = 1039 \\cdot 1038 1 \\cdot 2 \\\\ = 539 241.",
+     "fontSize": 19.9,
+     "id": "p54-b7",
+     "html": "<div class=\"rb-math\">) = 1039 · 1038 1 · 2 = 539 241.</div>"
+    },
+    {
+     "bbox": [
+      257.4,
+      1270,
+      937.7,
+      1337.8
+     ],
+     "text": "Sammenligner vi resultatene vi får om vi multipliserer sammen binomer både ved hjelp av binomialformelen og ved hjelp av Pascals trekant, ser vi at tallene i Pascals trekant må være binomialkoeffisienter (se figur 1.4.2). Hvis du er litt mer ærgjerrig,",
+     "fontSize": 19.9,
+     "type": "paragraph",
+     "id": "p54-b8",
+     "html": "<p>Sammenligner vi resultatene vi får om vi multipliserer sammen binomer både ved hjelp av binomialformelen og ved hjelp av Pascals trekant, ser vi at tallene i Pascals trekant må være binomialkoeffisienter (se figur 1.4.2). Hvis du er litt mer ærgjerrig,</p>"
+    }
+   ]
+  },
+  {
+   "n": 3,
+   "pdfPage": 55,
+   "printedPage": 55,
+   "note": "Figur 1.4.2, 1.4.4 Lemma, and the Bevis that follows it",
+   "image": "/reader-proto/kalkulus/p55.png",
+   "width": 1078,
+   "height": 1475,
+   "blocks": [
+    {
+     "bbox": [
+      354.8,
+      170.3,
+      840.3,
+      499.2
+     ],
+     "text": "Figur 1.4.2",
+     "fontSize": 19.9,
+     "type": "figure",
+     "label": "Figur 1.4.2",
+     "id": "p55-b0",
+     "html": "<figcaption>Figur 1.4.2</figcaption>"
+    },
+    {
+     "type": "math",
+     "bbox": [
+      354.8,
+      170.3,
+      840.3,
+      454.4
+     ],
+     "text": "( 0 0 ) ( 1 0 ) ( 1 1 ) ( 2 0 ) ( 2 1 ) ( 2 2 ) ( 3 0 ) ( 3 1 ) ( 3 2 ) ( 3 3 ) ( 4 0 ) ( 4 1 ) ( 4 2 ) ( 4 3 ) ( 4 4 ) ( 5 0 ) ( 5 1 ) ( 5 2 ) ( 5 3 ) ( 5 4 ) ( 5 5 )",
+     "latex": "\\left( \\\\ 0 \\\\ 0 \\right) \\left( \\\\ 1 \\\\ 0 \\right) \\\\ \\left( \\\\ 1 \\\\ 1 \\right) \\left( \\\\ 2 \\\\ 0 \\right) \\\\ \\left( \\\\ 2 \\\\ 1 \\right) \\\\ \\left( \\\\ 2 \\\\ 2 \\right) \\left( \\\\ 3 \\\\ 0 \\right) \\\\ \\left( \\\\ 3 \\\\ 1 \\right) \\\\ \\left( \\\\ 3 \\\\ 2 \\right) \\\\ \\left( \\\\ 3 \\\\ 3 \\right) \\left( \\\\ 4 \\\\ 0 \\right) \\\\ \\left( \\\\ 4 \\\\ 1 \\right) \\\\ \\left( \\\\ 4 \\\\ 2 \\right) \\\\ \\left( \\\\ 4 \\\\ 3 \\right) \\\\ \\left( \\\\ 4 \\\\ 4 \\right) \\left( \\\\ 5 \\\\ 0 \\right) \\\\ \\left( \\\\ 5 \\\\ 1 \\right) \\\\ \\left( \\\\ 5 \\\\ 2 \\right) \\\\ \\left( \\\\ 5 \\\\ 3 \\right) \\\\ \\left( \\\\ 5 \\\\ 4 \\right) \\\\ \\left( \\\\ 5 \\\\ 5 \\right)",
+     "fontSize": 19.9,
+     "id": "p55-b1",
+     "html": "<div class=\"rb-math\">( 0 0 ) ( 1 0 ) ( 1 1 ) ( 2 0 ) ( 2 1 ) ( 2 2 ) ( 3 0 ) ( 3 1 ) ( 3 2 ) ( 3 3 ) ( 4 0 ) ( 4 1 ) ( 4 2 ) ( 4 3 ) ( 4 4 ) ( 5 0 ) ( 5 1 ) ( 5 2 ) ( 5 3 ) ( 5 4 ) ( 5 5 )</div>"
+    },
+    {
+     "type": "math",
+     "bbox": [
+      497.2,
+      510.7,
+      697.9,
+      620.2
+     ],
+     "text": "( n i −1 ) (n i ) (n + 1 i )",
+     "latex": "\\left( n \\\\ i -1 \\right) \\\\ \\left(n \\\\ i \\right) \\left(n + 1 \\\\ i \\right)",
+     "fontSize": 19.9,
+     "id": "p55-b2",
+     "html": "<div class=\"rb-math\">( n i −1 ) (n i ) (n + 1 i )</div>"
+    },
+    {
+     "bbox": [
+      257.4,
+      665.8,
+      937.7,
+      924.8
+     ],
+     "text": "kan du forsøke å bevise dette ved å bruke induksjon – du vil da få bruk for lemma 1.4.4 nedenfor. Resten av dette avsnittet skal vi bruke til å bevise binomialformelen, og vi skal faktisk se på to helt forskjellige bevis; et induksjonsbevis og et kombinatorisk bevis. Induksjonsbeviset er kanskje lettest å forstå, men det kombinatoriske beviset forklarer mye bedre hvorfor det akkurat er binomialkoeffisientene fra kombinatorikken som dukker opp i binomialformelen. Før vi går løs på induksjonsbeviset, trenger vi en hjelpesetning. Legg merke til at denne setningen gjenspeiler måten Pascals trekant er bygd opp på; den sier nemlig at hver av binomialkoeffisientene i figur 1.4.2 er summen av de to binomialkoeffisientene som står på skrå rett ovenfor:",
+     "fontSize": 19.9,
+     "type": "paragraph",
+     "id": "p55-b3",
+     "html": "<p>kan du forsøke å bevise dette ved å bruke induksjon – du vil da få bruk for lemma 1.4.4 nedenfor. Resten av dette avsnittet skal vi bruke til å bevise binomialformelen, og vi skal faktisk se på to helt forskjellige bevis; et induksjonsbevis og et kombinatorisk bevis. Induksjonsbeviset er kanskje lettest å forstå, men det kombinatoriske beviset forklarer mye bedre hvorfor det akkurat er binomialkoeffisientene fra kombinatorikken som dukker opp i binomialformelen. Før vi går løs på induksjonsbeviset, trenger vi en hjelpesetning. Legg merke til at denne setningen gjenspeiler måten Pascals trekant er bygd opp på; den sier nemlig at hver av binomialkoeffisientene i figur 1.4.2 er summen av de to binomialkoeffisientene som står på skrå rett ovenfor:</p>"
+    },
+    {
+     "bbox": [
+      259.37799072265625,
+      942.2120361328125,
+      935.7080078125,
+      1113.654052734375
+     ],
+     "text": "1.4.4 Lemma For alle naturlige tall n og i, n ≥i, er (n + 1 i",
+     "fontSize": 19.9,
+     "type": "concept",
+     "heading": "1.4.4 Lemma",
+     "id": "p55-b4",
+     "html": "<p class=\"rb-concept\">1.4.4 Lemma For alle naturlige tall n og i, n ≥i, er (n + 1 i</p>",
+     "concept": "theorem",
+     "label": "Lemma 1.4.4"
+    },
+    {
+     "type": "math",
+     "bbox": [
+      536.5,
+      1021.2,
+      915.8,
+      1082.9
+     ],
+     "text": ") = ( n i −1 ) + (n i ) . (1)",
+     "latex": "\\right) \\\\ = \\\\ \\left( n \\\\ i -1 \\right) \\\\ + \\\\ \\left(n \\\\ i \\right) \\\\ . \\\\ (1)",
+     "fontSize": 19.9,
+     "id": "p55-b5",
+     "html": "<div class=\"rb-math\">) = ( n i −1 ) + (n i ) . (1)</div>"
+    },
+    {
+     "bbox": [
+      257.4,
+      1132,
+      937.7,
+      1324.4
+     ],
+     "text": "Bevis: La oss bevise denne likheten med et kombinatorisk resonnement: Vi vet at (n+1 i ) er antall mønstre vi kan ordne n + 1 baller i, når i av dem er hvite og resten er svarte. Slike mønstre er av to typer, de som starter med en hvit ball, og de som starter med en svart. Hvor mange er det som starter med en hvit ball? Vel, har vi brukt opp én hvit ball til å starte med, så er det n baller igjen å ordne, og av dem er i −1 hvite. Siden disse ballene kan ordnes på ( n i−1 ) måter, må det finnes ( n i−1 ) mønstre som starter med en hvit ball. Tilsvarende, hvis vi har brukt en svart ball til å starte med, kan de gjenværende i hvite og n −i svarte ballene ordnes på (n i ) måter, så det må finnes",
+     "fontSize": 19.9,
+     "type": "concept",
+     "heading": "Bevis:",
+     "id": "p55-b6",
+     "html": "<p class=\"rb-concept\">Bevis: La oss bevise denne likheten med et kombinatorisk resonnement: Vi vet at (n+1 i ) er antall mønstre vi kan ordne n + 1 baller i, når i av dem er hvite og resten er svarte. Slike mønstre er av to typer, de som starter med en hvit ball, og de som starter med en svart. Hvor mange er det som starter med en hvit ball? Vel, har vi brukt opp én hvit ball til å starte med, så er det n baller igjen å ordne, og av dem er i −1 hvite. Siden disse ballene kan ordnes på ( n i−1 ) måter, må det finnes ( n i−1 ) mønstre som starter med en hvit ball. Tilsvarende, hvis vi har brukt en svart ball til å starte med, kan de gjenværende i hvite og n −i svarte ballene ordnes på (n i ) måter, så det må finnes</p>",
+     "concept": "proof",
+     "label": "Bevis"
+    }
+   ]
+  },
+  {
+   "n": 4,
+   "pdfPage": 58,
+   "printedPage": 58,
+   "note": "Oppgaver i seksjon 1.4 — a full exercise page",
+   "image": "/reader-proto/kalkulus/p58.png",
+   "width": 1078,
+   "height": 1475,
+   "blocks": [
+    {
+     "bbox": [
+      144,
+      172.3,
+      404.1,
+      196.2
+     ],
+     "text": "Oppgaver i seksjon 1.4",
+     "fontSize": 23.9,
+     "type": "heading",
+     "level": 3,
+     "heading": "Oppgaver i seksjon 1.4",
+     "id": "p58-b0",
+     "html": "<h3>Oppgaver i seksjon 1.4</h3>"
+    },
+    {
+     "bbox": [
+      257.4,
+      209.3,
+      540.2,
+      229.4
+     ],
+     "text": "1. Fyll ut to linjer til på figur 1.4.1.",
+     "fontSize": 19.9,
+     "type": "exercise",
+     "label": "1",
+     "id": "p58-b1",
+     "html": "<li value=\"1\">1. Fyll ut to linjer til på figur 1.4.1.</li>"
+    },
+    {
+     "bbox": [
+      257.4,
+      248,
+      556.2,
+      268.1
+     ],
+     "text": "2. Bruk Pascals trekant til å regne ut:",
+     "fontSize": 19.9,
+     "type": "exercise",
+     "label": "2",
+     "id": "p58-b2",
+     "html": "<li value=\"2\">2. Bruk Pascals trekant til å regne ut:</li>"
+    },
+    {
+     "type": "math",
+     "bbox": [
+      280.6,
+      282.8,
+      376.9,
+      385.3
+     ],
+     "text": "a) (a + b)4 b) (x + y)7 c) (1 −x)5",
+     "latex": "a) (a + b)^{4} b) (x + y)^{7} c) (1 -x)^{5}",
+     "fontSize": 19.9,
+     "id": "p58-b3",
+     "html": "<div class=\"rb-math\">a) (a + b)4 b) (x + y)7 c) (1 −x)5</div>"
+    },
+    {
+     "bbox": [
+      257.4,
+      403.9,
+      344.5,
+      424
+     ],
+     "text": "3. Regn ut",
+     "fontSize": 19.9,
+     "type": "exercise",
+     "label": "3",
+     "id": "p58-b4",
+     "html": "<li value=\"3\">3. Regn ut</li>"
+    },
+    {
+     "type": "math",
+     "bbox": [
+      280.6,
+      438.8,
+      397.6,
+      590.2
+     ],
+     "text": "a) (a + 2b)5 b) (2x −3y)4 ( 1 + √ 2 )4 ( 1 − √ 3 )5",
+     "latex": "a) (a + 2b)^{5} b) (2x -3y)^{4} \\left( \\\\ 1 + \\\\ \\sqrt 2 \\\\ \\right)4 \\left( \\\\ 1 - \\\\ \\sqrt 3 \\\\ \\right)5",
+     "fontSize": 19.9,
+     "id": "p58-b5",
+     "html": "<div class=\"rb-math\">a) (a + 2b)5 b) (2x −3y)4 ( 1 + √ 2 )4 ( 1 − √ 3 )5</div>"
+    },
+    {
+     "bbox": [
+      281.8,
+      525.4,
+      297.2,
+      545.3
+     ],
+     "text": "c)",
+     "fontSize": 19.9,
+     "type": "paragraph",
+     "id": "p58-b6",
+     "html": "<p>c)</p>"
+    },
+    {
+     "bbox": [
+      280.6,
+      570.7,
+      297.2,
+      590.6
+     ],
+     "text": "d)",
+     "fontSize": 19.9,
+     "type": "paragraph",
+     "id": "p58-b7",
+     "html": "<p>d)</p>"
+    },
+    {
+     "bbox": [
+      257.4,
+      602.1,
+      615.3,
+      629.3
+     ],
+     "text": "4. Finn koeffisienten til x3y134 i (x + y)137.",
+     "fontSize": 19.9,
+     "type": "exercise",
+     "label": "4",
+     "id": "p58-b8",
+     "html": "<li value=\"4\">4. Finn koeffisienten til x3y134 i (x + y)137.</li>"
+    },
+    {
+     "bbox": [
+      257.4,
+      640.8,
+      573.8,
+      668
+     ],
+     "text": "5. Finn koeffisienten til b47 i (b + 3)50.",
+     "fontSize": 19.9,
+     "type": "exercise",
+     "label": "5",
+     "id": "p58-b9",
+     "html": "<li value=\"5\">5. Finn koeffisienten til b47 i (b + 3)50.</li>"
+    },
+    {
+     "bbox": [
+      257.4,
+      674.8,
+      809.5,
+      711.8
+     ],
+     "text": "6. Bevis lemma 1.4.4 ved å skrive ut og trekke sammen ( n i−1 ) + (n i ) .",
+     "fontSize": 19.9,
+     "type": "exercise",
+     "label": "6",
+     "id": "p58-b10",
+     "html": "<li value=\"6\">6. Bevis lemma 1.4.4 ved å skrive ut og trekke sammen ( n i−1 ) + (n i ) .</li>"
+    },
+    {
+     "bbox": [
+      257.4,
+      725.2,
+      879.3,
+      745.4
+     ],
+     "text": "7. Vis at de to utgavene av Pascals trekant på figur 1.4.1 og figur 1.4.2 er like.",
+     "fontSize": 19.9,
+     "type": "exercise",
+     "label": "7",
+     "id": "p58-b11",
+     "html": "<li value=\"7\">7. Vis at de to utgavene av Pascals trekant på figur 1.4.1 og figur 1.4.2 er like.</li>"
+    },
+    {
+     "type": "math",
+     "bbox": [
+      644.6,
+      758.7,
+      703.5,
+      821.6
+     ],
+     "text": "n ∑ (n k k=0",
+     "latex": "n \\\\ \\sum \\left(n \\\\ k k=0",
+     "fontSize": 19.9,
+     "id": "p58-b12",
+     "html": "<div class=\"rb-math\">n ∑ (n k k=0</div>"
+    },
+    {
+     "bbox": [
+      703.5,
+      765.2,
+      723.2,
+      799.3
+     ],
+     "text": ") .",
+     "fontSize": 19.9,
+     "type": "paragraph",
+     "id": "p58-b13",
+     "html": "<p>) .</p>"
+    },
+    {
+     "bbox": [
+      257.4,
+      770.8,
+      639.1,
+      799.3
+     ],
+     "text": "8. a) Bruk binomialformelen til å vise 2n =",
+     "fontSize": 19.9,
+     "type": "exercise",
+     "label": "8",
+     "id": "p58-b14",
+     "html": "<li value=\"8\">8. a) Bruk binomialformelen til å vise 2n =</li>"
+    },
+    {
+     "bbox": [
+      280.6,
+      837.1,
+      937.7,
+      928.8
+     ],
+     "text": "b) Gi et kombinatorisk bevis for denne formelen basert på følgende observasjoner: Anta at jeg har en samling med n ting. Da kan jeg plukke ut en delmengde av nøyaktig k ting på (n k ) forskjellige måter. På den andre siden er det totale antallet delmengder lik 2n.",
+     "fontSize": 19.9,
+     "type": "paragraph",
+     "id": "p58-b15",
+     "html": "<p>b) Gi et kombinatorisk bevis for denne formelen basert på følgende observasjoner: Anta at jeg har en samling med n ting. Da kan jeg plukke ut en delmengde av nøyaktig k ting på (n k ) forskjellige måter. På den andre siden er det totale antallet delmengder lik 2n.</p>"
+    },
+    {
+     "bbox": [
+      257.4,
+      947.4,
+      569,
+      990.9
+     ],
+     "text": "9. Vis at 3n =",
+     "fontSize": 19.9,
+     "type": "exercise",
+     "label": "9",
+     "id": "p58-b16",
+     "html": "<li value=\"9\">9. Vis at 3n =</li>"
+    },
+    {
+     "type": "math",
+     "bbox": [
+      574.6,
+      950.8,
+      666.6,
+      1013.6
+     ],
+     "text": "n ∑ (n k ) 2k k=0",
+     "latex": "n \\\\ \\sum \\left(n \\\\ k \\right) \\\\ 2^{k} k=0",
+     "fontSize": 19.9,
+     "id": "p58-b17",
+     "html": "<div class=\"rb-math\">n ∑ (n k ) 2k k=0</div>"
+    },
+    {
+     "bbox": [
+      257.4,
+      1037.3,
+      937.7,
+      1121.9
+     ],
+     "text": "10. a) Hvor ligger tallene på formen (k 1 ) i Pascals trekant? Hvor ligger tallene på formen (k 2 ) ? Generelt, hvis i er et fast tall og k varierer, hvor finner du tallene (k i ) ?",
+     "fontSize": 19.9,
+     "type": "exercise",
+     "label": "10",
+     "id": "p58-b18",
+     "html": "<li value=\"10\">10. a) Hvor ligger tallene på formen (k 1 ) i Pascals trekant? Hvor ligger tallene på formen (k 2 ) ? Generelt, hvis i er et fast tall og k varierer, hvor finner du tallene (k i ) ?</li>"
+    },
+    {
+     "bbox": [
+      280.6,
+      1136.2,
+      683.4,
+      1156.1
+     ],
+     "text": "b) Kontroller gjennom noen eksempler at likheten",
+     "fontSize": 19.9,
+     "type": "paragraph",
+     "id": "p58-b19",
+     "html": "<p>b) Kontroller gjennom noen eksempler at likheten</p>"
+    },
+    {
+     "type": "math",
+     "bbox": [
+      535.1,
+      1173.2,
+      709.8,
+      1236
+     ],
+     "text": "n ∑ (k i ) = (n + 1 i + 1 ) k=i",
+     "latex": "n \\\\ \\sum \\left(k \\\\ i \\right) \\\\ = \\\\ \\left(n + 1 \\\\ i + 1 \\right) k=i",
+     "fontSize": 19.9,
+     "id": "p58-b20",
+     "html": "<div class=\"rb-math\">n ∑ (k i ) = (n + 1 i + 1 ) k=i</div>"
+    },
+    {
+     "bbox": [
+      307.2,
+      1254.7,
+      937.7,
+      1298.5
+     ],
+     "text": "ser ut til å holde. Kan du forklare denne sammenhengen ut fra oppbygningen av Pascals trekant?",
+     "fontSize": 19.9,
+     "type": "paragraph",
+     "id": "p58-b21",
+     "html": "<p>ser ut til å holde. Kan du forklare denne sammenhengen ut fra oppbygningen av Pascals trekant?</p>"
+    },
+    {
+     "bbox": [
+      281.8,
+      1317.4,
+      623.9,
+      1337.8
+     ],
+     "text": "c) Bevis formelen i b) ved induksjon på n.",
+     "fontSize": 19.9,
+     "type": "paragraph",
+     "id": "p58-b22",
+     "html": "<p>c) Bevis formelen i b) ved induksjon på n.</p>"
+    }
+   ]
+  },
+  {
+   "n": 5,
+   "pdfPage": 133,
+   "printedPage": 133,
+   "note": "Exercise tail, section 3.3 opening, 3.3.1 Definisjon",
+   "image": "/reader-proto/kalkulus/p133.png",
+   "width": 1078,
+   "height": 1475,
+   "blocks": [
+    {
+     "bbox": [
+      257.4,
+      174.9,
+      667.1,
+      198.5
+     ],
+     "text": "17. (UiO) Gitt to komplekse tall z1 og z2, z1 ̸= z2.",
+     "fontSize": 19.9,
+     "type": "exercise",
+     "label": "17",
+     "id": "p133-b0",
+     "html": "<li value=\"17\">17. (UiO) Gitt to komplekse tall z1 og z2, z1 ̸= z2.</li>"
+    },
+    {
+     "bbox": [
+      281.8,
+      213.3,
+      937.7,
+      236.7
+     ],
+     "text": "a) La L være den rette linjen i det komplekse plan som går gjennom z1 og z2. Vis",
+     "fontSize": 19.9,
+     "type": "paragraph",
+     "id": "p133-b1",
+     "html": "<p>a) La L være den rette linjen i det komplekse plan som går gjennom z1 og z2. Vis</p>"
+    },
+    {
+     "bbox": [
+      307.2,
+      230.9,
+      767.8,
+      265.1
+     ],
+     "text": "at et komplekst tall z ligger på L hvis og bare hvis z −z1",
+     "fontSize": 19.9,
+     "type": "paragraph",
+     "id": "p133-b2",
+     "html": "<p>at et komplekst tall z ligger på L hvis og bare hvis z −z1</p>"
+    },
+    {
+     "bbox": [
+      716.1,
+      244.7,
+      937.3,
+      280
+     ],
+     "text": "z −z2 er reell eller z = z2.",
+     "fontSize": 19.9,
+     "type": "paragraph",
+     "id": "p133-b3",
+     "html": "<p>z −z2 er reell eller z = z2.</p>"
+    },
+    {
+     "bbox": [
+      280.6,
+      292,
+      937.7,
+      382.7
+     ],
+     "text": "b) La z3 være midtpunktet mellom z1 og z2. La C være sirkelen gjennom z1 og z2 med sentrum i z3. Vis at et komplekst tall z ligger på C hvis og bare hvis z −z1 z −z2 er imaginær eller z = z2.",
+     "fontSize": 19.9,
+     "type": "paragraph",
+     "id": "p133-b4",
+     "html": "<p>b) La z3 være midtpunktet mellom z1 og z2. La C være sirkelen gjennom z1 og z2 med sentrum i z3. Vis at et komplekst tall z ligger på C hvis og bare hvis z −z1 z −z2 er imaginær eller z = z2.</p>"
+    },
+    {
+     "bbox": [
+      257.4,
+      393.4,
+      500,
+      427.3
+     ],
+     "text": "18. (UiO) Anta at w = 1 + ti",
+     "fontSize": 19.9,
+     "type": "exercise",
+     "label": "18",
+     "id": "p133-b5",
+     "html": "<li value=\"18\">18. (UiO) Anta at w = 1 + ti</li>"
+    },
+    {
+     "bbox": [
+      451.7,
+      406.9,
+      610.9,
+      440.9
+     ],
+     "text": "1 −ti der t er reell.",
+     "fontSize": 19.9,
+     "type": "paragraph",
+     "id": "p133-b6",
+     "html": "<p>1 −ti der t er reell.</p>"
+    },
+    {
+     "bbox": [
+      281.8,
+      452.8,
+      849.3,
+      473.2
+     ],
+     "text": "a) Vis at når t varierer, så ligger w på en sirkel S i det komplekse plan.",
+     "fontSize": 19.9,
+     "type": "paragraph",
+     "id": "p133-b7",
+     "html": "<p>a) Vis at når t varierer, så ligger w på en sirkel S i det komplekse plan.</p>"
+    },
+    {
+     "bbox": [
+      280.6,
+      491.8,
+      796.5,
+      512.2
+     ],
+     "text": "b) Vis at argumentvinkelen θ til w er bestemt ved tan(θ/2) = t.",
+     "fontSize": 19.9,
+     "type": "paragraph",
+     "id": "p133-b8",
+     "html": "<p>b) Vis at argumentvinkelen θ til w er bestemt ved tan(θ/2) = t.</p>"
+    },
+    {
+     "bbox": [
+      257.4,
+      530.3,
+      509.3,
+      550.4
+     ],
+     "text": "19. Bevis alle punktene i 3.2.5.",
+     "fontSize": 19.9,
+     "type": "exercise",
+     "label": "19",
+     "id": "p133-b9",
+     "html": "<li value=\"19\">19. Bevis alle punktene i 3.2.5.</li>"
+    },
+    {
+     "bbox": [
+      257.4,
+      568.1,
+      886.5,
+      589.8
+     ],
+     "text": "20. Bevis ved induksjon på n at for alle komplekse tall z1, z2, z3, . . . , zn, så er",
+     "fontSize": 19.9,
+     "type": "exercise",
+     "label": "20",
+     "id": "p133-b10",
+     "html": "<li value=\"20\">20. Bevis ved induksjon på n at for alle komplekse tall z1, z2, z3, . . . , zn, så er</li>"
+    },
+    {
+     "bbox": [
+      358.4,
+      609.6,
+      836.7,
+      632.8
+     ],
+     "text": "|z1 + z2 + z3 + · · · + zn| ≤|z1| + |z2| + |z3] + · · · + |zn|.",
+     "fontSize": 19.9,
+     "type": "math",
+     "latex": "|z1 + z2 + z3 + \\cdot \\cdot \\cdot + zn| \\le |z1| + |z2| + |z3] + \\cdot \\cdot \\cdot + |zn|.",
+     "id": "p133-b11",
+     "html": "<div class=\"rb-math\">|z1 + z2 + z3 + · · · + zn| ≤|z1| + |z2| + |z3] + · · · + |zn|.</div>"
+    },
+    {
+     "bbox": [
+      257.4,
+      647,
+      763.1,
+      680.8
+     ],
+     "text": "21. Vis at |z −w| ≥ |||z| −|w| || for alle komplekse tall z og w.",
+     "fontSize": 19.9,
+     "type": "exercise",
+     "label": "21",
+     "id": "p133-b12",
+     "html": "<li value=\"21\">21. Vis at |z −w| ≥ |||z| −|w| || for alle komplekse tall z og w.</li>"
+    },
+    {
+     "bbox": [
+      257.4,
+      690,
+      937.7,
+      734
+     ],
+     "text": "22. Her er en skisse av et bevis for trekantulikheten som ikke bruker geometriske resonnementer. Fyll ut beviset og forklar hver enkelt trinn:",
+     "fontSize": 19.9,
+     "type": "exercise",
+     "label": "22",
+     "id": "p133-b13",
+     "html": "<li value=\"22\">22. Her er en skisse av et bevis for trekantulikheten som ikke bruker geometriske resonnementer. Fyll ut beviset og forklar hver enkelt trinn:</li>"
+    },
+    {
+     "type": "math",
+     "bbox": [
+      293.7,
+      748.5,
+      901.4,
+      809.7
+     ],
+     "text": "|z + w|2 = (z + w)(z + w) = |z|2 + zw + zw + |w|2 = |z|2 + 2Re(zw) + |w|2 ≤|z|2 + 2|z||w| + |w|2 = (|z| + |w|)2.",
+     "latex": "|z + w|^{2}= (z + w)(z + w) = |z|^{2}+ zw + zw + |w|^{2} = |z|^{2}+ 2Re(zw) + |w|^{2}\\le |z|^{2}+ 2|z||w| + |w|^{2}= (|z| + |w|)^{2}.",
+     "fontSize": 19.9,
+     "id": "p133-b14",
+     "html": "<div class=\"rb-math\">|z + w|2 = (z + w)(z + w) = |z|2 + zw + zw + |w|2 = |z|2 + 2Re(zw) + |w|2 ≤|z|2 + 2|z||w| + |w|2 = (|z| + |w|)2.</div>"
+    },
+    {
+     "bbox": [
+      144,
+      847,
+      871.1,
+      875.7
+     ],
+     "text": "3.3 Komplekse eksponentialer og de Moivres formel",
+     "fontSize": 28.7,
+     "type": "heading",
+     "level": 2,
+     "heading": "3.3 Komplekse eksponentialer og de Moivres formel",
+     "id": "p133-b15",
+     "html": "<h2>3.3 Komplekse eksponentialer og de Moivres formel</h2>"
+    },
+    {
+     "bbox": [
+      257.4,
+      883.8,
+      937.7,
+      934.9
+     ],
+     "text": "Vi vet hva ex betyr når x er et reelt tall, men hva skal vi mene med ez når z er kompleks? Vi starter med definisjonen selv om den kan se litt underlig ut:",
+     "fontSize": 19.9,
+     "type": "paragraph",
+     "id": "p133-b16",
+     "html": "<p>Vi vet hva ex betyr når x er et reelt tall, men hva skal vi mene med ez når z er kompleks? Vi starter med definisjonen selv om den kan se litt underlig ut:</p>"
+    },
+    {
+     "bbox": [
+      259.37799072265625,
+      950.6100463867188,
+      935.7080078125,
+      1140.4140625
+     ],
+     "text": "3.3.1 Definisjon Dersom z = a + ib er et komplekst tall, definerer vi",
+     "fontSize": 19.9,
+     "type": "concept",
+     "heading": "3.3.1 Definisjon",
+     "id": "p133-b17",
+     "html": "<p class=\"rb-concept\">3.3.1 Definisjon Dersom z = a + ib er et komplekst tall, definerer vi</p>",
+     "concept": "definition",
+     "label": "Definisjon 3.3.1"
+    },
+    {
+     "bbox": [
+      500.3,
+      1038.6,
+      694.8,
+      1066.8
+     ],
+     "text": "ez = ea(cos b + i sin b).",
+     "fontSize": 19.9,
+     "type": "math",
+     "latex": "e^{z}= e^{a}(cos b + i sin b).",
+     "id": "p133-b18",
+     "html": "<div class=\"rb-math\">ez = ea(cos b + i sin b).</div>"
+    },
+    {
+     "bbox": [
+      279.3,
+      1083.9,
+      757.5,
+      1111
+     ],
+     "text": "ez er altså et komplekst tall med modulus ea og argument b.",
+     "fontSize": 19.9,
+     "type": "paragraph",
+     "id": "p133-b19",
+     "html": "<p>ez er altså et komplekst tall med modulus ea og argument b.</p>"
+    },
+    {
+     "bbox": [
+      257.4,
+      1150.8,
+      937.7,
+      1250.1
+     ],
+     "text": "Legg merke til at hvis z = a + i0 er et reelt tall, så er ez = ea(cos 0 + i sin 0) = ea. Definisjonen stemmer altså overens med det vi er vant til når eksponenten er reell. Velger vi derimot imaginære verdier for eksponenten, skjer det uventede og fascinerende ting.",
+     "fontSize": 19.9,
+     "type": "paragraph",
+     "id": "p133-b20",
+     "html": "<p>Legg merke til at hvis z = a + i0 er et reelt tall, så er ez = ea(cos 0 + i sin 0) = ea. Definisjonen stemmer altså overens med det vi er vant til når eksponenten er reell. Velger vi derimot imaginære verdier for eksponenten, skjer det uventede og fascinerende ting.</p>"
+    },
+    {
+     "bbox": [
+      257.4,
+      1293.7,
+      400.3,
+      1337.8
+     ],
+     "text": "3.3.2 Eksempel Beregn eiπ.",
+     "fontSize": 19.9,
+     "type": "concept",
+     "heading": "3.3.2 Eksempel",
+     "id": "p133-b21",
+     "html": "<p class=\"rb-concept\">3.3.2 Eksempel Beregn eiπ.</p>",
+     "concept": "example",
+     "label": "Eksempel 3.3.2"
+    }
+   ]
+  },
+  {
+   "n": 6,
+   "pdfPage": 229,
+   "printedPage": 229,
+   "note": "Chapter 5 opens: display heading and epigraph",
+   "image": "/reader-proto/kalkulus/p229.png",
+   "width": 1078,
+   "height": 1475,
+   "blocks": [
+    {
+     "bbox": [
+      136.3,
+      78.3,
+      637,
+      257.6
+     ],
+     "text": "5 Kontinuerlige funksjoner",
+     "fontSize": 179.3,
+     "type": "heading",
+     "level": 1,
+     "heading": "5 Kontinuerlige funksjoner",
+     "id": "p229-b0",
+     "html": "<h1>5 Kontinuerlige funksjoner</h1>"
+    },
+    {
+     "bbox": [
+      676.9,
+      476.7,
+      919.9,
+      576.3
+     ],
+     "text": "Matematikere er som franskmenn; uansett hva man sier til dem, oversetter de det til sitt eget språk, og dermed blir det straks noe ganske annet.",
+     "fontSize": 15.9,
+     "type": "paragraph",
+     "id": "p229-b1",
+     "html": "<p>Matematikere er som franskmenn; uansett hva man sier til dem, oversetter de det til sitt eget språk, og dermed blir det straks noe ganske annet.</p>"
+    },
+    {
+     "bbox": [
+      676.9,
+      586,
+      907.3,
+      622.8
+     ],
+     "text": "— Johann Wolfgang von Goethe (1749–1832)",
+     "fontSize": 15.9,
+     "type": "paragraph",
+     "id": "p229-b2",
+     "html": "<p>— Johann Wolfgang von Goethe (1749–1832)</p>"
+    },
+    {
+     "bbox": [
+      257.4,
+      654.8,
+      937.7,
+      961.6
+     ],
+     "text": "Funksjonene man arbeider med i skolematematikken er bygget opp av potenser, eksponentialfunksjoner, logaritmer og trigonometriske funksjoner samt et endelig antall algebraiske operasjoner pluss, minus, gange og dele. Funksjoner som fremkommer på denne måten, har pene egenskaper – de er som regel kontinuerlige og deriverbare (unntatt muligens i noen få punkter), og de har grafer som enten er monotone, eller som har noen få topp- og bunnpunkter. Ved å studere fortegnet til funksjonene og deres deriverte skaffer vi oss fort oversikt over den geometriske oppførselen, og det er som oftest en smal sak å tegne gode skisser av funksjonsgrafene på grunnlag av denne informasjonen. Ut i fra egne erfaringer er det lett å tro at disse egenskapene er typiske for kontinuerlige funksjoner. Det er de imidlertid ikke – det skal ikke så store forandringene til før vi får kontinuerlige funksjoner med en helt annen oppførsel. Typografisk skiller funksjonen",
+     "fontSize": 19.9,
+     "type": "paragraph",
+     "id": "p229-b3",
+     "html": "<p>Funksjonene man arbeider med i skolematematikken er bygget opp av potenser, eksponentialfunksjoner, logaritmer og trigonometriske funksjoner samt et endelig antall algebraiske operasjoner pluss, minus, gange og dele. Funksjoner som fremkommer på denne måten, har pene egenskaper – de er som regel kontinuerlige og deriverbare (unntatt muligens i noen få punkter), og de har grafer som enten er monotone, eller som har noen få topp- og bunnpunkter. Ved å studere fortegnet til funksjonene og deres deriverte skaffer vi oss fort oversikt over den geometriske oppførselen, og det er som oftest en smal sak å tegne gode skisser av funksjonsgrafene på grunnlag av denne informasjonen. Ut i fra egne erfaringer er det lett å tro at disse egenskapene er typiske for kontinuerlige funksjoner. Det er de imidlertid ikke – det skal ikke så store forandringene til før vi får kontinuerlige funksjoner med en helt annen oppførsel. Typografisk skiller funksjonen</p>"
+    },
+    {
+     "type": "math",
+     "bbox": [
+      328.4,
+      980,
+      863.4,
+      1043
+     ],
+     "text": "∞ ∑ f(x) = sin 2kx 2k/2 = sin 2x √ 2 + sin 4x 2 + sin 8x 2 √ 2 + sin 16x 4 + · · · k=1",
+     "latex": "\\infty \\\\ \\sum f(x) = sin 2^{k}x 2^{k/2} \\\\ = sin 2x \\\\ \\sqrt 2 \\\\ + sin 4x 2 \\\\ + sin 8x 2 \\\\ \\sqrt 2 + sin 16x 4 \\\\ + \\cdot \\cdot \\cdot k=1",
+     "fontSize": 19.9,
+     "id": "p229-b4",
+     "html": "<div class=\"rb-math\">∞ ∑ f(x) = sin 2kx 2k/2 = sin 2x √ 2 + sin 4x 2 + sin 8x 2 √ 2 + sin 16x 4 + · · · k=1</div>"
+    },
+    {
+     "bbox": [
+      257.4,
+      1062.2,
+      937.7,
+      1321.3
+     ],
+     "text": "seg bare fra de vi er vant til ved at summen inneholder uendelig mange ledd, men geometrisk ser den helt annerledes ut – uansett hvor mye vi forstørrer den, flimrer grafen opp og ned og er full av kroker og kriker av alle størrelser (figur 5.0.1). Funksjoner av denne typen er ofte ikke deriverbare i ett eneste punkt, og lengden til grafen er uendelig over et hvilket som helst intervall (uansett hvor lite). Disse funksjonene er uvante og fremmedartede, men de er slett ikke verdensfjerne og unyttige – i mange matematiske modeller av virkelige fenomener er det nettopp disse funksjonene som spiller hovedrollen. Det finnes for eksempel en matematisk teori for såkalte Brownske bevegelser som har store anvendelser i fysikk, elektronikk og økonomi, og der alle de naturlig opptredende funksjonene er ingensteds deriverbare og har uendelig lengde.",
+     "fontSize": 19.9,
+     "type": "paragraph",
+     "id": "p229-b5",
+     "html": "<p>seg bare fra de vi er vant til ved at summen inneholder uendelig mange ledd, men geometrisk ser den helt annerledes ut – uansett hvor mye vi forstørrer den, flimrer grafen opp og ned og er full av kroker og kriker av alle størrelser (figur 5.0.1). Funksjoner av denne typen er ofte ikke deriverbare i ett eneste punkt, og lengden til grafen er uendelig over et hvilket som helst intervall (uansett hvor lite). Disse funksjonene er uvante og fremmedartede, men de er slett ikke verdensfjerne og unyttige – i mange matematiske modeller av virkelige fenomener er det nettopp disse funksjonene som spiller hovedrollen. Det finnes for eksempel en matematisk teori for såkalte Brownske bevegelser som har store anvendelser i fysikk, elektronikk og økonomi, og der alle de naturlig opptredende funksjonene er ingensteds deriverbare og har uendelig lengde.</p>"
+    }
+   ]
+  },
+  {
+   "n": 7,
+   "pdfPage": 230,
+   "printedPage": 230,
+   "note": "Figur 5.0.1 — the densest vector figure in the book",
+   "image": "/reader-proto/kalkulus/p230.png",
+   "width": 1078,
+   "height": 1475,
+   "blocks": [
+    {
+     "bbox": [
+      277.5,
+      175.7,
+      285.4,
+      193.7
+     ],
+     "text": "y",
+     "fontSize": 18,
+     "type": "paragraph",
+     "id": "p230-b0",
+     "html": "<p>y</p>"
+    },
+    {
+     "bbox": [
+      264.41510009765625,
+      180.01602172851562,
+      930.6940307617188,
+      700.2
+     ],
+     "text": "Figur 5.0.1.",
+     "fontSize": 19.9,
+     "type": "figure",
+     "label": "Figur 5.0.1",
+     "id": "p230-b1",
+     "html": "<figcaption>Figur 5.0.1.</figcaption>"
+    },
+    {
+     "bbox": [
+      571.3,
+      405.1,
+      579.3,
+      423.1
+     ],
+     "text": "x",
+     "fontSize": 18,
+     "type": "paragraph",
+     "id": "p230-b2",
+     "html": "<p>x</p>"
+    },
+    {
+     "bbox": [
+      257.4,
+      735.3,
+      937.7,
+      1018.3
+     ],
+     "text": "Stilt overfor disse nye eksemplene på kontinuerlige funksjoner er det naturlig å tvile en smule på sin intuisjon. Hvor mye av den erfaring og innsikt som vi har bygget opp gjennom arbeidet med de «pene»funksjonene i skolematematikken, kan vi egentlige overføre til disse nye funksjonene? Vi er vant til at kontinuerlige funksjoner har klart definerte topp- og bunnpunkter, men holder dette også for funksjoner av den typen vi ser på figur 5.0.1, som fortsetter å flimre opp og ned uansett hvor mye vi forstørrer dem? Eller, for å stille et annet spørsmål, er det mulig for en slik flimrende funksjon å passere fra negative til positive verdier uten å ha et nullpunkt innimellom? Det er spørsmål av denne typen vi skal forsøke å besvare i dette kapitlet. Hensikten er å bygge opp et fundament av kunnskap om kontinuerlige funksjoner som vi kan bruke som en støtte for vår intuisjon. Heldigvis ligger det ingen ubehagelige overraskelser og venter på oss – resultatene vi skal vise, er i god overensstemmelse med våre erfaringer.",
+     "fontSize": 19.9,
+     "type": "paragraph",
+     "id": "p230-b3",
+     "html": "<p>Stilt overfor disse nye eksemplene på kontinuerlige funksjoner er det naturlig å tvile en smule på sin intuisjon. Hvor mye av den erfaring og innsikt som vi har bygget opp gjennom arbeidet med de «pene»funksjonene i skolematematikken, kan vi egentlige overføre til disse nye funksjonene? Vi er vant til at kontinuerlige funksjoner har klart definerte topp- og bunnpunkter, men holder dette også for funksjoner av den typen vi ser på figur 5.0.1, som fortsetter å flimre opp og ned uansett hvor mye vi forstørrer dem? Eller, for å stille et annet spørsmål, er det mulig for en slik flimrende funksjon å passere fra negative til positive verdier uten å ha et nullpunkt innimellom? Det er spørsmål av denne typen vi skal forsøke å besvare i dette kapitlet. Hensikten er å bygge opp et fundament av kunnskap om kontinuerlige funksjoner som vi kan bruke som en støtte for vår intuisjon. Heldigvis ligger det ingen ubehagelige overraskelser og venter på oss – resultatene vi skal vise, er i god overensstemmelse med våre erfaringer.</p>"
+    },
+    {
+     "bbox": [
+      257.4,
+      1022.2,
+      937.7,
+      1329.1
+     ],
+     "text": "Det vi skal drive med i dette og neste kapittel, kan kanskje beskrives som «matematisk minimalisme» – vi skal prøve å finne ut så mye som mulig om en funksjon når alt vi i utgangspunktet vet, er at den er kontinuerlig (i dette kapitlet) eller deriverbar (i neste kapittel). Slik matematisk minimalisme kan virke uvant når man bare er vant til å arbeide med funksjoner som er gitt ved en formel, og som man dermed har all verdens informasjon om. Når vi bruker funksjoner i matematikk og andre fag, er det imidlertid sjelden at vi har en formel for dem; ofte vet vi bare at funksjonen vi arbeider med er løsningen til et matematisk problem (f.eks. løsningen til en differensialligning) eller at den beskriver et natur- eller samfunnsfenomen (f.eks. hvordan vann strømmer i et rør, eller hvordan etterspørselen til en vare avhenger av prisen). Når funksjonene er gitt på denne måten, har vi som regel litt grunnleggende informasjon fra den opprinnelige problemstillingen (kanskje vet vi at funksjonen er kontinuerlig eller at den er voksende eller at den må krumme på en spesiell måte) og vår oppgave er å bruke",
+     "fontSize": 19.9,
+     "type": "paragraph",
+     "id": "p230-b4",
+     "html": "<p>Det vi skal drive med i dette og neste kapittel, kan kanskje beskrives som «matematisk minimalisme» – vi skal prøve å finne ut så mye som mulig om en funksjon når alt vi i utgangspunktet vet, er at den er kontinuerlig (i dette kapitlet) eller deriverbar (i neste kapittel). Slik matematisk minimalisme kan virke uvant når man bare er vant til å arbeide med funksjoner som er gitt ved en formel, og som man dermed har all verdens informasjon om. Når vi bruker funksjoner i matematikk og andre fag, er det imidlertid sjelden at vi har en formel for dem; ofte vet vi bare at funksjonen vi arbeider med er løsningen til et matematisk problem (f.eks. løsningen til en differensialligning) eller at den beskriver et natur- eller samfunnsfenomen (f.eks. hvordan vann strømmer i et rør, eller hvordan etterspørselen til en vare avhenger av prisen). Når funksjonene er gitt på denne måten, har vi som regel litt grunnleggende informasjon fra den opprinnelige problemstillingen (kanskje vet vi at funksjonen er kontinuerlig eller at den er voksende eller at den må krumme på en spesiell måte) og vår oppgave er å bruke</p>"
+    }
+   ]
+  },
+  {
+   "n": 8,
+   "pdfPage": 251,
+   "printedPage": 251,
+   "note": "5.3.5 Ekstremalverdisetningen — a named theorem, and the Bevis under it",
+   "image": "/reader-proto/kalkulus/p251.png",
+   "width": 1078,
+   "height": 1475,
+   "blocks": [
+    {
+     "bbox": [
+      257.4,
+      170.1,
+      730.4,
+      190
+     ],
+     "text": "Vi er nå klare til å bevise hovedteoremet i denne seksjonen.",
+     "fontSize": 19.9,
+     "type": "paragraph",
+     "id": "p251-b0",
+     "html": "<p>Vi er nå klare til å bevise hovedteoremet i denne seksjonen.</p>"
+    },
+    {
+     "bbox": [
+      259.37799072265625,
+      207.4140167236328,
+      935.7080078125,
+      333.864013671875
+     ],
+     "text": "5.3.5 Ekstremalverdisetningen La f : [a, b] →R være en kontinuerlig funksjon definert på et lukket, begrenset intervall. Da har f både maksimumsog minimumspunkt(er).",
+     "fontSize": 19.9,
+     "type": "concept",
+     "heading": "5.3.5 Ekstremalverdisetningen",
+     "id": "p251-b1",
+     "html": "<p class=\"rb-concept\">5.3.5 Ekstremalverdisetningen La f : [a, b] →R være en kontinuerlig funksjon definert på et lukket, begrenset intervall. Da har f både maksimumsog minimumspunkt(er).</p>",
+     "concept": "theorem",
+     "label": "5.3.5",
+     "name": "Ekstremalverdisetningen"
+    },
+    {
+     "bbox": [
+      257.4,
+      352.1,
+      937.7,
+      443.7
+     ],
+     "text": "Bevis: Vi skal vise at f har maksimumspunkt(er); beviset for minimumspunkter er helt analogt. Fra setning 5.3.2 vet vi at f er begrenset, og følgelig eksisterer den minste øvre skranken M = sup{ f(x) | x ∈[a, b] }.",
+     "fontSize": 19.9,
+     "type": "concept",
+     "heading": "Bevis:",
+     "id": "p251-b2",
+     "html": "<p class=\"rb-concept\">Bevis: Vi skal vise at f har maksimumspunkt(er); beviset for minimumspunkter er helt analogt. Fra setning 5.3.2 vet vi at f er begrenset, og følgelig eksisterer den minste øvre skranken M = sup{ f(x) | x ∈[a, b] }.</p>",
+     "concept": "proof",
+     "label": "Bevis"
+    },
+    {
+     "bbox": [
+      257.4,
+      459.7,
+      937.7,
+      672.6
+     ],
+     "text": "Dersom vi kan finne et punkt c slik at f(c) = M, så vil c være et maksimumspunkt. Resonnementet har nøyaktig samme idé som beviset for setning 5.3.2. La oss starte med å dele intervallet [a, b] i to like store deler: [a, (a + b)/2] og [(a + b)/2, b]. Siden f har supremum M på [a, b], må den også ha supremum M på minst ett av de mindre intervallene. Kall dette intervallet [a1, b1] (dersom f har supremum M på begge to, velger vi ett av dem). Vi gjentar nå prosedyren med [a1, b1]; deler det i to deler [a1, (a1 + b1)/2] og [(a1 + b1)/2, b1], og observerer at f må ha supremum M på minst ett av disse intervallene. Det nye intervallet hvor f har supremum M, kaller vi [a2, b2]. Fortsetter vi på denne måten, får vi en uendelig kjede av intervaller",
+     "fontSize": 19.9,
+     "type": "paragraph",
+     "id": "p251-b3",
+     "html": "<p>Dersom vi kan finne et punkt c slik at f(c) = M, så vil c være et maksimumspunkt. Resonnementet har nøyaktig samme idé som beviset for setning 5.3.2. La oss starte med å dele intervallet [a, b] i to like store deler: [a, (a + b)/2] og [(a + b)/2, b]. Siden f har supremum M på [a, b], må den også ha supremum M på minst ett av de mindre intervallene. Kall dette intervallet [a1, b1] (dersom f har supremum M på begge to, velger vi ett av dem). Vi gjentar nå prosedyren med [a1, b1]; deler det i to deler [a1, (a1 + b1)/2] og [(a1 + b1)/2, b1], og observerer at f må ha supremum M på minst ett av disse intervallene. Det nye intervallet hvor f har supremum M, kaller vi [a2, b2]. Fortsetter vi på denne måten, får vi en uendelig kjede av intervaller</p>"
+    },
+    {
+     "bbox": [
+      357.5,
+      694.5,
+      834.3,
+      716.4
+     ],
+     "text": "[a, b] ⊇[a1, b1] ⊇[a2, b2] ⊇[a3, b3] ⊇· · · ⊇[an, bn] ⊇· · ·",
+     "fontSize": 19.9,
+     "type": "math",
+     "latex": "[a, b] [a1, b1] [a2, b2] [a3, b3] \\cdot \\cdot \\cdot [an, bn] \\cdot \\cdot \\cdot",
+     "id": "p251-b4",
+     "html": "<div class=\"rb-math\">[a, b] ⊇[a1, b1] ⊇[a2, b2] ⊇[a3, b3] ⊇· · · ⊇[an, bn] ⊇· · ·</div>"
+    },
+    {
+     "bbox": [
+      257.4,
+      738.3,
+      937.7,
+      880.8
+     ],
+     "text": "der f har supremum M. Følgen {an} er voksende, og ifølge teorem 4.3.9 må den da konvergere mot et punkt c i [a, b]. Siden lengden til intervallene halveres hele tiden, må følgen {bn} også konvergere mot c. Vi skal vise at f(c) = M, og at c dermed er et maksimumspunkt. Siden f har supremum M på alle intervallene våre, kan vi for hver n velge et punkt cn ∈[an, bn] slik at f(cn) ≥M −1/n. Dette betyr at",
+     "fontSize": 19.9,
+     "type": "paragraph",
+     "id": "p251-b5",
+     "html": "<p>der f har supremum M. Følgen {an} er voksende, og ifølge teorem 4.3.9 må den da konvergere mot et punkt c i [a, b]. Siden lengden til intervallene halveres hele tiden, må følgen {bn} også konvergere mot c. Vi skal vise at f(c) = M, og at c dermed er et maksimumspunkt. Siden f har supremum M på alle intervallene våre, kan vi for hver n velge et punkt cn ∈[an, bn] slik at f(cn) ≥M −1/n. Dette betyr at</p>"
+    },
+    {
+     "bbox": [
+      525.4,
+      902,
+      669.7,
+      932.6
+     ],
+     "text": "lim n→∞f(cn) = M.",
+     "fontSize": 19.9,
+     "type": "math",
+     "latex": "lim \\\\ n\\to \\infty f(c^{n}) = M.",
+     "id": "p251-b6",
+     "html": "<div class=\"rb-math\">lim n→∞f(cn) = M.</div>"
+    },
+    {
+     "bbox": [
+      257.4,
+      952.5,
+      937.7,
+      1021
+     ],
+     "text": "På den annen side er følgen {cn} klemt mellom de to følgene {an} og {bn} som begge konvergerer mot c, og følgelig må også {cn} konvergere mot c. Siden f er kontinuerlig, betyr dette ifølge setning 5.1.10 at",
+     "fontSize": 19.9,
+     "type": "paragraph",
+     "id": "p251-b7",
+     "html": "<p>På den annen side er følgen {cn} klemt mellom de to følgene {an} og {bn} som begge konvergerer mot c, og følgelig må også {cn} konvergere mot c. Siden f er kontinuerlig, betyr dette ifølge setning 5.1.10 at</p>"
+    },
+    {
+     "bbox": [
+      517.6,
+      1044.5,
+      677.5,
+      1075
+     ],
+     "text": "lim n→∞f(cn) = f(c).",
+     "fontSize": 19.9,
+     "type": "math",
+     "latex": "lim \\\\ n\\to \\infty f(c^{n}) = f(c).",
+     "id": "p251-b8",
+     "html": "<div class=\"rb-math\">lim n→∞f(cn) = f(c).</div>"
+    },
+    {
+     "bbox": [
+      257.4,
+      1090.9,
+      937.7,
+      1115.7
+     ],
+     "text": "Men dermed er f(c) = M, og setningen er bevist. ■",
+     "fontSize": 19.9,
+     "type": "paragraph",
+     "id": "p251-b9",
+     "html": "<p>Men dermed er f(c) = M, og setningen er bevist. ■</p>"
+    },
+    {
+     "bbox": [
+      257.4,
+      1159.3,
+      937.7,
+      1322.9
+     ],
+     "text": "Bemerkning Som vi allerede har påpekt, er dette beviset svært likt det vi ga for setning 5.3.2. Det er faktisk mulig (og ikke særlig vanskelig) å slå de to bevisene sammen til ett, og på den måten vise ekstremalverdisetningen direkte uten å gå veien om 5.3.2. Vi har valgt den indirekte ruten av to grunner; for det første blir beviset litt oversiktligere på denne måten, og for det andre understreker det på en klarere måte at begrensethet og eksistens av ekstremalverdier egentlig er to forskjellige egenskaper.",
+     "fontSize": 19.9,
+     "type": "paragraph",
+     "heading": "Bemerkning",
+     "id": "p251-b10",
+     "html": "<p class=\"rb-concept\">Bemerkning Som vi allerede har påpekt, er dette beviset svært likt det vi ga for setning 5.3.2. Det er faktisk mulig (og ikke særlig vanskelig) å slå de to bevisene sammen til ett, og på den måten vise ekstremalverdisetningen direkte uten å gå veien om 5.3.2. Vi har valgt den indirekte ruten av to grunner; for det første blir beviset litt oversiktligere på denne måten, og for det andre understreker det på en klarere måte at begrensethet og eksistens av ekstremalverdier egentlig er to forskjellige egenskaper.</p>"
+    }
+   ]
+  },
+  {
+   "n": 9,
+   "pdfPage": 253,
+   "printedPage": 253,
+   "note": "Oppgaver i seksjon 5.3 — a second exercise page, different chapter",
+   "image": "/reader-proto/kalkulus/p253.png",
+   "width": 1078,
+   "height": 1475,
+   "blocks": [
+    {
+     "bbox": [
+      257.4,
+      175.6,
+      937.7,
+      243.3
+     ],
+     "text": "egenskapen som skiller de reelle tallene fra de rasjonale, viser dette at kompletthetsprinsippet må være en essensiell ingrediens i ethvert bevis for ekstremalverdisetningen. ■",
+     "fontSize": 19.9,
+     "type": "paragraph",
+     "id": "p253-b0",
+     "html": "<p>egenskapen som skiller de reelle tallene fra de rasjonale, viser dette at kompletthetsprinsippet må være en essensiell ingrediens i ethvert bevis for ekstremalverdisetningen. ■</p>"
+    },
+    {
+     "bbox": [
+      144,
+      287.9,
+      404.1,
+      311.8
+     ],
+     "text": "Oppgaver i seksjon 5.3",
+     "fontSize": 23.9,
+     "type": "heading",
+     "level": 3,
+     "heading": "Oppgaver i seksjon 5.3",
+     "id": "p253-b1",
+     "html": "<h3>Oppgaver i seksjon 5.3</h3>"
+    },
+    {
+     "bbox": [
+      257.4,
+      324.8,
+      937.7,
+      368.9
+     ],
+     "text": "1. Bruk ekstremalverdisetningen til å vise at funksjonene har maksimums- og minimumsverdier på de angitte intervallene.",
+     "fontSize": 19.9,
+     "type": "exercise",
+     "label": "1",
+     "id": "p253-b2",
+     "html": "<li value=\"1\">1. Bruk ekstremalverdisetningen til å vise at funksjonene har maksimums- og minimumsverdier på de angitte intervallene.</li>"
+    },
+    {
+     "bbox": [
+      281.8,
+      383.3,
+      425,
+      422.6
+     ],
+     "text": "a) f(x) = esin x2",
+     "fontSize": 19.9,
+     "type": "math",
+     "latex": "a) f(x) =e^{sin x2}",
+     "id": "p253-b3",
+     "html": "<div class=\"rb-math\">a) f(x) = esin x2</div>"
+    },
+    {
+     "bbox": [
+      374.9,
+      385.7,
+      615.2,
+      436.3
+     ],
+     "text": "x2 + 1 på intervallet [ −14, √",
+     "fontSize": 19.9,
+     "type": "paragraph",
+     "id": "p253-b4",
+     "html": "<p>x2 + 1 på intervallet [ −14, √</p>"
+    },
+    {
+     "bbox": [
+      615.2,
+      400.4,
+      646.8,
+      422.2
+     ],
+     "text": "31 ]",
+     "fontSize": 19.9,
+     "type": "math",
+     "latex": "31 \\\\ \\right]",
+     "id": "p253-b5",
+     "html": "<div class=\"rb-math\">31 ]</div>"
+    },
+    {
+     "type": "math",
+     "bbox": [
+      280.6,
+      443.8,
+      670.9,
+      535.7
+     ],
+     "text": "b) f(x) = ln(sin2 x + ex) c) f(x) = tan(x2 + 1) på intervallet [ 0, 1/ √ 2 ]",
+     "latex": "b) f(x) = ln(sin^{2} x + e^{x}) c) f(x) = tan(x^{2}+ 1) på intervallet \\\\ \\left[ \\\\ 0, 1/ \\\\ \\sqrt 2 \\\\ \\right]",
+     "fontSize": 19.9,
+     "id": "p253-b6",
+     "html": "<div class=\"rb-math\">b) f(x) = ln(sin2 x + ex) c) f(x) = tan(x2 + 1) på intervallet [ 0, 1/ √ 2 ]</div>"
+    },
+    {
+     "bbox": [
+      414.2,
+      464.9,
+      700.9,
+      498.5
+     ],
+     "text": "x −1 på intervallet [1.0001, 3]",
+     "fontSize": 19.9,
+     "type": "paragraph",
+     "id": "p253-b7",
+     "html": "<p>x −1 på intervallet [1.0001, 3]</p>"
+    },
+    {
+     "bbox": [
+      257.4,
+      553.7,
+      937.7,
+      598
+     ],
+     "text": "2. a) Bruk setning 5.1.4 og definisjon 5.1.11 til å vise at funksjonen f(x) = 1/x er kontinuerlig.",
+     "fontSize": 19.9,
+     "type": "exercise",
+     "label": "2",
+     "id": "p253-b8",
+     "html": "<li value=\"2\">2. a) Bruk setning 5.1.4 og definisjon 5.1.11 til å vise at funksjonen f(x) = 1/x er kontinuerlig.</li>"
+    },
+    {
+     "bbox": [
+      280.6,
+      616.5,
+      937.7,
+      661.1
+     ],
+     "text": "b) Vis at f(x) ikke er begrenset på intervallet [−1, 1]. Hvorfor strider ikke dette mot ekstremalverdisetningen?",
+     "fontSize": 19.9,
+     "type": "paragraph",
+     "id": "p253-b9",
+     "html": "<p>b) Vis at f(x) ikke er begrenset på intervallet [−1, 1]. Hvorfor strider ikke dette mot ekstremalverdisetningen?</p>"
+    },
+    {
+     "bbox": [
+      257.4,
+      674.7,
+      937.7,
+      723.4
+     ],
+     "text": "3. a) Anta at f : R →R er kontinuerlig og at limx→∞f(x) og limx→−∞f(x) eksisterer. Vis at f er begrenset.",
+     "fontSize": 19.9,
+     "type": "exercise",
+     "label": "3",
+     "id": "p253-b10",
+     "html": "<li value=\"3\">3. a) Anta at f : R →R er kontinuerlig og at limx→∞f(x) og limx→−∞f(x) eksisterer. Vis at f er begrenset.</li>"
+    },
+    {
+     "bbox": [
+      280.6,
+      737.8,
+      937.7,
+      810.3
+     ],
+     "text": "b) Anta at f : R →R er kontinuerlig og har både positive og negative verdier. Anta også at limx→∞f(x) = limx→−∞f(x) = 0. Vis at f har maksimal- og minimalpunkter.",
+     "fontSize": 19.9,
+     "type": "paragraph",
+     "id": "p253-b11",
+     "html": "<p>b) Anta at f : R →R er kontinuerlig og har både positive og negative verdier. Anta også at limx→∞f(x) = limx→−∞f(x) = 0. Vis at f har maksimal- og minimalpunkter.</p>"
+    },
+    {
+     "bbox": [
+      257.4,
+      824,
+      937.7,
+      872.6
+     ],
+     "text": "4. Anta at f : (a, b) →R er kontinuerlig og at grenseverdiene av f(x) når x nærmer seg a ovenfra og b nedenfra eksisterer. Vis at f er begrenset.",
+     "fontSize": 19.9,
+     "type": "exercise",
+     "label": "4",
+     "id": "p253-b12",
+     "html": "<li value=\"4\">4. Anta at f : (a, b) →R er kontinuerlig og at grenseverdiene av f(x) når x nærmer seg a ovenfra og b nedenfra eksisterer. Vis at f er begrenset.</li>"
+    },
+    {
+     "bbox": [
+      257.4,
+      886.3,
+      937.7,
+      934.9
+     ],
+     "text": "5. Anta at f : [a, b] →R er kontinuerlig. Vis at verdimengden Vf = {f(x) : x ∈ [a, b]} er et lukket, begrenset intervall.",
+     "fontSize": 19.9,
+     "type": "exercise",
+     "label": "5",
+     "id": "p253-b13",
+     "html": "<li value=\"5\">5. Anta at f : [a, b] →R er kontinuerlig. Vis at verdimengden Vf = {f(x) : x ∈ [a, b]} er et lukket, begrenset intervall.</li>"
+    },
+    {
+     "bbox": [
+      257.4,
+      953.2,
+      541.2,
+      973.3
+     ],
+     "text": "6. (UiO) Vi ser på et reelt polynom",
+     "fontSize": 19.9,
+     "type": "exercise",
+     "label": "6",
+     "id": "p253-b14",
+     "html": "<li value=\"6\">6. (UiO) Vi ser på et reelt polynom</li>"
+    },
+    {
+     "bbox": [
+      369.8,
+      986.8,
+      824.2,
+      1016.6
+     ],
+     "text": "P(x) = xn + an−1xn−1 + an−2xn−2 + . . . + a1x + a0",
+     "fontSize": 19.9,
+     "type": "math",
+     "latex": "P(x) = x^{n}+ an-1x^{n-1}+ an-2x^{n-2}+ . . . + a1x + a0",
+     "id": "p253-b15",
+     "html": "<div class=\"rb-math\">P(x) = xn + an−1xn−1 + an−2xn−2 + . . . + a1x + a0</div>"
+    },
+    {
+     "bbox": [
+      257.4,
+      1036.7,
+      937.7,
+      1081.3
+     ],
+     "text": "der graden n er et partall. Vis at limx→∞P(x) = ∞og at limx→−∞P(x) = ∞. Vis deretter at det finnes et tall K slik at P(x) > K for alle x ∈R.",
+     "fontSize": 19.9,
+     "type": "paragraph",
+     "id": "p253-b16",
+     "html": "<p>der graden n er et partall. Vis at limx→∞P(x) = ∞og at limx→−∞P(x) = ∞. Vis deretter at det finnes et tall K slik at P(x) &gt; K for alle x ∈R.</p>"
+    },
+    {
+     "bbox": [
+      257.4,
+      1099.6,
+      937.7,
+      1194
+     ],
+     "text": "7. I denne oppgaven skal vi modifisere beviset for ekstremalverdisetningen slik at vi slipper å gå veien om setning 5.3.2. Vi antar altså at f : [a, b] →R er kontinuerlig og skal vise at f har et maksimalpunkt. La α = sup{f(x) : x ∈[a, b]} der vi lar α = ∞ dersom f er ubegrenset. La {αn} være en voksende følge slik at limn→∞αn = α.",
+     "fontSize": 19.9,
+     "type": "exercise",
+     "label": "7",
+     "id": "p253-b17",
+     "html": "<li value=\"7\">7. I denne oppgaven skal vi modifisere beviset for ekstremalverdisetningen slik at vi slipper å gå veien om setning 5.3.2. Vi antar altså at f : [a, b] →R er kontinuerlig og skal vise at f har et maksimalpunkt. La α = sup{f(x) : x ∈[a, b]} der vi lar α = ∞ dersom f er ubegrenset. La {αn} være en voksende følge slik at limn→∞αn = α.</li>"
+    },
+    {
+     "bbox": [
+      281.8,
+      1209.9,
+      636.3,
+      1229.8
+     ],
+     "text": "a) Vis at det finnes en sekvens av intervaller",
+     "fontSize": 19.9,
+     "type": "paragraph",
+     "id": "p253-b18",
+     "html": "<p>a) Vis at det finnes en sekvens av intervaller</p>"
+    },
+    {
+     "bbox": [
+      424.2,
+      1251.2,
+      817.4,
+      1273.1
+     ],
+     "text": "[a, b] ⊃[a1, b1] ⊃[a2, b2] ⊃· · · ⊃[an, bn] ⊃· · ·",
+     "fontSize": 19.9,
+     "type": "math",
+     "latex": "[a, b] \\supset [a1, b1] \\supset [a2, b2] \\supset \\cdot \\cdot \\cdot \\supset [an, bn] \\supset \\cdot \\cdot \\cdot",
+     "id": "p253-b19",
+     "html": "<div class=\"rb-math\">[a, b] ⊃[a1, b1] ⊃[a2, b2] ⊃· · · ⊃[an, bn] ⊃· · ·</div>"
+    },
+    {
+     "bbox": [
+      307.2,
+      1293.2,
+      937.7,
+      1339
+     ],
+     "text": "der hvert intervall er halvparten av det foregående, og der α = sup{f(x) : x ∈ [an, bn]} for alle n.",
+     "fontSize": 19.9,
+     "type": "paragraph",
+     "id": "p253-b20",
+     "html": "<p>der hvert intervall er halvparten av det foregående, og der α = sup{f(x) : x ∈ [an, bn]} for alle n.</p>"
+    }
+   ]
+  }
+ ]
+}
