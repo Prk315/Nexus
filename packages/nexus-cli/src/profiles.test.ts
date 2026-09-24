@@ -60,9 +60,9 @@ describe("config", () => {
   });
 
   it("prefers NEXUS_* env, then VITE_*, and ignores placeholders", () => {
-    const c = loadSupabaseConfig({ NEXUS_SUPABASE_URL: "https://x.supabase.co", NEXUS_SUPABASE_ANON_KEY: "key" }, home);
+    const c = loadSupabaseConfig({ NEXUS_SUPABASE_URL: "https://x.supabase.co", NEXUS_SUPABASE_ANON_KEY: "key" }, home, home);
     expect(c).toMatchObject({ url: "https://x.supabase.co", anonKey: "key" });
-    const v = loadSupabaseConfig({ VITE_SUPABASE_URL: "your-project-url", VITE_SUPABASE_ANON_KEY: "vkey" }, home);
+    const v = loadSupabaseConfig({ VITE_SUPABASE_URL: "your-project-url", VITE_SUPABASE_ANON_KEY: "vkey" }, home, home);
     expect(v.url).toBe("https://efxmzsdisaymtpebaxlp.supabase.co");
     expect(v.anonKey).toBe("vkey");
     expect(v.source.url).toBe("built-in default");

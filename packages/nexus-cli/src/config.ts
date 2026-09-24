@@ -56,7 +56,7 @@ export function parseDotenv(text: string): Record<string, string> {
   return out;
 }
 
-function candidateEnvFiles(cwd: string): string[] {
+function candidateEnvFiles(cwd: string, repoRoot: string): string[] {
   const files: string[] = [];
   if (process.env.NEXUS_ENV_FILE) files.push(process.env.NEXUS_ENV_FILE);
   let dir = path.resolve(cwd);
@@ -66,13 +66,15 @@ function candidateEnvFiles(cwd: string): string[] {
     if (parent === dir) break;
     dir = parent;
   }
-  files.push(path.join(REPO_ROOT, ".env"));
-  files.push(path.join(REPO_ROOT, "apps", "Vault", "Vault", ".env"));
-  files.push(path.join(REPO_ROOT, "apps", "PathFinder", ".env"));
+  files.push(path.join(repoRoot, ".env"));
+  files.push(path.join(repoRoot, "apps", "Vault", "Vault", ".env"));
+  files.push(path.join(repoRoot, "apps", "PathFinder", ".env"));
   return [...new Set(files)];
 }
 
-export function loadSupabaseConfig(env: NodeJS.ProcessEnv = process.env, cwd = process.cwd()): SupabaseConfig {
+// `repoRoot` is overridable so tests can run hermetically: the real repo's
+// .env files carry a real key and would otherwise satisfy any lookup.
+export function loadSupabaseConfig(env: NodeJS.ProcessEnv = process.env, cwd = process.cwd(), repoRoot = REPO_ROOT): SupabaseConfig {
   let url: string | undefined;
   let anonKey: string | undefined;
   let urlSource = "";
@@ -86,7 +88,7 @@ export function loadSupabaseConfig(env: NodeJS.ProcessEnv = process.env, cwd = p
   take(env.NEXUS_SUPABASE_URL, env.NEXUS_SUPABASE_ANON_KEY, "env NEXUS_SUPABASE_*");
   take(env.VITE_SUPABASE_URL, env.VITE_SUPABASE_ANON_KEY, "env VITE_SUPABASE_*");
 
-  const searched = candidateEnvFiles(cwd);
+  const searched = candidateEnvFiles(cwd, repoRoot);
   if (!url || !anonKey) {
     for (const file of searched) {
       if (url && anonKey) break;
