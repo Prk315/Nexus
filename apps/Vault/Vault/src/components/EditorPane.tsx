@@ -251,6 +251,23 @@ export const EditorPane = forwardRef<EditorPaneHandle, EditorPaneProps>(
 
     // ── History ───────────────────────────────────────────────────────────────
     const [showHistory, setShowHistory] = useState(false);
+
+    // ── Links, collapsed to a count ───────────────────────────────────────────
+    // The chips themselves used to be a full row of their own. They are the
+    // same chips with the same × — they just live behind the count now.
+    const [linksOpen, setLinksOpen] = useState(false);
+    const linksRef = useRef<HTMLDivElement>(null);
+    // A different node is a different set of links, so an open list from the
+    // previous one must not survive the switch.
+    useEffect(() => { setLinksOpen(false); }, [selectedId]);
+    useEffect(() => {
+      if (!linksOpen) return;
+      function onPointerDown(e: PointerEvent) {
+        if (!linksRef.current?.contains(e.target as Node)) setLinksOpen(false);
+      }
+      document.addEventListener("pointerdown", onPointerDown);
+      return () => document.removeEventListener("pointerdown", onPointerDown);
+    }, [linksOpen]);
     // The live NoteEditor's handle, when one is mounted. Null while the schema
     // guard is showing, and for every kind that renders a different editor —
     // restoreVersion has a route that does not need it.
@@ -824,12 +841,91 @@ export const EditorPane = forwardRef<EditorPaneHandle, EditorPaneProps>(
           <HomePage graph={graph} onSelectNode={selectNode} />
         ) : selectedNode ? (
           <>
-            <div className="editor-toolbar">
-              <span className="note-title">
-                {nodeIcon(selectedNode.kind)} {selectedNode.name}
-              </span>
-              <div className="toolbar-actions">
-                {collabEligible && collabSession && (
+            {/* One compact strip where three rows used to be: the title line
+                (the tab already names the node, so it was saying it twice),
+                the tag bar, and the row of link chips.
+
+                Nothing it could do has gone — tags add, remove and keep their
+                colour dot; the links are the same chips with the same ×,
+                behind a count that expands; and the save status, the conflict
+                exits and History came across from the title line rather than
+                being dropped with it. */}
+            <div className="chrome-strip">
+              <TagBar
+                nodeId={selectedId!}
+                graph={graph}
+                newTag={newTag}
+                onNewTagChange={setNewTag}
+                onAddTag={(tag) => {
+                  addTag(selectedId!, tag);
+                  setNewTag("");
+                }}
+                onRemoveTag={(tag) => removeTag(selectedId!, tag)}
+                onSetTagColor={setTagColor}
+              />
+
+              {(() => {
+                const outgoing = (graph.edges[selectedId!] ?? []).filter(
+                  (id) => graph.nodes[id]
+                );
+                const incoming = (graph.back_edges[selectedId!] ?? []).filter(
+                  (id) => graph.nodes[id]
+                );
+                if (outgoing.length === 0 && incoming.length === 0) return null;
+                return (
+                  <div className="links-summary" ref={linksRef}>
+                    <button
+                      type="button"
+                      className={`links-count${linksOpen ? " links-count-open" : ""}`}
+                      onClick={() => setLinksOpen((o) => !o)}
+                      aria-expanded={linksOpen}
+                      title={`${outgoing.length} outgoing, ${incoming.length} incoming — click to list them`}
+                    >
+                      {outgoing.length > 0 && (
+                        <span className="links-count-out">{outgoing.length} →</span>
+                      )}
+                      {incoming.length > 0 && (
+                        <span className="links-count-in">{incoming.length} ←</span>
+                      )}
+                    </button>
+                    {linksOpen && (
+                      <div className="links-popover">
+                        {outgoing.map((id) => (
+                          <span key={`out-${id}`} className="edge-chip edge-chip-out">
+                            → {graph.nodes[id].name}
+                            <button
+                              className="edge-chip-remove"
+                              title="Remove this link"
+                              onClick={() => removeEdge(selectedId!, id)}
+                            >
+                              ×
+                            </button>
+                          </span>
+                        ))}
+                        {incoming.map((id) => (
+                          <span key={`in-${id}`} className="edge-chip edge-chip-in">
+                            ← {graph.nodes[id].name}
+                            <button
+                              className="edge-chip-remove"
+                              title="Remove this link"
+                              onClick={() => removeEdge(id, selectedId!)}
+                            >
+                              ×
+                            </button>
+                          </span>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                );
+              })()}
+
+              {/* Pushes the status and History to the far end, so the strip
+                  reads left-to-right as "what this note is" then "is it
+                  safe". */}
+              <span className="chrome-strip-gap" />
+
+              {collabEligible && collabSession && (
                   <span
                     className="collab-status"
                     title={
@@ -941,7 +1037,6 @@ export const EditorPane = forwardRef<EditorPaneHandle, EditorPaneProps>(
                     History
                   </button>
                 )}
-              </div>
             </div>
 
             {showHistory && selectedId && (
@@ -954,55 +1049,6 @@ export const EditorPane = forwardRef<EditorPaneHandle, EditorPaneProps>(
                 onClose={() => setShowHistory(false)}
               />
             )}
-
-            <TagBar
-              nodeId={selectedId!}
-              graph={graph}
-              newTag={newTag}
-              onNewTagChange={setNewTag}
-              onAddTag={(tag) => {
-                addTag(selectedId!, tag);
-                setNewTag("");
-              }}
-              onRemoveTag={(tag) => removeTag(selectedId!, tag)}
-              onSetTagColor={setTagColor}
-            />
-
-            {(() => {
-              const outgoing = (graph.edges[selectedId!] ?? []).filter(
-                (id) => graph.nodes[id]
-              );
-              const incoming = (graph.back_edges[selectedId!] ?? []).filter(
-                (id) => graph.nodes[id]
-              );
-              if (outgoing.length === 0 && incoming.length === 0) return null;
-              return (
-                <div className="edge-bar">
-                  {outgoing.map((id) => (
-                    <span key={id} className="edge-chip edge-chip-out">
-                      → {graph.nodes[id].name}
-                      <button
-                        className="edge-chip-remove"
-                        onClick={() => removeEdge(selectedId!, id)}
-                      >
-                        ×
-                      </button>
-                    </span>
-                  ))}
-                  {incoming.map((id) => (
-                    <span key={id} className="edge-chip edge-chip-in">
-                      ← {graph.nodes[id].name}
-                      <button
-                        className="edge-chip-remove"
-                        onClick={() => removeEdge(id, selectedId!)}
-                      >
-                        ×
-                      </button>
-                    </span>
-                  ))}
-                </div>
-              );
-            })()}
 
             <Suspense fallback={<div className="loading-state">Loading…</div>}>
             {isFolderSelected && folderGraphData ? (
