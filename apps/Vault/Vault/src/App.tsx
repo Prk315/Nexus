@@ -16,6 +16,8 @@ import { TagsPanel } from "./components/TagsPanel";
 import { EditorPane, EditorPaneHandle } from "./components/EditorPane";
 import { useConfirm } from "./components/ConfirmDialog";
 import { DirectoryShell } from "./components/directory/DirectoryShell";
+import { ErrorFence } from "./components/directory/ErrorFence";
+import { LayoutSwitch } from "./components/directory/LayoutSwitch";
 import type { ImportKind } from "./components/directory/DirectoryTree";
 import { useLayoutMode, usePersistentExpanded } from "./components/directory/useDirectory";
 import { otherMemberName } from "./lib/teamMembers";
@@ -728,6 +730,7 @@ function App() {
       />
 
       {layout === "grid" ? (
+        <ErrorFence label="The directory layout could not be drawn. Switch to the classic layout with ?layout=classic.">
         <DirectoryShell
           graph={graph}
           graphData={graphData}
@@ -768,6 +771,7 @@ function App() {
           layout={layout}
           onLayout={setLayout}
         />
+        </ErrorFence>
       ) : (
       <>
       <button
@@ -804,6 +808,9 @@ function App() {
               aria-label="Colour scheme"
               aria-pressed={themeOpen}
             >◐</button>
+            {/* The way back to the directory layout. It has to be HERE and not
+                only in the grid shell's header — see LayoutSwitch.tsx. */}
+            <LayoutSwitch layout={layout} onLayout={setLayout} compact />
           </div>
         </div>
 

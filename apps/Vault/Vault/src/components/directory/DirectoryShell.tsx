@@ -7,6 +7,8 @@ import { FolderDirectory } from "./FolderDirectory";
 import { Minimap } from "./Minimap";
 import { containingFolder, descendantSubgraph, tagSubgraph } from "./subgraph";
 import { DEFAULT_GRAPH_FILTERS } from "../GraphFilterPanel";
+import { ErrorFence } from "./ErrorFence";
+import { LayoutSwitch } from "./LayoutSwitch";
 import { useElementSize } from "./useDirectory";
 import type { LayoutMode } from "./useDirectory";
 
@@ -222,13 +224,7 @@ export function DirectoryShell(props: Props) {
           >
             ◐
           </button>
-          <button
-            className="vault-layout-btn"
-            onClick={() => onLayout(layout === "grid" ? "classic" : "grid")}
-            title="Switch between the directory prototype and the existing layout"
-          >
-            {layout === "grid" ? "Classic layout" : "Directory layout"}
-          </button>
+          <LayoutSwitch layout={layout} onLayout={onLayout} />
         </div>
       </header>
 
@@ -266,6 +262,7 @@ export function DirectoryShell(props: Props) {
           ) : (
             <div className="dir-side-graph" ref={sideCell.ref}>
               {sideCell.size.width > 0 && (
+                <ErrorFence label="The graph could not be drawn.">
                 <Suspense fallback={<div className="loading-state">Loading graph…</div>}>
                   <GraphView
                     graph={graph}
@@ -281,6 +278,7 @@ export function DirectoryShell(props: Props) {
                     onToggleLinkMode={onToggleLinkMode}
                   />
                 </Suspense>
+                </ErrorFence>
               )}
             </div>
           )}
@@ -346,6 +344,7 @@ export function DirectoryShell(props: Props) {
               </div>
             ) : (
               graphCell.size.width > 0 && (
+                <ErrorFence label="The graph could not be drawn.">
                 <Suspense fallback={<div className="loading-state">Loading graph…</div>}>
                   <ForceGraphView
                     graph={graph}
@@ -371,6 +370,7 @@ export function DirectoryShell(props: Props) {
                     savePositions={onSavePositions}
                   />
                 </Suspense>
+                </ErrorFence>
               )
             )}
             <Minimap

@@ -9231,6 +9231,55 @@ body.vault-block-dragging .tt-bubble {
   color: var(--fg-main);
   border-color: var(--border-strong);
 }
+/* The classic sidebar header is already three controls wide, so the way back
+   is a glyph there rather than a word. */
+.vault-layout-btn.is-compact {
+  padding: 3px 7px;
+  font-size: 12px;
+  line-height: 1;
+}
+
+/* A pane that failed says so, in the pane. See ErrorFence.tsx — the
+   alternative is a white screen with the reason only in the console. */
+.pane-error {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 16px;
+  text-align: center;
+}
+.pane-error-title {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--fg-main);
+}
+.pane-error-detail {
+  max-width: 420px;
+  font-size: 11px;
+  font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+  color: var(--fg-muted);
+  overflow-wrap: anywhere;
+}
+.pane-error-retry {
+  margin-top: 4px;
+  padding: 3px 12px;
+  background: var(--bg-raised);
+  border: 1px solid var(--border-base);
+  border-radius: 100px;
+  font-family: inherit;
+  font-size: 11px;
+  color: var(--fg-muted);
+  cursor: pointer;
+  box-shadow: none;
+}
+.pane-error-retry:hover {
+  color: var(--fg-main);
+  border-color: var(--border-strong);
+}
 
 /* ── The grid ───────────────────────────────────────────────────────────────
    sidebar spans all three rows; the graph takes rows 1–2 of both right-hand

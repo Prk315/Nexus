@@ -40,7 +40,19 @@ export function useElementSize<T extends HTMLElement>() {
   return { ref, size };
 }
 
-const LAYOUT_KEY = "nexus.vault.layout";
+// ⚠️ The key is versioned, and that is a fix rather than a tidy-up.
+//
+// The first build stored `classic` under `nexus.vault.layout` the moment anyone
+// pressed the toggle — and the toggle lived inside the grid shell, so pressing
+// it removed the only way back (see LayoutSwitch.tsx). Every reload afterwards
+// read that value and rendered the old layout: the prototype was "not on the
+// screen" and there was "no way to get there", with nothing wrong in the build,
+// the console or the server.
+//
+// Bumping the key retires those stored values instead of asking anyone to clear
+// site data. A layout preference is the cheapest possible thing to lose, and the
+// branch's whole purpose is that the new layout is what you see.
+const LAYOUT_KEY = "nexus.vault.layout.v2";
 export type LayoutMode = "grid" | "classic";
 
 /**
