@@ -98,6 +98,7 @@
 .reader-body { display: flex; flex: 1; min-height: 0; }
 
 .reader-colrail-hold {
+  z-index: 1;
   position: sticky;
   top: 0;
   flex: none;
@@ -140,27 +141,76 @@
 .reader-cols {
   display: flex;
   align-items: flex-start;
-  justify-content: center;
+  /* `safe` matters once zoom takes the page wider than the window: plain
+     `center` overflows in BOTH directions and the left edge of the page becomes
+     unreachable, however far you scroll. */
+  justify-content: safe center;
   gap: 0;
   min-height: 100%;
 }
 
-/* The outline stands still while the pages move; the concept rail moves WITH
-   them, because a cue beside the wrong paragraph is worse than no cue. */
-.reader-outline-hold {
+/* ── The merged column ──────────────────────────────────────────────────────
+   One column holding both. The concept rail is what it shows at rest and scrolls
+   WITH the pages, because a cue beside the wrong paragraph is worse than no cue.
+   The outline is a layer over it, transparent until the pointer or focus enters
+   the column — so the structure of the book is one hover away without spending a
+   second column on it, and the rail never loses its alignment to do it. */
+.reader-aside {
+  position: relative;
+  flex: none;
+}
+
+/* The outline covers the VIEWPORT while taking no space in the column.
+ *
+ * Two elements, and both are load-bearing. The hold is absolutely positioned
+ * over the whole tall column, so it contributes no height — the column's height
+ * stays the rail's, which is what keeps every entry level with its block. The
+ * outline inside it is sticky, so it stays pinned to the viewport however far
+ * the pages have scrolled.
+ *
+ * The obvious one-element version was `margin-top: -100%` on a sticky element,
+ * and it is wrong in a way that is easy to miss: a percentage margin — even
+ * margin-TOP — resolves against the containing block's WIDTH. On a 190px column
+ * that is -190px, not one column-height, so the outline sat at the very bottom
+ * of the document, 9000px below the viewport, while the rail beneath it dimmed
+ * on hover exactly as designed. The symptom was an empty column. */
+.reader-aside-outline-hold {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;   /* never steals a click meant for a rail entry */
+}
+.reader-aside-outline {
   position: sticky;
   top: 0;
-  flex: none;
-  align-self: flex-start;
-  max-height: 100vh;
+  height: 100vh;
+  padding: 28px 10px 28px 2px;
   overflow: auto;
-  padding: 28px 10px 28px 0;
   overscroll-behavior: contain;
+  background: var(--bg-base);
+  opacity: 0;
+  /* `visibility`, not opacity alone. A transparent element is still FOCUSABLE,
+     so on opacity alone a Tab from the page walked into an outline nobody could
+     see and the focus ring vanished off-screen. Delaying visibility by the fade
+     duration lets the element stay rendered while it fades OUT, and drop out of
+     the tab order the instant it is closed. */
+  visibility: hidden;
+  transition: opacity 120ms var(--ease), visibility 0s linear 120ms;
 }
-.reader-rail-hold { flex: none; }
+.reader-aside.is-open .reader-aside-outline {
+  opacity: 1;
+  visibility: visible;
+  pointer-events: auto;
+  transition: opacity 120ms var(--ease), visibility 0s;
+}
+
+/* The rail fades back rather than disappearing: the concepts are still the
+   column's subject, and a hard swap makes the hover feel like a different panel. */
+.reader-rail { transition: opacity 120ms var(--ease); }
+.reader-rail.is-dimmed { opacity: 0; pointer-events: none; }
 
 /* ── Outline ────────────────────────────────────────────────────────────────*/
 .reader-outline { font-size: 12px; line-height: 1.35; }
+.reader-aside-outline { scrollbar-width: thin; }
 .reader-outline-empty { color: var(--fg-ghost); font-style: italic; }
 .outline-list { margin: 0; padding: 0; list-style: none; }
 .outline-item { margin: 0; }

@@ -23,15 +23,20 @@ import { PAGE_GAP, PAGE_PAD, blockFrac, pageBoxHeight } from "./readerTypes";
 
 interface Props extends ReaderView {
   columnWidth: number;
+  /** True while the outline layer is raised over this column — see ReaderEditor. */
+  dimmed?: boolean;
 }
 
 export const ConceptRail = memo(function ConceptRail({
-  pages, currentPage, visibleBlocks, onNavigate, columnWidth,
+  pages, currentPage, visibleBlocks, onNavigate, columnWidth, dimmed = false,
 }: Props) {
   const seen = new Set(visibleBlocks);
 
   return (
-    <div className="reader-rail" style={{ paddingTop: PAGE_PAD, paddingBottom: PAGE_PAD }}>
+    <div
+      className={`reader-rail${dimmed ? " is-dimmed" : ""}`}
+      style={{ paddingTop: PAGE_PAD, paddingBottom: PAGE_PAD }}
+    >
       {pages.map((page, index) => (
         <div
           key={page.pdfPage}

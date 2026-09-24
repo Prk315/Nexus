@@ -51,21 +51,17 @@ export const ToggleRails = memo(function ToggleRails({
     );
   }
 
+  // One segment, not two. The outline and the concept rail became one column,
+  // and the outline is raised by hover and focus rather than by a switch — so
+  // there is exactly one thing left to turn on and off here.
   return (
-    <div className="reader-colrail" role="group" aria-label="Kolonner">
+    <div className="reader-colrail">
       <button
         type="button"
-        className={`colrail-seg${toggles.outline ? " is-on" : ""}`}
-        aria-pressed={toggles.outline}
-        onClick={() => onToggle("outline")}
-        title="Innholdsoversikt"
-      />
-      <button
-        type="button"
-        className={`colrail-seg${toggles.conceptRail ? " is-on" : ""}`}
-        aria-pressed={toggles.conceptRail}
-        onClick={() => onToggle("conceptRail")}
-        title="Begrepsspalte"
+        className={`colrail-seg${toggles.column ? " is-on" : ""}`}
+        aria-pressed={toggles.column}
+        onClick={() => onToggle("column")}
+        title="Begreper og innhold"
       />
     </div>
   );

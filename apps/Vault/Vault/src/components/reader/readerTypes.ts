@@ -101,10 +101,16 @@ export interface ReaderView {
   onNavigate: (pageIndex: number, blockId?: string) => void;
 }
 
-/** What the rails switch on and off. */
+/**
+ * What the rails switch on and off.
+ *
+ * `column` is one switch where there were two, because the outline and the
+ * concept rail are now one column: the rail is what the column shows, and the
+ * outline is a layer over it that hover and focus raise. Two switches for one
+ * column is how they end up disagreeing.
+ */
 export interface ReaderToggles {
-  outline: boolean;
-  conceptRail: boolean;
+  column: boolean;
   dataLayer: boolean;
 }
 
@@ -152,6 +158,29 @@ export function blockFrac(page: ReaderPage, bbox: readonly number[]) {
 export function pageBoxHeight(page: ReaderPage, columnWidth: number): number {
   const v = pageView(page);
   return (columnWidth * v.h) / v.w;
+}
+
+/**
+ * Which page a document offset falls on, and how far down it.
+ *
+ * The inverse of `pageTop`, and it exists for zoom: to keep the page still
+ * under the cursor while the column width changes, the anchor has to be
+ * expressed in something width-INDEPENDENT first. A pixel offset is not —
+ * (page, fraction) is, so the same point can be converted back at the new
+ * width. Everything else zoom does falls out of that.
+ */
+export function pageAtOffset(
+  pages: ReaderPage[], columnWidth: number, offset: number,
+): { index: number; frac: number } {
+  let top = PAGE_PAD;
+  for (let i = 0; i < pages.length; i++) {
+    const h = pageBoxHeight(pages[i], columnWidth);
+    if (offset < top + h + PAGE_GAP || i === pages.length - 1) {
+      return { index: i, frac: h > 0 ? (offset - top) / h : 0 };
+    }
+    top += h + PAGE_GAP;
+  }
+  return { index: 0, frac: 0 };
 }
 
 /** Scroll offset of a page's top within the scroll container, in px. */
