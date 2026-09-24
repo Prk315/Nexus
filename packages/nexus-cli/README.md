@@ -1,14 +1,15 @@
 # nexus-cli
 
 `nexus` is a terminal CLI for the Nexus monorepo. It reads and writes Vault
-notes and PathFinder tasks so that Claude Code, shell scripts and a later TUI
-can work with what was planned in the apps, without opening them.
+notes and PathFinder tasks so that Claude Code, shell scripts and `nexus board`
+— a TUI meant to live in a tmux pane next to the editor — can work with what
+was planned in the apps, without opening them.
 
 - TypeScript, ESM, Node 24, no build step (runs through `tsx`).
 - Every command supports `--json` (stable field names) and prints a compact
   table otherwise. Every human-readable header starts with `[<profile> <email>]`.
 - Exit codes: `0` ok, `1` user error, `2` auth error. Errors are one line on stderr.
-- Everything except `nexus login` is non-interactive.
+- Everything except `nexus login` and `nexus board` is non-interactive.
 
 ## Install
 
@@ -184,6 +185,66 @@ nexus -p me pf task add "Write the abstract" --parent 412 --due 2026-10-01
 nexus -p me pf task stage 415 active        # fails with the gate message if unscheduled
 ```
 
+### Board — the TUI
+
+```sh
+nexus board [-p profile]        # e.g. nexus -p me board
+```
+
+A full-screen Ink board with four panes, for a tmux pane beside the editor. The
+header is always `[<profile> <email>] nexus board · <today>`, so the account
+being edited is never in doubt. It is interactive: it refuses `--json` and
+refuses to start when stdin/stdout is not a TTY.
+
+| pane | what |
+|---|---|
+| **1 Roadmap** | goals (status, priority, deadline) → their plans → a plan's top-level tasks. Every row carries `done/total` **leaves** and a bar. |
+| **2 Current** | stage `active` plus anything open that is due today or overdue. Overdue first, then due date, then urgency. Columns: id, title, due, urgency, kanban, plan. |
+| **3 Upcoming** | the open work Current does not hold, grouped *due within 7 days* / *due later* / *no date*, by due date then priority. |
+| **4 Progress** | the brief's headline numbers (open, roots, active, overdue) and per-goal done/total leaves with a bar. |
+
+Keys (the bottom line lists them):
+
+| key | does |
+|---|---|
+| `1`–`4`, `Tab` | switch pane |
+| `j`/`k`, `↑`/`↓`, PgUp/PgDn | move |
+| `Enter` | expand / collapse a goal or plan |
+| `a` | add a task — title prompt; the plan is inherited from the selected plan or task |
+| `d` | toggle done |
+| `s` | set stage (menu: refine / schedule / active / done) |
+| `x` | set kanban status (menu) |
+| `e` | edit title, then due date (empty clears it) |
+| `D` | delete — **y/n confirm**, and it takes the subtree |
+| `r` | refresh |
+| `/` | filter by text; `Esc` clears it |
+| `q`, `Ctrl-C` | quit |
+
+Every write goes through `createPathfinderApi`, re-fetches, and prints one
+status line (`done: 1023 Book: …`). A failure prints the error **verbatim** —
+`setStage`'s scheduling-gate message is the rule, not a generic "couldn't set
+stage". `D` is the only key that writes without a further keystroke being
+impossible to reach by accident; every other write changes one field of one
+visible row and says which.
+
+Three things it deliberately refuses to round off:
+
+- **Counts are leaves, not nodes** (the `brief` skill's rule), and a plan's work
+  is the *closure* over its tasks' descendants — a step does not inherit its
+  parent's `plan_id`, so `plan_id = n` alone misses whole branches.
+- **The goal buckets partition the tasks.** A step reaching no goal of its own
+  still sits inside its ancestor's goal closure, so `(no goal)` is what is left
+  over rather than "tasks whose goal is null" — otherwise those steps are
+  counted twice.
+- **Unknown is not zero.** If `pf_agent_brief` fails the headline numbers read
+  `?` and the board says so; if `loadTasks()` hit the row cap it says every
+  count below is a floor; a plan with no leaves gets an empty track and `0/0`,
+  never a filled bar.
+
+Readable at 100 columns; at 80 it drops the `plan` and `kanban`/`stage`/
+`deadline` columns and gives the space back to the title, which is the last
+thing to give way.
+
 ### The "never raw SQL" rule
 
 **All PathFinder writes go through `createPathfinderApi` from
@@ -202,13 +263,27 @@ or the Supabase MCP's `execute_sql`. Three invariants live only in that layer:
 
 ```sh
 cd packages/nexus-cli
-npx vitest run       # 116 tests: Markdown round trips, tree walks, profiles, mocked write commands
+npx vitest run       # Markdown round trips, tree walks, profiles, the board's data
+                     # shaping and pane snapshots, and every write command and
+                     # board keystroke against a mocked PathfinderApi
 npx tsc --noEmit     # type-check
 ```
 
 The tests are pure: no network, no Supabase env needed. Command tests hand a
 mocked `PathfinderApi` / `VaultApi` to `registerPfCommands` /
-`registerVaultCommands` and assert the calls.
+`registerVaultCommands` and assert the calls. The board is tested the same way
+in three layers: `src/board/data.test.ts` (the buckets, the leaf counts, the
+sorting — pure functions, no React), `src/board/render.test.tsx` (each pane
+rendered to a string on `src/board/fixture.ts`, at 100 and 80 columns) and
+`src/board/app.test.tsx` (every key driven through `ink-testing-library`'s
+stdin, asserting exactly which api method was called). Nothing in the suite can
+reach the personal account.
+
+⚠️ One known-flaky case, unrelated to the board: `profiles.test.ts`'s "prefers
+NEXUS_* env, then VITE_*" expects `source.url` to be `built-in default`, which
+only holds when no `.env` on the search path supplies a URL. This worktree's
+root `.env` does, so that one assertion fails here. `candidateEnvFiles` always
+appends `<repo root>/.env`, and no environment variable suppresses it.
 
 `@nexus/core`'s package `exports` point at `.ts` source; the CLI imports the
 deep path `@nexus/core/pathfinder` (never the `@nexus/core` barrel, which pulls

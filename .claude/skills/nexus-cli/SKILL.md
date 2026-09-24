@@ -1,6 +1,6 @@
 ---
 name: nexus-cli
-description: Read and write Vault notes and PathFinder tasks from the terminal with the `nexus` CLI (packages/nexus-cli). Use when a task needs a note's content, the folder tree, a task subtree with leaf counts, the pf_agent_brief, or a write to a note or task — instead of raw SQL or the Supabase MCP.
+description: Read and write Vault notes and PathFinder tasks from the terminal with the `nexus` CLI (packages/nexus-cli), and open `nexus board`, its four-pane TUI. Use when a task needs a note's content, the folder tree, a task subtree with leaf counts, the pf_agent_brief, or a write to a note or task — instead of raw SQL or the Supabase MCP.
 ---
 
 # nexus CLI
@@ -54,6 +54,26 @@ bold/italic/code/link; other Markdown is flattened with a stderr warning. They
 refuse shared notes (`team_id` set), legacy HTML without `--force`, and abort if
 `updated_at` moved during the write. PathFinder writes go through
 `createPathfinderApi` — never raw SQL; `setStage` holds the scheduling gate.
+
+## The board
+
+```
+nexus -p me board          # interactive TUI; refuses --json and a non-TTY
+```
+
+Four panes: **1** Roadmap (goals → plans → a plan's top-level tasks, each with
+done/total **leaves** and a bar), **2** Current (stage `active` + due today or
+overdue, overdue first), **3** Upcoming (the rest of the open work: due within 7
+days / later / no date), **4** Progress (the brief's counts + per-goal leaves).
+
+Keys: `1`-`4`/Tab pane · `j`/`k` move · `Enter` expand · `a` add (inherits the
+selected plan) · `d` done · `s` stage · `x` kanban · `e` title then due · `D`
+delete (y/n confirm) · `r` refresh · `/` filter (`Esc` clears) · `q` quit.
+
+Every write goes through `createPathfinderApi`, re-fetches and prints one status
+line; an error — including the scheduling gate's — is shown verbatim. Header is
+always `[<profile> <email>]`, so **the sandbox rule applies here too**: don't
+drive the board's write keys against `me` on your own.
 
 ## --json shapes
 
