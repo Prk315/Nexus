@@ -6,12 +6,17 @@ import type { ImportKind } from "./DirectoryTree";
 import { FolderDirectory } from "./FolderDirectory";
 import { Minimap } from "./Minimap";
 import { containingFolder, descendantSubgraph, tagSubgraph } from "./subgraph";
+import { DEFAULT_GRAPH_FILTERS } from "../GraphFilterPanel";
 import { useElementSize } from "./useDirectory";
 import type { LayoutMode } from "./useDirectory";
 
 // GraphView pulls react-force-graph-2d, so it rides the same lazy path App.tsx
 // uses for it. Two lazyWithReload calls on one module share a chunk.
 const GraphView = lazyWithReload(() => import("../GraphView").then((m) => ({ default: m.GraphView })));
+// The main graph is the 3D one — the same component the fullscreen overlay uses,
+// now sized by props rather than by the window. It pulls three + both
+// force-graph builds, so it rides the same lazy path.
+const ForceGraphView = lazyWithReload(() => import("../ForceGraphView").then((m) => ({ default: m.ForceGraphView })));
 
 // ── The prototype shell ─────────────────────────────────────────────────────
 //
@@ -67,7 +72,6 @@ interface Props {
   linkSource: string | null;
   onToggleLinkMode: () => void;
   onGraphNodeClick: (id: string) => void;
-  onDeleteEdge: (a: string, b: string) => void;
   onSavePositions: (nodes: any[]) => void;
 
   onOpenSearch: () => void;
@@ -103,7 +107,6 @@ export function DirectoryShell(props: Props) {
     linkSource,
     onToggleLinkMode,
     onGraphNodeClick,
-    onDeleteEdge,
     onSavePositions,
     onOpenSearch,
     layout,
@@ -111,6 +114,13 @@ export function DirectoryShell(props: Props) {
   } = props;
 
   const [focus, setFocus] = useState<Focus>({ type: "all" });
+  /**
+   * 3D unless the graph itself says otherwise. `ForceGraphView` wraps the WebGL
+   * canvas in an error boundary that calls this with `false`, so a machine (or a
+   * WebView) that cannot make a context degrades to the 2D canvas instead of
+   * white-screening the pane.
+   */
+  const [is3D, setIs3D] = useState(true);
   /** null = the top of the vault. Follows the focus, or the selection. */
   const [openFolder, setOpenFolder] = useState<string | null>(null);
 
@@ -325,41 +335,48 @@ export function DirectoryShell(props: Props) {
           </div>
 
           <div className="dir-graph-canvas" ref={graphCell.ref}>
-            {graphCell.size.width > 0 && (
-              <Suspense fallback={<div className="loading-state">Loading graph…</div>}>
-                <GraphView
-                  graph={graph}
-                  graphData={focusedData}
-                  selectedId={selectedId}
-                  linkMode={linkMode}
-                  linkSource={linkSource}
-                  width={graphCell.size.width}
-                  height={graphCell.size.height}
-                  hideToolbar
-                  clusterTags={clusterTags}
-                  onClusterClick={focusTag}
-                  onBackgroundClick={resetFocus}
-                  fitSignal={fitSignal}
-                  emptyMessage={
-                    Object.keys(graph.nodes).length === 0
-                      ? "No nodes in vault yet"
-                      : "Nothing here — press All to go back"
-                  }
-                  onNodeClick={(id) => {
-                    onGraphNodeClick(id);
-                    setOpenFolder(containingFolder(graph, id));
-                  }}
-                  onEngineStop={() => onSavePositions(focusedData.nodes)}
-                  onToggleLinkMode={onToggleLinkMode}
-                  onDeleteEdge={onDeleteEdge}
-                />
-              </Suspense>
+            {/* Gate the mount on having nodes: an empty graphData is what trips
+                the kapsule/layout race CLAUDE.md documents, and "nothing here"
+                deserves a sentence rather than an empty canvas anyway. */}
+            {focusedData.nodes.length === 0 ? (
+              <div className="graph-empty-state">
+                {Object.keys(graph.nodes).length === 0
+                  ? "No nodes in vault yet"
+                  : "Nothing here — press All to go back"}
+              </div>
+            ) : (
+              graphCell.size.width > 0 && (
+                <Suspense fallback={<div className="loading-state">Loading graph…</div>}>
+                  <ForceGraphView
+                    graph={graph}
+                    filteredGraphData={focusedData}
+                    graphFilters={DEFAULT_GRAPH_FILTERS}
+                    is3D={is3D}
+                    setIs3D={setIs3D}
+                    selectedId={selectedId}
+                    linkMode={linkMode}
+                    linkSource={linkSource}
+                    // Both are "is this graph live?" gates inside the component;
+                    // in this shell it always is.
+                    fullGraph
+                    appMode="vault"
+                    width={graphCell.size.width}
+                    height={graphCell.size.height}
+                    fitSignal={fitSignal}
+                    onClusterClick={focusTag}
+                    onNodeClick={(id: string) => {
+                      onGraphNodeClick(id);
+                      setOpenFolder(containingFolder(graph, id));
+                    }}
+                    savePositions={onSavePositions}
+                  />
+                </Suspense>
+              )
             )}
             <Minimap
               graph={graph}
               currentId={focus.type === "folder" ? focus.id : null}
               onPick={focusFolder}
-              onReset={resetFocus}
             />
           </div>
         </section>

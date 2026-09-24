@@ -763,7 +763,6 @@ function App() {
           linkSource={linkSource}
           onToggleLinkMode={toggleLinkMode}
           onGraphNodeClick={handleGraphNodeClick}
-          onDeleteEdge={async (a, b) => removeEdge(a, b)}
           onSavePositions={savePositions}
           onOpenSearch={() => setSearchOpen(true)}
           layout={layout}

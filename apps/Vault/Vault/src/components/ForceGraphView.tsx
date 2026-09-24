@@ -4,6 +4,7 @@ import ForceGraph3D from "react-force-graph-3d";
 import * as THREE from "three";
 import SpriteText from "three-spritetext";
 import { drawNode, resolveNodeColor } from "../canvas/drawNode";
+import { hitTestClusters } from "./directory/clusters";
 import type { VaultGraph } from "../types";
 import type { GraphFilters } from "./GraphFilterPanel";
 
@@ -49,6 +50,23 @@ export interface ForceGraphViewProps {
   appMode: "vault" | "learn";
   onNodeClick: (id: string) => void;
   savePositions: (nodes: any[]) => void;
+
+  // ── Embedding (all optional) ──────────────────────────────────────────────
+  // The overlay is full-bleed and sizes itself from the window. The directory
+  // layout puts the same graph in a grid cell, which the window cannot answer
+  // for. Defaults reproduce the overlay's numbers exactly, so passing none of
+  // these leaves the overlay pixel-identical.
+  /** Canvas width. Default: `window.innerWidth - 260`, the overlay's value. */
+  width?: number;
+  /** Canvas height. Default: `window.innerHeight`. */
+  height?: number;
+  /** Re-fits the camera whenever this string changes. */
+  fitSignal?: string;
+  /**
+   * Pressing a tag's cluster bubble. Only wired when supplied — the overlay
+   * passes nothing and keeps its plain background click.
+   */
+  onClusterClick?: (tag: string) => void;
 }
 
 export function ForceGraphView({
@@ -64,6 +82,10 @@ export function ForceGraphView({
   appMode,
   onNodeClick,
   savePositions,
+  width,
+  height,
+  fitSignal,
+  onClusterClick,
 }: ForceGraphViewProps) {
   const fullGraphRef = useRef<any>(undefined);
   // Cluster bubble meshes and label sprites keyed by tag name
@@ -192,6 +214,63 @@ export function ForceGraphView({
     rafId = requestAnimationFrame(loop);
     return () => cancelAnimationFrame(rafId);
   }, [fullGraph, appMode, is3D, graphFilters.showClusters]);
+
+  // Re-fit the camera when the caller says the visible set changed. Deferred
+  // past the warm-up for the same reason applyForces is: fitting to nodes the
+  // simulation has not placed yet frames the origin.
+  useEffect(() => {
+    if (fitSignal === undefined) return;
+    const t = setTimeout(() => {
+      try { fullGraphRef.current?.zoomToFit(500, 90); } catch { /* not placed yet */ }
+    }, 600);
+    return () => clearTimeout(t);
+  }, [fitSignal]);
+
+  /**
+   * Which cluster bubble a background press landed on.
+   *
+   * Screen space, not a raycast: the bubbles are BackSide spheres drawn for
+   * looks, and projecting their centre and radius reuses `hitTestClusters` —
+   * the same tested function the 2D graph uses — instead of adding a second,
+   * untested notion of "inside a cluster" that could disagree with what is
+   * drawn.
+   */
+  function clusterAt(e: MouseEvent): string | null {
+    const fg = fullGraphRef.current;
+    if (!fg?.camera || clusterMeshesRef.current.size === 0) return null;
+    try {
+      const camera = fg.camera();
+      const renderer = fg.renderer?.();
+      const canvas: HTMLCanvasElement | undefined = renderer?.domElement;
+      if (!camera || !canvas) return null;
+      const rect = canvas.getBoundingClientRect();
+      const w = rect.width;
+      const h = rect.height;
+      const toScreen = (v: THREE.Vector3) => {
+        const p = v.clone().project(camera);
+        return { x: ((p.x + 1) / 2) * w, y: ((1 - p.y) / 2) * h };
+      };
+      const right = new THREE.Vector3();
+      camera.getWorldDirection(right);
+      right.cross(camera.up).normalize();
+
+      const circles = [...clusterMeshesRef.current.entries()].map(([tag, mesh]) => {
+        const centre = toScreen(mesh.position);
+        const worldR = mesh.scale.x;
+        const edge = toScreen(mesh.position.clone().add(right.clone().multiplyScalar(worldR)));
+        return {
+          tag,
+          x: centre.x,
+          y: centre.y,
+          r: Math.hypot(edge.x - centre.x, edge.y - centre.y),
+          count: 2,
+        };
+      });
+      return hitTestClusters(circles, { x: e.clientX - rect.left, y: e.clientY - rect.top });
+    } catch {
+      return null;
+    }
+  }
 
   // Keep ref fresh so the D3 cluster force always sees current nodes
   filteredNodesRef.current = filteredGraphData.nodes as any[];
@@ -329,6 +408,11 @@ export function ForceGraphView({
   // Keep the ref pointing at the latest version so the rAF loop is always current
   updateClusterMeshesRef.current = updateClusterMeshes;
 
+  // Resolved once per render so both branches agree. `window` is read lazily
+  // here exactly as before, keeping the overlay's sizing untouched.
+  const canvasWidth = width ?? window.innerWidth - 260;
+  const canvasHeight = height ?? window.innerHeight;
+
   // 2D canvas graph — used both as the explicit 2D mode and as the WebGL fallback.
   const twoDGraph = (
     <ForceGraph2D
@@ -344,8 +428,8 @@ export function ForceGraphView({
       warmupTicks={60}
       cooldownTime={4000}
       d3VelocityDecay={0.35}
-      width={window.innerWidth - 260}
-      height={window.innerHeight}
+      width={canvasWidth}
+      height={canvasHeight}
       onEngineStop={() => savePositions(filteredGraphData.nodes)}
       onNodeClick={(node: any) => onNodeClick(node.id)}
     />
@@ -369,9 +453,13 @@ export function ForceGraphView({
         warmupTicks={60}
         cooldownTime={4000}
         d3VelocityDecay={0.35}
-        width={window.innerWidth - 260}
-        height={window.innerHeight}
+        width={canvasWidth}
+        height={canvasHeight}
         onNodeClick={(node: any) => onNodeClick(node.id)}
+        onBackgroundClick={onClusterClick ? (e: MouseEvent) => {
+          const tag = clusterAt(e);
+          if (tag) onClusterClick(tag);
+        } : undefined}
         onEngineStop={() => {
           savePositions(filteredGraphData.nodes);
           fullGraphRef.current?.zoomToFit(400, 120);
