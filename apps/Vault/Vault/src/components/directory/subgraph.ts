@@ -96,19 +96,25 @@ export function folderGraph(graph: VaultGraph): SubGraph {
 
 export interface Placed {
   id: string;
-  /** Normalised to the unit box, so the caller owns the pixel size. */
+  /** Normalised to the unit cube, so the caller owns the pixel size. */
   x: number;
   y: number;
+  /** Depth away from the viewer, 0..1. Drives the minimap's perspective. */
+  z: number;
   depth: number;
 }
 
 /**
- * A layered radial placement for the minimap.
+ * A layered radial placement for the minimap, in three dimensions.
  *
- * Naive on purpose (this is a prototype minimap, not a layout engine): BFS
- * depth from the roots decides the ring, position within the ring is the index.
- * It is deterministic, which matters more here than being pretty — a minimap
- * that reshuffles on every render is unreadable as a map.
+ * Naive on purpose (this is a minimap, not a layout engine): BFS depth from the
+ * roots decides the ring, position within the ring is the index, and the ring
+ * is tilted through z so the map reads as a solid rather than a disc.
+ *
+ * ⚠️ Deterministic, and that is the requirement rather than a nicety. The
+ * minimap sits over a graph that is itself a running simulation; if the map
+ * moved too there would be nothing on screen holding still, and a map you have
+ * to re-read every glance is not doing a map's job.
  */
 export function layoutRadial(graph: VaultGraph, sub: SubGraph): Placed[] {
   const members = new Set(sub.nodeIds);
@@ -148,15 +154,19 @@ export function layoutRadial(graph: VaultGraph, sub: SubGraph): Placed[] {
     const radius = maxDepth === 0 ? 0 : (d / maxDepth) * 0.42;
     ids.forEach((id, i) => {
       if (d === 0 && ids.length === 1) {
-        placed.push({ id, x: 0.5, y: 0.5, depth: d });
+        placed.push({ id, x: 0.5, y: 0.5, z: 0.5, depth: d });
         return;
       }
       // Offset each ring by half a step so rings don't line up radially.
       const angle = (i / ids.length) * Math.PI * 2 + (d % 2 ? Math.PI / ids.length : 0);
+      const r = radius || 0.24;
       placed.push({
         id,
-        x: 0.5 + Math.cos(angle) * (radius || 0.24),
-        y: 0.5 + Math.sin(angle) * (radius || 0.24),
+        x: 0.5 + Math.cos(angle) * r,
+        y: 0.5 + Math.sin(angle) * r,
+        // A ring is tilted rather than flat: z follows the same angle, so a
+        // ring reads as a hoop seen at a slant instead of a circle of dots.
+        z: clamp01(0.5 + Math.sin(angle + d) * r * 0.9),
         depth: d,
       });
     });
@@ -165,6 +175,48 @@ export function layoutRadial(graph: VaultGraph, sub: SubGraph): Placed[] {
   const index = new Map(sub.nodeIds.map((id, i) => [id, i]));
   placed.sort((a, b) => index.get(a.id)! - index.get(b.id)!);
   return placed;
+}
+
+function clamp01(v: number): number {
+  return v < 0 ? 0 : v > 1 ? 1 : v;
+}
+
+export interface Projected {
+  id: string;
+  /** Pixels, inside the given box. */
+  x: number;
+  y: number;
+  /** 0 (far) .. 1 (near) — the caller spends it on size and opacity. */
+  near: number;
+}
+
+/**
+ * Project a unit-cube point into a box, the cheap way.
+ *
+ * A second WebGL context for a decorative map is the expensive way, and this
+ * app has already been bitten once by force-graph's layout race (see the
+ * ForceGraph3D notes in CLAUDE.md). A fixed camera over a fixed layout needs no
+ * renderer at all: shift by depth, scale by depth, done — and the result cannot
+ * fail to initialise, lose its context, or start a simulation.
+ */
+export function projectIso(
+  p: { x: number; y: number; z: number },
+  box: { width: number; height: number; pad?: number },
+): Omit<Projected, "id"> {
+  const pad = box.pad ?? 10;
+  const w = box.width - pad * 2;
+  const h = box.height - pad * 2;
+  // Nearer points are pushed out from the centre and drawn larger; the skew is
+  // what keeps a tilted ring from collapsing back into a flat circle.
+  const near = clamp01(p.z);
+  const scale = 0.78 + near * 0.32;
+  const cx = (p.x - 0.5) * scale + 0.5;
+  const cy = (p.y - 0.5) * scale + 0.5 - (near - 0.5) * 0.16;
+  return {
+    x: pad + clamp01(cx) * w,
+    y: pad + clamp01(cy) * h,
+    near,
+  };
 }
 
 /**

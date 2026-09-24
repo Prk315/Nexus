@@ -5,6 +5,7 @@ import {
   descendantSubgraph,
   folderGraph,
   layoutRadial,
+  projectIso,
   tagSubgraph,
 } from "./subgraph";
 import { buildGraph, uniGraph } from "./testGraph";
@@ -90,17 +91,17 @@ describe("folderGraph", () => {
 });
 
 describe("layoutRadial", () => {
-  it("places every member once, inside the unit box", () => {
+  it("places every member once, inside the unit cube", () => {
     const g = uniGraph();
     const sub = folderGraph(g);
     const placed = layoutRadial(g, sub);
     expect(placed).toHaveLength(sub.nodeIds.length);
     expect(new Set(placed.map((p) => p.id)).size).toBe(sub.nodeIds.length);
     for (const p of placed) {
-      expect(p.x).toBeGreaterThanOrEqual(0);
-      expect(p.x).toBeLessThanOrEqual(1);
-      expect(p.y).toBeGreaterThanOrEqual(0);
-      expect(p.y).toBeLessThanOrEqual(1);
+      for (const v of [p.x, p.y, p.z]) {
+        expect(v).toBeGreaterThanOrEqual(0);
+        expect(v).toBeLessThanOrEqual(1);
+      }
     }
   });
 
@@ -108,15 +109,52 @@ describe("layoutRadial", () => {
     const g = uniGraph();
     const placed = layoutRadial(g, folderGraph(g));
     const at = (id: string) => placed.find((p) => p.id === id)!;
-    expect(at("UNI")).toMatchObject({ x: 0.5, y: 0.5, depth: 0 });
+    expect(at("UNI")).toMatchObject({ x: 0.5, y: 0.5, z: 0.5, depth: 0 });
     expect(at("Mathematics").depth).toBe(1);
     expect(at("Mathematics-c1").depth).toBe(2);
+  });
+
+  it("spreads a ring through z, so the map is a solid and not a disc", () => {
+    const g = uniGraph();
+    const placed = layoutRadial(g, folderGraph(g));
+    const ring = placed.filter((p) => p.depth === 2).map((p) => p.z);
+    expect(Math.max(...ring) - Math.min(...ring)).toBeGreaterThan(0.1);
   });
 
   it("is deterministic — a minimap that reshuffles is not a map", () => {
     const g = uniGraph();
     const sub = folderGraph(g);
     expect(layoutRadial(g, sub)).toEqual(layoutRadial(g, sub));
+  });
+});
+
+describe("projectIso", () => {
+  const box = { width: 100, height: 100, pad: 10 };
+
+  it("keeps every point inside the box, padding included", () => {
+    for (const z of [0, 0.5, 1]) {
+      for (const x of [0, 0.5, 1]) {
+        const p = projectIso({ x, y: x, z }, box);
+        expect(p.x).toBeGreaterThanOrEqual(10);
+        expect(p.x).toBeLessThanOrEqual(90);
+        expect(p.y).toBeGreaterThanOrEqual(10);
+        expect(p.y).toBeLessThanOrEqual(90);
+      }
+    }
+  });
+
+  it("pushes a near point further from centre than a far one — the depth cue", () => {
+    const near = projectIso({ x: 1, y: 0.5, z: 1 }, box);
+    const far = projectIso({ x: 1, y: 0.5, z: 0 }, box);
+    expect(near.x).toBeGreaterThan(far.x);
+    expect(near.near).toBe(1);
+    expect(far.near).toBe(0);
+  });
+
+  it("leaves the centre of the map at the centre of the box", () => {
+    const p = projectIso({ x: 0.5, y: 0.5, z: 0.5 }, box);
+    expect(p.x).toBeCloseTo(50);
+    expect(p.y).toBeCloseTo(50);
   });
 });
 
