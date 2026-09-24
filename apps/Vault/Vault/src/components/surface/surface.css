@@ -1,0 +1,341 @@
+/* Surface editor — outline prototype.
+ *
+ * Deliberately plain: the grammar and the focus rules are the product, so
+ * everything here is structure, one accent, and the focus ring. Every colour is
+ * a token declared on :root in App.css, which is what lib/theme.ts rewrites —
+ * so this follows a light theme, a dark theme and every custom one without a
+ * single literal of its own. (App.css's colour ratchet in lib/cssTokens.test.ts
+ * only scans App.css; using tokens here is for the themes, not the test.)
+ *
+ * Loaded by SurfaceEditor.tsx rather than main.tsx on purpose: it rides the
+ * lazy chunk, so a vault with no Surface node never downloads it.
+ */
+
+.surface-host {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+  background: var(--bg-void);
+  color: var(--fg-main);
+  /* The keyboard is scoped to this element (tabIndex=0), never to window. The
+     default focus outline would draw a second ring around the whole pane and
+     compete with the one that means something. */
+  outline: none;
+}
+
+.surface-stage {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+}
+
+/* ── Containers ─────────────────────────────────────────────────────────── */
+
+.surface-grid {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  background:
+    /* The cell rhythm, so a gap reads as part of a grid rather than as
+       background. Sized to CELL_W+GAP / CELL_H+GAP in model.ts — if those
+       change, these two numbers do too. */
+    linear-gradient(to right, var(--border-faint) 1px, transparent 1px) 0 0 / 332px 252px,
+    linear-gradient(to bottom, var(--border-faint) 1px, transparent 1px) 0 0 / 332px 252px,
+    var(--bg-base);
+}
+
+.surface-grid.is-scroll {
+  overflow: auto;
+}
+
+/* Rule 1 made visible: exactly one grid carries this ring at a time, and it is
+   the only one the wheel reaches. */
+.surface-grid.is-focused {
+  box-shadow: inset 0 0 0 2px var(--accent);
+}
+
+.surface-grid-content {
+  position: relative;
+  transform-origin: 0 0;
+}
+
+/* ── Bricks ─────────────────────────────────────────────────────────────── */
+
+.surface-brick {
+  position: absolute;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  border: 1px solid var(--border-base);
+  border-radius: 6px;
+  background: var(--bg-base);
+  box-shadow: 0 1px 2px var(--tint-faint);
+}
+
+.surface-brick.is-selected {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px var(--accent);
+}
+
+/* Component mode: the ring doubles so "the keys are in there" is legible from
+   across the surface, not only from the mode chip in the status bar. */
+.surface-brick.is-component {
+  box-shadow: 0 0 0 2px var(--accent), 0 0 0 5px var(--bg-muted);
+}
+
+.surface-brick-bar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: 0 0 auto;
+  padding: 4px 8px;
+  font-size: 11px;
+  line-height: 1.4;
+  background: var(--bg-subtle);
+  border-bottom: 1px solid var(--border-faint);
+  color: var(--fg-secondary);
+  cursor: default;
+  user-select: none;
+}
+
+.surface-brick.is-selected > .surface-brick-bar {
+  background: var(--bg-muted);
+  color: var(--fg-main);
+}
+
+.surface-brick-glyph {
+  flex: 0 0 auto;
+  color: var(--fg-muted);
+}
+
+.surface-brick-name {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 600;
+}
+
+.surface-brick-meta {
+  flex: 0 0 auto;
+  color: var(--fg-ghost);
+  font-size: 10px;
+  white-space: nowrap;
+}
+
+.surface-brick-body {
+  position: relative;
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: hidden;
+}
+
+/* ── Components ─────────────────────────────────────────────────────────── */
+
+.surface-leaf {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+}
+
+.surface-leaf-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+}
+
+.surface-leaf-loading,
+.surface-leaf-error {
+  padding: 10px 12px;
+  font-size: 12px;
+  color: var(--fg-muted);
+}
+
+.surface-leaf-error {
+  color: var(--danger-solid);
+}
+
+/* The level-of-detail card. Built from the leaf's saved state, so it renders
+   for a brick whose node has never been read. */
+.surface-card {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 4px;
+  height: 100%;
+  padding: 10px 12px;
+  background: var(--bg-raised);
+}
+
+.surface-card-name {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--fg-main);
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.surface-card-meta {
+  font-size: 11px;
+  color: var(--fg-muted);
+}
+
+.surface-card-note {
+  font-size: 11px;
+  color: var(--fg-ghost);
+}
+
+/* Attributes: sub-components bound to a component. Rendered, not focusable —
+   see the comment in LeafView.tsx. */
+.surface-attrs {
+  display: flex;
+  flex-wrap: wrap;
+  flex: 0 0 auto;
+  padding: 6px 8px;
+  border-top: 1px dashed var(--border-base);
+  background: var(--bg-subtle);
+}
+
+.surface-attr {
+  display: flex;
+  align-items: baseline;
+  gap: 5px;
+  padding: 2px 6px;
+  border: 1px solid var(--border-faint);
+  border-radius: 4px;
+  background: var(--bg-base);
+  font-size: 10px;
+}
+
+.surface-attr-name {
+  color: var(--fg-secondary);
+  font-weight: 600;
+}
+
+.surface-attr-kind {
+  color: var(--fg-ghost);
+}
+
+.surface-note {
+  position: relative;
+  height: 100%;
+  min-height: 0;
+  overflow: auto;
+}
+
+.surface-note-status {
+  position: absolute;
+  top: 4px;
+  right: 6px;
+  z-index: 2;
+  padding: 1px 6px;
+  border-radius: 999px;
+  font-size: 10px;
+  background: var(--bg-muted);
+  color: var(--fg-muted);
+}
+
+.surface-note-status.is-error {
+  background: var(--danger-tint);
+  color: var(--danger-solid);
+}
+
+/* ── Status bar: the mode indicator, always visible ─────────────────────── */
+
+.surface-statusbar {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+  flex: 0 0 auto;
+  padding: 5px 10px;
+  border-top: 1px solid var(--border-base);
+  background: var(--bg-dark);
+  font-size: 11px;
+  color: var(--fg-muted);
+  user-select: none;
+}
+
+.surface-mode {
+  padding: 2px 7px;
+  border-radius: 3px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  background: var(--bg-muted);
+  color: var(--fg-secondary);
+}
+
+.surface-mode.is-component {
+  background: var(--accent);
+  color: var(--on-accent);
+}
+
+.surface-stat {
+  white-space: nowrap;
+}
+
+.surface-stat-fixture {
+  color: var(--fg-ghost);
+  font-style: italic;
+}
+
+.surface-notice {
+  padding: 1px 6px;
+  border-radius: 3px;
+  background: var(--danger-tint);
+  color: var(--danger-solid);
+  white-space: nowrap;
+}
+
+.surface-hint {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  text-align: right;
+  color: var(--fg-ghost);
+}
+
+/* ── Unreadable content ─────────────────────────────────────────────────── */
+
+.surface-host-error,
+.surface-host-loading {
+  padding: 24px;
+  gap: 8px;
+  color: var(--fg-muted);
+}
+
+.surface-host-error h3 {
+  margin: 0;
+  color: var(--fg-main);
+  font-size: 15px;
+}
+
+.surface-error-reason {
+  margin: 0;
+  color: var(--danger-solid);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12px;
+}
+
+.surface-error-help {
+  margin: 0;
+  max-width: 62ch;
+  line-height: 1.5;
+  font-size: 12px;
+}
+
+.surface-error-help code {
+  padding: 1px 4px;
+  border-radius: 3px;
+  background: var(--bg-raised);
+  font-size: 11px;
+}

@@ -35,6 +35,7 @@ const WorkbookEditor = lazyWithReload(() => import("./WorkbookEditor").then(m =>
 const BookshelfEditor = lazyWithReload(() => import("./BookshelfEditor").then(m => ({ default: m.BookshelfEditor })));
 const JournalEditor = lazyWithReload(() => import("./JournalEditor").then(m => ({ default: m.JournalEditor })));
 const DatabaseEditor = lazyWithReload(() => import("./DatabaseEditor").then(m => ({ default: m.DatabaseEditor })));
+const SurfaceEditor = lazyWithReload(() => import("./surface/SurfaceEditor").then(m => ({ default: m.SurfaceEditor })));
 // GraphView pulls react-force-graph-2d — not "genuinely light" despite being
 // canvas-drawn, so it rides the same lazy path as the editors above.
 const GraphView = lazyWithReload(() => import("./GraphView").then(m => ({ default: m.GraphView })));
@@ -1065,6 +1066,16 @@ export const EditorPane = forwardRef<EditorPaneHandle, EditorPaneProps>(
                   name={selectedNode.name}
                   content={content}
                   onChange={setContent}
+                />
+              </EditorErrorBoundary>
+            ) : selectedNode?.kind.type === "Surface" ? (
+              <EditorErrorBoundary key={selectedId} label="SurfaceEditor">
+                <SurfaceEditor
+                  nodeId={selectedId!}
+                  name={selectedNode.name}
+                  content={content}
+                  onChange={setContent}
+                  graph={graph}
                 />
               </EditorErrorBoundary>
             ) : selectedNode?.kind.type === "Journal" ? (

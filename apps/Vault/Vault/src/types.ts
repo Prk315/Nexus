@@ -10,7 +10,8 @@ export type NodeKind =
   | { type: "Database" }
   | { type: "Workbook" }
   | { type: "Journal" }
-  | { type: "Books" };
+  | { type: "Books" }
+  | { type: "Surface" };
 
 export interface VaultNode {
   id: string;
