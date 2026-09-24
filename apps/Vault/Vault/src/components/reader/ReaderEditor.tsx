@@ -21,9 +21,7 @@ import { ReaderPages } from "./ReaderPages";
 import { ToggleRails } from "./ToggleRails";
 import { loadReaderDoc } from "./loadReader";
 import type { ReaderBlock, ReaderDoc, ReaderToggles, ReaderView } from "./readerTypes";
-import {
-  DEFAULT_CONCEPT_FILTER, PAGE_GAP, PAGE_PAD, pageBoxHeight, pageTop,
-} from "./readerTypes";
+import { PAGE_GAP, PAGE_PAD, blockFrac, pageBoxHeight, pageTop } from "./readerTypes";
 import "./reader.css";
 
 /**
@@ -46,8 +44,10 @@ function scrollReaderTo(el: HTMLElement, to: number): void {
   el.scrollTo({ top: target, behavior: reduce ? "auto" : "smooth" });
 }
 
-const OUTLINE_WIDTH = 210;
-const RAIL_WIDTH = 132;
+const OUTLINE_WIDTH = 198;
+const RAIL_WIDTH = 138;
+/** The toggle rail between the outline and the concept rail. */
+const COLRAIL_WIDTH = 13;
 const MIN_PAGE_WIDTH = 360;
 const MAX_PAGE_WIDTH = 900;
 
@@ -64,7 +64,6 @@ export function ReaderEditor({ content, nodeId }: Props) {
   const [toggles, setToggles] = useState<ReaderToggles>({
     outline: true, conceptRail: true, dataLayer: false,
   });
-  const [filter, setFilter] = useState(DEFAULT_CONCEPT_FILTER);
   const [currentPage, setCurrentPage] = useState(0);
   const [visibleBlocks, setVisibleBlocks] = useState<string[]>([]);
   const [highlightBlock, setHighlightBlock] = useState<string | null>(null);
@@ -98,7 +97,8 @@ export function ReaderEditor({ content, nodeId }: Props) {
     if (!el) return;
     const measure = () => {
       const chrome =
-        (toggles.outline ? OUTLINE_WIDTH : 0) + (toggles.conceptRail ? RAIL_WIDTH : 0) + 88;
+        (toggles.outline ? OUTLINE_WIDTH : 0) + (toggles.conceptRail ? RAIL_WIDTH : 0) +
+        COLRAIL_WIDTH + 64;
       const available = el.clientWidth - chrome;
       setColumnWidth(Math.max(MIN_PAGE_WIDTH, Math.min(MAX_PAGE_WIDTH, available)));
     };
@@ -133,10 +133,10 @@ export function ReaderEditor({ content, nodeId }: Props) {
       if (overlap > bestOverlap) { bestOverlap = overlap; best = i; }
 
       if (overlap > 0) {
-        const scale = height / page.height;
         for (const block of page.blocks) {
-          const y0 = pageStart + block.bbox[1] * scale;
-          const y1 = pageStart + block.bbox[3] * scale;
+          const f = blockFrac(page, block.bbox);
+          const y0 = pageStart + f.top * height;
+          const y1 = y0 + f.height * height;
           if (y1 > top && y0 < bottom) seen.push(block.id);
         }
       }
@@ -179,7 +179,7 @@ export function ReaderEditor({ content, nodeId }: Props) {
       // A quarter of the viewport of lead-in: landing a theorem flush against
       // the top edge reads as if the page starts there.
       if (block) {
-        top += (block.bbox[1] / page.height) * pageBoxHeight(page, columnWidth);
+        top += blockFrac(page, block.bbox).top * pageBoxHeight(page, columnWidth);
         top -= el.clientHeight * 0.22;
       }
     }
@@ -255,6 +255,7 @@ export function ReaderEditor({ content, nodeId }: Props) {
       onMouseDown={() => rootRef.current?.focus({ preventScroll: true })}
     >
       <ToggleRails
+        slot="top"
         toggles={toggles}
         onToggle={onToggle}
         currentPage={currentPage}
@@ -271,14 +272,15 @@ export function ReaderEditor({ content, nodeId }: Props) {
                 <OutlineColumn {...view} />
               </div>
             )}
+            {/* The seam between the two columns, and the only chrome inside
+                the scroll area. It sits here rather than on the window edge so
+                that an "on" segment reads as the edge of the column it opens. */}
+            <div className="reader-colrail-hold" style={{ width: COLRAIL_WIDTH }}>
+              <ToggleRails slot="column" toggles={toggles} onToggle={onToggle} />
+            </div>
             {toggles.conceptRail && (
               <div className="reader-rail-hold" style={{ width: RAIL_WIDTH }}>
-                <ConceptRail
-                  {...view}
-                  columnWidth={columnWidth}
-                  filter={filter}
-                  onFilterChange={setFilter}
-                />
+                <ConceptRail {...view} columnWidth={columnWidth} />
               </div>
             )}
             <ReaderPages

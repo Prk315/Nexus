@@ -4,10 +4,15 @@
 // is present underneath it, and stays invisible until someone asks for it with
 // `d` or the top rail. Nothing here is ever the primary reading surface — if
 // the data layer and the image disagree, the image is right.
+//
+// The page carries no frame: no border, no shadow, no card. It sits on the same
+// background as the outline and the rail so the three read as one page rather
+// than as three panels — and the book's own margin is cropped away (see
+// `pageView`) so the text starts where the rail ends.
 
 import { memo } from "react";
-import type { ReaderBlock, ReaderView } from "./readerTypes";
-import { PAGE_GAP, PAGE_PAD, pageBoxHeight } from "./readerTypes";
+import type { ReaderBlock, ReaderPage, ReaderView } from "./readerTypes";
+import { PAGE_GAP, PAGE_PAD, blockFrac, pageBoxHeight, pageView } from "./readerTypes";
 
 interface Props extends ReaderView {
   columnWidth: number;
@@ -19,19 +24,19 @@ interface Props extends ReaderView {
   latexIsTranscribed: boolean;
 }
 
-/** Percent-of-page box for a block, so the overlay scales with the image. */
-function boxStyle(block: ReaderBlock, w: number, h: number) {
-  const [x0, y0, x1, y1] = block.bbox;
+/** Percent-of-VISIBLE-box position for a block, so the overlay follows the crop. */
+function boxStyle(page: ReaderPage, block: ReaderBlock) {
+  const f = blockFrac(page, block.bbox);
   return {
-    left: `${(x0 / w) * 100}%`,
-    top: `${(y0 / h) * 100}%`,
-    width: `${((x1 - x0) / w) * 100}%`,
-    height: `${((y1 - y0) / h) * 100}%`,
+    left: `${f.left * 100}%`,
+    top: `${f.top * 100}%`,
+    width: `${f.width * 100}%`,
+    height: `${f.height * 100}%`,
   };
 }
 
 export const ReaderPages = memo(function ReaderPages({
-  pages, currentPage, onNavigate, columnWidth, dataLayer, highlightBlock,
+  pages, currentPage, columnWidth, dataLayer, highlightBlock,
   onCopyLatex, latexIsTranscribed,
 }: Props) {
   return (
@@ -41,6 +46,12 @@ export const ReaderPages = memo(function ReaderPages({
     >
       {pages.map((page, index) => {
         const height = pageBoxHeight(page, columnWidth);
+        const view = pageView(page);
+        // The crop is a window onto the whole PNG: scale the image so the
+        // window is exactly the column width, then offset it by the window's
+        // own origin. No second image, no re-render, and the bboxes below are
+        // still in full-sheet coordinates.
+        const scale = columnWidth / view.w;
         return (
           <figure
             key={page.pdfPage}
@@ -52,8 +63,12 @@ export const ReaderPages = memo(function ReaderPages({
               className="reader-page-img"
               src={page.image}
               alt={`Kalkulus side ${page.printedPage}`}
-              width={page.width}
-              height={page.height}
+              style={{
+                width: page.width * scale,
+                height: page.height * scale,
+                marginLeft: -view.x * scale,
+                marginTop: -view.y * scale,
+              }}
               // The pages below the fold are 200 kB each and there are ten of
               // them; the first two carry the opening of the reading order.
               loading={index < 2 ? "eager" : "lazy"}
@@ -68,7 +83,7 @@ export const ReaderPages = memo(function ReaderPages({
                     key={block.id}
                     className="rb"
                     data-type={block.type}
-                    style={boxStyle(block, page.width, page.height)}
+                    style={boxStyle(page, block)}
                   >
                     <span className="rb-type">
                       {block.label ?? (block.type === "heading" ? `h${block.level ?? 2}` : block.type)}
@@ -79,11 +94,7 @@ export const ReaderPages = memo(function ReaderPages({
                         // Set at the block's OWN glyph size so the selectable
                         // copy lands roughly on the printed words rather than
                         // at some CSS default two sizes off.
-                        style={{
-                          fontSize: block.fontSize
-                            ? (block.fontSize / page.width) * columnWidth
-                            : undefined,
-                        }}
+                        style={{ fontSize: block.fontSize ? block.fontSize * scale : undefined }}
                       >
                         {block.text}
                       </div>
@@ -111,16 +122,8 @@ export const ReaderPages = memo(function ReaderPages({
                 went whether or not the data layer happens to be open. */}
             {highlightBlock && (() => {
               const block = page.blocks.find((b) => b.id === highlightBlock);
-              return block ? (
-                <div className="rb-flash" style={boxStyle(block, page.width, page.height)} />
-              ) : null;
+              return block ? <div className="rb-flash" style={boxStyle(page, block)} /> : null;
             })()}
-
-            <figcaption className="reader-page-folio">
-              <button type="button" onClick={() => onNavigate(index)} title={page.note ?? ""}>
-                s. {page.printedPage}
-              </button>
-            </figcaption>
           </figure>
         );
       })}

@@ -85,9 +85,11 @@ export const OutlineColumn = memo(function OutlineColumn({
     </ul>
   );
 
+  // No "Innhold" heading above it: a column of headings does not need a
+  // heading, and the label was a line of chrome in a layout whose rule is that
+  // everything on screen is either the page, the rail or the outline.
   return (
     <nav className="reader-outline" aria-label="Innholdsoversikt">
-      <div className="reader-outline-head">Innhold</div>
       {tree.length ? render(tree, 0) : <p className="reader-outline-empty">Ingen overskrifter</p>}
     </nav>
   );

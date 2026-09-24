@@ -661,6 +661,39 @@ def to_html(b: dict) -> str:
     return f"<p>{esc}</p>"
 
 
+# ── Crop ─────────────────────────────────────────────────────────────────────
+
+# Breathing room left either side of the text, in image pixels at SCALE.
+CROP_PAD = 18
+
+
+def assign_crop(pages: list[dict]) -> None:
+    """Give every page the same horizontal crop box, tight to the text column.
+
+    Kalkulus is set with a wide inner margin — the text starts about a quarter
+    of the way across the sheet — and once the page sits next to a concept rail
+    that margin is a gutter between the cue and the thing it names. The crop is
+    written into the JSON as a box in IMAGE pixels rather than applied to the
+    PNG, so the bboxes stay in the coordinate system they were measured in and
+    the reader maps them through the crop at render time. Re-cropping later is
+    a number in this file, not a re-render of ten images.
+
+    One box for all ten pages, not one per page. Per-page boxes would be
+    tighter, but a page whose widest line is short would then render LARGER
+    than its neighbours at the same column width — the book's own type would
+    change size from page to page, which is worse than a little slack.
+
+    Vertical extent is left alone: the head and foot margins carry the folio
+    and the running head, which are how a page says which page it is.
+    """
+    x0 = min((b["bbox"][0] for p in pages for b in p["blocks"]), default=0.0)
+    x1 = max((b["bbox"][2] for p in pages for b in p["blocks"]), default=0.0)
+    for p in pages:
+        left = max(0.0, x0 - CROP_PAD)
+        right = min(float(p["width"]), x1 + CROP_PAD)
+        p["crop"] = [round(left, 1), 0.0, round(right, 1), float(p["height"])]
+
+
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--pdf", default="/Users/bastianthomsen/Desktop/Kalkulus.pdf")
@@ -674,6 +707,7 @@ def main() -> None:
     doc = fitz.open(args.pdf)
     pages = [extract_page(doc, idx, order, note, args.out)
              for order, (idx, note) in enumerate(PAGES)]
+    assign_crop(pages)
 
     payload = {
         "v": 1,
@@ -701,6 +735,9 @@ def main() -> None:
         for b in p["blocks"]:
             kinds[b["type"]] = kinds.get(b["type"], 0) + 1
         print(f"  p{p['printedPage']:>4} (pdf {p['pdfPage']})  {kinds}")
+    c = pages[0]["crop"]
+    print(f"  crop x {c[0]:.0f}–{c[2]:.0f} of {pages[0]['width']} "
+          f"({(c[2] - c[0]) / pages[0]['width']:.0%} of the sheet kept)")
     print(f"raw blocks -> {args.raw}")
 
 

@@ -5,49 +5,33 @@
 // is that a concept's name is beside the concept. A sticky rail would have to
 // re-derive its positions on every scroll frame; this one is laid out once, in
 // CSS, from ratios — each page's box is exactly as tall as the page renders,
-// and an entry sits at `bbox.top / page.height` down it. Nothing measures
-// anything, so nothing can be one frame behind.
+// and an entry sits at `blockFrac(...).top` down it. Nothing measures anything,
+// so nothing can be one frame behind.
+//
+// Every kind is listed, always. The rail carried four filter chips for one
+// round and they were the wrong shape for this surface twice over: a control
+// at the top of a column whose whole job is to be scanned quietly, and a
+// default that HID half the concepts on the page — a rail that silently omits
+// the examples is worse than no rail, because it reads as complete. The kinds
+// are still told apart, by weight and by the shape of the tick, which costs no
+// space and needs no explaining.
 
 import { memo } from "react";
 import { blockConcept } from "./readerOutline";
-import type { ConceptFilter, ReaderView } from "./readerTypes";
-import { PAGE_GAP, PAGE_PAD, pageBoxHeight } from "./readerTypes";
-import type { ConceptKind } from "./conceptDetect";
+import type { ReaderView } from "./readerTypes";
+import { PAGE_GAP, PAGE_PAD, blockFrac, pageBoxHeight } from "./readerTypes";
 
 interface Props extends ReaderView {
   columnWidth: number;
-  filter: ConceptFilter;
-  onFilterChange: (next: ConceptFilter) => void;
 }
 
-const FILTER_LABELS: Array<[ConceptKind, string]> = [
-  ["definition", "Def"],
-  ["theorem", "Setn"],
-  ["example", "Eks"],
-  ["proof", "Bevis"],
-];
-
 export const ConceptRail = memo(function ConceptRail({
-  pages, currentPage, visibleBlocks, onNavigate, columnWidth, filter, onFilterChange,
+  pages, currentPage, visibleBlocks, onNavigate, columnWidth,
 }: Props) {
   const seen = new Set(visibleBlocks);
 
   return (
     <div className="reader-rail" style={{ paddingTop: PAGE_PAD, paddingBottom: PAGE_PAD }}>
-      <div className="reader-rail-filter" role="group" aria-label="Begrepsfilter">
-        {FILTER_LABELS.map(([kind, short]) => (
-          <button
-            key={kind}
-            type="button"
-            className={`rail-chip${filter[kind] ? " is-on" : ""}`}
-            aria-pressed={filter[kind]}
-            onClick={() => onFilterChange({ ...filter, [kind]: !filter[kind] })}
-          >
-            {short}
-          </button>
-        ))}
-      </div>
-
       {pages.map((page, index) => (
         <div
           key={page.pdfPage}
@@ -60,7 +44,7 @@ export const ConceptRail = memo(function ConceptRail({
           {page.blocks.map((block) => {
             if (block.type !== "concept") return null;
             const concept = blockConcept(block);
-            if (!concept || !filter[concept.kind]) return null;
+            if (!concept) return null;
             return (
               <button
                 key={block.id}
@@ -70,7 +54,7 @@ export const ConceptRail = memo(function ConceptRail({
                 // The entry's TOP is pinned to the block's top, not centred on
                 // it: a Cornell cue answers "what starts here", and a centred
                 // label on a half-page theorem points at the middle of a proof.
-                style={{ top: `${(block.bbox[1] / page.height) * 100}%` }}
+                style={{ top: `${blockFrac(page, block.bbox).top * 100}%` }}
                 onClick={() => onNavigate(index, block.id)}
                 title={`${block.label ?? ""}${block.name ? ` — ${block.name}` : ""} · s. ${page.printedPage}`}
               >

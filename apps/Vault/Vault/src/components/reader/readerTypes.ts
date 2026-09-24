@@ -44,6 +44,16 @@ export interface ReaderBlock {
 export interface ReaderPage {
   /** Position in this prototype's reading order. */
   n: number;
+  /**
+   * [x0, y0, x1, y1] of the sheet actually shown, in image pixels.
+   *
+   * Kalkulus's inner margin is about a quarter of the sheet, which next to a
+   * concept rail is a gutter between a cue and the thing it names. The crop is
+   * applied at RENDER — the PNG is whole and every bbox is still in full-sheet
+   * coordinates, so re-cropping is a number in extract.py rather than ten
+   * re-rendered images, and a bbox can never be stale with respect to it.
+   */
+  crop?: [number, number, number, number];
   /** 1-based page in the source PDF. */
   pdfPage: number;
   /** The number the book itself prints on the page. */
@@ -91,21 +101,6 @@ export interface ReaderView {
   onNavigate: (pageIndex: number, blockId?: string) => void;
 }
 
-/** Which concept kinds the rail lists. Spec §4: definitions and theorems by default. */
-export interface ConceptFilter {
-  definition: boolean;
-  theorem: boolean;
-  example: boolean;
-  proof: boolean;
-}
-
-export const DEFAULT_CONCEPT_FILTER: ConceptFilter = {
-  definition: true,
-  theorem: true,
-  example: false,
-  proof: false,
-};
-
 /** What the rails switch on and off. */
 export interface ReaderToggles {
   outline: boolean;
@@ -118,6 +113,33 @@ export const PAGE_GAP = 28;
 /** Padding above the first page and below the last, in px. */
 export const PAGE_PAD = 28;
 
+/** The visible box of a page, in image pixels. The whole sheet when uncropped. */
+export function pageView(page: ReaderPage): { x: number; y: number; w: number; h: number } {
+  const c = page.crop;
+  if (!c) return { x: 0, y: 0, w: page.width, h: page.height };
+  return { x: c[0], y: c[1], w: c[2] - c[0], h: c[3] - c[1] };
+}
+
+/**
+ * Where a block sits inside the VISIBLE box, as fractions of it.
+ *
+ * Every position in the reader goes through here: the data layer's outlines,
+ * the concept rail's entries, the navigation target and the scroll reader's
+ * idea of what is on screen. One function means a change to the crop moves all
+ * five together — when this was four separate `bbox[1] / page.height`
+ * expressions, cropping would have silently desynchronised the rail from the
+ * page it labels, which is the one thing this layout cannot survive.
+ */
+export function blockFrac(page: ReaderPage, bbox: readonly number[]) {
+  const v = pageView(page);
+  return {
+    left: (bbox[0] - v.x) / v.w,
+    top: (bbox[1] - v.y) / v.h,
+    width: (bbox[2] - bbox[0]) / v.w,
+    height: (bbox[3] - bbox[1]) / v.h,
+  };
+}
+
 /**
  * How tall a page renders at a given column width.
  *
@@ -127,8 +149,9 @@ export const PAGE_PAD = 28;
  * right. ReaderEditor uses the same function to work out which page the scroll
  * position is on, so the rail and the scroll maths cannot disagree.
  */
-export function pageBoxHeight(page: { width: number; height: number }, columnWidth: number): number {
-  return (columnWidth * page.height) / page.width;
+export function pageBoxHeight(page: ReaderPage, columnWidth: number): number {
+  const v = pageView(page);
+  return (columnWidth * v.h) / v.w;
 }
 
 /** Scroll offset of a page's top within the scroll container, in px. */
