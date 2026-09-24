@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import {
   clampFocus,
   effectiveZoom,
+  initialFocus,
   initialState,
   isFocusedGrid,
   keyToAction,
@@ -12,7 +13,16 @@ import {
   type Action,
   type SurfaceState,
 } from "./focus";
-import { gridAt, MAX_GRID_DEPTH, type GridNode, type LeafNode, type Surface } from "./model";
+import { clampView, contentRect, panBounds } from "./lod";
+import {
+  CELL_H,
+  CELL_W,
+  gridAt,
+  MAX_GRID_DEPTH,
+  type GridNode,
+  type LeafNode,
+  type Surface,
+} from "./model";
 
 function leaf(id: string, x: number, y: number, w = 1, h = 1): LeafNode {
   return { kind: "leaf", id, pos: { x, y, w, h }, renderer: "placeholder" };
@@ -63,6 +73,7 @@ describe("rule 1 — one level pans or zooms, the one with focus", () => {
   });
 
   it("pans only the focused level and leaves every other level where it was", () => {
+    // No viewport reported, so nothing is clamped — this is about routing.
     const s = run([{ type: "pan", dx: -100, dy: -40 }]);
     expect(viewFor(s.focus, [])).toMatchObject({ x: -100, y: -40 });
     // The nested containers have not moved.
@@ -107,6 +118,70 @@ describe("rule 1 — one level pans or zooms, the one with focus", () => {
     ]);
     expect(effectiveZoom(s.focus, [])).toBe(0.5);
     expect(effectiveZoom(s.focus, [1])).toBe(0.25);
+  });
+
+  // Root content spans cells (0,0)…(6,5) — the note leaf reaches y=5 — so the
+  // pan box is that plus one cell on every side. Derived rather than written
+  // out: hand-arithmetic here hid the margin's effect on the LEADING edge.
+  const rootPan = () => panBounds(fixture().root)!;
+  const VP = { w: 800, h: 600 };
+
+  it("cannot pan past the outermost bricks once the viewport is known", () => {
+    const b = rootPan();
+    expect(b).toEqual({ x: -CELL_W, y: -CELL_H, w: 8 * CELL_W, h: 7 * CELL_H });
+
+    const measured = run([{ type: "setViewport", path: [], ...VP }]);
+    const far = reduce(measured, { type: "pan", dx: -99999, dy: -99999 });
+    // Stopped where the content's trailing edge meets the window's.
+    expect(viewFor(far.focus, [])).toMatchObject({
+      x: VP.w - (b.x + b.w),
+      y: VP.h - (b.y + b.h),
+    });
+    // And the other way: the leading edge, one cell out from the first brick.
+    const back = reduce(far, { type: "pan", dx: 99999, dy: 99999 });
+    expect(viewFor(back.focus, [])).toMatchObject({ x: -b.x, y: -b.y });
+  });
+
+  it("re-clamps on zoom, so the wheel cannot walk around the bound", () => {
+    const b = rootPan();
+    let s = run([{ type: "setViewport", path: [], ...VP }]);
+    s = reduce(s, { type: "pan", dx: -99999, dy: -99999 });
+    const pinned = viewFor(s.focus, []);
+    // Zooming out shrinks the content, so the old offset is now out of bounds.
+    s = reduce(s, { type: "zoom", factor: 0.5, ox: 0, oy: 0 });
+    const after = viewFor(s.focus, []);
+    expect(after.zoom).toBe(0.5);
+    expect(after.x).toBeGreaterThan(pinned.x);
+    expect(after.x).toBeCloseTo(VP.w - (b.x + b.w) * 0.5, 6);
+  });
+
+  it("re-clamps when the window resizes", () => {
+    const b = rootPan();
+    let s = run([{ type: "setViewport", path: [], ...VP }]);
+    s = reduce(s, { type: "pan", dx: -99999, dy: 0 });
+    expect(viewFor(s.focus, []).x).toBe(VP.w - (b.x + b.w));
+    // A wider window has to give some of that back.
+    s = reduce(s, { type: "setViewport", path: [], w: 1600, h: 600 });
+    expect(viewFor(s.focus, []).x).toBe(1600 - (b.x + b.w));
+  });
+
+  it("ignores a repeated viewport report, by identity", () => {
+    const s = run([{ type: "setViewport", path: [], ...VP }]);
+    expect(reduce(s, { type: "setViewport", path: [], ...VP })).toBe(s);
+  });
+
+  it("zoom-to-fit frames the CONTENT, not the content plus its margin", () => {
+    let s = run([{ type: "setViewport", path: [], ...VP }]);
+    s = reduce(s, { type: "fit", path: [] });
+    const v = viewFor(s.focus, []);
+    // Content is 6 × 5 cells = 1920 × 1200; 800/1920 binds over 600/1200.
+    expect(v.zoom).toBeCloseTo(VP.w / (6 * CELL_W), 6);
+    // Every brick is on screen at that view.
+    const content = contentRect(fixture().root)!;
+    expect(content.w * v.zoom).toBeLessThanOrEqual(VP.w + 0.001);
+    expect(content.h * v.zoom).toBeLessThanOrEqual(VP.h + 0.001);
+    // And the fitted view is itself legal — fit must never land out of bounds.
+    expect(clampView(v, rootPan(), VP)).toEqual(v);
   });
 
   it("resets only the focused level's view", () => {
@@ -320,7 +395,11 @@ describe("a focus that no longer fits its document", () => {
 
   it("drops a selection that is past the end of its grid", () => {
     const doc = fixture();
-    const focus = { gridPath: [], selection: 7, mode: "component" as const, views: {}, notice: null };
+    const focus = {
+      ...initialFocus(),
+      selection: 7,
+      mode: "component" as const,
+    };
     const clamped = clampFocus(doc, focus);
     expect(clamped.selection).toBeNull();
     expect(clamped.mode).toBe("surface");

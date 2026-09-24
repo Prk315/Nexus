@@ -23,6 +23,8 @@ import {
   gridAt,
   isGrid,
   MAX_GRID_DEPTH,
+  MAX_ZOOM,
+  MIN_ZOOM,
   makeGrid,
   makeLeaf,
   moveChild,
@@ -30,9 +32,15 @@ import {
   updateGrid,
   pathKey,
   type Brick,
+  type GridNode,
   type Path,
   type Surface,
 } from "./model";
+import { clampView, contentRect, fitView, panBounds } from "./lod";
+
+// Re-exported so callers keep one import for the view vocabulary; they are
+// declared in model.ts so lod.ts can reach them without a cycle.
+export { MIN_ZOOM, MAX_ZOOM };
 
 export type Mode = "surface" | "component";
 export type Dir = "left" | "right" | "up" | "down";
@@ -45,8 +53,6 @@ export interface View {
 }
 
 export const DEFAULT_VIEW: View = { x: 0, y: 0, zoom: 1 };
-export const MIN_ZOOM = 0.15;
-export const MAX_ZOOM = 3;
 
 export interface FocusState {
   /** Path to the focused GRID. `[]` is the root surface. */
@@ -56,6 +62,16 @@ export interface FocusState {
   mode: Mode;
   /** Per-grid pan/zoom, keyed by `pathKey`. Absent means DEFAULT_VIEW. */
   views: Record<string, View>;
+  /**
+   * Measured pixel size of each grid's viewport, keyed by `pathKey`.
+   *
+   * The reducer needs it because the pan clamp is "you cannot scroll the
+   * content out of the window", which is a statement about the window. It is
+   * reported by the DOM (a ResizeObserver in GridView) rather than computed,
+   * and an absent or zero entry means "not measured yet" — in which case
+   * nothing is clamped, so the first frame does not snap.
+   */
+  viewports: Record<string, { w: number; h: number }>;
   /**
    * Why the last action was refused (depth cap, no room, nothing selected).
    * Cleared by the next action that does something. The UI shows it; the tests
@@ -95,10 +111,21 @@ export type Action =
   /** Zoom the focused level about a point in its own viewport px. */
   | { type: "zoom"; factor: number; ox: number; oy: number }
   | { type: "resetView" }
+  /** Zoom-to-fit the grid at `path` (default: the focused one). */
+  | { type: "fit"; path?: Path }
+  /** A grid's viewport was measured. Drives the pan clamp. */
+  | { type: "setViewport"; path: Path; w: number; h: number }
   | { type: "setDoc"; doc: Surface };
 
 export function initialFocus(): FocusState {
-  return { gridPath: [], selection: null, mode: "surface", views: {}, notice: null };
+  return {
+    gridPath: [],
+    selection: null,
+    mode: "surface",
+    views: {},
+    viewports: {},
+    notice: null,
+  };
 }
 
 export function initialState(doc: Surface): SurfaceState {
@@ -107,6 +134,10 @@ export function initialState(doc: Surface): SurfaceState {
 
 export function viewFor(focus: FocusState, path: Path): View {
   return focus.views[pathKey(path)] ?? DEFAULT_VIEW;
+}
+
+export function viewportFor(focus: FocusState, path: Path): { w: number; h: number } {
+  return focus.viewports[pathKey(path)] ?? { w: 0, h: 0 };
 }
 
 /**
@@ -350,39 +381,81 @@ export function reduce(state: SurfaceState, action: Action): SurfaceState {
       // when that level is a pan-zoom viewport. A "scroll" container is scrolled
       // by the browser and a "fixed" one does not move at all.
       if (grid.viewport !== "pan-zoom") return state;
-      const key = pathKey(focus.gridPath);
       const cur = viewFor(focus, focus.gridPath);
-      return withFocus(state, {
-        views: { ...focus.views, [key]: { ...cur, x: cur.x + action.dx, y: cur.y + action.dy } },
+      return setView(state, grid, focus.gridPath, {
+        ...cur,
+        x: cur.x + action.dx,
+        y: cur.y + action.dy,
       });
     }
 
     case "zoom": {
       if (grid.viewport !== "pan-zoom") return state;
-      const key = pathKey(focus.gridPath);
       const cur = viewFor(focus, focus.gridPath);
       const zoom = clampZoom(cur.zoom * action.factor);
       if (zoom === cur.zoom) return state;
       // Keep the point under the cursor fixed: it is the difference between
       // zooming a document and zooming a coordinate system.
       const k = zoom / cur.zoom;
-      return withFocus(state, {
-        views: {
-          ...focus.views,
-          [key]: {
-            zoom,
-            x: action.ox - (action.ox - cur.x) * k,
-            y: action.oy - (action.oy - cur.y) * k,
-          },
-        },
+      return setView(state, grid, focus.gridPath, {
+        zoom,
+        x: action.ox - (action.ox - cur.x) * k,
+        y: action.oy - (action.oy - cur.y) * k,
       });
     }
 
-    case "resetView": {
-      const key = pathKey(focus.gridPath);
-      return withFocus(state, { views: { ...focus.views, [key]: { ...DEFAULT_VIEW } } });
+    case "resetView":
+      return setView(state, grid, focus.gridPath, { ...DEFAULT_VIEW });
+
+    case "fit": {
+      const path = action.path ?? focus.gridPath;
+      const target = gridAt(doc.root, path);
+      if (!target) return state;
+      // Fit the CONTENT, not the content plus its pan margin — opening a
+      // surface with a cell of empty space framed on every side is the wasted
+      // space, not the fix for it.
+      const fitted = fitView(contentRect(target), viewportFor(focus, path));
+      return withFocus(state, { views: { ...focus.views, [pathKey(path)]: fitted } });
+    }
+
+    case "setViewport": {
+      const key = pathKey(action.path);
+      const prev = focus.viewports[key];
+      if (prev && prev.w === action.w && prev.h === action.h) return state;
+      const viewports = { ...focus.viewports, [key]: { w: action.w, h: action.h } };
+      // A resize can leave the current view outside the bounds — a window
+      // widened past the content has to re-centre, or the surface sits against
+      // one edge with dead space beside it.
+      const target = gridAt(doc.root, action.path);
+      const views = { ...focus.views };
+      if (target && target.viewport === "pan-zoom") {
+        const clamped = clampView(viewFor(focus, action.path), panBounds(target), {
+          w: action.w,
+          h: action.h,
+        });
+        views[key] = clamped;
+      }
+      return { ...state, focus: { ...focus, viewports, views } };
     }
   }
+}
+
+/**
+ * Write one grid's view, held inside its pan bounds.
+ *
+ * Every view write goes through here — pan, zoom and reset alike — so the
+ * clamp cannot be forgotten by whichever gesture is added next.
+ */
+function setView(
+  state: SurfaceState,
+  grid: GridNode,
+  path: Path,
+  next: View
+): SurfaceState {
+  const clamped = clampView(next, panBounds(grid), viewportFor(state.focus, path));
+  return withFocus(state, {
+    views: { ...state.focus.views, [pathKey(path)]: clamped },
+  });
 }
 
 /** Fold a list of actions — what the tests read like, and a handy debug tool. */
@@ -434,5 +507,6 @@ export function keyToAction(
   if (e.key === "n") return { type: "addLeaf", id: newId() };
   if (e.key === "g") return { type: "addGrid", id: newId() };
   if (e.key === "0") return { type: "resetView" };
+  if (e.key === "f") return { type: "fit" };
   return null;
 }

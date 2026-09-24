@@ -15,7 +15,17 @@
 // purpose — the wiring is the thing being built, and a better curve is a tuning
 // change to one constant rather than a change to any caller.
 
-import { CELL_H, CELL_W, GAP, type Brick, type Pos } from "./model";
+import {
+  CELL_H,
+  CELL_W,
+  contentBounds,
+  MAX_ZOOM,
+  MIN_ZOOM,
+  type Brick,
+  type GridNode,
+  type Pos,
+} from "./model";
+// Type-only, so it is erased and focus.ts → lod.ts stays a one-way runtime edge.
 import type { View } from "./focus";
 
 export type Detail = "full" | "card";
@@ -38,19 +48,26 @@ export interface Rect {
   h: number;
 }
 
-/** A brick's rectangle in its grid's own content space (px at zoom 1). */
-export function cellRect(pos: Pos, cellW = CELL_W, cellH = CELL_H, gap = GAP): Rect {
+/**
+ * A brick's rectangle in its grid's own content space (px at zoom 1).
+ *
+ * Exact multiples of the cell, in both position and size, because there is no
+ * gap — see the geometry note in model.ts. That is what lets a brick fill whole
+ * cells with nothing left over, and what makes the cell lines drawn under a
+ * brick line up with its edges.
+ */
+export function cellRect(pos: Pos, cellW = CELL_W, cellH = CELL_H): Rect {
   return {
-    x: pos.x * (cellW + gap),
-    y: pos.y * (cellH + gap),
-    w: pos.w * cellW + (pos.w - 1) * gap,
-    h: pos.h * cellH + (pos.h - 1) * gap,
+    x: pos.x * cellW,
+    y: pos.y * cellH,
+    w: pos.w * cellW,
+    h: pos.h * cellH,
   };
 }
 
 /** Content extent of a grid with `cols`×`rows` cells, in px at zoom 1. */
-export function gridExtent(cols: number, rows: number, cellW = CELL_W, cellH = CELL_H, gap = GAP): Rect {
-  return { x: 0, y: 0, w: cols * cellW + (cols - 1) * gap, h: rows * cellH + (rows - 1) * gap };
+export function gridExtent(cols: number, rows: number, cellW = CELL_W, cellH = CELL_H): Rect {
+  return { x: 0, y: 0, w: cols * cellW, h: rows * cellH };
 }
 
 /**
@@ -106,4 +123,99 @@ export function visibleIndices(
 /** Human-readable size for a placeholder card: "2 × 1 cells". */
 export function describeSize(pos: Pos): string {
   return `${pos.w} × ${pos.h} cells`;
+}
+
+// ── Pan bounds ───────────────────────────────────────────────────────────────
+//
+// You cannot pan past the outermost bricks, plus one cell of breathing room.
+//
+// The limit is the CONTENT's bounding box, not the grid's `cols`×`rows` extent:
+// a grid that grew to 8 rows because a brick was added and then moved back is
+// still only as big as what is in it, and panning across four empty rows to
+// find nothing is exactly the wasted space this rule exists to remove.
+
+export const PAN_MARGIN_CELLS = 1;
+
+/** Bounding box of a grid's bricks, in px at zoom 1. Null when it has none. */
+export function contentRect(grid: GridNode, cellW = CELL_W, cellH = CELL_H): Rect | null {
+  const cells = contentBounds(grid);
+  return cells ? cellRect(cells, cellW, cellH) : null;
+}
+
+/**
+ * `contentRect` expanded by one cell on every side — the pan limit.
+ *
+ * The margin is what stops the outermost brick sitting flush against the window
+ * edge with nothing to grab, and it is one CELL rather than a pixel count so it
+ * means the same thing at every zoom.
+ */
+export function panBounds(grid: GridNode, cellW = CELL_W, cellH = CELL_H): Rect | null {
+  const r = contentRect(grid, cellW, cellH);
+  if (!r) return null;
+  const mx = PAN_MARGIN_CELLS * cellW;
+  const my = PAN_MARGIN_CELLS * cellH;
+  return { x: r.x - mx, y: r.y - my, w: r.w + 2 * mx, h: r.h + 2 * my };
+}
+
+// `-b0 * zoom` is -0 whenever the bounds start at the origin, which is the
+// common case. -0 compares equal to 0 under ===, so nothing breaks — but it
+// serialises as "-0" and reads as a bug in every debug print, so it is
+// normalised once here rather than explained at each call site.
+const noNegZero = (n: number) => (n === 0 ? 0 : n);
+
+function clampAxis(v: number, b0: number, bSize: number, viewportSize: number, zoom: number): number {
+  const span = bSize * zoom;
+  // Content narrower than the viewport: there is nothing to scroll, so centre it
+  // rather than letting it sit against an edge. A range clamp here would invert
+  // (lo > hi) and pick whichever bound was written first, which is arbitrary.
+  if (span <= viewportSize) return noNegZero((viewportSize - span) / 2 - b0 * zoom);
+  const hi = -b0 * zoom; // content's leading edge at the viewport's leading edge
+  const lo = viewportSize - (b0 + bSize) * zoom; // trailing edge at trailing edge
+  return noNegZero(Math.min(hi, Math.max(lo, v)));
+}
+
+/**
+ * Hold a view inside its pan bounds.
+ *
+ * Applied to pan AND to zoom: zooming out enlarges the viewport in content
+ * terms, so a view that was legal at 100% can be far outside the bounds at 30%,
+ * and clamping only on pan would let the wheel walk around that.
+ *
+ * An unmeasured viewport (0×0, before the ResizeObserver fires) returns the
+ * view untouched — clamping against a zero-sized window would centre everything
+ * on the first frame and then jump.
+ */
+export function clampView(
+  view: View,
+  bounds: Rect | null,
+  viewport: { w: number; h: number }
+): View {
+  if (!bounds || viewport.w <= 0 || viewport.h <= 0) return view;
+  const x = clampAxis(view.x, bounds.x, bounds.w, viewport.w, view.zoom);
+  const y = clampAxis(view.y, bounds.y, bounds.h, viewport.h, view.zoom);
+  if (x === view.x && y === view.y) return view;
+  return { ...view, x, y };
+}
+
+/**
+ * Zoom-to-fit: the scale at which `bounds` just fits, centred.
+ *
+ * Capped at 1 by default — fitting a single small brick would otherwise open
+ * the surface at 3× and read as broken rather than as helpful.
+ */
+export function fitView(
+  bounds: Rect | null,
+  viewport: { w: number; h: number },
+  maxZoom = 1
+): View {
+  if (!bounds || bounds.w <= 0 || bounds.h <= 0 || viewport.w <= 0 || viewport.h <= 0) {
+    return { x: 0, y: 0, zoom: 1 };
+  }
+  const raw = Math.min(maxZoom, viewport.w / bounds.w, viewport.h / bounds.h);
+  const zoom = Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, raw));
+  return {
+    zoom,
+    x: (viewport.w - bounds.w * zoom) / 2 - bounds.x * zoom,
+    y: (viewport.h - bounds.h * zoom) / 2 - bounds.y * zoom,
+  };
 }

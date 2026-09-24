@@ -18,6 +18,7 @@ import {
   keyToAction,
   reduce,
   viewFor,
+  viewportFor,
   type Action,
   type SurfaceState,
 } from "./focus";
@@ -71,9 +72,15 @@ export function SurfaceEditor({ nodeId, name, content, onChange, graph }: Surfac
   const onChangeRef = useRef(onChange);
   onChangeRef.current = onChange;
 
+  // Zoom-to-fit once per document, after the root's viewport has been measured.
+  // It cannot happen in `install`: nothing has been laid out yet, so the
+  // viewport is 0×0 and `fitView` would have nothing to fit against.
+  const fittedFor = useRef<Surface | null>(null);
+
   function install(doc: Surface, from: string | null) {
     const next = initialState(doc);
     stateRef.current = next;
+    fittedFor.current = null;
     setState(next);
     setSource(from);
     setError(null);
@@ -134,6 +141,19 @@ export function SurfaceEditor({ nodeId, name, content, onChange, graph }: Surfac
       onChangeRef.current(text);
     }
   }, []);
+
+  // The root reports its size through `setViewport` on its first layout pass;
+  // that is the earliest moment a fit is meaningful, so this waits for it.
+  const rootViewport = state ? viewportFor(state.focus, []) : null;
+  useEffect(() => {
+    if (!state || !rootViewport) return;
+    if (rootViewport.w <= 0 || rootViewport.h <= 0) return;
+    if (fittedFor.current === state.doc) return;
+    fittedFor.current = state.doc;
+    dispatch({ type: "fit", path: [] });
+    // `state.doc` rather than `state`: a fit must follow a document being
+    // loaded, not every focus change.
+  }, [state?.doc, rootViewport?.w, rootViewport?.h]);
 
   // Keep the keys coming to the surface while it is in surface mode — but only
   // when focus is already somewhere inside this pane. Focusing unconditionally
@@ -221,7 +241,7 @@ export function SurfaceEditor({ nodeId, name, content, onChange, graph }: Surfac
         {focus.notice && <span className="surface-notice">{focus.notice}</span>}
         <span className="surface-hint">
           {focus.mode === "surface"
-            ? "arrows select · ⏎ enter · esc out · ⌘⇧arrows move · ⌘⌥⇧arrows resize · n brick · g container · 0 reset · wheel pans, ⌘wheel zooms"
+            ? "arrows select · ⏎ enter · esc out · ⌘⇧arrows move · ⌘⌥⇧arrows resize · n brick · g container · f fit · 0 reset · wheel pans, ⌘wheel zooms"
             : "esc returns to the surface"}
         </span>
       </div>
