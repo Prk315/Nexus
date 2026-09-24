@@ -9305,7 +9305,6 @@ body.vault-block-dragging .tt-bubble {
 }
 
 .dtree-root-add {
-  position: relative;
   display: inline-flex;
 }
 
@@ -9453,30 +9452,16 @@ body.vault-block-dragging .tt-bubble {
   visibility: visible;
 }
 
-.dtree-add-wrap {
-  position: relative;
-  display: inline-flex;
-}
-
-.dtree-add-btn {
-  background: none;
-  border: none;
-  box-shadow: none;
+.dtree-dots {
   padding: 0 4px;
+  font-size: 13px;
+  letter-spacing: 1px;
   line-height: 1;
-  font-family: inherit;
-  font-size: 15px;
-  color: var(--fg-ghost);
-  cursor: pointer;
-  transition: color var(--duration) var(--ease);
-}
-.dtree-add-btn:hover {
-  color: var(--accent);
 }
 
-/* ── The "+" menu: everything the old sidebar block could do ───────────────
-   Dismissal is this backdrop rather than a document-level listener, so the
-   menu cleans itself up with the component. */
+/* ── The row menu: everything the old sidebar block could do, plus the row's
+   own actions. Dismissal is this backdrop rather than a document-level
+   listener, so the menu cleans itself up with the component. */
 .dtree-menu-backdrop {
   position: fixed;
   inset: 0;
@@ -9491,7 +9476,7 @@ body.vault-block-dragging .tt-bubble {
   position: fixed;
   z-index: 61;
   visibility: visible;
-  max-height: 330px;
+  max-height: 380px;
   overflow-y: auto;
   display: flex;
   flex-direction: column;
@@ -9535,6 +9520,12 @@ body.vault-block-dragging .tt-bubble {
 .dtree-menu-item:disabled {
   color: var(--fg-dim);
   cursor: default;
+}
+.dtree-menu-item.is-danger {
+  color: var(--destructive);
+}
+.dtree-menu-item.is-danger:hover {
+  background: var(--destructive-bg);
 }
 
 .dtree-menu-icon {
@@ -9683,72 +9674,38 @@ body.vault-block-dragging .tt-bubble {
   overflow: hidden;
 }
 
-/* ── Minimap: the folder graph, precomputed and deterministic ───────────── */
+/* ── Minimap: the folder graph over the main graph ──────────────────────────
+   No panel and no fill — only the folder nodes and their edges are drawn, so
+   the 3D graph beneath stays visible through it. `pointer-events` is off on the
+   SVG and back on for the circles, or an invisible 150×120 box would swallow
+   every drag that started in that corner of the graph. */
 .dir-minimap {
   position: absolute;
-  top: 10px;
-  right: 10px;
+  top: 8px;
+  right: 8px;
   z-index: 5;
-  padding: 6px 6px 4px;
-  background: var(--bg-base);
-  border: 1px solid var(--border-base);
-  border-radius: calc(var(--radius) * 0.6);
-  box-shadow: var(--shadow-sm);
-}
-
-.dir-minimap-head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  padding: 0 2px 4px;
-  font-size: 10px;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
-  color: var(--fg-ghost);
-}
-
-.dir-minimap-reset {
   background: none;
   border: none;
   box-shadow: none;
-  padding: 0;
-  font-family: inherit;
-  font-size: 10px;
-  text-transform: uppercase;
-  color: var(--fg-muted);
-  cursor: pointer;
-}
-.dir-minimap-reset:hover {
-  color: var(--accent);
+  pointer-events: none;
 }
 
 .dir-minimap-edge {
-  stroke: var(--border-strong);
+  stroke: var(--fg-dim);
   stroke-width: 1;
 }
 
 .dir-minimap-node {
-  fill: var(--fg-dim);
+  fill: var(--fg-subdued);
+  pointer-events: auto;
   cursor: pointer;
   transition: fill var(--duration) var(--ease);
 }
 .dir-minimap-node:hover {
-  fill: var(--fg-muted);
+  fill: var(--fg-main);
 }
 .dir-minimap-node.is-current {
   fill: var(--accent);
-}
-
-.dir-minimap-caption {
-  max-width: 168px;
-  padding-top: 2px;
-  font-size: 10px;
-  text-align: center;
-  color: var(--fg-ghost);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
 }
 
 /* ── Folder directory ───────────────────────────────────────────────────── */

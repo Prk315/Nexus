@@ -20,7 +20,12 @@ import { iconForKindName, isFolder, kindLabel, safeIcon } from "./nodeMeta";
 // Creating lives HERE rather than in a block above the tree. The old block
 // (name field, kind selector, three import buttons) could only make root nodes,
 // so every "new note in this folder" was two steps — make it, then drag or link
-// it. A "+" on the row names the parent by construction.
+// it. The row's "···" names the parent by construction.
+//
+// There is exactly ONE menu and one affordance per row: new nodes of every kind,
+// the three imports, share, unlink and delete. Four hover buttons plus a "+" was
+// five small targets on a 26px row, and four of them were one pixel from a
+// destructive one.
 
 export type ImportKind = "Pdf" | "Video" | "Parsed";
 
@@ -87,7 +92,7 @@ export function DirectoryTree({
 }: Props) {
   const [hoverKey, setHoverKey] = useState<string | null>(null);
   /**
-   * Which row's "+" menu is open ("" is the root-level one), and where the
+   * Which row's "···" menu is open ("" is the root-level one), and where the
    * button was when it opened.
    *
    * ⚠️ The menu is positioned FIXED from that rect rather than absolutely
@@ -157,23 +162,54 @@ export function DirectoryTree({
     if (draft?.parentKey) rowRefs.current[draft.parentKey]?.focus();
   }
 
-  const renderMenu = (key: string, parentId: string | null, parentKey: string | null) =>
-    menu?.key === key ? (
-      <CreateMenu
+  const renderMenu = (key: string, parentId: string | null, parentKey: string | null) => {
+    if (menu?.key !== key) return null;
+    const row = parentKey ? rows.find((r) => r.key === parentKey) : null;
+    const close = () => {
+      setMenu(null);
+      if (parentKey) rowRefs.current[parentKey]?.focus();
+    };
+
+    // The row's own actions, in the same menu as everything else.
+    const actions: MenuAction[] = [];
+    if (row && onToggleShare) {
+      actions.push({
+        icon: "⇄",
+        label: row.shared ? "Unshare" : "Share",
+        run: () => onToggleShare(row.nodeId, row.shared),
+      });
+    }
+    if (row?.parentId && onUnlink) {
+      actions.push({
+        icon: "⊘",
+        label: "Remove from parent",
+        run: () => onUnlink(row.parentId!, row.nodeId),
+      });
+    }
+    if (row) {
+      // Straight to App's single confirm gate — this menu adds no second one.
+      actions.push({ icon: "×", label: "Delete", danger: true, run: () => onDelete(row.nodeId) });
+    }
+
+    return (
+      <RowMenu
         at={menu}
         parentName={parentId ? graph.nodes[parentId]?.name ?? "" : null}
         importingParsed={importingParsed}
+        actions={actions}
         onPick={(kind) => startDraft(parentId, parentKey, kind)}
         onImport={(kind) => {
           setMenu(null);
           onImport(parentId, kind);
         }}
-        onClose={() => {
+        onAction={(run) => {
           setMenu(null);
-          if (parentKey) rowRefs.current[parentKey]?.focus();
+          run();
         }}
+        onClose={close}
       />
-    ) : null;
+    );
+  };
 
   const draftRow = (d: Draft, guides: GuideSegment[]) => (
     <div className="dtree-row is-draft">
@@ -215,7 +251,7 @@ export function DirectoryTree({
         <span>Vault</span>
         <span className="dtree-root-add">
           <button
-            className="dtree-add-btn"
+            className="node-menu-btn dtree-dots"
             title="New node at the top level"
             aria-haspopup="menu"
             aria-expanded={menuFor === ""}
@@ -249,9 +285,6 @@ export function DirectoryTree({
             onHover={setHoverKey}
             onSelect={onSelect}
             onToggle={onToggle}
-            onDelete={onDelete}
-            onUnlink={onUnlink}
-            onToggleShare={onToggleShare}
             onFocusFolder={onFocusFolder}
             onOpenMenu={(button) => toggleMenu(row.key, button)}
             menuSlot={renderMenu(row.key, row.nodeId, row.key)}
@@ -277,9 +310,6 @@ interface RowProps {
   onHover: (key: string | null) => void;
   onSelect: (id: string) => void;
   onToggle: (id: string) => void;
-  onDelete: (id: string) => void;
-  onUnlink?: (parentId: string, childId: string) => void;
-  onToggleShare?: (id: string, isShared: boolean) => void;
   onFocusFolder?: (id: string) => void;
   /** Takes the button so the menu can be placed against it. */
   onOpenMenu: (button: HTMLElement) => void;
@@ -298,9 +328,6 @@ function Row({
   onHover,
   onSelect,
   onToggle,
-  onDelete,
-  onUnlink,
-  onToggleShare,
   onFocusFolder,
   onOpenMenu,
   menuSlot,
@@ -322,7 +349,7 @@ function Row({
       e.preventDefault();
       // Anchor on the row's own "+" so the keyboard path lands where the
       // pointer path would, not in the corner of the screen.
-      const button = e.currentTarget.querySelector(".dtree-add-btn");
+      const button = e.currentTarget.querySelector(".dtree-dots");
       onOpenMenu((button as HTMLElement | null) ?? (e.currentTarget as HTMLElement));
     } else if (e.key === "Enter" || e.key === " ") {
       e.preventDefault();
@@ -387,60 +414,25 @@ function Row({
         </span>
       )}
 
+      {/* One affordance per row. Creating, importing, sharing, unlinking and
+          deleting all live in this menu — a row with four hover buttons and a
+          fifth for "new" was four chances to press the wrong one. */}
       <span className="dtree-actions">
-        {onToggleShare && (
-          <button
-            className={`share-btn${row.shared ? " share-active" : ""}`}
-            tabIndex={-1}
-            title={row.shared ? "Unshare" : "Share"}
-            onClick={(e) => {
-              e.stopPropagation();
-              onToggleShare(row.nodeId, row.shared);
-            }}
-          >
-            ⇄
-          </button>
-        )}
-        {row.parentId && onUnlink && (
-          <button
-            className="unlink-btn"
-            tabIndex={-1}
-            title="Remove connection to parent"
-            onClick={(e) => {
-              e.stopPropagation();
-              onUnlink(row.parentId!, row.nodeId);
-            }}
-          >
-            ⊘
-          </button>
-        )}
         <button
-          className="delete-btn"
+          className="node-menu-btn dtree-dots"
           tabIndex={-1}
-          title="Delete node"
+          aria-haspopup="menu"
+          aria-expanded={menuOpen}
+          title={`Actions for "${node.name}"`}
+          aria-label={`Actions for ${node.name}`}
           onClick={(e) => {
             e.stopPropagation();
-            onDelete(row.nodeId);
+            onOpenMenu(e.currentTarget);
           }}
         >
-          ×
+          ⋯
         </button>
-        <span className="dtree-add-wrap">
-          <button
-            className="dtree-add-btn"
-            tabIndex={-1}
-            aria-haspopup="menu"
-            aria-expanded={menuOpen}
-            title={folder ? `New node inside "${node.name}"` : `New node under "${node.name}"`}
-            onClick={(e) => {
-              e.stopPropagation();
-              onOpenMenu(e.currentTarget);
-            }}
-          >
-            +
-          </button>
-          {menuSlot}
-        </span>
+        {menuSlot}
       </span>
     </div>
   );
@@ -448,20 +440,39 @@ function Row({
 
 // ── The "+" menu ────────────────────────────────────────────────────────────
 
+export interface MenuAction {
+  icon: string;
+  label: string;
+  danger?: boolean;
+  run: () => void;
+}
+
 interface MenuProps {
   /** Viewport coordinates of the button's bottom-right corner. */
   at: { x: number; y: number };
   parentName: string | null;
   importingParsed?: boolean;
+  /** What this row can do to itself. Empty at the root level. */
+  actions: MenuAction[];
   onPick: (kind: string) => void;
   onImport: (kind: ImportKind) => void;
+  onAction: (run: () => void) => void;
   onClose: () => void;
 }
 
-const MENU_W = 200;
-const MENU_H = 330;
+const MENU_W = 210;
+const MENU_H = 380;
 
-function CreateMenu({ at, parentName, importingParsed, onPick, onImport, onClose }: MenuProps) {
+function RowMenu({
+  at,
+  parentName,
+  importingParsed,
+  actions,
+  onPick,
+  onImport,
+  onAction,
+  onClose,
+}: MenuProps) {
   // Clamped into the viewport rather than flipped: a menu that flips above the
   // button for the bottom half of the list moves under the pointer, and the
   // list is exactly where you press "+" repeatedly.
@@ -519,6 +530,18 @@ function CreateMenu({ at, parentName, importingParsed, onPick, onImport, onClose
           >
             <span className="dtree-menu-icon">↥</span>
             {imp.kind === "Parsed" && importingParsed ? "Importing…" : imp.label}
+          </button>
+        ))}
+        {actions.length > 0 && <div className="dtree-menu-sep" />}
+        {actions.map((a) => (
+          <button
+            key={a.label}
+            className={`dtree-menu-item${a.danger ? " is-danger" : ""}`}
+            role="menuitem"
+            onClick={() => onAction(a.run)}
+          >
+            <span className="dtree-menu-icon">{a.icon}</span>
+            {a.label}
           </button>
         ))}
       </div>
