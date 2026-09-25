@@ -47,7 +47,13 @@ function initialSidebarOpen(): boolean {
 }
 
 export default function App() {
-  const [page, setPage] = useState<Page>("time");
+  const [page, setPage] = useState<Page>(() => {
+    // Deep-linkable pages (?page=learn): the Learn surface is a daily
+    // destination now that the composed day lives at its top, and "open the
+    // learn page" should be a URL, not four clicks after a reload.
+    const q = new URLSearchParams(window.location.search).get("page");
+    return (PAGES as readonly string[]).includes(q ?? "") ? (q as Page) : "time";
+  });
   const [status, setStatus] = useState<GridStatus | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [sidebarOpen, setSidebarOpen] = useState(initialSidebarOpen);
