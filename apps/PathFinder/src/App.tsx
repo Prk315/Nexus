@@ -18,6 +18,7 @@ import { BottomNav } from "./components/BottomNav";
 import { Dashboard } from "./pages/Dashboard";
 import { Week } from "./pages/Week";
 import { Courses } from "./pages/Courses";
+import { Learn } from "./pages/Learn";
 import { Projects } from "./pages/Projects";
 import { Games } from "./pages/Games";
 import { Schedules } from "./pages/Schedules";
@@ -152,6 +153,7 @@ function App() {
           {page === "team"      && <Team />}
           {page === "projects"  && <Projects />}
           {page === "courses"   && <Courses />}
+          {page === "learn"     && <Learn />}
           {page === "schedules" && <Schedules />}
           {page === "games"     && <Games />}
         </main>
