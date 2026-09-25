@@ -1438,3 +1438,50 @@ export async function fetchChallengeRuns(limit: number = 50): Promise<LrChalleng
   if (error) throw error;
   return (data ?? []) as LrChallengeRun[];
 }
+
+// ── The composed learning day (lr_daily_plan, written by learn-plan) ────────
+
+export interface DailyPlanBlocks {
+  intro: { minutes: number };
+  reading: {
+    minutes: number; material_id: string; title: string;
+    vault_node_id: string | null; unit_label: string;
+    from: number; to: number; pace: number;
+  } | null;
+  lesson: {
+    minutes?: number; material_id?: string; title?: string;
+    url?: string | null; retention?: boolean; phase?: string;
+  };
+  review: { minutes: number; due_concepts: number | null };
+}
+
+export interface DailyPlan {
+  plan_date: string;
+  blocks: DailyPlanBlocks;
+  brief_md: string;
+  status: "ready" | "done";
+  generated_at: string;
+}
+
+/** Today's plan or null. ⚠️ Null means "not generated yet" (the cron passes
+ *  every 30 min), never "rest day" — the lr_daily_plan row is deliberately
+ *  never seeded, same doctrine as lr_learn_state's missing verdict. */
+export async function fetchDailyPlan(dateYmd: string): Promise<DailyPlan | null> {
+  const { data, error } = await supabasePublic
+    .from("lr_daily_plan")
+    .select("plan_date, blocks, brief_md, status, generated_at")
+    .eq("user_id", await nodeUserId())
+    .eq("plan_date", dateYmd)
+    .maybeSingle();
+  if (error) throw new Error(`lr_daily_plan: ${error.message}`);
+  return (data as DailyPlan | null) ?? null;
+}
+
+export async function markDailyPlanDone(dateYmd: string): Promise<void> {
+  const { error } = await supabasePublic
+    .from("lr_daily_plan")
+    .update({ status: "done", completed_at: new Date().toISOString() })
+    .eq("user_id", await nodeUserId())
+    .eq("plan_date", dateYmd);
+  if (error) throw new Error(`lr_daily_plan: ${error.message}`);
+}
