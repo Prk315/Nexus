@@ -135,6 +135,9 @@ interface MaterialRow {
   priority: number;
   status: string;
   due_date: string | null;
+  course_id: number | null;
+  chapter_prefix: string | null;
+  chapter_pages: Record<string, [number, number]> | null;
 }
 
 interface EventRow {
@@ -148,8 +151,14 @@ interface EventRow {
 }
 
 interface EnrollRow {
+  c_id: number;
   label: string;
   plan_id: number | null;
+  chapter_prefix: string;
+  term_start: string;
+  week1_chapter: number;
+  chapters_per_week: number;
+  chapter_override: number | null;
   lecture_dow: number | null;
   exercise_dow: number | null;
 }
@@ -167,6 +176,29 @@ interface DailyLessonRow {
 }
 
 interface TaskRow { id: number; title: string | null; due_date: string | null }
+
+/** Reading position → chapters read (mirrors learn-daily's readChapterOf).
+ *  Null = this material cannot express chapters; never gate on it. */
+function readChapterOf(m: MaterialRow, position: number): number | null {
+  if (m.unit_label === "chapters") return Math.floor(position);
+  if (m.chapter_pages) {
+    let best = 0;
+    for (const [ch, range] of Object.entries(m.chapter_pages)) {
+      const n = Number(ch);
+      if (Number.isFinite(n) && Array.isArray(range) && position >= range[1] && n > best) best = n;
+    }
+    return best;
+  }
+  return null;
+}
+
+/** Where the course's teaching is (mirrors learn-daily's chapterCeiling,
+ *  without the phase lookahead — this is a lag measure, not a serving cap). */
+function courseCeiling(e: EnrollRow, today: string): number {
+  if (e.chapter_override != null) return e.chapter_override;
+  const week = Math.floor(daysBetween(e.term_start, today) / 7) + 1;
+  return e.week1_chapter + Math.floor((week - 1) * Number(e.chapters_per_week));
+}
 
 // ── Reading selection ──────────────────────────────────────────────────────
 
@@ -209,6 +241,7 @@ function pickReading(
   events: EventRow[],
   today: string,
   minutes: number,
+  enrollments: EnrollRow[],
 ): ReadingPick | null {
   const readable = materials.filter(
     (m) => m.status === "active" && ["book", "document", "paper"].includes(m.kind),
@@ -233,14 +266,30 @@ function pickReading(
       else if (inDays <= 7) urgency = 1.8;
       else if (inDays <= 14) urgency = 1.3;
     }
-    const score = m.priority * urgency * staleness;
+    // A course book BEHIND the teaching week outranks free reading: the
+    // lesson's read-gate is holding concepts back until these chapters are
+    // read, so this reading is what unlocks tonight's cards.
+    let behind = 0;
+    if (m.course_id != null && m.chapter_prefix) {
+      const e = enrollments.find((x) =>
+        x.c_id === m.course_id &&
+        x.chapter_prefix.toUpperCase() === m.chapter_prefix!.toUpperCase());
+      if (e) {
+        const readCh = readChapterOf(m, pos);
+        if (readCh != null) behind = Math.max(0, courseCeiling(e, today) - readCh);
+      }
+    }
+    const score = m.priority * urgency * staleness * (1 + 0.4 * Math.min(behind, 3));
     if (!best || score > best.score) best = { m, score };
   }
   if (!best) return null;
   const m = best.m;
   const pos = positionOf(m, events);
   const pace = paceOf(m, events);
-  const span = Math.max(4, Math.round(pace * minutes));
+  // The floor is a PAGES number; a chapter-tracked book floors at one
+  // chapter — four chapters of course notes is not a 90-minute assignment.
+  const floor = m.unit_label === "chapters" ? 1 : 4;
+  const span = Math.max(floor, Math.round(pace * minutes));
   const from = Math.floor(pos) + 1;
   const to = m.total_units != null
     ? Math.min(from + span - 1, Math.floor(m.total_units))
@@ -253,7 +302,8 @@ function pickReading(
 interface WeekTotals { pages: number; minutes: number; days: Set<string> }
 
 function fmtRange(m: MaterialRow, from: number, to: number): string {
-  return `${m.title}, ${m.unit_label === "pages" ? "pp." : m.unit_label} ${from}–${to}`;
+  const label = m.unit_label === "pages" ? "pp." : m.unit_label === "chapters" ? "kap." : m.unit_label;
+  return from === to ? `${m.title}, ${label} ${from}` : `${m.title}, ${label} ${from}–${to}`;
 }
 
 function composeBrief(args: {
@@ -411,7 +461,7 @@ Deno.serve(async (req: Request) => {
     const enrollments = unwrap<EnrollRow>(
       "lr_course_enrollment",
       await db.from("lr_course_enrollment")
-        .select("label, plan_id, lecture_dow, exercise_dow")
+        .select("c_id, label, plan_id, chapter_prefix, term_start, week1_chapter, chapters_per_week, chapter_override, lecture_dow, exercise_dow")
         .eq("user_id", userId).eq("active", true),
     );
 
@@ -453,7 +503,7 @@ Deno.serve(async (req: Request) => {
     }
 
     // ── Compose the four blocks ──────────────────────────────────────────
-    const reading = pickReading(materials, events, today, cfg.reading_minutes);
+    const reading = pickReading(materials, events, today, cfg.reading_minutes, enrollments);
 
     // Phase: the most demanding phase across enrollments decides whether
     // today is a lesson day (prime > consolidate > maintain).
