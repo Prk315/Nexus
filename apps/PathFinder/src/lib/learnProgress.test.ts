@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import {
   materialPosition, materialFraction, materialPace, deltaForLogTo, lastActivityDate,
+  examRunway, recentDailyPace,
 } from "./learnProgress";
 
 const M = { id: "m1", start_unit: 37, total_units: 1171, pace_units_per_min: 0.15 };
@@ -77,5 +78,37 @@ describe("lastActivityDate", () => {
       ev({ event_date: "2026-09-20", units_to: 40 }),
       ev({ event_date: "2026-09-24", minutes: 15 }),
     ])).toBe("2026-09-24");
+  });
+});
+
+describe("examRunway", () => {
+  const RM = { ...M, due_date: "2026-11-06" };
+  it("needs both a due date and a length", () => {
+    expect(examRunway({ ...M, due_date: null }, 100, "2026-09-28")).toBeNull();
+    expect(examRunway({ ...RM, total_units: null }, 100, "2026-09-28")).toBeNull();
+  });
+  it("required per day = remaining / days left", () => {
+    const r = examRunway(RM, 781, "2026-09-28")!; // 390 pages, 39 days
+    expect(r.daysLeft).toBe(39);
+    expect(r.requiredPerDay).toBeCloseTo(10, 5);
+  });
+  it("overdue floors days at 1 — full load, no divide-by-zero", () => {
+    const r = examRunway(RM, 1000, "2026-11-20")!;
+    expect(r.daysLeft).toBe(1);
+    expect(r.remaining).toBe(171);
+  });
+});
+
+describe("recentDailyPace", () => {
+  it("null with no dated progress — a fresh tracker is not 0/day", () => {
+    expect(recentDailyPace(M, [], "2026-09-28")).toBeNull();
+  });
+  it("averages deltas over the window", () => {
+    const events = [
+      ev({ event_date: "2026-09-27", units_delta: 21 }),
+      ev({ event_date: "2026-09-25", units_delta: 14 }),
+      ev({ event_date: "2026-09-01", units_delta: 99 }), // outside window
+    ];
+    expect(recentDailyPace(M, events, "2026-09-28", 7)).toBeCloseTo(5, 5);
   });
 });

@@ -74,3 +74,47 @@ export function lastActivityDate(m: MaterialLike, events: LearnEventLike[]): str
   }
   return last;
 }
+
+export interface RunwayInput extends MaterialLike {
+  due_date?: string | null;
+}
+
+/** Exam runway: what finishing by the due date demands. Null without both a
+ *  due date and a known length — a runway needs both ends, and inventing
+ *  either would be the empty-meter lie. daysLeft floors at 1 so an overdue
+ *  book shows its full remaining load rather than dividing by zero. */
+export function examRunway(
+  m: RunwayInput,
+  position: number,
+  todayYmd: string,
+): { remaining: number; daysLeft: number; requiredPerDay: number } | null {
+  if (!m.due_date || m.total_units == null) return null;
+  const [y1, mo1, d1] = todayYmd.split("-").map(Number);
+  const [y2, mo2, d2] = m.due_date.split("-").map(Number);
+  const daysLeft = Math.max(1, Math.round(
+    (Date.UTC(y2, mo2 - 1, d2) - Date.UTC(y1, mo1 - 1, d1)) / 86_400_000,
+  ));
+  const remaining = Math.max(0, m.total_units - position);
+  return { remaining, daysLeft, requiredPerDay: remaining / daysLeft };
+}
+
+/** Average units/day over the last `days` days of reading events — the
+ *  "am I on track" comparator. Null (not 0) with no dated progress: absent
+ *  is not zero, and a fresh tracker must not read as "0/day, hopeless". */
+export function recentDailyPace(
+  m: MaterialLike,
+  events: LearnEventLike[],
+  todayYmd: string,
+  days = 7,
+): number | null {
+  const [y, mo, d] = todayYmd.split("-").map(Number);
+  const cutoff = new Date(Date.UTC(y, mo - 1, d - days + 1)).toISOString().slice(0, 10);
+  let sum = 0;
+  let any = false;
+  for (const e of events) {
+    if (e.material_id !== m.id || e.kind !== "reading") continue;
+    if (e.event_date < cutoff || e.event_date > todayYmd) continue;
+    if (e.units_delta != null && e.units_delta > 0) { sum += e.units_delta; any = true; }
+  }
+  return any ? sum / days : null;
+}
