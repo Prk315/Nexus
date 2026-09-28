@@ -4,14 +4,14 @@ import {
   CheckCircle2, Circle, Plus, ExternalLink, RefreshCw, Flame, Pencil, Trash2,
 } from "lucide-react";
 import {
-  getLearnDay, getLearnMaterials, getLearnCourses, logLearnProgress,
+  getLearnDay, getLearnMaterials, getLearnCourses, getLearnEvents, logLearnProgress,
   createLearnMaterial, updateLearnMaterial, deleteLearnMaterial,
   createLearnCourse, enrollLearnCourse, setLearnCourseActive, markLearnDayDone,
 } from "../lib/api";
 import type {
   LearnMaterial, LearnPlan, LearnCourse, MaterialKind, MaterialStatus,
 } from "../lib/api";
-import { deltaForLogTo } from "../lib/learnProgress";
+import { deltaForLogTo, examRunway, recentDailyPace } from "../lib/learnProgress";
 import { Button } from "../components/ui/button";
 import { Input } from "../components/ui/input";
 import { cn } from "../lib/utils";
@@ -548,11 +548,71 @@ function CoursesSection({ courses, onChanged }: { courses: LearnCourse[]; onChan
   );
 }
 
+// ── Exam timeline ───────────────────────────────────────────────────────────
+
+function ExamTimeline({ materials, events, date }: {
+  materials: LearnMaterial[];
+  events: import("../lib/learnProgress").LearnEventLike[];
+  date: string;
+}) {
+  const rows = materials
+    .filter((m) => m.status === "active" && ["book", "document", "paper"].includes(m.kind))
+    .map((m) => {
+      const rw = examRunway({ ...m, due_date: m.dueDate }, m.position, date);
+      if (!rw || rw.remaining <= 0) return null;
+      const pace = recentDailyPace(m, events, date);
+      // On track = the last 7 days' pace covers the requirement. Null pace is
+      // UNKNOWN, not failing — a fresh tracker has nothing to judge.
+      const onTrack = pace == null ? null : pace >= rw.requiredPerDay;
+      return { m, rw, pace, onTrack };
+    })
+    .filter((r): r is NonNullable<typeof r> => r != null)
+    .sort((a, b) => b.rw.requiredPerDay - a.rw.requiredPerDay);
+  if (!rows.length) return null;
+
+  return (
+    <section className="space-y-2">
+      <h2 className="flex items-center gap-1.5 text-sm font-semibold text-muted-foreground">
+        <ClipboardList className="h-4 w-4" /> Exam timeline
+      </h2>
+      <div className="rounded-xl border bg-card p-3 space-y-2.5">
+        {rows.map(({ m, rw, pace, onTrack }) => {
+          const pct = m.fraction != null ? Math.round(m.fraction * 100) : 0;
+          return (
+            <div key={m.id}>
+              <div className="flex items-baseline justify-between gap-2 text-sm">
+                <span className="truncate font-medium">{m.title}</span>
+                <span className="flex-none text-xs tabular-nums text-muted-foreground">
+                  {Math.round(rw.remaining)} {m.unitLabel} · {rw.daysLeft} d ·{" "}
+                  <b className="text-foreground">{rw.requiredPerDay.toFixed(1)}/day</b>
+                  {onTrack != null && (
+                    <span className={cn("ml-1.5 font-semibold", onTrack ? "text-emerald-600" : "text-destructive")}>
+                      {onTrack ? "on track" : `behind (${pace!.toFixed(1)}/day)`}
+                    </span>
+                  )}
+                </span>
+              </div>
+              <div className="mt-1 h-1.5 overflow-hidden rounded-full bg-muted">
+                <div className="h-full rounded-full bg-primary" style={{ width: `${pct}%` }} />
+              </div>
+            </div>
+          );
+        })}
+        <p className="pt-1 text-[11px] text-muted-foreground">
+          Finish lines come from each book's due date — edit them per material. Trim a
+          book's total pages to the exam syllabus if the whole book isn't examined.
+        </p>
+      </div>
+    </section>
+  );
+}
+
 // ── Page ────────────────────────────────────────────────────────────────────
 
 export function Learn() {
   const [plan, setPlan] = useState<LearnPlan | null>(null);
   const [materials, setMaterials] = useState<LearnMaterial[] | null>(null);
+  const [events, setEvents] = useState<import("../lib/learnProgress").LearnEventLike[]>([]);
   const [courses, setCourses] = useState<LearnCourse[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [adding, setAdding] = useState(false);
@@ -561,12 +621,13 @@ export function Learn() {
   const load = useCallback(async () => {
     try {
       setError(null);
-      const [p, m, c] = await Promise.all([
-        getLearnDay(date), getLearnMaterials(), getLearnCourses(),
+      const [p, m, c, ev] = await Promise.all([
+        getLearnDay(date), getLearnMaterials(), getLearnCourses(), getLearnEvents(),
       ]);
       setPlan(p);
       setMaterials(m);
       setCourses(c);
+      setEvents(ev);
     } catch (e) {
       // signedOut/loading/error are distinct from "zero rows" — never render
       // a failure as an empty tracker.
@@ -627,6 +688,10 @@ export function Learn() {
       )}
 
       <TodayCard plan={plan} onDone={async () => { await markLearnDayDone(date); load(); }} onRefresh={load} />
+
+      {materials != null && (
+        <ExamTimeline materials={materials} events={events} date={date} />
+      )}
 
       {materials === null && !error && (
         <div className="text-sm text-muted-foreground">Loading materials…</div>

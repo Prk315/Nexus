@@ -11,11 +11,10 @@
 //   reading  — 90 minutes of the tracked book that needs it most, as a page
 //              range computed from measured pace, starting where the last
 //              progress event left off.
-//   lesson   — the CURRENT authored lesson (Dagens Lektion artifact) on
-//              teaching-phase days. DESIGN.md pins lessons at 3–4×/week
-//              aligned to lectures; on maintain days this block says
-//              "retention day" honestly instead of flattening the structure —
-//              the exact mistake the rejected v1 made.
+//   lesson   — the CURRENT authored lesson (Concept Module artifact), on a
+//              WEEKLY QUOTA (lessons_per_week, default 3). The quota is a
+//              floor, not a cap: a week that hits it early keeps the link
+//              and may move further ahead in the curriculum.
 //   review   — the spaced-repetition session learn-evaluate/learn-daily
 //              already drive; this block carries the due count.
 //
@@ -116,6 +115,7 @@ interface SettingsRow {
   lesson_minutes: number;
   review_minutes: number;
   intro_minutes: number;
+  lessons_per_week: number;
   pf_user_id: string | null;
   pf_plan_id: number | null;
   vault_user_id: string | null;
@@ -200,6 +200,24 @@ function courseCeiling(e: EnrollRow, today: string): number {
   return e.week1_chapter + Math.floor((week - 1) * Number(e.chapters_per_week));
 }
 
+// ── Exam runway ────────────────────────────────────────────────────────────
+
+interface Runway {
+  material: MaterialRow;
+  remaining: number;
+  daysLeft: number;
+  requiredPerDay: number;
+}
+
+/** What finishing by the due date demands, per material. Null when the
+ *  material has no due date or no known length — a runway needs both ends. */
+function runwayOf(m: MaterialRow, position: number, today: string): Runway | null {
+  if (!m.due_date || m.total_units == null) return null;
+  const remaining = Math.max(0, m.total_units - position);
+  const daysLeft = Math.max(1, daysBetween(today, m.due_date));
+  return { material: m, remaining, daysLeft, requiredPerDay: remaining / daysLeft };
+}
+
 // ── Reading selection ──────────────────────────────────────────────────────
 
 interface ReadingPick {
@@ -265,6 +283,14 @@ function pickReading(
       if (inDays <= 3) urgency = 2.5;
       else if (inDays <= 7) urgency = 1.8;
       else if (inDays <= 14) urgency = 1.3;
+      // Schedule pressure works at exam range, where the ladder is silent:
+      // how much of a daily session does the finish line demand? A book
+      // needing more than one session's pages per day outranks one cruising.
+      const rw = runwayOf(m, pos, today);
+      if (rw) {
+        const deliverable = Math.max(1, paceOf(m, events) * minutes);
+        urgency = Math.max(urgency, Math.min(3, Math.max(1, rw.requiredPerDay / deliverable)));
+      }
     }
     // A course book BEHIND the teaching week outranks free reading: the
     // lesson's read-gate is holding concepts back until these chapters are
@@ -289,7 +315,13 @@ function pickReading(
   // The floor is a PAGES number; a chapter-tracked book floors at one
   // chapter — four chapters of course notes is not a 90-minute assignment.
   const floor = m.unit_label === "chapters" ? 1 : 4;
-  const span = Math.max(floor, Math.round(pace * minutes));
+  // Behind the exam runway, the block stretches toward what the finish line
+  // demands — capped at 1.5× the measured session so the assignment stays a
+  // session, not a fantasy. The brief states the required daily pace either way.
+  const rw = runwayOf(m, pos, today);
+  const paceSpan = Math.round(pace * minutes);
+  const needSpan = rw ? Math.ceil(rw.requiredPerDay) : 0;
+  const span = Math.max(floor, paceSpan, Math.min(needSpan, Math.round(paceSpan * 1.5)));
   const from = Math.floor(pos) + 1;
   const to = m.total_units != null
     ? Math.min(from + span - 1, Math.floor(m.total_units))
@@ -314,6 +346,7 @@ function composeBrief(args: {
   week: WeekTotals;
   yesterdayLesson: DailyLessonRow | null;
   dueSoon: Array<{ title: string; inDays: number }>;
+  runways: Runway[];
   primes: string[];
   reading: ReadingPick | null;
   lessonLine: string;
@@ -350,6 +383,14 @@ function composeBrief(args: {
       "From yesterday. Out loud or on paper, one sentence each, *then* check:",
     );
     for (const p of args.primes) L.push(`- ${p}`);
+    L.push("");
+  }
+
+  if (args.runways.length) {
+    L.push("## Exam runway");
+    for (const r of args.runways) {
+      L.push(`- **${r.material.title}**: ${Math.round(r.remaining)} ${r.material.unit_label} left · ${r.daysLeft} days · needs **${r.requiredPerDay.toFixed(1)}/day**`);
+    }
     L.push("");
   }
 
@@ -505,8 +546,6 @@ Deno.serve(async (req: Request) => {
     // ── Compose the four blocks ──────────────────────────────────────────
     const reading = pickReading(materials, events, today, cfg.reading_minutes, enrollments);
 
-    // Phase: the most demanding phase across enrollments decides whether
-    // today is a lesson day (prime > consolidate > maintain).
     const phases = enrollments.map((e) => phaseOf(today, e));
     const phase: Phase = phases.includes("prime")
       ? "prime" : phases.includes("consolidate") ? "consolidate" : "maintain";
@@ -515,12 +554,23 @@ Deno.serve(async (req: Request) => {
       .filter((m) => m.kind === "lesson" && m.status === "active")
       .sort((a, b) => b.priority - a.priority || a.title.localeCompare(b.title))[0] ?? null;
 
-    const lessonDay = phase !== "maintain" && lessonMaterial != null;
-    const lessonLine = lessonDay
-      ? `**${lessonMaterial!.title}** — start or resume. ${lessonMaterial!.url ?? ""}`.trim()
-      : lessonMaterial
-        ? "retention day — no new lesson; the review session *is* the work (interleaving belongs here, acquisition stays blocked)."
-        : "no active lesson material.";
+    // The authored lesson runs on a WEEKLY QUOTA (default 3), not the phase:
+    // the target is a floor — a week that hits it early may keep going, so
+    // the link stays present, only the framing changes. A lesson day is
+    // counted by lesson-kind progress events (one per day).
+    const dowQ = weekdayOf(today);
+    const mondayQ = shiftDate(today, -((dowQ + 6) % 7));
+    const lessonDays = new Set(
+      events.filter((e) => e.kind === "lesson" && e.event_date >= mondayQ && e.event_date <= today)
+        .map((e) => e.event_date),
+    ).size;
+    const quota = cfg.lessons_per_week ?? 3;
+    const lessonDay = lessonMaterial != null && lessonDays < quota;
+    const lessonLine = lessonMaterial == null
+      ? "no active lesson material — the next lesson needs authoring."
+      : lessonDay
+        ? `**${lessonMaterial.title}** — lesson ${lessonDays + 1} of ${quota} this week. ${lessonMaterial.url ?? ""}`.trim()
+        : `week's target met (${lessonDays}/${quota}) — continue ahead if you like: ${lessonMaterial.url ?? ""}`.trim();
 
     // Due count: absent is UNKNOWN, never zero.
     const dueCount = state && Array.isArray(state.due_concepts)
@@ -569,6 +619,12 @@ Deno.serve(async (req: Request) => {
       lesson: cfg.lesson_minutes,
       review: cfg.review_minutes,
     };
+    const runways = materials
+      .filter((m) => m.status === "active" && ["book", "document", "paper"].includes(m.kind))
+      .map((m) => runwayOf(m, positionOf(m, events), today))
+      .filter((r): r is Runway => r != null && r.remaining > 0)
+      .sort((a, b) => b.requiredPerDay - a.requiredPerDay);
+
     const briefMd = composeBrief({
       today,
       streak: state?.streak_days ?? null,
@@ -577,6 +633,7 @@ Deno.serve(async (req: Request) => {
       week,
       yesterdayLesson: yLesson,
       dueSoon: graded,
+      runways,
       primes,
       reading,
       lessonLine,
@@ -598,12 +655,15 @@ Deno.serve(async (req: Request) => {
           pace: Number(reading.pace.toFixed(3)),
         }
         : null,
-      lesson: lessonDay && lessonMaterial
+      lesson: lessonMaterial
         ? {
           minutes: minutes.lesson,
           material_id: lessonMaterial.id,
           title: lessonMaterial.title,
           url: lessonMaterial.url,
+          week_done: lessonDays,
+          week_target: quota,
+          target_met: !lessonDay,
         }
         : { retention: true, phase },
       review: { minutes: minutes.review, due_concepts: dueCount },
@@ -704,7 +764,7 @@ Deno.serve(async (req: Request) => {
       date: today,
       phase,
       reading: reading ? `${reading.material.title} ${reading.from}–${reading.to}` : null,
-      lesson: lessonDay ? lessonMaterial?.title : "retention",
+      lesson: lessonMaterial ? `${lessonMaterial.title} (${lessonDays}/${quota}${lessonDay ? "" : " met"})` : "none",
       pf_tasks: pfTaskIds.length,
       vault_note: vaultNoteId,
     });

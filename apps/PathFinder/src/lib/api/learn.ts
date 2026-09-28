@@ -301,3 +301,13 @@ export async function setLearnCourseActive(cId: number, active: boolean): Promis
     .update({ active }).eq("user_id", LEARN_USER).eq("c_id", cId);
   if (error) err(error);
 }
+
+/** Raw recent progress events — the timeline's pace input. */
+export async function getLearnEvents(days = 30): Promise<import("../learnProgress").LearnEventLike[]> {
+  const since = new Date(Date.now() - days * 86_400_000).toISOString().slice(0, 10);
+  const { data, error } = await supabase.from("lr_progress_events")
+    .select("material_id, event_date, kind, units_from, units_to, units_delta, minutes")
+    .eq("user_id", LEARN_USER).gte("event_date", since);
+  if (error) err(error);
+  return (data ?? []) as import("../learnProgress").LearnEventLike[];
+}
