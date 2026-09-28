@@ -172,7 +172,7 @@ interface LearnStateRow {
 interface DailyLessonRow {
   lesson_date: string;
   completed_at: string | null;
-  cards: Array<{ kind: string; title?: string; course?: string }> | null;
+  cards: Array<{ kind: string; title?: string; course?: string; prompt?: string }> | null;
 }
 
 interface TaskRow { id: number; title: string | null; due_date: string | null }
@@ -592,12 +592,26 @@ Deno.serve(async (req: Request) => {
       }
     }
     if (yLesson?.cards) {
+      // Only NAMED concepts make fair say-backs. learn-daily already encodes
+      // the judgment: a statement-titled concept's read card gets the TOPIC
+      // as its prompt, a named concept's gets its title — so prompt===title
+      // is the "this title is a real name" signal. All-caps section headers
+      // ("IMPLICATIONS", a book's own name) are structure, not concepts, and
+      // "what X is" over either is an unanswerable prompt — the exact
+      // failure the card doctrine forbids.
       const seen = new Set<string>();
       for (const c of yLesson.cards) {
-        if ((c.kind === "read" || c.kind === "recall") && c.title && !seen.has(c.title)) {
-          seen.add(c.title);
-          if (seen.size <= 4) primes.push(`what **${c.title}** is (${c.course ?? "kursus"})`);
-        }
+        if (c.kind !== "read" || !c.title || c.prompt !== c.title) continue;
+        if (c.title === c.title.toUpperCase()) continue;
+        const words = c.title.split(" ");
+        if (words.length > 7) continue;
+        // A title ending on a function word is a sentence FRAGMENT, not a
+        // name ("Et tall a er rot i") — short stumps dodge learn-daily's
+        // 20-char statement check, so catch them by their dangling tail.
+        if (/^(i|og|på|av|en|et|ei|for|til|at|som|er|the|of|in|a|an|is|are|to|and|or|with|by|on)$/i.test(words[words.length - 1])) continue;
+        if (seen.has(c.title)) continue;
+        seen.add(c.title);
+        if (seen.size <= 4) primes.push(`what **${c.title}** is (${c.course ?? "kursus"})`);
       }
     }
 
