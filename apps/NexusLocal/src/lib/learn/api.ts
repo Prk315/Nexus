@@ -603,7 +603,15 @@ export async function fetchReviewQueue(limit: number = REVIEW_QUEUE_SIZE): Promi
         }
       }
     }
-    if (candidates.length > 0) perConcept.set(dc.concept_id, candidates);
+    // Review happens standing on the metro: serve only machine-checkable
+    // drills (tiles, true/false, numeric, vector, choice) — a self-graded
+    // `text` card ("show solution", rate yourself) is a reading exercise,
+    // not a review rep, and it is unanswerable one-handed on a phone. A
+    // concept whose unit authored ONLY text drills keeps them as fallback:
+    // dropping it from the queue entirely would leave it due forever.
+    const fast = candidates.filter((c) => c.drill.answer_type !== "text");
+    if (fast.length > 0) perConcept.set(dc.concept_id, fast);
+    else if (candidates.length > 0) perConcept.set(dc.concept_id, candidates);
   }
 
   let attemptCounts: Record<string, number> = {};
