@@ -28,8 +28,17 @@
  * course via `CourseContext.useCourse()` with zero prop-drilling — the
  * course switcher itself lives in `PathPanel`'s header (the page's one
  * course-scoped spine), not as a second control here.
+ *
+ * v5 (2026-09-29): two tabs. The composed learning day (Today + Review) is
+ * NOT course material — it spans every course and the exam books — yet it
+ * rendered stacked above and below the LA path, which read as "part of the
+ * Lineær Algebra course" and buried Review under 28 path units. "Today" is
+ * now the default tab (the daily surfaces); "Kursus" holds the
+ * course-scoped spine and its session panels. The choice sticks per device
+ * in localStorage — a preference, not state worth syncing.
  */
 
+import { useState } from "react";
 import { CourseProvider } from "./CourseContext";
 import { TodayPanel } from "./TodayPanel";
 import { PathPanel } from "./PathPanel";
@@ -39,18 +48,56 @@ import { ChallengePanel } from "./ChallengePanel";
 import { SprintPanel } from "./SprintPanel";
 import { StatsPanel } from "./StatsPanel";
 
+type LearnTab = "today" | "course";
+
+function readTab(): LearnTab {
+  try {
+    return localStorage.getItem("nl-learn-tab") === "course" ? "course" : "today";
+  } catch {
+    return "today";
+  }
+}
+
 export function LearnPage() {
+  const [tab, setTab] = useState<LearnTab>(readTab);
+  const pick = (t: LearnTab) => {
+    setTab(t);
+    try { localStorage.setItem("nl-learn-tab", t); } catch { /* per-device convenience */ }
+  };
+  const pill = (t: LearnTab, label: string) => (
+    <button
+      onClick={() => pick(t)}
+      className={`rounded-full px-4 py-1.5 text-sm font-semibold transition-colors ${
+        tab === t ? "bg-white text-[#1A1A24] shadow-sm" : "text-[#6E6E78] hover:text-[#1A1A24]"
+      }`}
+    >
+      {label}
+    </button>
+  );
   return (
     <CourseProvider>
       <div className="-mx-6 -mb-6 flex-1 overflow-y-auto bg-[#F6F5F1] text-[#1A1A24]">
         <div className="mx-auto flex max-w-xl flex-col gap-6 px-4 pb-16 pt-6 sm:px-6 md:max-w-2xl md:gap-10 md:px-8 md:pb-24 md:pt-10">
-          <TodayPanel />
-          <PathPanel />
-          <ReviewPanel />
-          <ChallengePanel />
-          <SprintPanel />
-          <InfinitePanel />
-          <StatsPanel />
+          <div className="flex justify-center">
+            <div className="flex gap-1 rounded-full bg-[#EBEAE5] p-1">
+              {pill("today", "Today")}
+              {pill("course", "Kursus")}
+            </div>
+          </div>
+          {tab === "today" ? (
+            <>
+              <TodayPanel />
+              <ReviewPanel />
+            </>
+          ) : (
+            <>
+              <PathPanel />
+              <ChallengePanel />
+              <SprintPanel />
+              <InfinitePanel />
+              <StatsPanel />
+            </>
+          )}
         </div>
       </div>
     </CourseProvider>
