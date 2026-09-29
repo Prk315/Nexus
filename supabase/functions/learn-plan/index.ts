@@ -550,10 +550,6 @@ Deno.serve(async (req: Request) => {
     const phase: Phase = phases.includes("prime")
       ? "prime" : phases.includes("consolidate") ? "consolidate" : "maintain";
 
-    const lessonMaterial = materials
-      .filter((m) => m.kind === "lesson" && m.status === "active")
-      .sort((a, b) => b.priority - a.priority || a.title.localeCompare(b.title))[0] ?? null;
-
     // The authored lesson runs on a WEEKLY QUOTA (default 3), not the phase:
     // the target is a floor — a week that hits it early may keep going, so
     // the link stays present, only the framing changes. A lesson day is
@@ -564,6 +560,21 @@ Deno.serve(async (req: Request) => {
       events.filter((e) => e.kind === "lesson" && e.event_date >= mondayQ && e.event_date <= today)
         .map((e) => e.event_date),
     ).size;
+
+    // With several courses carrying lessons, priority alone would serve one
+    // course forever. Rotation: the ACTIVE lesson material with the fewest
+    // lesson events this week leads, so courses interleave inside the same
+    // weekly quota; priority and title only break ties.
+    const servedThisWeek = new Map<string, number>();
+    for (const e of events) {
+      if (e.kind !== "lesson" || e.event_date < mondayQ || e.event_date > today) continue;
+      servedThisWeek.set(e.material_id, (servedThisWeek.get(e.material_id) ?? 0) + 1);
+    }
+    const lessonMaterial = materials
+      .filter((m) => m.kind === "lesson" && m.status === "active")
+      .sort((a, b) =>
+        (servedThisWeek.get(a.id) ?? 0) - (servedThisWeek.get(b.id) ?? 0) ||
+        b.priority - a.priority || a.title.localeCompare(b.title))[0] ?? null;
     const quota = cfg.lessons_per_week ?? 3;
     const lessonDay = lessonMaterial != null && lessonDays < quota;
     const lessonLine = lessonMaterial == null
