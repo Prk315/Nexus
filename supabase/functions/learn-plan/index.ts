@@ -297,9 +297,15 @@ function pickReading(
     // read, so this reading is what unlocks tonight's cards.
     let behind = 0;
     if (m.course_id != null && m.chapter_prefix) {
-      const e = enrollments.find((x) =>
-        x.c_id === m.course_id &&
-        x.chapter_prefix.toUpperCase() === m.chapter_prefix!.toUpperCase());
+      // `chapter_prefix` on an enrollment is a LIST ("KAL,MC,TOK"); only the
+      // FIRST (primary) book tracks the lecture pacing, so only it can be
+      // "behind the teaching week". Supplementary books are read-gated by
+      // position alone and get no false schedule pressure.
+      const e = enrollments.find((x) => {
+        if (x.c_id !== m.course_id) return false;
+        const primary = x.chapter_prefix.split(",")[0].trim().toUpperCase();
+        return primary === m.chapter_prefix!.toUpperCase();
+      });
       if (e) {
         const readCh = readChapterOf(m, pos);
         if (readCh != null) behind = Math.max(0, courseCeiling(e, today) - readCh);
