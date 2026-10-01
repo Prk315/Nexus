@@ -323,6 +323,7 @@ interface Concept {
   sourceRef: string;
   chapter: number;
   topic: string;
+  prefix: string;      // which of the enrollment's books numbered this chapter
   importance: number;
   prereqs: string[];
 }
@@ -614,10 +615,10 @@ interface CoursePool {
  */
 function rankFresh(
   concepts: Concept[],
-  ceiling: number,
+  windowOf: (c: Concept) => boolean,
+  readOf: (c: Concept) => boolean,
   mem: Map<string, Mem>,
   excluded: Set<string>,
-  readCh: number | null,
 ): { list: Concept[]; gate: "strict" | "relaxed"; unread: number } {
   const known = (id: string) => {
     const m = mem.get(id);
@@ -628,16 +629,12 @@ function rankFresh(
     return !!m && m.confidence >= INTRODUCED_MIN_EVIDENCE;
   };
 
-  const inWindow = new Set(
-    concepts.filter((c) => c.chapter <= ceiling).map((c) => c.id),
-  );
+  const inWindow = new Set(concepts.filter(windowOf).map((c) => c.id));
 
   const eligible = concepts.filter(
-    (c) => c.chapter <= ceiling && !known(c.id) && !excluded.has(c.id),
+    (c) => windowOf(c) && !known(c.id) && !excluded.has(c.id),
   );
-  const candidates = readCh == null
-    ? eligible
-    : eligible.filter((c) => c.chapter <= readCh);
+  const candidates = eligible.filter(readOf);
   const unread = eligible.length - candidates.length;
 
   const scored = candidates.map((c) => {
@@ -929,14 +926,29 @@ async function generate(
     const phase = phaseOf(today, e);
     const ceiling = chapterCeiling(e, today, phase);
     const week = teachingWeek(e.term_start, today);
-    const readCh = readChBy.get(`${e.c_id}:${e.chapter_prefix.toUpperCase()}`) ?? null;
+
+    // `chapter_prefix` is a LIST ("KAL,MC,TOK"): concepts first, books
+    // second. The FIRST prefix is the course's primary book and keeps the
+    // lecture-paced chapter ceiling. Every further prefix is a supplementary
+    // book whose concepts are admitted purely by READING: a chapter-mapped
+    // material and a logged position in it are what unlock its concepts —
+    // the week ceiling is meaningless across a different book's numbering.
+    const prefixes = e.chapter_prefix.split(",").map((s) => s.trim()).filter(Boolean);
+    const primary = prefixes[0];
+    const readChOf = new Map<string, number | null>(prefixes.map((pf) =>
+      [pf, readChBy.get(`${e.c_id}:${pf.toUpperCase()}`) ?? null]));
+    const readCh = readChOf.get(primary) ?? null;
 
     const concepts: Concept[] = [];
     for (const row of conceptRows) {
       const topic = row.t_id == null ? null : topicById.get(row.t_id);
       if (!topic || topic.c_id !== e.c_id) continue;
-      const chapter = chapterOf(topic.title, e.chapter_prefix);
-      if (chapter == null) continue; // another book inside the same lr_course
+      let chapter: number | null = null, prefix = primary;
+      for (const pf of prefixes) {
+        const ch = chapterOf(topic.title, pf);
+        if (ch != null) { chapter = ch; prefix = pf; break; }
+      }
+      if (chapter == null) continue; // a book this enrollment does not serve
       if (!row.title || !row.description) continue; // nothing to build a card from
       if (!isTeachable(row.title, row.description)) continue;
       concepts.push({
@@ -947,13 +959,28 @@ async function generate(
         sourceRef: row.source_ref ?? "",
         chapter,
         topic: (topic.title ?? "").trim(),
+        prefix,
         importance: row.importance ?? 0.5,
         prereqs: prereqsOf.get(row.concept_id) ?? [],
       });
     }
     const byId = new Map(concepts.map((c) => [c.id, c]));
 
-    const { list: fresh, gate, unread } = rankFresh(concepts, ceiling, mem, recentlyServed, readCh);
+    // Window: primary book under the teaching ceiling; a supplementary book
+    // only once it has a mapped, read material (absent map = that book
+    // contributes nothing yet — silently flooding the pool with a whole
+    // unread book would be worse). Read: each book gates by ITS OWN read
+    // position; the primary keeps its no-map = no-gate behavior.
+    const windowOf = (c: Concept) => c.prefix === primary
+      ? c.chapter <= ceiling
+      : readChOf.get(c.prefix) != null;
+    const readOf = (c: Concept) => {
+      const rc = readChOf.get(c.prefix) ?? null;
+      if (c.prefix === primary) return rc == null || c.chapter <= rc;
+      return rc != null && c.chapter <= rc;
+    };
+
+    const { list: fresh, gate, unread } = rankFresh(concepts, windowOf, readOf, mem, recentlyServed);
 
     const due = concepts
       .filter((c) => {
@@ -972,8 +999,8 @@ async function generate(
         const from = byId.get(p.prereq_id);
         const to = byId.get(p.concept_id);
         if (!from || !to) return false;
-        if (from.chapter > ceiling || to.chapter > ceiling) return false;
-        if (readCh != null && (from.chapter > readCh || to.chapter > readCh)) return false;
+        if (!windowOf(from) || !windowOf(to)) return false;
+        if (!readOf(from) || !readOf(to)) return false;
         const mf = mem.get(from.id), mt = mem.get(to.id);
         return (mf?.confidence ?? 0) >= INTRODUCED_MIN_EVIDENCE ||
                (mt?.confidence ?? 0) >= INTRODUCED_MIN_EVIDENCE;
