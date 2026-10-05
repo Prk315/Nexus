@@ -51,6 +51,10 @@ export interface CourseView {
   lessonsDone: number;
 }
 
+function shiftDate(ymd: string, days: number): string {
+  const [y, m, d] = ymd.split("-").map(Number);
+  return new Date(Date.UTC(y, m - 1, d + days)).toISOString().slice(0, 10);
+}
 function daysBetween(fromYmd: string, toYmd: string): number {
   const [y1, m1, d1] = fromYmd.split("-").map(Number);
   const [y2, m2, d2] = toYmd.split("-").map(Number);
@@ -127,8 +131,9 @@ export function build(mats: MaterialRow[], events: EventRow[], enrolls: EnrollRo
 }
 
 
-export function useRoadmap(): { courses: CourseView[] | null; error: boolean } {
+export function useRoadmap(): { courses: CourseView[] | null; weeks: WeekNode[] | null; error: boolean } {
   const [courses, setCourses] = useState<CourseView[] | null>(null);
+  const [weeks, setWeeks] = useState<WeekNode[] | null>(null);
   const [error, setError] = useState(false);
   useEffect(() => {
     let alive = true;
@@ -142,15 +147,153 @@ export function useRoadmap(): { courses: CourseView[] | null; error: boolean } {
             .select("material_id, event_date, kind, units_to, units_delta")
             .eq("user_id", LEARN_USER),
           supabasePublic.from("lr_course_enrollment")
-            .select("c_id, label").eq("user_id", LEARN_USER).eq("active", true),
+            .select("c_id, label, plan_id").eq("user_id", LEARN_USER).eq("active", true),
         ]);
         if (m.error || e.error || en.error) throw m.error ?? e.error ?? en.error;
-        if (alive) setCourses(build(m.data ?? [], e.data ?? [], en.data ?? []));
+        // Graded deadlines fra kursernes PathFinder-planer — best effort:
+        // træet uden deadlines er stadig et træ, så en fejl her blokerer ikke.
+        let tasks: Array<{ title: string; due_date: string; done: boolean }> = [];
+        try {
+          const planIds = (en.data ?? [])
+            .map((r: { plan_id: number | null }) => r.plan_id)
+            .filter((p): p is number => p != null);
+          if (planIds.length) {
+            const t = await supabasePublic.from("pf_tasks")
+              .select("title, due_date, done").in("plan_id", planIds)
+              .not("due_date", "is", null);
+            tasks = (t.data ?? [])
+              .filter((r) => r.title && r.due_date &&
+                /quiz|afleve|assignm|hand[- ]?in|exam|eksamen|prøve|rapport|projekt/i.test(r.title) &&
+                !/^(lecture|forelæsning|excercise|exercise|øvelser|lab)/i.test(r.title))
+              .map((r) => ({ title: r.title as string, due_date: (r.due_date as string).slice(0, 10), done: !!r.done }));
+          }
+        } catch { /* deadlines er pynt på træet, aldrig en blocker */ }
+        if (alive) {
+          setCourses(build(m.data ?? [], e.data ?? [], en.data ?? []));
+          setWeeks(buildWeekTree(m.data ?? [], e.data ?? [], en.data ?? [], tasks));
+        }
       } catch {
         if (alive) setError(true);
       }
     })();
     return () => { alive = false; };
   }, []);
-  return { courses, error };
+  return { courses, weeks, error };
+}
+
+// ── Uge-træet: git-graph-roadmappet ─────────────────────────────────────────
+// Trunk = terminens uger frem til eksamen; grene = ugens leverancer på tværs
+// af ALLE kurser. Fortid viser faktiske hændelser (✓), nutid/fremtid viser
+// planen: bøgernes resterende sider fordelt jævnt over de resterende uger,
+// lektionskøen fordelt med lessons_per_week ad gangen, og graded deadlines
+// placeret i deres uge. Ren funktion — projektionen kan testes.
+
+export interface WeekItem {
+  course: string;
+  kind: "read" | "lesson" | "deadline";
+  text: string;
+  done: boolean;
+}
+export interface WeekNode {
+  idx: number;          // teaching week, 1-based
+  start: string;        // monday, YYYY-MM-DD
+  state: "past" | "current" | "future" | "exam";
+  items: WeekItem[];
+}
+
+interface TaskLite { title: string; due_date: string; done: boolean }
+
+const TERM_START = "2026-08-31"; // monday of teaching week 1 (every enrollment)
+const LESSONS_PER_WEEK = 3;
+
+function shortTitle(t: string): string {
+  return t.replace(/^[A-Za-zÆØÅæøå]+ · /, "").replace(/ — Concept Module$/, "")
+    .replace(/\s*\(.*\)$/, "").slice(0, 34);
+}
+
+export function buildWeekTree(
+  mats: MaterialRow[], events: EventRow[], enrolls: EnrollRow[], tasks: TaskLite[],
+): WeekNode[] {
+  const today = todayYmd();
+  const courseOf = new Map(enrolls.map((e) => [e.c_id, e.label]));
+  const examDate = mats.filter((m) => m.due_date).map((m) => m.due_date!).sort().at(-1) ?? null;
+  const lastWeek = examDate ? Math.floor(daysBetween(TERM_START, examDate) / 7) + 1 : 10;
+  const curWeek = Math.min(lastWeek, Math.floor(daysBetween(TERM_START, today) / 7) + 1);
+  const weekOf = (ymd: string) => Math.floor(daysBetween(TERM_START, ymd) / 7) + 1;
+  const mondayOf = (w: number) => shiftDate(TERM_START, (w - 1) * 7);
+
+  const byId = new Map(mats.map((m) => [m.id, m]));
+  const posOf = new Map<string, number>();
+  for (const e of events) {
+    if (e.units_to != null && e.units_to > (posOf.get(e.material_id) ?? 0)) posOf.set(e.material_id, e.units_to);
+  }
+
+  const weeks: WeekNode[] = [];
+  for (let w = 1; w <= lastWeek; w++) {
+    weeks.push({
+      idx: w, start: mondayOf(w),
+      state: w < curWeek ? "past" : w === curWeek ? "current" : "future",
+      items: [],
+    });
+  }
+
+  // FORTID + NUTID: faktiske hændelser, aggregeret pr. (uge, kursus, slags)
+  const readAgg = new Map<string, number>(); // `${w}|${course}` -> pages
+  for (const e of events) {
+    const m = byId.get(e.material_id);
+    if (!m || m.course_id == null) continue;
+    const w = weekOf(e.event_date);
+    if (w < 1 || w > lastWeek) continue;
+    const course = courseOf.get(m.course_id);
+    if (!course) continue; // materiale på et ikke-aktivt kursus hører ikke hjemme i træet
+    if (e.kind === "reading" && e.units_delta != null && e.units_delta > 0) {
+      const k = `${w}|${course}`;
+      readAgg.set(k, (readAgg.get(k) ?? 0) + e.units_delta);
+    } else if (e.kind === "lesson") {
+      weeks[w - 1].items.push({ course, kind: "lesson", text: shortTitle(m.title), done: true });
+    }
+  }
+  for (const [k, pages] of readAgg) {
+    const [w, course] = k.split("|");
+    weeks[Number(w) - 1].items.push({ course, kind: "read", text: `Læste ${Math.round(pages)} sider`, done: true });
+  }
+
+  // FREMTID (inkl. resten af denne uge): bøgernes resterende sider jævnt fordelt
+  const weeksLeft = Math.max(1, lastWeek - curWeek + 1);
+  const perCoursePages = new Map<string, number>();
+  for (const m of mats) {
+    if (m.status !== "active" || !["book", "document", "paper"].includes(m.kind)) continue;
+    if (m.course_id == null || m.total_units == null) continue;
+    const course = courseOf.get(m.course_id);
+    if (!course) continue;
+    const remaining = Math.max(0, m.total_units - Math.max(m.start_unit ?? 0, posOf.get(m.id) ?? 0));
+    perCoursePages.set(course, (perCoursePages.get(course) ?? 0) + remaining);
+  }
+  for (let w = curWeek; w <= lastWeek; w++) {
+    for (const [course, total] of perCoursePages) {
+      const perWeek = Math.ceil(total / weeksLeft);
+      if (perWeek > 0) weeks[w - 1].items.push({ course, kind: "read", text: `Læs ~${perWeek} sider`, done: false });
+    }
+  }
+
+  // Lektionskøen: aktive (uafsluttede) først, så planlagte — LESSONS_PER_WEEK pr. uge
+  const doneLessons = new Set(events.filter((e) => e.kind === "lesson").map((e) => e.material_id));
+  const queue = mats
+    .filter((m) => m.kind === "lesson" && (m.status === "active" || m.status === "planned") && !doneLessons.has(m.id))
+    .sort((a, b) => (a.status === b.status ? a.id.localeCompare(b.id) : a.status === "active" ? -1 : 1));
+  queue.forEach((m, i) => {
+    const w = Math.min(lastWeek, curWeek + Math.floor(i / LESSONS_PER_WEEK));
+    const course = m.course_id != null ? courseOf.get(m.course_id) : undefined;
+    weeks[w - 1].items.push({ course: course ?? "", kind: "lesson", text: shortTitle(m.title), done: false });
+  });
+
+  // Graded deadlines i deres uge
+  for (const t of tasks) {
+    const w = weekOf(t.due_date);
+    if (w < 1 || w > lastWeek) continue;
+    weeks[w - 1].items.push({ course: "", kind: "deadline", text: t.title.slice(0, 40), done: t.done });
+  }
+
+  if (examDate) weeks.push({ idx: lastWeek + 1, start: examDate, state: "exam", items: [] });
+  return weeks;
 }

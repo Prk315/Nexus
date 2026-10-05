@@ -1,0 +1,11 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "nexuslocal",
+      "runtimeExecutable": "npx",
+      "runtimeArgs": ["vite", "--port", "1426"],
+      "port": 1426
+    }
+  ]
+}

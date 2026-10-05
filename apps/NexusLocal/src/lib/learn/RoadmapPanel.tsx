@@ -5,6 +5,7 @@
  * honesty rules (absent ≠ zero, no cold-start "bagud") live in roadmapData.
  */
 import { useRoadmap } from "./roadmapData";
+import { WeekTree } from "./WeekTree";
 
 function Bar({ pct, tone }: { pct: number; tone: string }) {
   return (
@@ -15,7 +16,7 @@ function Bar({ pct, tone }: { pct: number; tone: string }) {
 }
 
 export function RoadmapPanel() {
-  const { courses, error } = useRoadmap();
+  const { courses, weeks, error } = useRoadmap();
 
   if (error) {
     return <section className="rounded-2xl bg-white p-5 text-sm text-[#6E6E78] shadow-sm">
@@ -27,6 +28,10 @@ export function RoadmapPanel() {
     <section className="flex flex-col gap-4">
       <h2 className="text-[11px] font-semibold uppercase tracking-[0.18em] text-[#9A9AA8]">
         Pensum-roadmap
+      </h2>
+      {weeks && weeks.length > 0 && <WeekTree weeks={weeks} />}
+      <h2 className="mt-2 text-[11px] font-semibold uppercase tracking-[0.18em] text-[#9A9AA8]">
+        Per kursus
       </h2>
       {courses.map((c) => (
         <div key={c.label} className="rounded-2xl bg-white p-5 shadow-sm">
