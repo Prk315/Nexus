@@ -46,9 +46,9 @@ export function CourseCards() {
                 <span className={`text-xl font-bold tabular-nums ${c.daysLeft <= 14 ? "text-[#BE123C]" : "text-[#1A1A24]"}`}>
                   {c.daysLeft}
                 </span>
-                <span className="ml-1 text-xs text-[#6E6E78]">dage til eksamen · {c.examDate}</span>
+                <span className="ml-1 text-xs text-[#6E6E78]">dage til deadline · {c.examDate}</span>
               </div>
-            ) : <span className="text-xs text-[#9A9AA8]">ingen eksamensdato</span>}
+            ) : <span className="text-xs text-[#9A9AA8]">ingen deadline</span>}
           </div>
 
           {/* samlet fremdrift */}
