@@ -43,7 +43,7 @@ import { CourseProvider } from "./CourseContext";
 import { TodayPanel } from "./TodayPanel";
 import { PathPanel } from "./PathPanel";
 import { ReviewPanel } from "./ReviewPanel";
-import { RoadmapPanel } from "./RoadmapPanel";
+import { RoadmapTree, CourseCards } from "./RoadmapPanel";
 import { OverviewStrip } from "./OverviewStrip";
 import { InfinitePanel } from "./InfinitePanel";
 import { ChallengePanel } from "./ChallengePanel";
@@ -59,14 +59,13 @@ import { StatsPanel } from "./StatsPanel";
  * deadline, so the glanceable answer to "hvor er jeg, og hvad brænder?"
  * never requires picking the right tab first.
  */
-type LearnTab = "today" | "roadmap" | "course";
+type LearnTab = "overblik" | "course";
 
 function readTab(): LearnTab {
   try {
-    const t = localStorage.getItem("nl-learn-tab");
-    return t === "course" || t === "roadmap" ? t : "today";
+    return localStorage.getItem("nl-learn-tab") === "course" ? "course" : "overblik";
   } catch {
-    return "today";
+    return "overblik";
   }
 }
 
@@ -89,22 +88,30 @@ export function LearnPage() {
   return (
     <CourseProvider>
       <div className="-mx-6 -mb-6 flex-1 overflow-y-auto bg-[#F6F5F1] text-[#1A1A24]">
-        <div className="mx-auto flex max-w-xl flex-col gap-6 px-4 pb-16 pt-6 sm:px-6 md:max-w-2xl md:gap-10 md:px-8 md:pb-24 md:pt-10">
+        <div className={`mx-auto flex flex-col gap-6 px-4 pb-16 pt-6 sm:px-6 md:gap-8 md:px-8 md:pb-24 md:pt-10 ${
+          tab === "overblik" ? "max-w-6xl" : "max-w-xl md:max-w-2xl"}`}>
           <OverviewStrip />
           <div className="flex justify-center">
             <div className="flex gap-1 rounded-full bg-[#EBEAE5] p-1">
-              {pill("today", "I dag")}
-              {pill("roadmap", "Roadmap")}
+              {pill("overblik", "Overblik")}
               {pill("course", "Kursus")}
             </div>
           </div>
-          {tab === "today" ? (
-            <>
-              <TodayPanel />
-              <ReviewPanel />
-            </>
-          ) : tab === "roadmap" ? (
-            <RoadmapPanel />
+          {tab === "overblik" ? (
+            // To kolonner: træet til venstre, dagen+review+kursuskort til højre
+            // (dobbelt bredde). På smalle skærme stakkes med GØR-fladen først —
+            // træet er planlægning og må gerne ligge under.
+            <div className="grid grid-cols-1 items-start gap-6 lg:grid-cols-3">
+              <div className="order-2 lg:order-1 lg:col-span-1 lg:sticky lg:top-4">
+                <RoadmapTree />
+              </div>
+              <div className="order-1 flex flex-col gap-6 lg:order-2 lg:col-span-2">
+                <TodayPanel />
+                <ReviewPanel />
+                <hr className="border-[#E3E2DC]" />
+                <CourseCards />
+              </div>
+            </div>
           ) : (
             <>
               <PathPanel />
