@@ -43,6 +43,7 @@ import { CourseProvider } from "./CourseContext";
 import { TodayPanel } from "./TodayPanel";
 import { PathPanel } from "./PathPanel";
 import { ReviewPanel } from "./ReviewPanel";
+import { RoadmapPanel } from "./RoadmapPanel";
 import { InfinitePanel } from "./InfinitePanel";
 import { ChallengePanel } from "./ChallengePanel";
 import { SprintPanel } from "./SprintPanel";
@@ -87,6 +88,7 @@ export function LearnPage() {
           {tab === "today" ? (
             <>
               <TodayPanel />
+              <RoadmapPanel />
               <ReviewPanel />
             </>
           ) : (
