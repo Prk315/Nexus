@@ -44,6 +44,8 @@ import { TodayPanel } from "./TodayPanel";
 import { PathPanel } from "./PathPanel";
 import { ReviewPanel } from "./ReviewPanel";
 import { RoadmapTree, CourseCards } from "./RoadmapPanel";
+import { IOChart } from "./IOChart";
+import { useRoadmap } from "./roadmapData";
 import { OverviewStrip } from "./OverviewStrip";
 import { InfinitePanel } from "./InfinitePanel";
 import { ChallengePanel } from "./ChallengePanel";
@@ -98,20 +100,7 @@ export function LearnPage() {
             </div>
           </div>
           {tab === "overblik" ? (
-            // To kolonner: træet til venstre, dagen+review+kursuskort til højre
-            // (dobbelt bredde). På smalle skærme stakkes med GØR-fladen først —
-            // træet er planlægning og må gerne ligge under.
-            <div className="grid grid-cols-1 items-start gap-6 lg:grid-cols-3">
-              <div className="order-2 lg:order-1 lg:col-span-1 lg:sticky lg:top-4">
-                <RoadmapTree />
-              </div>
-              <div className="order-1 flex flex-col gap-6 lg:order-2 lg:col-span-2">
-                <TodayPanel />
-                <ReviewPanel />
-                <hr className="border-[#E3E2DC]" />
-                <CourseCards />
-              </div>
-            </div>
+            <OverblikLayout />
           ) : (
             <>
               <PathPanel />
@@ -124,5 +113,28 @@ export function LearnPage() {
         </div>
       </div>
     </CourseProvider>
+  );
+}
+
+/** Overblik: I/O-grafen øverst, derunder to kolonner — træet til venstre,
+ *  dagen+review+kursuskort i den dobbelt så brede højrekolonne. På smalle
+ *  skærme stakkes med GØR-fladen først; træet er planlægning. */
+function OverblikLayout() {
+  const { series } = useRoadmap();
+  return (
+    <>
+      {series && <IOChart input={series.input} output={series.output} />}
+      <div className="grid grid-cols-1 items-start gap-6 lg:grid-cols-3">
+              <div className="order-2 lg:order-1 lg:col-span-1 lg:sticky lg:top-4">
+                <RoadmapTree />
+              </div>
+              <div className="order-1 flex flex-col gap-6 lg:order-2 lg:col-span-2">
+                <TodayPanel />
+                <ReviewPanel />
+                <hr className="border-[#E3E2DC]" />
+                <CourseCards />
+              </div>
+            </div>
+    </>
   );
 }
