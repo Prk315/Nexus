@@ -44,16 +44,27 @@ import { TodayPanel } from "./TodayPanel";
 import { PathPanel } from "./PathPanel";
 import { ReviewPanel } from "./ReviewPanel";
 import { RoadmapPanel } from "./RoadmapPanel";
+import { OverviewStrip } from "./OverviewStrip";
 import { InfinitePanel } from "./InfinitePanel";
 import { ChallengePanel } from "./ChallengePanel";
 import { SprintPanel } from "./SprintPanel";
 import { StatsPanel } from "./StatsPanel";
 
-type LearnTab = "today" | "course";
+/**
+ * v6 (2026-10-05): separation + overblik. Three tabs, one concern each —
+ * "I dag" is the DO surface (the composed day + repetition), "Roadmap" is
+ * the PLAN surface (countdowns, book progress, lesson curriculum), and
+ * "Kursus" keeps the course-scoped spine and its session panels. Above all
+ * three sits the OverviewStrip: one chip per course and the nearest graded
+ * deadline, so the glanceable answer to "hvor er jeg, og hvad brænder?"
+ * never requires picking the right tab first.
+ */
+type LearnTab = "today" | "roadmap" | "course";
 
 function readTab(): LearnTab {
   try {
-    return localStorage.getItem("nl-learn-tab") === "course" ? "course" : "today";
+    const t = localStorage.getItem("nl-learn-tab");
+    return t === "course" || t === "roadmap" ? t : "today";
   } catch {
     return "today";
   }
@@ -79,18 +90,21 @@ export function LearnPage() {
     <CourseProvider>
       <div className="-mx-6 -mb-6 flex-1 overflow-y-auto bg-[#F6F5F1] text-[#1A1A24]">
         <div className="mx-auto flex max-w-xl flex-col gap-6 px-4 pb-16 pt-6 sm:px-6 md:max-w-2xl md:gap-10 md:px-8 md:pb-24 md:pt-10">
+          <OverviewStrip />
           <div className="flex justify-center">
             <div className="flex gap-1 rounded-full bg-[#EBEAE5] p-1">
-              {pill("today", "Today")}
+              {pill("today", "I dag")}
+              {pill("roadmap", "Roadmap")}
               {pill("course", "Kursus")}
             </div>
           </div>
           {tab === "today" ? (
             <>
               <TodayPanel />
-              <RoadmapPanel />
               <ReviewPanel />
             </>
+          ) : tab === "roadmap" ? (
+            <RoadmapPanel />
           ) : (
             <>
               <PathPanel />
