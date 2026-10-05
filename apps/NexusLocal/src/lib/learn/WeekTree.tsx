@@ -48,7 +48,7 @@ export function WeekTree({ weeks }: { weeks: WeekNode[] }) {
               <g key={w.idx}>
                 <circle cx={TRUNK_X} cy={nodeY} r={9} fill={ROSE} />
                 <text x={TRUNK_X + 20} y={nodeY + 5} fontSize={14} fontWeight={700} fill={ROSE}
-                  fontFamily="Archivo, sans-serif">EKSAMEN · {w.start}</text>
+                  fontFamily="Archivo, sans-serif">DEADLINE · {w.start} (eksamen en uge senere)</text>
               </g>
             );
           }
