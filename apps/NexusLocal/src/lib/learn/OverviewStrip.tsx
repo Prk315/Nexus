@@ -33,7 +33,8 @@ function useNextDeadline(): Deadline | null {
           .select("title, due_date").in("plan_id", planIds).eq("done", false)
           .not("due_date", "is", null)
           .order("due_date", { ascending: true }).limit(20);
-        const graded = (t.data ?? []).find((r) =>
+        const today = new Intl.DateTimeFormat("en-CA", { timeZone: "Europe/Copenhagen" }).format(new Date());
+        const graded = (t.data ?? []).filter((r) => (r.due_date ?? "") >= today).find((r) =>
           /quiz|afleve|assignm|hand[- ]?in|exam|eksamen|prøve|deadline|rapport|projekt/i.test(r.title ?? "") &&
           !/^(lecture|forelæsning|excercise|exercise|øvelser|lab)/i.test(r.title ?? ""));
         if (alive && graded?.due_date) {
