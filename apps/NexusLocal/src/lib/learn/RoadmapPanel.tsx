@@ -6,14 +6,7 @@
  */
 import { useRoadmap } from "./roadmapData";
 import { WeekTree } from "./WeekTree";
-
-function Bar({ pct, tone }: { pct: number; tone: string }) {
-  return (
-    <div className="h-1.5 w-full overflow-hidden rounded-full bg-[#EBEAE5]">
-      <div className={`h-full rounded-full ${tone}`} style={{ width: `${Math.round(pct * 100)}%` }} />
-    </div>
-  );
-}
+import { PaceBar } from "./PaceBar";
 
 /** Venstre kolonne: kun træet. */
 export function RoadmapTree() {
@@ -64,14 +57,15 @@ export function CourseCards() {
               <div className="mb-1 flex justify-between">
                 <span>Læsning</span><span className="tabular-nums">{Math.round(c.bookPct * 100)}%</span>
               </div>
-              <Bar pct={c.bookPct} tone="bg-gradient-to-r from-indigo-500 to-fuchsia-500" />
+              <PaceBar pct={c.bookPct} expectedPct={c.expectedBookPct} />
             </div>
             <div>
               <div className="mb-1 flex justify-between">
                 <span>Lektioner</span>
                 <span className="tabular-nums">{c.lessonsDone}/{c.lessons.length}</span>
               </div>
-              <Bar pct={c.lessons.length ? c.lessonsDone / c.lessons.length : 0} tone="bg-emerald-500" />
+              <PaceBar pct={c.lessons.length ? c.lessonsDone / c.lessons.length : 0}
+                expectedPct={c.expectedLessons != null && c.lessons.length ? c.expectedLessons / c.lessons.length : null} />
             </div>
           </div>
 
@@ -93,7 +87,7 @@ export function CourseCards() {
                     )}
                   </span>
                 </div>
-                <Bar pct={b.pct} tone="bg-indigo-400" />
+                <PaceBar pct={b.pct} expectedPct={b.expectedPct} />
               </div>
             );
           })}

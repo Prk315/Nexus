@@ -11,6 +11,7 @@ const LEARN_USER = "default";
 
 interface MaterialRow {
   id: string;
+  created_at?: string | null;
   kind: string;
   title: string;
   unit_label: string;
@@ -28,12 +29,14 @@ interface EventRow {
   kind: string;
   units_to: number | null;
   units_delta: number | null;
+  minutes?: number | null;
 }
 interface EnrollRow { c_id: number; label: string }
 
 export interface BookView {
   title: string;
   pct: number;          // 0..1 over the readable span
+  expectedPct: number | null; // hvor langt man BURDE være (lineært fra sporing → deadline)
   position: number;
   total: number;
   unitLabel: string;
@@ -48,7 +51,9 @@ export interface CourseView {
   books: BookView[];
   lessons: LessonView[];
   bookPct: number;      // aggregate readable-span progress
+  expectedBookPct: number | null;
   lessonsDone: number;
+  expectedLessons: number | null;
 }
 
 function shiftDate(ymd: string, days: number): string {
@@ -63,6 +68,16 @@ function daysBetween(fromYmd: string, toYmd: string): number {
 const todayYmd = () => new Intl.DateTimeFormat("en-CA", {
   timeZone: "Europe/Copenhagen", year: "numeric", month: "2-digit", day: "2-digit",
 }).format(new Date());
+
+export /** Lineær "burde"-fraktion: 0 ved sporingens start, 1 ved deadline. Null når
+ *  der ingen deadline er — uden en frist findes der intet "bagud". */
+function expectedFrac(createdAt: string | null | undefined, due: string | null, today: string): number | null {
+  if (!due) return null;
+  const from = (createdAt ?? "").slice(0, 10) || TERM_START;
+  const total = daysBetween(from, due);
+  if (total <= 0) return 1;
+  return Math.min(1, Math.max(0, daysBetween(from, today) / total));
+}
 
 export function build(mats: MaterialRow[], events: EventRow[], enrolls: EnrollRow[]): CourseView[] {
   const today = todayYmd();
@@ -94,6 +109,7 @@ export function build(mats: MaterialRow[], events: EventRow[], enrolls: EnrollRo
         return {
           title: m.title,
           pct: Math.min(1, read / span),
+          expectedPct: expectedFrac(m.created_at, m.due_date, today),
           position,
           total: m.total_units ?? 0,
           unitLabel: m.unit_label,
@@ -117,6 +133,17 @@ export function build(mats: MaterialRow[], events: EventRow[], enrolls: EnrollRo
     const spanSum = books.reduce((s, b) => s + Math.max(1, b.total - 0), 0);
     const bookPct = spanSum === 0 ? 0 :
       books.reduce((s, b) => s + b.pct * Math.max(1, b.total), 0) / spanSum;
+    const expWeighted = books.filter((b) => b.expectedPct != null);
+    const expectedBookPct = expWeighted.length === 0 ? null :
+      expWeighted.reduce((s, b) => s + (b.expectedPct ?? 0) * Math.max(1, b.total), 0) /
+      expWeighted.reduce((s, b) => s + Math.max(1, b.total), 0);
+    // Lektioner "burde": kurset s lektionskø fordelt lineært fra første
+    // lektions sporing til eksamen.
+    const lessonMats = mats.filter((m) => m.course_id === en.c_id && m.kind === "lesson" && m.status !== "paused");
+    const firstLesson = lessonMats.map((m) => (m.created_at ?? "").slice(0, 10)).filter(Boolean).sort()[0] ?? null;
+    const expectedLessons = due && lessons.length > 0
+      ? Math.min(lessons.length, (expectedFrac(firstLesson, due, today) ?? 0) * lessons.length)
+      : null;
 
     return {
       label: en.label,
@@ -125,15 +152,18 @@ export function build(mats: MaterialRow[], events: EventRow[], enrolls: EnrollRo
       books,
       lessons,
       bookPct,
+      expectedBookPct,
       lessonsDone: lessons.filter((l) => l.state === "done").length,
+      expectedLessons,
     };
   }).filter((c) => c.books.length > 0 || c.lessons.length > 0);
 }
 
 
-export function useRoadmap(): { courses: CourseView[] | null; weeks: WeekNode[] | null; error: boolean } {
+export function useRoadmap(): { courses: CourseView[] | null; weeks: WeekNode[] | null; series: IOSeries | null; error: boolean } {
   const [courses, setCourses] = useState<CourseView[] | null>(null);
   const [weeks, setWeeks] = useState<WeekNode[] | null>(null);
+  const [series, setSeries] = useState<IOSeries | null>(null);
   const [error, setError] = useState(false);
   useEffect(() => {
     let alive = true;
@@ -141,10 +171,10 @@ export function useRoadmap(): { courses: CourseView[] | null; weeks: WeekNode[] 
       try {
         const [m, e, en] = await Promise.all([
           supabasePublic.from("lr_materials")
-            .select("id, kind, title, unit_label, total_units, start_unit, status, due_date, course_id, priority, url")
+            .select("id, created_at, kind, title, unit_label, total_units, start_unit, status, due_date, course_id, priority, url")
             .eq("user_id", LEARN_USER),
           supabasePublic.from("lr_progress_events")
-            .select("material_id, event_date, kind, units_to, units_delta")
+            .select("material_id, event_date, kind, units_to, units_delta, minutes")
             .eq("user_id", LEARN_USER),
           supabasePublic.from("lr_course_enrollment")
             .select("c_id, label, plan_id").eq("user_id", LEARN_USER).eq("active", true),
@@ -168,9 +198,19 @@ export function useRoadmap(): { courses: CourseView[] | null; weeks: WeekNode[] 
               .map((r) => ({ title: r.title as string, due_date: (r.due_date as string).slice(0, 10), done: !!r.done }));
           }
         } catch { /* deadlines er pynt på træet, aldrig en blocker */ }
+        // dagligt tidsbudget fra settings — 160 min som ærligt fallback
+        let budget = 160;
+        try {
+          const st = await supabasePublic.from("lr_learn_settings")
+            .select("reading_minutes, lesson_minutes, review_minutes, intro_minutes")
+            .eq("user_id", LEARN_USER).limit(1);
+          const r = st.data?.[0];
+          if (r) budget = (r.reading_minutes ?? 0) + (r.lesson_minutes ?? 0) + (r.review_minutes ?? 0) + (r.intro_minutes ?? 0);
+        } catch { /* budgettet er en reference-linje, aldrig en blocker */ }
         if (alive) {
           setCourses(build(m.data ?? [], e.data ?? [], en.data ?? []));
           setWeeks(buildWeekTree(m.data ?? [], e.data ?? [], en.data ?? [], tasks));
+          setSeries(buildSeries(m.data ?? [], e.data ?? [], budget));
         }
       } catch {
         if (alive) setError(true);
@@ -178,7 +218,7 @@ export function useRoadmap(): { courses: CourseView[] | null; weeks: WeekNode[] 
     })();
     return () => { alive = false; };
   }, []);
-  return { courses, weeks, error };
+  return { courses, weeks, series, error };
 }
 
 // ── Uge-træet: git-graph-roadmappet ─────────────────────────────────────────
@@ -296,4 +336,58 @@ export function buildWeekTree(
 
   if (examDate) weeks.push({ idx: lastWeek + 1, start: examDate, state: "exam", items: [] });
   return weeks;
+}
+
+// ── Input/output-serierne ───────────────────────────────────────────────────
+// INPUT er tid: det daglige studiebudget (fra lr_learn_settings) akkumuleret
+// vs. de faktisk loggede minutter. OUTPUT er fremdrift: den forventede
+// kumulative læsning (hver bogs span fordelt lineært fra dens sporing til
+// dens deadline) vs. de faktisk læste sider. Begge serier starter ved den
+// tidligste sporing og slutter i dag — fremtiden hører til i uge-træet.
+
+export interface SeriesPoint { d: string; exp: number; act: number }
+export interface IOSeries { input: SeriesPoint[]; output: SeriesPoint[] }
+
+export function buildSeries(
+  mats: MaterialRow[], events: EventRow[], dailyBudgetMin: number,
+): IOSeries {
+  const today = todayYmd();
+  const books = mats.filter((m) =>
+    m.status === "active" && ["book", "document", "paper"].includes(m.kind) && m.total_units != null);
+  const starts = [
+    ...books.map((m) => (m.created_at ?? "").slice(0, 10)).filter(Boolean),
+    ...events.map((e) => e.event_date),
+  ].sort();
+  const t0 = starts[0] ?? today;
+  const nDays = Math.max(1, daysBetween(t0, today) + 1);
+
+  const actRead = new Map<string, number>();
+  const actMin = new Map<string, number>();
+  for (const e of events) {
+    if (e.kind === "reading" && e.units_delta != null && e.units_delta > 0) {
+      actRead.set(e.event_date, (actRead.get(e.event_date) ?? 0) + e.units_delta);
+    }
+    if (e.minutes != null && e.minutes > 0) {
+      actMin.set(e.event_date, (actMin.get(e.event_date) ?? 0) + e.minutes);
+    }
+  }
+
+  const input: SeriesPoint[] = [];
+  const output: SeriesPoint[] = [];
+  let cumAct = 0, cumMin = 0;
+  for (let i = 0; i < nDays; i++) {
+    const d = shiftDate(t0, i);
+    cumAct += actRead.get(d) ?? 0;
+    cumMin += actMin.get(d) ?? 0;
+    // forventet læsning pr. bog: span * andel af bogens egen tidslinje
+    let exp = 0;
+    for (const m of books) {
+      const span = Math.max(0, (m.total_units ?? 0) - (m.start_unit ?? 0));
+      const frac = expectedFrac(m.created_at, m.due_date, d);
+      if (frac != null) exp += span * frac;
+    }
+    output.push({ d, exp: Math.round(exp), act: Math.round(cumAct) });
+    input.push({ d, exp: (i + 1) * dailyBudgetMin, act: cumMin });
+  }
+  return { input, output };
 }
