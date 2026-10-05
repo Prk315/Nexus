@@ -653,7 +653,121 @@ export async function fetchReviewQueue(limit: number = REVIEW_QUEUE_SIZE): Promi
     });
   }
 
+  // ── Resten af køen: ALT brugeren har haft om, ikke kun mestrede paths ──
+  // Path-grænsen gjorde Review til ren Lineær Algebra: learn-evaluate regner
+  // kun koncepter fra mestrede units som "retained", så eksamenskursernes
+  // (bog-ingesterede) koncepter nåede aldrig drill-maskinen. Toppen af køen
+  // fyldes nu fra hele lr_memory_state: due-koncepter med evidens, uanset om
+  // de har en unit. Koncepter uden forfattede drills får en SYNTETISERET
+  // choice-drill — termen mod distraktor-titler fra samme emne — så selv et
+  // bog-koncept er auto-tjekbart og telefon-hurtigt, aldrig "husk og vurder
+  // selv". Deterministisk (hash-shuffle af concept_id): samme kø, samme dag.
+  if (items.length < limit) {
+    try {
+      const extra = await memoryWideDue(
+        limit - items.length,
+        new Set(items.map((i) => i.conceptId)),
+      );
+      items.push(...extra);
+    } catch (e) {
+      // Udvidelsen er additiv: fejler den, står den klassiske kø urørt.
+      console.error("[learn] memoryWideDue failed", e);
+    }
+  }
+
   return items;
+}
+
+/** Deterministisk Fisher-Yates med FNV-hash-seed — ingen Math.random, så
+ *  køen flimrer ikke mellem åbninger samme dag. */
+function seededShuffle<T>(arr: T[], seedStr: string): T[] {
+  let h = 2166136261;
+  for (let i = 0; i < seedStr.length; i++) { h ^= seedStr.charCodeAt(i); h = Math.imul(h, 16777619); }
+  const out = arr.slice();
+  for (let i = out.length - 1; i > 0; i--) {
+    h = Math.imul(h ^ (h >>> 13), 1274126177);
+    const j = (h >>> 0) % (i + 1);
+    [out[i], out[j]] = [out[j], out[i]];
+  }
+  return out;
+}
+
+const DUE_HEAT = 0.5;
+const DUE_COMP = 0.6;
+
+async function memoryWideDue(
+  want: number,
+  excluded: Set<string>,
+): Promise<ReviewQueueItem[]> {
+  const userId = await nodeUserId();
+  const now = new Date();
+  const mem = await supabasePublic.from("lr_memory_state")
+    .select("concept_id, value_alpha, value_beta, heat, last_decayed")
+    .eq("user_id", userId);
+  if (mem.error) throw mem.error;
+
+  const due = (mem.data ?? [])
+    .map((r) => {
+      const a = r.value_alpha ?? 1, b = r.value_beta ?? 1;
+      const mean = a / (a + b);
+      const decayed = r.last_decayed
+        ? (r.heat ?? 0) * Math.exp(-(Math.log(2) / 24) * Math.max(0, (now.getTime() - new Date(r.last_decayed).getTime()) / 3_600_000))
+        : (r.heat ?? 0);
+      return { id: r.concept_id as string, mean, decayed, evidence: a + b - 2 };
+    })
+    .filter((m) => m.evidence >= 1 && !excluded.has(m.id) &&
+      (m.decayed < DUE_HEAT || m.mean < DUE_COMP))
+    // mest trængende først: lav kompetence og kold hukommelse vægter op
+    .sort((x, y) => (x.mean + x.decayed) - (y.mean + y.decayed))
+    .slice(0, want * 3);
+  if (!due.length) return [];
+
+  const rows = await supabasePublic.from("lr_concept")
+    .select("concept_id, t_id, title, description")
+    .in("concept_id", due.map((d) => d.id));
+  if (rows.error) throw rows.error;
+  const byId = new Map((rows.data ?? []).map((r) => [r.concept_id as string, r]));
+
+  const items: ReviewQueueItem[] = [];
+  for (const d of due) {
+    if (items.length >= want) break;
+    const c = byId.get(d.id);
+    if (!c?.title || !c?.description || c.t_id == null) continue;
+    if (c.title.length > 60 || c.title === c.title.toUpperCase()) continue; // struktur-/statement-titler er ikke fair valgmuligheder
+    // distraktorer: titler fra samme emne-nabolag (samme t_id ± 2)
+    const sib = await supabasePublic.from("lr_concept")
+      .select("concept_id, title")
+      .gte("t_id", c.t_id - 2).lte("t_id", c.t_id + 2)
+      .neq("concept_id", c.concept_id).limit(24);
+    const pool = [...new Set((sib.data ?? [])
+      .map((r) => (r.title ?? "").trim())
+      .filter((t) => t && t !== c.title && t.length <= 60 && t !== t.toUpperCase()))];
+    if (pool.length < 3) continue;
+    const distractors = seededShuffle(pool, c.concept_id).slice(0, 3);
+    const choices = seededShuffle([c.title, ...distractors], c.concept_id + "|c");
+    const desc = (c.description as string).replace(/\s+/g, " ").trim().slice(0, 300);
+    const drill: Drill = {
+      id: `memdue:${c.concept_id}`,
+      prompt_md: `Hvilket begreb beskrives her?\n\n> ${desc}`,
+      lens: detectConceptLens(c.concept_id),
+      answer_type: "choice",
+      choices,
+      answer: { value: c.title },
+    };
+    items.push({
+      drill,
+      group: { archetype: "conceptual", concept_ids: [c.concept_id], drills: [drill] },
+      archetype: "conceptual",
+      conceptId: c.concept_id,
+      unitId: -1,
+    });
+  }
+  return items;
+}
+
+/** Kursus-lens ud fra koncept-id-præfikset — bruges kun til attempt-log-tags. */
+function detectConceptLens(conceptId: string): Lens {
+  return conceptId.startsWith("la-") ? "abstract" : "abstract";
 }
 
 // ── Infinite exercises (LEARN_PLAN.md "Infinite exercises", pinned
