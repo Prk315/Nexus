@@ -37,8 +37,17 @@ import { useCourse } from "./CourseContext";
 import { DrillCard } from "./player/DrillCard";
 import { detectSourceLens, DOCK_SHELL, DOCK_STACK, PLAYER_STYLE, READING_COL } from "./player/tokens";
 
-export function ReviewSession({ onClose }: { onClose: () => void }) {
+export function ReviewSession({ onClose, source, title, emptyText }: {
+  onClose: () => void;
+  /** Alternativ kø-kilde — fx dagens primer (recap-koncepterne fra
+   *  learn-plan). Default er den almindelige due-kø. Samme aktivitet,
+   *  samme grading, kun udvalget skifter. */
+  source?: () => Promise<ReviewQueueItem[] | null>;
+  title?: string;
+  emptyText?: string;
+}) {
   const { course } = useCourse();
+  const label = title ?? "Review";
   // undefined = loading, null = lr_learn_state has no row at all ("ingen dom
   // endnu" — never treated as "nothing due"), [] = row exists, nothing to
   // drill right now (a real, different state from null).
@@ -50,7 +59,7 @@ export function ReviewSession({ onClose }: { onClose: () => void }) {
 
   useEffect(() => {
     let alive = true;
-    fetchReviewQueue()
+    (source ? source() : fetchReviewQueue())
       .then(async (q) => {
         if (!alive) return;
         setQueue(q);
@@ -128,7 +137,7 @@ export function ReviewSession({ onClose }: { onClose: () => void }) {
             >
               ✕
             </button>
-            <span className="truncate text-[13px] font-medium text-[#1A1A24]/85">Review</span>
+            <span className="truncate text-[13px] font-medium text-[#1A1A24]/85">{label}</span>
             {total > 0 && !done && (
               <span className="ml-auto shrink-0 font-mono text-[11px] tabular-nums text-[#6E6E78]">
                 {Math.min(index + 1, total)} / {total}
@@ -167,7 +176,7 @@ export function ReviewSession({ onClose }: { onClose: () => void }) {
 
       {queue !== undefined && queue !== null && queue.length === 0 && !done && (
         <main className="flex min-h-0 flex-1 flex-col items-center justify-center gap-2 px-4 text-center">
-          <p className="text-[13px] text-[#1A1A24]/70">Nothing due right now.</p>
+          <p className="text-[13px] text-[#1A1A24]/70">{emptyText ?? "Nothing due right now."}</p>
           <p className="max-w-[240px] text-[11px] leading-relaxed text-[#6E6E78]/80">
             All caught up — check back once more content is due for review.
           </p>
@@ -179,7 +188,7 @@ export function ReviewSession({ onClose }: { onClose: () => void }) {
           key={current.drill.id}
           drill={current.drill}
           archetype={current.archetype}
-          indexLabel={`Review ${index + 1} / ${total}`}
+          indexLabel={`${label} ${index + 1} / ${total}`}
           translateFrom={
             current.archetype === "translate" ? detectSourceLens(current.drill.prompt_md, course) : null
           }
