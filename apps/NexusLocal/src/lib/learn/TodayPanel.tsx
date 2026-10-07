@@ -61,7 +61,7 @@ export function TodayPanel() {
   const done = plan!.status === "done";
 
   const rows: Array<{ n: number; label: string; minutes?: number; body: React.ReactNode }> = [
-    { n: 1, label: "Intro", minutes: b.intro?.minutes, body: <>the brief — say the say-backs out loud first</> },
+    { n: 1, label: "Review", minutes: b.intro?.minutes, body: <>recap of the previous pages & lesson — prime before anything new</> },
     {
       n: 2, label: "Reading", minutes: b.reading?.minutes,
       body: b.reading
