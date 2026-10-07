@@ -607,6 +607,9 @@ Deno.serve(async (req: Request) => {
     // recap is grounded in what the ingested chapters actually say — never
     // model-invented. One more read on the same failure posture as the rest.
     const review: string[] = [];
+    // The ids behind the recap concepts — the app turns these into a drill
+    // session (same activity as Repetition), so the review is DONE, not read.
+    const primerIds: string[] = [];
     if (reading) {
       const m = reading.material;
       const lastRead = [...events]
@@ -641,10 +644,10 @@ Deno.serve(async (req: Request) => {
               return mch != null && chSet.has(String(Number(mch[1])));
             }).map((t) => t.t_id);
             if (tIds.length) {
-              const concepts = unwrap<{ title: string; description: string | null; importance: number }>(
+              const concepts = unwrap<{ concept_id: string; title: string; description: string | null; importance: number }>(
                 "lr_concept",
                 await db.from("lr_concept")
-                  .select("title,description,importance")
+                  .select("concept_id,title,description,importance")
                   .in("t_id", tIds)
                   .order("importance", { ascending: false })
                   .limit(5),
@@ -652,6 +655,7 @@ Deno.serve(async (req: Request) => {
               if (concepts.length) {
                 review.push(`  Key ideas from those pages — have them back in mind:`);
                 for (const c of concepts) {
+                  primerIds.push(c.concept_id);
                   const d = (c.description ?? "").replace(/[*_]/g, "").replace(/\s+/g, " ").trim();
                   review.push(`  - **${c.title}**${d ? ` — ${d.length > 160 ? d.slice(0, 157) + "…" : d}` : ""}`);
                 }
@@ -733,7 +737,7 @@ Deno.serve(async (req: Request) => {
     });
 
     const blocks = {
-      intro: { minutes: minutes.intro },
+      intro: { minutes: minutes.intro, primer_concept_ids: primerIds },
       reading: reading
         ? {
           minutes: minutes.reading,

@@ -731,36 +731,70 @@ async function memoryWideDue(
   const items: ReviewQueueItem[] = [];
   for (const d of due) {
     if (items.length >= want) break;
-    const c = byId.get(d.id);
-    if (!c?.title || !c?.description || c.t_id == null) continue;
-    if (c.title.length > 60 || c.title === c.title.toUpperCase()) continue; // struktur-/statement-titler er ikke fair valgmuligheder
-    // distraktorer: titler fra samme emne-nabolag (samme t_id ± 2)
-    const sib = await supabasePublic.from("lr_concept")
-      .select("concept_id, title")
-      .gte("t_id", c.t_id - 2).lte("t_id", c.t_id + 2)
-      .neq("concept_id", c.concept_id).limit(24);
-    const pool = [...new Set((sib.data ?? [])
-      .map((r) => (r.title ?? "").trim())
-      .filter((t) => t && t !== c.title && t.length <= 60 && t !== t.toUpperCase()))];
-    if (pool.length < 3) continue;
-    const distractors = seededShuffle(pool, c.concept_id).slice(0, 3);
-    const choices = seededShuffle([c.title, ...distractors], c.concept_id + "|c");
-    const desc = (c.description as string).replace(/\s+/g, " ").trim().slice(0, 300);
-    const drill: Drill = {
-      id: `memdue:${c.concept_id}`,
-      prompt_md: `Hvilket begreb beskrives her?\n\n> ${desc}`,
-      lens: detectConceptLens(c.concept_id),
-      answer_type: "choice",
-      choices,
-      answer: { value: c.title },
-    };
-    items.push({
-      drill,
-      group: { archetype: "conceptual", concept_ids: [c.concept_id], drills: [drill] },
-      archetype: "conceptual",
-      conceptId: c.concept_id,
-      unitId: -1,
-    });
+    const item = await synthChoiceItem(byId.get(d.id), "memdue");
+    if (item) items.push(item);
+  }
+  return items;
+}
+
+/** Syntetiseret choice-drill for ét koncept: beskrivelsen som prompt, titlen
+ *  blandt distraktor-titler fra samme emne-nabolag (t_id ± 2). Deterministisk
+ *  (hash-shuffle af concept_id). Null når konceptet ikke kan bære en FAIR
+ *  drill — struktur-/statement-titler er ikke valgmuligheder. Delt mellem
+ *  memoryWideDue og fetchPrimerQueue, så de to aktiviteter aldrig driver
+ *  fra hinanden. */
+async function synthChoiceItem(
+  c: { concept_id: string; t_id: number | null; title: string | null; description: string | null } | undefined,
+  idPrefix: string,
+): Promise<ReviewQueueItem | null> {
+  if (!c?.title || !c?.description || c.t_id == null) return null;
+  if (c.title.length > 60 || c.title === c.title.toUpperCase()) return null;
+  // distraktorer: titler fra samme emne-nabolag (samme t_id ± 2)
+  const sib = await supabasePublic.from("lr_concept")
+    .select("concept_id, title")
+    .gte("t_id", c.t_id - 2).lte("t_id", c.t_id + 2)
+    .neq("concept_id", c.concept_id).limit(24);
+  const pool = [...new Set((sib.data ?? [])
+    .map((r) => (r.title ?? "").trim())
+    .filter((t) => t && t !== c.title && t.length <= 60 && t !== t.toUpperCase()))];
+  if (pool.length < 3) return null;
+  const distractors = seededShuffle(pool, c.concept_id).slice(0, 3);
+  const choices = seededShuffle([c.title, ...distractors], c.concept_id + "|c");
+  const desc = c.description.replace(/\s+/g, " ").trim().slice(0, 300);
+  const drill: Drill = {
+    id: `${idPrefix}:${c.concept_id}`,
+    prompt_md: `Hvilket begreb beskrives her?\n\n> ${desc}`,
+    lens: detectConceptLens(c.concept_id),
+    answer_type: "choice",
+    choices,
+    answer: { value: c.title },
+  };
+  return {
+    drill,
+    group: { archetype: "conceptual", concept_ids: [c.concept_id], drills: [drill] },
+    archetype: "conceptual",
+    conceptId: c.concept_id,
+    unitId: -1,
+  };
+}
+
+/** Primer-køen: SAMME aktivitet som Repetition (auto-tjekbare drills gennem
+ *  DrillCard), men scopet til dagens recap-koncepter — nøgleideerne fra de
+ *  sidst læste sider, som learn-plan lagde i blocks.intro.primer_concept_ids
+ *  — i stedet for due-hed. Bevarer edge-funktionens vigtigheds-orden. [] når
+ *  ingen af koncepterne kan bære en fair drill (aldrig null: planen HAR en
+ *  dom, der er bare intet at drille). */
+export async function fetchPrimerQueue(conceptIds: string[]): Promise<ReviewQueueItem[]> {
+  if (!conceptIds.length) return [];
+  const rows = await supabasePublic.from("lr_concept")
+    .select("concept_id, t_id, title, description")
+    .in("concept_id", conceptIds);
+  if (rows.error) throw rows.error;
+  const byId = new Map((rows.data ?? []).map((r) => [r.concept_id as string, r]));
+  const items: ReviewQueueItem[] = [];
+  for (const id of conceptIds) {
+    const item = await synthChoiceItem(byId.get(id), "primer");
+    if (item) items.push(item);
   }
   return items;
 }
@@ -1564,7 +1598,7 @@ export async function fetchChallengeRuns(limit: number = 50): Promise<LrChalleng
 // ── The composed learning day (lr_daily_plan, written by learn-plan) ────────
 
 export interface DailyPlanBlocks {
-  intro: { minutes: number };
+  intro: { minutes: number; primer_concept_ids?: string[] };
   reading: {
     minutes: number; material_id: string; title: string;
     vault_node_id: string | null; unit_label: string;

@@ -15,8 +15,9 @@
  */
 
 import { useCallback, useEffect, useState } from "react";
-import { fetchDailyPlan, markDailyPlanDone, type DailyPlan } from "./api";
+import { fetchDailyPlan, fetchPrimerQueue, markDailyPlanDone, type DailyPlan } from "./api";
 import { Markdown } from "./Markdown";
+import { ReviewSession } from "./ReviewSession";
 
 function todayYmd(): string {
   return new Intl.DateTimeFormat("en-CA", {
@@ -28,6 +29,7 @@ export function TodayPanel() {
   const [plan, setPlan] = useState<DailyPlan | null>(null);
   const [state, setState] = useState<"loading" | "missing" | "error" | "ready">("loading");
   const [briefOpen, setBriefOpen] = useState(false);
+  const [primerOpen, setPrimerOpen] = useState(false);
   const date = todayYmd();
 
   const load = useCallback(async () => {
@@ -61,7 +63,25 @@ export function TodayPanel() {
   const done = plan!.status === "done";
 
   const rows: Array<{ n: number; label: string; minutes?: number; body: React.ReactNode }> = [
-    { n: 1, label: "Review", minutes: b.intro?.minutes, body: <>recap of the previous pages & lesson — prime before anything new</> },
+    {
+      n: 1, label: "Review", minutes: b.intro?.minutes,
+      // Same ACTIVITY as Repetition: the recap concepts become a drill
+      // session, not a paragraph to read. Older plan rows (no primer ids)
+      // keep the read-the-brief fallback.
+      body: (b.intro?.primer_concept_ids?.length ?? 0) > 0
+        ? (
+          <>
+            {b.intro!.primer_concept_ids!.length} concepts from last session —{" "}
+            <button
+              onClick={() => setPrimerOpen(true)}
+              className="font-medium text-indigo-600 underline-offset-2 hover:underline"
+            >
+              start the primer
+            </button>
+          </>
+        )
+        : <>recap of the previous pages & lesson — prime before anything new</>,
+    },
     {
       n: 2, label: "Reading", minutes: b.reading?.minutes,
       body: b.reading
@@ -138,6 +158,15 @@ export function TodayPanel() {
         <div className="mt-2 rounded-xl bg-[#1A1A24]/[0.04] p-3">
           <Markdown className="text-sm leading-relaxed">{plan!.brief_md}</Markdown>
         </div>
+      )}
+
+      {primerOpen && (
+        <ReviewSession
+          title="Primer"
+          emptyText="No drillable primer concepts today — read the brief instead."
+          source={() => fetchPrimerQueue(b.intro?.primer_concept_ids ?? [])}
+          onClose={() => setPrimerOpen(false)}
+        />
       )}
     </section>
   );
