@@ -4,10 +4,13 @@
 // `learn-daily` composes the card LESSON inside it. Four blocks:
 //
 //   intro    — a deterministic brief: what yesterday and this week actually
-//              held, what is due soon, and RETRIEVAL PRIMES for yesterday's
-//              material (titles only, never definitions — re-reading is the
-//              illusion of studying; the attempt is the active ingredient,
-//              per course_lessons/DESIGN.md, the governing pedagogy doc).
+//              held, what is due soon, and a REVIEW of where you left off —
+//              the previous pages' key concepts (from the book's own concept
+//              graph) and the previous lesson — so today's lesson starts
+//              primed on what it builds on. (This replaced the say-back
+//              retrieval primes on 2026-10-08, by the learner's own call:
+//              a recap that bridges into today beats titles-only prompts
+//              for how these days are actually run.)
 //   reading  — 90 minutes of the tracked book that needs it most, as a page
 //              range computed from measured pace, starting where the last
 //              progress event left off.
@@ -353,7 +356,7 @@ function composeBrief(args: {
   yesterdayLesson: DailyLessonRow | null;
   dueSoon: Array<{ title: string; inDays: number }>;
   runways: Runway[];
-  primes: string[];
+  review: string[];
   reading: ReadingPick | null;
   lessonLine: string;
   reviewLine: string;
@@ -383,14 +386,13 @@ function composeBrief(args: {
   L.push(y.length ? y.map((s) => `- ${s}`).join("\n") : "- no study recorded");
   L.push("");
 
-  if (args.primes.length) {
-    L.push("## Before you read anything — say these back");
-    L.push(
-      "From yesterday. Out loud or on paper, one sentence each, *then* check:",
-    );
-    for (const p of args.primes) L.push(`- ${p}`);
-    L.push("");
+  L.push("## Review — where you left off");
+  if (args.review.length) {
+    for (const r of args.review) L.push(r);
+  } else {
+    L.push("- first study day on record — nothing to review yet.");
   }
+  L.push("");
 
   if (args.runways.length) {
     L.push("## Exam runway");
@@ -415,7 +417,7 @@ function composeBrief(args: {
   L.push("");
 
   L.push("## Today");
-  L.push(`1. **Intro** (${args.minutes.intro} min) — this brief + the say-backs above.`);
+  L.push(`1. **Review** (${args.minutes.intro} min) — the recap above: re-anchor the previous pages and lesson, THEN start.`);
   L.push(args.reading
     ? `2. **Reading** (${args.minutes.reading} min) — ${fmtRange(args.reading.material, args.reading.from, args.reading.to)}.`
     : `2. **Reading** — no active reading material; add one in PathFinder → Learn.`);
@@ -599,36 +601,94 @@ Deno.serve(async (req: Request) => {
         ? `${dueCount} concept${dueCount === 1 ? "" : "s"} due — open Dagens lektion in Nexus Learn.`
         : "due count unknown (no learn state) — open Nexus Learn.";
 
-    // Retrieval primes from yesterday: reading section + lesson card titles.
-    const primes: string[] = [];
-    for (const e of events) {
-      if (e.event_date !== yesterday || e.kind !== "reading") continue;
-      const m = materialsById.get(e.material_id);
-      if (m && e.units_from != null && e.units_to != null) {
-        primes.push(`the main claim of ${fmtRange(m, e.units_from, e.units_to)}`);
+    // ── Review of where you left off: previous pages' key concepts + the
+    // previous lesson, as a bridge into today's lesson. Summaries are drawn
+    // from the book's OWN concept graph (lr_concept via lr_topic), so the
+    // recap is grounded in what the ingested chapters actually say — never
+    // model-invented. One more read on the same failure posture as the rest.
+    const review: string[] = [];
+    if (reading) {
+      const m = reading.material;
+      const lastRead = [...events]
+        .filter((e) =>
+          e.material_id === m.id && e.kind === "reading" &&
+          e.event_date < today && e.units_from != null && e.units_to != null)
+        .sort((a, b) => b.event_date.localeCompare(a.event_date))[0] ?? null;
+      if (lastRead) {
+        const ago = daysBetween(lastRead.event_date, today);
+        review.push(`- **${m.title}**: last read ${fmtRange(m, lastRead.units_from!, lastRead.units_to!).slice(m.title.length + 2)} (${
+          ago === 1 ? "yesterday" : `${ago} days ago`}). Today continues at ${
+          m.unit_label === "chapters" ? "kap." : "p."} ${reading.from}.`);
+        // Which chapters did that range touch? chapter_pages maps chapter →
+        // [first, last] page; absent map = no concept lookup (absent is not
+        // zero — we say less rather than guess).
+        if (m.chapter_pages && m.chapter_prefix) {
+          const chapters: string[] = [];
+          for (const [ch, range] of Object.entries(m.chapter_pages)) {
+            if (!Array.isArray(range) || range.length < 2) continue;
+            if (lastRead.units_from! <= range[1] && lastRead.units_to! >= range[0]) chapters.push(ch);
+          }
+          if (chapters.length) {
+            const prefix = m.chapter_prefix.trim();
+            const topics = unwrap<{ t_id: number; title: string }>(
+              "lr_topic",
+              await db.from("lr_topic").select("t_id,title")
+                .like("title", `${prefix} %`),
+            );
+            const chSet = new Set(chapters.map((c) => String(Number(c))));
+            const tIds = topics.filter((t) => {
+              const mch = t.title.slice(prefix.length).trim().match(/^(\d+)/);
+              return mch != null && chSet.has(String(Number(mch[1])));
+            }).map((t) => t.t_id);
+            if (tIds.length) {
+              const concepts = unwrap<{ title: string; description: string | null; importance: number }>(
+                "lr_concept",
+                await db.from("lr_concept")
+                  .select("title,description,importance")
+                  .in("t_id", tIds)
+                  .order("importance", { ascending: false })
+                  .limit(5),
+              );
+              if (concepts.length) {
+                review.push(`  Key ideas from those pages — have them back in mind:`);
+                for (const c of concepts) {
+                  const d = (c.description ?? "").replace(/[*_]/g, "").replace(/\s+/g, " ").trim();
+                  review.push(`  - **${c.title}**${d ? ` — ${d.length > 160 ? d.slice(0, 157) + "…" : d}` : ""}`);
+                }
+              }
+            }
+          }
+        }
+      } else {
+        review.push(`- **${m.title}**: first session — today starts at ${
+          m.unit_label === "chapters" ? "kap." : "p."} ${reading.from}.`);
       }
     }
-    if (yLesson?.cards) {
-      // Only NAMED concepts make fair say-backs. learn-daily already encodes
-      // the judgment: a statement-titled concept's read card gets the TOPIC
-      // as its prompt, a named concept's gets its title — so prompt===title
-      // is the "this title is a real name" signal. All-caps section headers
-      // ("IMPLICATIONS", a book's own name) are structure, not concepts, and
-      // "what X is" over either is an unanswerable prompt — the exact
-      // failure the card doctrine forbids.
-      const seen = new Set<string>();
-      for (const c of yLesson.cards) {
-        if (c.kind !== "read" || !c.title || c.prompt !== c.title) continue;
-        if (c.title === c.title.toUpperCase()) continue;
-        const words = c.title.split(" ");
-        if (words.length > 7) continue;
-        // A title ending on a function word is a sentence FRAGMENT, not a
-        // name ("Et tall a er rot i") — short stumps dodge learn-daily's
-        // 20-char statement check, so catch them by their dangling tail.
-        if (/^(i|og|på|av|en|et|ei|for|til|at|som|er|the|of|in|a|an|is|are|to|and|or|with|by|on)$/i.test(words[words.length - 1])) continue;
-        if (seen.has(c.title)) continue;
-        seen.add(c.title);
-        if (seen.size <= 4) primes.push(`what **${c.title}** is (${c.course ?? "kursus"})`);
+    {
+      const lastLessonEv = [...events]
+        .filter((e) => e.kind === "lesson" && e.event_date < today)
+        .sort((a, b) => b.event_date.localeCompare(a.event_date))[0] ?? null;
+      if (lastLessonEv) {
+        const lm = materialsById.get(lastLessonEv.material_id);
+        const ago = daysBetween(lastLessonEv.event_date, today);
+        if (lm) {
+          review.push(`- **Previous lesson**: ${lm.title} (${
+            ago === 1 ? "yesterday" : `${ago} days ago`}).${
+            lm.url ? ` Loose on any of it? Skim its “Taught so far” panel first: ${lm.url}` : ""}`);
+        }
+      }
+      if (lessonMaterial && lessonDay) {
+        // Only claim the recap primes the lesson when they share a course —
+        // a PGM reading recap does not "build into" a MatAn lesson.
+        const recapCourses = new Set<number>();
+        if (reading?.material.course_id != null) recapCourses.add(reading.material.course_id);
+        if (lastLessonEv) {
+          const lmc = materialsById.get(lastLessonEv.material_id)?.course_id;
+          if (lmc != null) recapCourses.add(lmc);
+        }
+        review.push(lessonMaterial.course_id != null && recapCourses.has(lessonMaterial.course_id)
+          ? `- **Today's lesson**: ${lessonMaterial.title} — the recap above is what it builds on.`
+          : `- **Today's lesson**: ${lessonMaterial.title} — different course than the recap; its own "Taught so far" panel is the primer.`);
       }
     }
 
@@ -665,7 +725,7 @@ Deno.serve(async (req: Request) => {
       yesterdayLesson: yLesson,
       dueSoon: graded,
       runways,
-      primes,
+      review,
       reading,
       lessonLine,
       reviewLine,
@@ -704,7 +764,7 @@ Deno.serve(async (req: Request) => {
     const pfTaskIds: number[] = [];
     if (cfg.pf_user_id && cfg.pf_plan_id) {
       const wanted: Array<{ title: string; estimate: number }> = [
-        { title: `Learn · Intro brief (${today})`, estimate: minutes.intro },
+        { title: `Learn · Review & prime (${today})`, estimate: minutes.intro },
         ...(reading
           ? [{
             title: `Learn · Reading: ${fmtRange(reading.material, reading.from, reading.to)} (${today})`,
