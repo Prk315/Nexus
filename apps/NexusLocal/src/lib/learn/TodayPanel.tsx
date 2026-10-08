@@ -74,7 +74,7 @@ export function TodayPanel() {
             {b.intro!.primer_concept_ids!.length} concepts from last session —{" "}
             <button
               onClick={() => setPrimerOpen(true)}
-              className="font-medium text-indigo-600 underline-offset-2 hover:underline"
+              className="inline p-0 align-baseline text-sm font-medium leading-[inherit] text-indigo-600 underline-offset-2 hover:underline"
             >
               start the primer
             </button>
