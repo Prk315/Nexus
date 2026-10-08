@@ -72,7 +72,7 @@ export interface CourseDef {
   /** `lr_course.c_id` / `lr_unit.course_id` — the one hard DB key everything
    * else in this file exists to avoid hardcoding a second time. */
   courseId: number;
-  key: "la" | "dbms";
+  key: "la" | "dbms" | "pgm" | "prob";
   /** Full title, this course's own language ("Lineær Algebra" — LA is
    * Danish-content, DBMS is English-content, per each course's own
    * `contentLanguage`). Used in the path header ("Learn · {title}"). */
@@ -228,6 +228,112 @@ const DBMS_TRANSLATE_BAR: Record<string, string> = {
   "sql-ra": "bg-gradient-to-r from-pink-500 to-blue-500",
 };
 
+
+// PGM — graph (cyan) · factor (violet) · query (pink). Three views the
+// Koller & Friedman book itself keeps triangulating: the structure you can
+// read independencies off, the algebra of factors/CPDs the structure
+// stands for, and what a query/algorithm can do with it. Hue picks clear
+// red/amber/emerald by >30° (cyan 187° is 35° past emerald) and sit 71°/72°
+// apart pairwise; LA/DBMS hue reuse is fine — courses never co-render.
+const PGM_LENSES: Record<string, LensToken> = {
+  graph: {
+    label: "Graph",
+    long: "Graph view — structure & separation",
+    hex: "#22d3ee",
+    chip: "bg-cyan-50 text-cyan-700 ring-1 ring-cyan-600/25",
+    chipOn: "bg-cyan-100 text-cyan-800 ring-1 ring-cyan-600/40",
+    dot: "bg-cyan-500",
+    edge: "border-l-2 border-cyan-500/60",
+    tint: "bg-cyan-50",
+  },
+  factor: {
+    label: "Factor",
+    long: "Factor view — distributions & algebra",
+    hex: "#8b5cf6",
+    chip: "bg-violet-50 text-violet-700 ring-1 ring-violet-600/25",
+    chipOn: "bg-violet-100 text-violet-800 ring-1 ring-violet-600/40",
+    dot: "bg-violet-500",
+    edge: "border-l-2 border-violet-500/60",
+    tint: "bg-violet-50",
+  },
+  query: {
+    label: "Query",
+    long: "Query view — what inference buys",
+    hex: "#ec4899",
+    chip: "bg-pink-50 text-pink-700 ring-1 ring-pink-600/25",
+    chipOn: "bg-pink-100 text-pink-800 ring-1 ring-pink-600/40",
+    dot: "bg-pink-500",
+    edge: "border-l-2 border-pink-500/60",
+    tint: "bg-pink-50",
+  },
+};
+
+const PGM_SOLID_BAR: Record<string, string> = {
+  graph: "bg-cyan-500",
+  factor: "bg-violet-500",
+  query: "bg-pink-500",
+};
+
+const PGM_TRANSLATE_BAR: Record<string, string> = {
+  "graph-factor": "bg-gradient-to-r from-cyan-500 to-violet-500",
+  "graph-query": "bg-gradient-to-r from-cyan-500 to-pink-500",
+  "factor-graph": "bg-gradient-to-r from-violet-500 to-cyan-500",
+  "factor-query": "bg-gradient-to-r from-violet-500 to-pink-500",
+  "query-graph": "bg-gradient-to-r from-pink-500 to-cyan-500",
+  "query-factor": "bg-gradient-to-r from-pink-500 to-violet-500",
+};
+
+// PROB — story (sky) · formal (indigo) · sim (fuchsia). Blitzstein's own
+// doctrine: the story proof, the formal definition/derivation, and the
+// simulation/sampling view his R sections keep returning to.
+const PROB_LENSES: Record<string, LensToken> = {
+  story: {
+    label: "Story",
+    long: "Story view — narrative & counting",
+    hex: "#0ea5e9",
+    chip: "bg-sky-50 text-sky-700 ring-1 ring-sky-600/25",
+    chipOn: "bg-sky-100 text-sky-800 ring-1 ring-sky-600/40",
+    dot: "bg-sky-500",
+    edge: "border-l-2 border-sky-500/60",
+    tint: "bg-sky-50",
+  },
+  formal: {
+    label: "Formal",
+    long: "Formal view — definitions & derivations",
+    hex: "#6366f1",
+    chip: "bg-indigo-50 text-indigo-700 ring-1 ring-indigo-600/25",
+    chipOn: "bg-indigo-100 text-indigo-800 ring-1 ring-indigo-600/40",
+    dot: "bg-indigo-500",
+    edge: "border-l-2 border-indigo-500/60",
+    tint: "bg-indigo-50",
+  },
+  sim: {
+    label: "Sim",
+    long: "Simulation view — sampling intuition",
+    hex: "#e879f9",
+    chip: "bg-fuchsia-50 text-fuchsia-700 ring-1 ring-fuchsia-600/25",
+    chipOn: "bg-fuchsia-100 text-fuchsia-800 ring-1 ring-fuchsia-600/40",
+    dot: "bg-fuchsia-500",
+    edge: "border-l-2 border-fuchsia-500/60",
+    tint: "bg-fuchsia-50",
+  },
+};
+
+const PROB_SOLID_BAR: Record<string, string> = {
+  story: "bg-sky-500",
+  formal: "bg-indigo-500",
+  sim: "bg-fuchsia-500",
+};
+
+const PROB_TRANSLATE_BAR: Record<string, string> = {
+  "story-formal": "bg-gradient-to-r from-sky-500 to-indigo-500",
+  "story-sim": "bg-gradient-to-r from-sky-500 to-fuchsia-500",
+  "formal-story": "bg-gradient-to-r from-indigo-500 to-sky-500",
+  "formal-sim": "bg-gradient-to-r from-indigo-500 to-fuchsia-500",
+  "sim-story": "bg-gradient-to-r from-fuchsia-500 to-sky-500",
+  "sim-formal": "bg-gradient-to-r from-fuchsia-500 to-indigo-500",
+};
+
 export const COURSES: Record<CourseKey, CourseDef> = {
   la: {
     courseId: 2,
@@ -278,6 +384,48 @@ export const COURSES: Record<CourseKey, CourseDef> = {
       { re: /Given in SQL\b/i, lens: "sql" },
     ],
   },
+  pgm: {
+    courseId: 4,
+    key: "pgm",
+    title: "Probabilistic Graphical Models",
+    shortLabel: "PGM",
+    contentLanguage: "en",
+    itemSlugPrefix: "pgm-x-",
+    hasLearnState: false,
+    // Roadmap is complete (6 modules / 20 units over K&F ch. 2-19); content
+    // is authored module by module, module 1 first — the DBMS pattern.
+    complete: false,
+    lensOrder: ["graph", "factor", "query"],
+    lenses: PGM_LENSES,
+    solidBar: PGM_SOLID_BAR,
+    translateBar: PGM_TRANSLATE_BAR,
+    sourceLensPatterns: [
+      { re: /Given (?:as|in) (?:the )?graph\b/i, lens: "graph" },
+      { re: /Given (?:as|in) (?:the )?factor/i, lens: "factor" },
+      { re: /Given (?:as|in) (?:the )?query/i, lens: "query" },
+    ],
+  },
+  prob: {
+    courseId: 1,
+    key: "prob",
+    title: "Introduction to Probability",
+    shortLabel: "PROB",
+    contentLanguage: "en",
+    itemSlugPrefix: "prob-x-",
+    hasLearnState: false,
+    // 8 modules / 19 units along Blitzstein's own order; authored
+    // incrementally like DBMS.
+    complete: false,
+    lensOrder: ["story", "formal", "sim"],
+    lenses: PROB_LENSES,
+    solidBar: PROB_SOLID_BAR,
+    translateBar: PROB_TRANSLATE_BAR,
+    sourceLensPatterns: [
+      { re: /Given (?:as|in) (?:the |a )?story\b/i, lens: "story" },
+      { re: /Given (?:as|in) (?:the )?formal/i, lens: "formal" },
+      { re: /Given (?:as|in) (?:the |a )?simulation\b/i, lens: "sim" },
+    ],
+  },
 };
 
 export const DEFAULT_COURSE_KEY: CourseKey = "la";
@@ -287,7 +435,7 @@ export function getCourse(key: CourseKey): CourseDef {
 }
 
 export function isCourseKey(value: string): value is CourseKey {
-  return value === "la" || value === "dbms";
+  return value === "la" || value === "dbms" || value === "pgm" || value === "prob";
 }
 
-export const COURSE_LIST: CourseDef[] = [COURSES.la, COURSES.dbms];
+export const COURSE_LIST: CourseDef[] = [COURSES.la, COURSES.dbms, COURSES.pgm, COURSES.prob];
