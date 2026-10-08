@@ -338,6 +338,32 @@ function pickReading(
   return { material: m, from, to, pace, minutes };
 }
 
+
+/** Koncept-beskrivelse → recap-linje: emfase strippet, klippet på
+ *  sætningsgrænse (hårdt midt-i-sætning-snit læste som fejl), og en
+ *  ubalanceret $$-formel i klippet droppes helt. */
+function clipSentence(raw: string, budget = 220): string {
+  const clean = raw.replace(/[*_]/g, "").replace(/\s+/g, " ").trim();
+  let out = clean;
+  if (clean.length > budget) {
+    const sentences = clean.match(/[^.!?]*[.!?]+(?:\s|$)/g) ?? [];
+    out = "";
+    for (const s of sentences) {
+      if ((out + s).length > budget) break;
+      out += s;
+    }
+    out = out.trim();
+    if (out.length < 50) {
+      const cut = clean.slice(0, budget);
+      out = cut.slice(0, Math.max(cut.lastIndexOf(" "), 50)).trim() + " …";
+    }
+  }
+  if (((out.match(/\$\$/g) ?? []).length) % 2 === 1) {
+    out = out.slice(0, out.lastIndexOf("$$")).trim();
+  }
+  return out;
+}
+
 // ── Brief composition (deterministic, honest) ──────────────────────────────
 
 interface WeekTotals { pages: number; minutes: number; days: Set<string> }
@@ -668,8 +694,8 @@ Deno.serve(async (req: Request) => {
                 review.push(`  Key ideas from those pages — have them back in mind:`);
                 for (const c of concepts) {
                   primerIds.push(c.concept_id);
-                  const d = (c.description ?? "").replace(/[*_]/g, "").replace(/\s+/g, " ").trim();
-                  review.push(`  - **${c.title}**${d ? ` — ${d.length > 160 ? d.slice(0, 157) + "…" : d}` : ""}`);
+                  const d = clipSentence(c.description ?? "");
+                  review.push(`  - **${c.title}**${d ? ` — ${d}` : ""}`);
                 }
               }
             }
