@@ -611,8 +611,14 @@ Deno.serve(async (req: Request) => {
     // Rotation still interleaves WITHIN the course, and a reading course
     // with no active lessons falls back to the global rotation rather than
     // dropping the lesson block.
+    // Tie-break by CURRICULUM order, not the alphabet: lesson materials
+    // carry their course week in start_unit (inert for lessons otherwise),
+    // so within a course the next lesson is the next week's — Camera &
+    // Landmarks (wk 2) before Kalman (wk 7). Weekless rows sort last.
+    const weekOf = (m: MaterialRow) => m.start_unit > 0 ? m.start_unit : 99;
     const rotation = (a: MaterialRow, b: MaterialRow) =>
       (servedThisWeek.get(a.id) ?? 0) - (servedThisWeek.get(b.id) ?? 0) ||
+      weekOf(a) - weekOf(b) ||
       b.priority - a.priority || a.title.localeCompare(b.title);
     const lessonCandidates = materials
       .filter((m) => m.kind === "lesson" && m.status === "active");
