@@ -87,6 +87,16 @@ export function DrillCard({
   onGraded: (grade: Grade) => void;
 }) {
   const LENS = useLensTokens();
+  // A drill's lens is authored against its OWN course, but LENS is the
+  // ACTIVE course's token map — a synthesized review/primer drill (lens
+  // "abstract") rendered while e.g. REX is the active course would index
+  // an undefined token and crash the whole overlay to black. An unknown
+  // lens renders as a neutral chip instead of taking the session down.
+  const lensTok = LENS[drill.lens] ?? {
+    label: "–", long: "Ukendt linse", hex: "#6E6E78",
+    chip: "bg-black/[0.05] text-[#6E6E78]", chipOn: "bg-black/[0.08] text-[#1A1A24]",
+    dot: "bg-[#6E6E78]", edge: "border-l-2 border-black/15", tint: "bg-black/[0.03]",
+  };
   const SOLID_BAR = useSolidBar();
   const TRANSLATE_BAR = useTranslateBar();
   const [input, setInput] = useState("");
@@ -358,9 +368,9 @@ export function DrillCard({
               {ARCHETYPE_LABEL[archetype]}
             </span>
             <div className="flex items-center gap-2">
-              <span className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-medium tracking-wide ${LENS[drill.lens].chip}`}>
-                <span className={`h-1 w-1 rounded-full ${LENS[drill.lens].dot}`} />
-                {LENS[drill.lens].label}
+              <span className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-medium tracking-wide ${lensTok.chip}`}>
+                <span className={`h-1 w-1 rounded-full ${lensTok.dot}`} />
+                {lensTok.label}
               </span>
               <span className="flex gap-0.5">
                 {[0, 1, 2].map((i) => (
@@ -392,7 +402,7 @@ export function DrillCard({
             hints.slice(0, hintsShown).map((hint, i) => (
               <div
                 key={i}
-                className={`mt-2 animate-[learn-step-in_.2s_ease-out] rounded-r-lg py-2 pl-3 pr-2 text-[13px] text-[#1A1A24]/70 md:mt-3 md:py-3.5 md:pl-6 md:pr-5 md:text-[14.5px] ${LENS[drill.lens].edge} ${LENS[drill.lens].tint}`}
+                className={`mt-2 animate-[learn-step-in_.2s_ease-out] rounded-r-lg py-2 pl-3 pr-2 text-[13px] text-[#1A1A24]/70 md:mt-3 md:py-3.5 md:pl-6 md:pr-5 md:text-[14.5px] ${lensTok.edge} ${lensTok.tint}`}
               >
                 <span className="mb-1 block text-[10px] uppercase tracking-wide text-[#6E6E78]/70">Hint {i + 1}</span>
                 <Markdown className="text-[13px] leading-relaxed text-[#1A1A24]/70 md:text-[14.5px]">{hint}</Markdown>

@@ -760,7 +760,9 @@ async function synthChoiceItem(
   if (pool.length < 3) return null;
   const distractors = seededShuffle(pool, c.concept_id).slice(0, 3);
   const choices = seededShuffle([c.title, ...distractors], c.concept_id + "|c");
-  const desc = c.description.replace(/\s+/g, " ").trim().slice(0, 300);
+  // Bog-beskrivelser bærer rå markdown-emfase; strippet, ellers viser
+  // prompten "*"-støj (samme rensning som learn-plan-briefen).
+  const desc = c.description.replace(/[*_]/g, "").replace(/\s+/g, " ").trim().slice(0, 300);
   const drill: Drill = {
     id: `${idPrefix}:${c.concept_id}`,
     prompt_md: `Hvilket begreb beskrives her?\n\n> ${desc}`,
