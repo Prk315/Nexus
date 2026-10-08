@@ -578,11 +578,23 @@ Deno.serve(async (req: Request) => {
       if (e.kind !== "lesson" || e.event_date < mondayQ || e.event_date > today) continue;
       servedThisWeek.set(e.material_id, (servedThisWeek.get(e.material_id) ?? 0) + 1);
     }
-    const lessonMaterial = materials
-      .filter((m) => m.kind === "lesson" && m.status === "active")
-      .sort((a, b) =>
-        (servedThisWeek.get(a.id) ?? 0) - (servedThisWeek.get(b.id) ?? 0) ||
-        b.priority - a.priority || a.title.localeCompare(b.title))[0] ?? null;
+    // ── The day is ONE course where possible. Reading is picked by need
+    // (runway/staleness); the lesson then follows the READING's course, so
+    // the review-primer, the pages and the lesson all point the same way —
+    // a PGM morning feeding a MatAn lesson was the misalignment this fixes.
+    // Rotation still interleaves WITHIN the course, and a reading course
+    // with no active lessons falls back to the global rotation rather than
+    // dropping the lesson block.
+    const rotation = (a: MaterialRow, b: MaterialRow) =>
+      (servedThisWeek.get(a.id) ?? 0) - (servedThisWeek.get(b.id) ?? 0) ||
+      b.priority - a.priority || a.title.localeCompare(b.title);
+    const lessonCandidates = materials
+      .filter((m) => m.kind === "lesson" && m.status === "active");
+    const sameCourse = reading?.material.course_id != null
+      ? lessonCandidates.filter((m) => m.course_id === reading.material.course_id)
+      : [];
+    const lessonMaterial =
+      (sameCourse.length ? sameCourse : lessonCandidates).sort(rotation)[0] ?? null;
     const quota = cfg.lessons_per_week ?? 3;
     const lessonDay = lessonMaterial != null && lessonDays < quota;
     const lessonLine = lessonMaterial == null
