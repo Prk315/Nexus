@@ -737,6 +737,37 @@ async function memoryWideDue(
   return items;
 }
 
+
+/** Bog-beskrivelse → drill-prompt: markdown-emfase strippet, og klippet på
+ *  SÆTNINGS-grænse inden for budgettet — et hårdt 300-tegns snit efterlod
+ *  prompts der stoppede midt i en sætning og midt i en $$-formel. En
+ *  ubalanceret $$-blok i det beholdte stykke droppes helt: halv LaTeX er
+ *  støj, ingen LaTeX er bare kortere. Null når der ikke er en hel, brugbar
+ *  sætning at stille spørgsmålet over. */
+function clipForPrompt(raw: string, budget = 380): string | null {
+  const clean = raw.replace(/[*_]/g, "").replace(/\s+/g, " ").trim();
+  let out = clean;
+  if (clean.length > budget) {
+    const sentences = clean.match(/[^.!?]*[.!?]+(?:\s|$)/g) ?? [];
+    out = "";
+    for (const s of sentences) {
+      if ((out + s).length > budget) break;
+      out += s;
+    }
+    out = out.trim();
+    // ingen hel sætning inden for budgettet → ord-klip med ærlig ellipse
+    if (out.length < 60) {
+      const cut = clean.slice(0, budget);
+      out = cut.slice(0, Math.max(cut.lastIndexOf(" "), 60)).trim() + " …";
+    }
+  }
+  // ulige antal $$ = en formel blev åbnet men aldrig lukket i klippet
+  if (((out.match(/\$\$/g) ?? []).length) % 2 === 1) {
+    out = out.slice(0, out.lastIndexOf("$$")).trim();
+  }
+  return out.length >= 40 ? out : null;
+}
+
 /** Syntetiseret choice-drill for ét koncept: beskrivelsen som prompt, titlen
  *  blandt distraktor-titler fra samme emne-nabolag (t_id ± 2). Deterministisk
  *  (hash-shuffle af concept_id). Null når konceptet ikke kan bære en FAIR
@@ -760,9 +791,8 @@ async function synthChoiceItem(
   if (pool.length < 3) return null;
   const distractors = seededShuffle(pool, c.concept_id).slice(0, 3);
   const choices = seededShuffle([c.title, ...distractors], c.concept_id + "|c");
-  // Bog-beskrivelser bærer rå markdown-emfase; strippet, ellers viser
-  // prompten "*"-støj (samme rensning som learn-plan-briefen).
-  const desc = c.description.replace(/[*_]/g, "").replace(/\s+/g, " ").trim().slice(0, 300);
+  const desc = clipForPrompt(c.description);
+  if (!desc) return null;
   const drill: Drill = {
     id: `${idPrefix}:${c.concept_id}`,
     prompt_md: `Hvilket begreb beskrives her?\n\n> ${desc}`,
