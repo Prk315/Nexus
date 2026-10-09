@@ -28,7 +28,6 @@ import { useEffect, useState } from "react";
 import { fetchLearnState, fetchMemoryStates } from "./api";
 import { isStable } from "./memory";
 import type { LrLearnState } from "./types";
-import { useCourse } from "./CourseContext";
 import { ReviewSession } from "./ReviewSession";
 
 const LAST_KNOWN_KEY = "learn:review:lastKnownState";
@@ -69,7 +68,6 @@ function weekDots(streakDays: number | null, lastSessionDate: string | null): bo
 }
 
 export function ReviewPanel() {
-  const { course } = useCourse();
   // undefined = still loading, null = row missing ("ingen dom endnu").
   const [verdict, setVerdict] = useState<LrLearnState | null | undefined>(undefined);
   const [lastKnown, setLastKnown] = useState<LrLearnState | null>(null);
@@ -77,20 +75,13 @@ export function ReviewPanel() {
   const [sessionOpen, setSessionOpen] = useState(false);
 
   useEffect(() => {
-    // `lr_learn_state` is computed for ONE user, not per-course — only the
-    // LA-scoped `learn-evaluate` cron feeds it today (`courses.ts`'s
-    // `hasLearnState`). A course without it must never show LA's verdict
-    // under its own header (LEARN_PLAN.md "App course support": "ensure the
-    // DBMS course view degrades gracefully … rather than showing LA numbers
-    // under a DBMS header") — so this reuses the exact same "ingen dom endnu"
-    // branch below without ever calling `fetchLearnState`, and skips the
-    // last-known-verdict cache too (that cache is LA's own history).
-    if (!course.hasLearnState) {
-      setVerdict(null);
-      setLastKnown(null);
-      setStability(null);
-      return;
-    }
+    // `lr_learn_state` is computed for ONE user, not per-course. Dette
+    // gatede tidligere på `course.hasLearnState` ("vis aldrig LA-tal under
+    // en DBMS-header") — men siden `fetchReviewQueue` blev memory-wide
+    // (klassisk spor + round-robin over hele `lr_memory_state`) er Review
+    // ægte kursus-overgribende, så dommen er brugerens, ikke LA's. Gaten
+    // efterlod "ingen repetition" på alle ikke-LA kurser. Panelet viser nu
+    // altid dommen og siger eksplicit at den dækker hele hukommelsen.
     let cancelled = false;
     (async () => {
       let v: LrLearnState | null;
@@ -135,11 +126,11 @@ export function ReviewPanel() {
     return () => {
       cancelled = true;
     };
-  }, [course.hasLearnState]);
+  }, []);
 
   return (
     <section className="flex flex-col gap-2 md:gap-3">
-      <h2 className="text-xs uppercase tracking-[0.14em] text-[#6E6E78] md:text-[13px]">Review</h2>
+      <h2 className="text-xs uppercase tracking-[0.14em] text-[#6E6E78] md:text-[13px]">Review <span className="normal-case tracking-normal text-[#6E6E78]/60">· hele hukommelsen, alle kurser</span></h2>
 
       {verdict === undefined && (
         <div className="rounded-xl border border-black/[0.06] bg-white p-4 text-center text-[12px] text-[#6E6E78]/70 shadow-[0_1px_8px_rgba(0,0,0,0.05)]">
@@ -180,14 +171,8 @@ export function ReviewPanel() {
             <div className="min-w-0">
               <div className="text-[13px] text-[#1A1A24]/70">Ingen dom endnu</div>
               <p className="mt-0.5 text-[11px] leading-relaxed text-[#6E6E78]/80">
-                {course.hasLearnState ? (
-                  <>
-                    The server hasn’t computed a review verdict yet. This does{" "}
-                    <em className="not-italic text-[#1A1A24]/70">not</em> mean nothing is due.
-                  </>
-                ) : (
-                  <>Review isn’t wired up for {course.title} yet — it only covers Linear Algebra today.</>
-                )}
+                The server hasn’t computed a review verdict yet. This does{" "}
+                <em className="not-italic text-[#1A1A24]/70">not</em> mean nothing is due.
               </p>
             </div>
           </div>
@@ -203,19 +188,13 @@ export function ReviewPanel() {
             </div>
           )}
 
-          {/* No `lr_learn_state` support for this course at all (as opposed
-              to "support exists, verdict not computed yet") — there is
-              nothing course-scoped for a session to drill, so no button
-              promises one. */}
-          {course.hasLearnState && (
-            <button
-              type="button"
-              onClick={() => setSessionOpen(true)}
-              className="w-full rounded-xl bg-gradient-to-r from-indigo-500 to-fuchsia-600 px-4 py-3 text-[15px] font-semibold text-white transition-transform active:scale-[0.985] md:max-w-[26rem]"
-            >
-              Start review
-            </button>
-          )}
+          <button
+            type="button"
+            onClick={() => setSessionOpen(true)}
+            className="w-full rounded-xl bg-gradient-to-r from-indigo-500 to-fuchsia-600 px-4 py-3 text-[15px] font-semibold text-white transition-transform active:scale-[0.985] md:max-w-[26rem]"
+          >
+            Start review
+          </button>
         </>
       )}
 
