@@ -622,11 +622,9 @@ export async function fetchReviewQueue(limit: number = REVIEW_QUEUE_SIZE): Promi
     // zero counts) still yields a valid, deterministic pick.
   }
 
-  const items: ReviewQueueItem[] = [];
-  for (const dc of due) {
-    if (items.length >= limit) break;
+  const pickFor = (dc: (typeof due)[number]): ReviewQueueItem | null => {
     const candidates = perConcept.get(dc.concept_id);
-    if (!candidates || candidates.length === 0) continue;
+    if (!candidates || candidates.length === 0) return null;
 
     let pool = candidates;
     if (dc.least_seen_lens) {
@@ -644,13 +642,27 @@ export async function fetchReviewQueue(limit: number = REVIEW_QUEUE_SIZE): Promi
       }
     }
 
-    items.push({
+    return {
       drill: best.drill,
       group: best.group,
       archetype: best.archetype,
       conceptId: dc.concept_id,
       unitId: dc.unit_id,
-    });
+    };
+  };
+
+  // Det klassiske spor (learn-evaluate's due_concepts) må ikke fylde hele
+  // køen: med 30 LA-koncepter due og en kø på 10 kørte memory-wide-
+  // udvidelsen nedenfor ALDRIG, og Review var ren Lineær Algebra uanset
+  // hvor meget andet brugeren havde haft om. Cap'en reserverer pladser;
+  // top-up-løkken efter udvidelsen giver dem tilbage hvis resten af
+  // hukommelsen ikke kan fylde dem — køen bliver aldrig kortere af det.
+  const classicCap = Math.min(limit, Math.ceil(limit * 0.6));
+  const items: ReviewQueueItem[] = [];
+  for (const dc of due) {
+    if (items.length >= classicCap) break;
+    const item = pickFor(dc);
+    if (item) items.push(item);
   }
 
   // ── Resten af køen: ALT brugeren har haft om, ikke kun mestrede paths ──
@@ -672,6 +684,18 @@ export async function fetchReviewQueue(limit: number = REVIEW_QUEUE_SIZE): Promi
     } catch (e) {
       // Udvidelsen er additiv: fejler den, står den klassiske kø urørt.
       console.error("[learn] memoryWideDue failed", e);
+    }
+  }
+
+  // Top-up: ubrugte reserverede pladser går tilbage til det klassiske spor,
+  // så en tom/kort memory-wide-kø aldrig gør Review kortere end før cap'en.
+  if (items.length < limit) {
+    const taken = new Set(items.map((i) => i.conceptId));
+    for (const dc of due) {
+      if (items.length >= limit) break;
+      if (taken.has(dc.concept_id)) continue;
+      const item = pickFor(dc);
+      if (item) { items.push(item); taken.add(dc.concept_id); }
     }
   }
 
@@ -706,7 +730,7 @@ async function memoryWideDue(
     .eq("user_id", userId);
   if (mem.error) throw mem.error;
 
-  const due = (mem.data ?? [])
+  const needy = (mem.data ?? [])
     .map((r) => {
       const a = r.value_alpha ?? 1, b = r.value_beta ?? 1;
       const mean = a / (a + b);
@@ -718,8 +742,28 @@ async function memoryWideDue(
     .filter((m) => m.evidence >= 1 && !excluded.has(m.id) &&
       (m.decayed < DUE_HEAT || m.mean < DUE_COMP))
     // mest trængende først: lav kompetence og kold hukommelse vægter op
-    .sort((x, y) => (x.mean + x.decayed) - (y.mean + y.decayed))
-    .slice(0, want * 3);
+    .sort((x, y) => (x.mean + x.decayed) - (y.mean + y.decayed));
+
+  // Round-robin over emne-buckets (slug-præfiks før første '-'): LA alene
+  // har ~150 due-koncepter i lr_memory_state, så en ren trængende-først-
+  // rækkefølge gav de reserverede pladser tilbage til LA — præcis det
+  // denne udvidelse skulle modvirke. Én fra hver bucket pr. runde, mest
+  // trængende bucket først, giver spredning uden at opfinde en kursustabel.
+  const buckets = new Map<string, typeof needy>();
+  for (const m of needy) {
+    const key = m.id.split("-")[0];
+    const arr = buckets.get(key);
+    if (arr) arr.push(m); else buckets.set(key, [m]);
+  }
+  const due: typeof needy = [];
+  const queues = Array.from(buckets.values());
+  for (let round = 0; due.length < want * 3; round++) {
+    let added = false;
+    for (const q of queues) {
+      if (round < q.length && due.length < want * 3) { due.push(q[round]); added = true; }
+    }
+    if (!added) break;
+  }
   if (!due.length) return [];
 
   const rows = await supabasePublic.from("lr_concept")
