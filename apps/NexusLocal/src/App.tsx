@@ -29,8 +29,16 @@ type GridStatus = {
 };
 
 /** The dashboards in the header bar. Add one here and to `renderPage` below. */
-const PAGES = ["time", "tasks", "protocol", "learn"] as const;
-type Page = (typeof PAGES)[number];
+const ALL_PAGES = ["time", "tasks", "protocol", "learn"] as const;
+type Page = (typeof ALL_PAGES)[number];
+
+/** The same frontend is a Tauri app on the Mac AND a Vercel page on the phone
+ * (deployed so Learn survives the SideStore/7-day-cert gaps). On the web there
+ * is no Rust side: no grid, no `tt_*` commands — so the Time dashboard (which
+ * is invoke()-driven) is left out, Learn is the landing page, and every
+ * sidebar panel that talks to the daemon is hidden rather than left to error. */
+const IS_TAURI = typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
+const PAGES: readonly Page[] = IS_TAURI ? ALL_PAGES : ["tasks", "protocol", "learn"];
 
 /**
  * Remembered so the sidebar doesn't reopen on every launch — it is a workspace
@@ -52,7 +60,8 @@ export default function App() {
     // destination now that the composed day lives at its top, and "open the
     // learn page" should be a URL, not four clicks after a reload.
     const q = new URLSearchParams(window.location.search).get("page");
-    return (PAGES as readonly string[]).includes(q ?? "") ? (q as Page) : "time";
+    if ((PAGES as readonly string[]).includes(q ?? "")) return q as Page;
+    return IS_TAURI ? "time" : "learn";
   });
   const [status, setStatus] = useState<GridStatus | null>(null);
   const [err, setErr] = useState<string | null>(null);
@@ -66,6 +75,7 @@ export default function App() {
   const [showLogin, setShowLogin] = useState(false);
 
   useEffect(() => {
+    if (!IS_TAURI) return;
     let alive = true;
     const load = () =>
       invoke<GridStatus>("grid_status")
@@ -119,12 +129,12 @@ export default function App() {
 
         <span
           className={`ml-auto shrink-0 rounded-full px-2 py-1 text-[10px] ${
-            status?.supabase_configured
+            !IS_TAURI || status?.supabase_configured
               ? "bg-emerald-500/15 text-emerald-300"
               : "bg-amber-500/15 text-amber-300"
           }`}
         >
-          {status?.supabase_configured ? "● online" : "○ no backend"}
+          {!IS_TAURI ? "● web" : status?.supabase_configured ? "● online" : "○ no backend"}
         </span>
       </header>
 
@@ -150,9 +160,9 @@ export default function App() {
 
           {/* Configuration: the lists you edit occasionally. See the split in
               `lib/timetracker/index.tsx`. */}
-          <TimeTrackerSettings />
+          {IS_TAURI && <TimeTrackerSettings />}
 
-          <section className="flex flex-col gap-2">
+          {IS_TAURI && <section className="flex flex-col gap-2">
             <h3 className="text-xs uppercase tracking-wide text-white/40">Installed modules</h3>
             {status?.modules.length ? (
               status.modules.map((m) => (
@@ -179,9 +189,9 @@ export default function App() {
                 itself runs none.
               </p>
             )}
-          </section>
+          </section>}
 
-          {status && (
+          {IS_TAURI && status && (
             <section className="flex flex-col gap-2">
               <h3 className="text-xs uppercase tracking-wide text-white/40">This device</h3>
               <div className="grid grid-cols-2 gap-2 text-xs">
@@ -193,10 +203,9 @@ export default function App() {
             </section>
           )}
 
-          <GarminPanel platform={status?.platform ?? null} />
-
-          <KeychainDebug />
-          <BleScan />
+          {IS_TAURI && <GarminPanel platform={status?.platform ?? null} />}
+          {IS_TAURI && <KeychainDebug />}
+          {IS_TAURI && <BleScan />}
         </Sidebar>
 
         {/* px-6 pb-6 is load-bearing: LearnPage cancels it with `-mx-6 -mb-6` to
