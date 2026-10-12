@@ -290,13 +290,24 @@ export async function judgeAnswer(
         "Content-Type": "application/json",
         Authorization: `Bearer ${SUPABASE_ANON_KEY}`,
       },
+      // The edge function's contract (parseRequest): a NESTED `question`
+      // object and history as {role, text} turns. This was flat question
+      // fields + {prompt_md, answer} history for a while — every call 400'd
+      // and the session silently lived in rubric mode forever (fail-open hid
+      // it completely: no judge, no coach, "asks but never teaches").
       body: JSON.stringify({
-        prompt_md: question.prompt_md,
-        target_md: question.target_md,
-        facets: question.facets,
-        misconceptions: question.misconceptions,
+        mode: "judge",
+        question: {
+          prompt_md: question.prompt_md,
+          target_md: question.target_md,
+          facets: question.facets,
+          misconceptions: question.misconceptions,
+        },
         answer,
-        history,
+        history: history.flatMap((h) => [
+          { role: "tutor", text: h.prompt_md },
+          { role: "learner", text: h.answer },
+        ]),
       }),
     });
     if (!res.ok) return null;
@@ -310,6 +321,50 @@ export async function judgeAnswer(
       misconception: typeof data.misconception === "string" ? data.misconception : null,
       coach_md: typeof data.coach_md === "string" ? data.coach_md : "",
     };
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Explain mode on the same edge function: the learner explicitly asked to be
+ * TAUGHT, so this returns a real explanation (definitions, intuition, general
+ * LA knowledge beyond the rubric — it may reveal the answer; grading is
+ * untouched by it). `ask` is the learner's own optional question. Null on any
+ * failure, same fail-open posture as `judgeAnswer`.
+ */
+export async function explainQuestion(
+  question: SocraticQuestion,
+  history: SocraticExchangeTurn[],
+  ask?: string,
+): Promise<string | null> {
+  try {
+    const res = await fetch(SOCRATIC_JUDGE_URL, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${SUPABASE_ANON_KEY}`,
+      },
+      body: JSON.stringify({
+        mode: "explain",
+        question: {
+          prompt_md: question.prompt_md,
+          target_md: question.target_md,
+          facets: question.facets,
+          misconceptions: question.misconceptions,
+        },
+        answer: ask ?? "",
+        history: history.flatMap((h) => [
+          { role: "tutor", text: h.prompt_md },
+          { role: "learner", text: h.answer },
+        ]),
+      }),
+    });
+    if (!res.ok) return null;
+    const data = await res.json().catch(() => null);
+    return data && typeof data.explain_md === "string" && data.explain_md.trim()
+      ? data.explain_md
+      : null;
   } catch {
     return null;
   }

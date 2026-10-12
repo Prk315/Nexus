@@ -68,6 +68,7 @@ import {
   applyBlamePropagation,
   approveProofContent,
   demoteProofContent,
+  explainQuestion,
   fetchMemoryStates,
   fetchSocraticContent,
   judgeAnswer,
@@ -79,7 +80,7 @@ import { applyGrade, defaultMemoryState } from "./memory";
 import { Markdown } from "./Markdown";
 import { CARD, DOCK_SHELL, DOCK_STACK, FEEDBACK, PLAYER_STYLE, READING_COL, useLensTokens } from "./player/tokens";
 
-type TurnKind = "prompt" | "answer" | "coach" | "target";
+type TurnKind = "prompt" | "answer" | "coach" | "target" | "explain";
 
 interface Turn {
   id: string;
@@ -166,6 +167,15 @@ function CoachLine({ text }: { text: string }) {
   );
 }
 
+function ExplainCard({ text }: { text: string }) {
+  return (
+    <div className="animate-[learn-step-in_.18s_ease-out] rounded-xl bg-indigo-50/60 p-3 ring-1 ring-indigo-400/20 md:p-4">
+      <div className="text-[10px] uppercase tracking-wide text-indigo-600/80">Forklaring</div>
+      <Markdown className="mt-1.5 text-[13.5px] leading-relaxed text-[#1A1A24]/80 md:text-[14.5px]">{text}</Markdown>
+    </div>
+  );
+}
+
 function TargetCard({ text }: { text: string }) {
   return (
     <div className="animate-[learn-step-in_.18s_ease-out] rounded-xl bg-black/[0.02] p-3 ring-1 ring-black/[0.06] md:p-4">
@@ -190,6 +200,7 @@ export function SocraticSession({ proofId, onClose }: { proofId: number; onClose
   // header). "ai" and "unknown" behave identically (judge is tried) — the
   // distinction only matters for the mode chip's label.
   const [judgeMode, setJudgeMode] = useState<"unknown" | "ai" | "rubric">("unknown");
+  const [explaining, setExplaining] = useState(false);
 
   const [followups, setFollowups] = useState(0);
   const [facetsHit, setFacetsHit] = useState<Set<string>>(new Set());
@@ -386,6 +397,28 @@ export function SocraticSession({ proofId, onClose }: { proofId: number; onClose
     setBusy(false);
   }
 
+  /** "Forklar" — the learner asks to be TAUGHT. Appends an explanation card;
+   * never grades, never advances the exchange, usable once per prompt turn.
+   * Gated on having attempted the current question at least once (retrieval
+   * first), and hidden in rubric mode (same endpoint as the judge — if the
+   * judge is down, this is too). */
+  async function handleExplain() {
+    if (!script || busy || explaining) return;
+    const q = script.questions[qIdx];
+    setExplaining(true);
+    const md = await explainQuestion(q, questionHistory(turns, q.id));
+    setExplaining(false);
+    if (md) {
+      setTurns((t) => [...t, { id: `${q.id}::explain::${t.length}`, kind: "explain", text: md }]);
+    } else {
+      setTurns((t) => [...t, {
+        id: `${q.id}::explain::${t.length}`,
+        kind: "coach",
+        text: "Forklaringen er ikke tilgængelig lige nu — prøv igen om lidt.",
+      }]);
+    }
+  }
+
   function toggleFacet(id: string) {
     setTappedFacets((prev) => {
       const next = new Set(prev);
@@ -475,6 +508,11 @@ export function SocraticSession({ proofId, onClose }: { proofId: number; onClose
 
   const last = turns[turns.length - 1];
   const awaitingAnswer = !finished && !awaitingRubricTap && last?.kind === "prompt";
+  const currentQ = script?.questions[qIdx];
+  const hasAttempted = currentQ
+    ? turns.some((t) => t.id.startsWith(`${currentQ.id}::`) && t.kind === "answer")
+    : false;
+  const canExplain = awaitingAnswer && hasAttempted && judgeMode !== "rubric";
   const showContinueDock = !finished && last?.kind === "target";
   const currentQuestion = script && !finished ? script.questions[qIdx] : null;
   const contentIsDraft = row?.status === "draft";
@@ -623,6 +661,7 @@ export function SocraticSession({ proofId, onClose }: { proofId: number; onClose
               }
               if (t.kind === "answer") return <AnswerBubble key={t.id} text={t.text} />;
               if (t.kind === "coach") return <CoachLine key={t.id} text={t.text} />;
+              if (t.kind === "explain") return <ExplainCard key={t.id} text={t.text} />;
               return <TargetCard key={t.id} text={t.text} />;
             })}
 
@@ -735,6 +774,16 @@ export function SocraticSession({ proofId, onClose }: { proofId: number; onClose
               >
                 {busy ? "…" : "Send"}
               </button>
+              {canExplain && (
+                <button
+                  type="button"
+                  onClick={handleExplain}
+                  disabled={busy || explaining}
+                  className="w-full rounded-xl bg-indigo-50 px-4 py-2.5 text-[13px] font-medium text-indigo-700 ring-1 ring-indigo-400/25 transition-colors active:bg-indigo-100 disabled:opacity-50"
+                >
+                  {explaining ? "Forklarer…" : "💡 Forklar konceptet for mig"}
+                </button>
+              )}
             </>
           )}
 
