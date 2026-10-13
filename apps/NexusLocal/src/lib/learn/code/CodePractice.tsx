@@ -107,7 +107,7 @@ export function CodePanel() {
     <section className="rounded-2xl border border-black/[0.06] bg-white p-4 shadow-[0_1px_8px_rgba(0,0,0,0.05)] md:p-5">
       <div className="flex items-center justify-between gap-3">
         <div>
-          <h2 className="text-[15px] font-semibold">Kode-økt</h2>
+          <h2 className="text-[15px] font-semibold">Kodetræning</h2>
           <p className="mt-0.5 text-[12px] text-[#6E6E78]">
             Valgfri daglig træning — kursusnære katas med skjulte tests. Ingen streak, intet pres.
           </p>
