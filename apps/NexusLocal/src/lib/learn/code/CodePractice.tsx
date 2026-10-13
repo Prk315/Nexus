@@ -72,13 +72,16 @@ async function logAttempt(slug: string, passed: boolean, code: string): Promise<
   });
 }
 
-/** Panel på Learn-overblikket: sprogvalg + opgaveliste med flueben. */
+/** Panel på Learn-overblikket: ÉN start-knap. Deliberate practice er en
+ * SESSION med stigende sværhedsgrad, ikke en menu — listen findes stadig,
+ * men gemt bag "gennemse", til at kigge løsninger efter. */
 export function CodePanel() {
   const [exercises, setExercises] = useState<Exercise[] | null>(null);
   const [passed, setPassed] = useState<Set<string>>(new Set());
   const [lang, setLang] = useState<Lang>(() => {
     try { return (localStorage.getItem("nl-code-lang") as Lang) || "python"; } catch { return "python"; }
   });
+  const [mode, setMode] = useState<"idle" | "activity" | "browse">("idle");
   const [openSlug, setOpenSlug] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -92,15 +95,13 @@ export function CodePanel() {
     () => (exercises ?? []).filter((e) => e.language === lang),
     [exercises, lang],
   );
-  const open = list.find((e) => e.slug === openSlug) ?? null;
 
+  if (mode === "activity" && list.length) {
+    return <CodeActivity exercises={list} passed={passed} onClose={() => { setMode("idle"); reload(); }} />;
+  }
+  const open = list.find((e) => e.slug === openSlug) ?? null;
   if (open) {
-    return (
-      <CodeSession
-        exercise={open}
-        onClose={() => { setOpenSlug(null); reload(); }}
-      />
-    );
+    return <CodeSession exercise={open} onClose={() => { setOpenSlug(null); reload(); }} />;
   }
 
   return (
@@ -109,7 +110,7 @@ export function CodePanel() {
         <div>
           <h2 className="text-[15px] font-semibold">Kodetræning</h2>
           <p className="mt-0.5 text-[12px] text-[#6E6E78]">
-            Valgfri daglig træning — kursusnære katas med skjulte tests. Ingen streak, intet pres.
+            ~45 min · starter let, niveauet stiger med dig. Valgfri — ingen streak, intet pres.
           </p>
         </div>
         <div className="flex gap-1 rounded-full bg-[#EBEAE5] p-1">
@@ -136,38 +137,168 @@ export function CodePanel() {
         </p>
       )}
 
-      <div className="mt-3 flex flex-col gap-1.5">
-        {list.map((e) => (
+      {exercises && list.length > 0 && (
+        <>
           <button
-            key={e.slug}
-            onClick={() => setOpenSlug(e.slug)}
-            className="flex min-h-[44px] items-center gap-3 rounded-xl bg-black/[0.02] px-3 py-2 text-left ring-1 ring-black/[0.05] transition-colors hover:bg-black/[0.04]"
+            onClick={() => setMode("activity")}
+            className="mt-4 w-full rounded-xl bg-gradient-to-r from-indigo-500 to-fuchsia-600 px-4 py-3 text-[15px] font-semibold text-white transition-transform active:scale-[0.985]"
           >
-            <span className={`grid h-5 w-5 shrink-0 place-items-center rounded-full text-[10px] ${
-              passed.has(e.slug)
-                ? "bg-emerald-500/15 text-emerald-600"
-                : "bg-black/[0.05] text-[#6E6E78]/60"
-            }`}>
-              {passed.has(e.slug) ? "✓" : ""}
-            </span>
-            <span className="min-w-0 flex-1 truncate text-[13px] text-[#1A1A24]/90">{e.title}</span>
-            {e.course_key && (
-              <span className="shrink-0 rounded bg-indigo-500/10 px-1.5 py-0.5 text-[10px] font-medium text-indigo-600">
-                {COURSE_LABEL[e.course_key] ?? e.course_key}
-              </span>
-            )}
-            <span className="shrink-0 text-[10px] text-[#6E6E78]/60">{"●".repeat(e.difficulty)}</span>
+            ▶ Start kodetræning
           </button>
-        ))}
-        {exercises && list.length === 0 && (
-          <p className="text-[12px] text-[#6E6E78]/70">Ingen øvelser for det sprog endnu.</p>
-        )}
-      </div>
+          <div className="mt-2 flex items-center justify-between">
+            <span className="text-[11px] text-[#6E6E78]/70">
+              {Array.from(passed).filter((sl) => list.some((e) => e.slug === sl)).length}/{list.length} løst
+            </span>
+            <button onClick={() => setMode(mode === "browse" ? "idle" : "browse")} className="text-[11px] text-indigo-600 hover:underline">
+              {mode === "browse" ? "Skjul øvelser" : "Gennemse øvelser"}
+            </button>
+          </div>
+        </>
+      )}
+
+      {mode === "browse" && (
+        <div className="mt-2 flex flex-col gap-1.5">
+          {list.map((e) => (
+            <button
+              key={e.slug}
+              onClick={() => setOpenSlug(e.slug)}
+              className="flex min-h-[44px] items-center gap-3 rounded-xl bg-black/[0.02] px-3 py-2 text-left ring-1 ring-black/[0.05] transition-colors hover:bg-black/[0.04]"
+            >
+              <span className={`grid h-5 w-5 shrink-0 place-items-center rounded-full text-[10px] ${
+                passed.has(e.slug)
+                  ? "bg-emerald-500/15 text-emerald-600"
+                  : "bg-black/[0.05] text-[#6E6E78]/60"
+              }`}>
+                {passed.has(e.slug) ? "✓" : ""}
+              </span>
+              <span className="min-w-0 flex-1 truncate text-[13px] text-[#1A1A24]/90">{e.title}</span>
+              {e.course_key && (
+                <span className="shrink-0 rounded bg-indigo-500/10 px-1.5 py-0.5 text-[10px] font-medium text-indigo-600">
+                  {COURSE_LABEL[e.course_key] ?? e.course_key}
+                </span>
+              )}
+              <span className="shrink-0 text-[10px] text-[#6E6E78]/60">{"●".repeat(e.difficulty)}</span>
+            </button>
+          ))}
+        </div>
+      )}
     </section>
   );
 }
 
-function CodeSession({ exercise, onClose }: { exercise: Exercise; onClose: () => void }) {
+const ACTIVITY_MINUTES = 45;
+
+interface Outcome { passed: boolean; usedHints: boolean; usedSolution: boolean; skipped: boolean }
+
+/** 45-minutters aktivitet med adaptivt niveau: bestået uden hjælp → op,
+ * bestået med hints → samme, sprunget over / løsning afsløret → ned. Uløste
+ * øvelser serveres før allerede-løste på samme niveau, og en øvelse ses
+ * højst én gang pr. session. */
+function CodeActivity({ exercises, passed, onClose }: {
+  exercises: Exercise[];
+  passed: Set<string>;
+  onClose: () => void;
+}) {
+  const [startedAt] = useState(() => Date.now());
+  const [level, setLevel] = useState(1);
+  const [served, setServed] = useState<Set<string>>(new Set());
+  const [solved, setSolved] = useState(0);
+  const [done, setDone] = useState(false);
+  const [, forceTick] = useState(0);
+
+  useEffect(() => {
+    const t = window.setInterval(() => forceTick((n) => n + 1), 30_000);
+    return () => window.clearInterval(t);
+  }, []);
+
+  const pick = (lvl: number, taken: Set<string>): Exercise | null => {
+    const fresh = exercises.filter((e) => !taken.has(e.slug));
+    if (!fresh.length) return null;
+    // nærmeste niveau vinder; uløst slår løst; derefter stabil slug-orden
+    const scored = fresh
+      .map((e) => ({ e, d: Math.abs(e.difficulty - lvl), old: passed.has(e.slug) ? 1 : 0 }))
+      .sort((a, b) => a.d - b.d || a.old - b.old || a.e.slug.localeCompare(b.e.slug));
+    return scored[0].e;
+  };
+
+  const [current, setCurrent] = useState<Exercise | null>(() => pick(1, new Set()));
+
+  const minutesGone = Math.floor((Date.now() - startedAt) / 60_000);
+  const overTime = minutesGone >= ACTIVITY_MINUTES;
+
+  function advance(outcome: Outcome) {
+    const taken = new Set(served);
+    if (current) taken.add(current.slug);
+    setServed(taken);
+    if (outcome.passed) setSolved((n) => n + 1);
+
+    const next = outcome.passed && !outcome.usedSolution && !outcome.usedHints
+      ? Math.min(3, level + 1)
+      : outcome.passed
+        ? level
+        : Math.max(1, level - 1);
+    setLevel(next);
+
+    if (overTime) { setDone(true); return; }
+    const nx = pick(next, taken);
+    if (!nx) { setDone(true); return; }
+    setCurrent(nx);
+  }
+
+  if (done || !current) {
+    return (
+      <section className="rounded-2xl border border-black/[0.06] bg-white p-5 text-center shadow-[0_1px_8px_rgba(0,0,0,0.05)]">
+        <div className="text-3xl">🏁</div>
+        <h2 className="mt-2 text-[15px] font-semibold">Kodetræning færdig</h2>
+        <p className="mt-1 text-[13px] text-[#6E6E78]">
+          {solved} løst på {Math.max(1, minutesGone)} min · sluttede på niveau {level}
+        </p>
+        <div className="mt-4 flex justify-center gap-2">
+          {!!pick(level, served) && (
+            <button
+              onClick={() => { setDone(false); const nx = pick(level, served); if (nx) setCurrent(nx); }}
+              className="rounded-xl bg-black/[0.05] px-4 py-2 text-[13px] font-medium text-[#1A1A24]/80"
+            >
+              Bliv ved lidt endnu
+            </button>
+          )}
+          <button onClick={onClose} className="rounded-xl bg-gradient-to-r from-indigo-500 to-fuchsia-600 px-4 py-2 text-[13px] font-semibold text-white">
+            Luk
+          </button>
+        </div>
+      </section>
+    );
+  }
+
+  return (
+    <CodeSession
+      key={current.slug}
+      exercise={current}
+      onClose={onClose}
+      activity={{
+        minutesGone,
+        minutesTotal: ACTIVITY_MINUTES,
+        level,
+        index: served.size + 1,
+        onNext: advance,
+      }}
+    />
+  );
+}
+
+interface ActivityCtx {
+  minutesGone: number;
+  minutesTotal: number;
+  level: number;
+  index: number;
+  onNext: (o: Outcome) => void;
+}
+
+function CodeSession({ exercise, onClose, activity }: {
+  exercise: Exercise;
+  onClose: () => void;
+  activity?: ActivityCtx;
+}) {
   const spec = exercise.spec;
   const draftKey = `nl-code-draft-${exercise.slug}`;
   const [code, setCode] = useState<string>(() => {
@@ -222,9 +353,16 @@ function CodeSession({ exercise, onClose }: { exercise: Exercise; onClose: () =>
           </div>
           <h2 className="text-[15px] font-semibold">{exercise.title}</h2>
         </div>
-        <button onClick={onClose} className="rounded-lg bg-black/[0.04] px-2.5 py-1 text-[12px] text-[#6E6E78] hover:bg-black/[0.07]">
-          ← Tilbage
-        </button>
+        <div className="flex items-center gap-2">
+          {activity && (
+            <span className="rounded-full bg-black/[0.05] px-2.5 py-1 text-[11px] font-medium tabular-nums text-[#6E6E78]">
+              #{activity.index} · niv. {activity.level} · {activity.minutesGone}/{activity.minutesTotal} min
+            </span>
+          )}
+          <button onClick={onClose} className="rounded-lg bg-black/[0.04] px-2.5 py-1 text-[12px] text-[#6E6E78] hover:bg-black/[0.07]">
+            {activity ? "Afslut" : "← Tilbage"}
+          </button>
+        </div>
       </div>
 
       <Markdown className="mt-3 text-[13.5px] leading-relaxed text-[#1A1A24]/85">{spec.statement_md}</Markdown>
@@ -272,6 +410,22 @@ function CodeSession({ exercise, onClose }: { exercise: Exercise; onClose: () =>
           Nulstil
         </button>
         {!runnable && <span className="text-[11px] text-amber-700">Kør på Mac'en — C har ingen compiler på web.</span>}
+        {activity && verdict !== "pass" && (
+          <button
+            onClick={() => activity.onNext({ passed: false, usedHints: hintsShown > 0, usedSolution: showSolution, skipped: true })}
+            className="ml-auto rounded-xl bg-black/[0.04] px-3 py-2 text-[12px] text-[#6E6E78] hover:bg-black/[0.07]"
+          >
+            Spring over →
+          </button>
+        )}
+        {activity && verdict === "pass" && (
+          <button
+            onClick={() => activity.onNext({ passed: true, usedHints: hintsShown > 0, usedSolution: showSolution, skipped: false })}
+            className="ml-auto rounded-xl bg-gradient-to-r from-indigo-500 to-fuchsia-600 px-4 py-2 text-[13px] font-semibold text-white"
+          >
+            Næste →
+          </button>
+        )}
       </div>
 
       {spec.hints.slice(0, hintsShown).map((h, i) => (
