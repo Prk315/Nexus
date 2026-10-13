@@ -1,4 +1,5 @@
 mod ble_scan;
+mod code_run;
 mod config;
 mod content_blocker;
 mod device;
@@ -248,6 +249,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             grid_status,
             tt_node_user_id,
+            code_run::run_c_exercise,
             ios_bridge::store_session,
             ios_bridge::clear_session,
             ios_bridge::appgroup_debug,
