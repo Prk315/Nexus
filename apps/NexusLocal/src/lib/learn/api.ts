@@ -55,6 +55,7 @@ import { applyBlame } from "./memory";
 // `supabase-js` client, so a network/503/malformed-JSON failure is a plain
 // `fetch` rejection or a non-2xx response `judgeAnswer` can catch cleanly and
 // turn into `null` — never an exception that reaches the caller. ───────────
+const PRIMER_DRILLS_URL = `${(import.meta.env.VITE_SUPABASE_URL as string).replace(/\/$/, "")}/functions/v1/primer-drills`;
 const SOCRATIC_JUDGE_URL = `${(import.meta.env.VITE_SUPABASE_URL as string).replace(/\/$/, "")}/functions/v1/socratic-judge`;
 const SUPABASE_ANON_KEY = import.meta.env.VITE_SUPABASE_ANON_KEY as string;
 
@@ -735,7 +736,17 @@ export async function fetchReviewQueue(limit: number = REVIEW_QUEUE_SIZE): Promi
         limit - items.length,
         new Set(items.map((i) => i.conceptId)),
       );
-      items.push(...extra);
+      // VÆV dem ind i stedet for at hænge dem bagpå: klassisk-først betød at
+      // kort 1-6 altid var LA, og den der stopper efter en håndfuld kort har
+      // bogstaveligt talt kun set Lineær Algebra — præcis klagen blandingen
+      // skulle løse. Interleavet er deterministisk: c1, m1, c2, m2, …
+      const woven: ReviewQueueItem[] = [];
+      for (let i = 0; i < Math.max(items.length, extra.length); i++) {
+        if (i < items.length) woven.push(items[i]);
+        if (i < extra.length) woven.push(extra[i]);
+      }
+      items.length = 0;
+      items.push(...woven);
     } catch (e) {
       // Udvidelsen er additiv: fejler den, står den klassiske kø urørt.
       console.error("[learn] memoryWideDue failed", e);
@@ -811,7 +822,14 @@ async function memoryWideDue(
     if (arr) arr.push(m); else buckets.set(key, [m]);
   }
   const due: typeof needy = [];
-  const queues = Array.from(buckets.values());
+  // Buckets det klassiske spor allerede dækker (LA i praksis) bagerst:
+  // de reserverede pladser findes for VARIATION, og en runde der starter
+  // med 'la' giver den første af dem tilbage til netop det spor der fyldte
+  // resten af køen.
+  const excludedPrefixes = new Set([...excluded].map((id) => id.split("-")[0]));
+  const queues = Array.from(buckets.entries())
+    .sort(([a], [b]) => Number(excludedPrefixes.has(a)) - Number(excludedPrefixes.has(b)))
+    .map(([, q]) => q);
   for (let round = 0; due.length < want * 3; round++) {
     let added = false;
     for (const q of queues) {
@@ -829,9 +847,10 @@ async function memoryWideDue(
 
   const items: ReviewQueueItem[] = [];
   const authored = await authoredItemsFor(due.map((d) => d.id)).catch(() => new Map<string, ReviewQueueItem>());
+  const bank = await bankItemsFor(due.filter((d) => !authored.has(d.id)).map((d) => d.id), "memdue-");
   for (const d of due) {
     if (items.length >= want) break;
-    const item = authored.get(d.id) ?? await synthChoiceItem(byId.get(d.id), "memdue");
+    const item = authored.get(d.id) ?? bank.get(d.id) ?? await synthChoiceItem(byId.get(d.id), "memdue");
     if (item) items.push(item);
   }
   return items;
@@ -912,6 +931,58 @@ async function authoredItemsFor(conceptIds: string[]): Promise<Map<string, Revie
       }
       if (out.has(cid)) break;
     }
+  }
+  return out;
+}
+
+
+/** Claude-forfattede drills fra lr_concept_drill_bank, via primer-drills-
+ *  funktionen (som genererer manglende én gang og cacher). Fail-open: enhver
+ *  fejl giver et tomt map, og kortene falder tilbage til synth. Returnerede
+ *  drills valideres — serveren er en anden deploy-enhed end denne klient. */
+async function bankItemsFor(conceptIds: string[], idPrefix: string): Promise<Map<string, ReviewQueueItem>> {
+  const out = new Map<string, ReviewQueueItem>();
+  if (!conceptIds.length) return out;
+  try {
+    const res = await fetch(PRIMER_DRILLS_URL, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${SUPABASE_ANON_KEY}` },
+      body: JSON.stringify({ concept_ids: conceptIds.slice(0, 40) }),
+    });
+    if (!res.ok) return out;
+    const data = await res.json().catch(() => null) as { drills?: Record<string, unknown[]> } | null;
+    if (!data?.drills) return out;
+    // Dagsrotation: samme kort hele dagen (deterministisk som resten af
+    // køen), nyt kort i banken i morgen.
+    const day = Math.floor(Date.now() / 86_400_000);
+    for (const [cid, list] of Object.entries(data.drills)) {
+      if (!Array.isArray(list) || !list.length) continue;
+      const pick = list[day % list.length] as {
+        prompt_md?: unknown; choices?: unknown; answer?: unknown; hints?: unknown; solution_md?: unknown;
+      };
+      if (typeof pick?.prompt_md !== "string" || !Array.isArray(pick.choices) || pick.choices.length < 2) continue;
+      const choices = pick.choices.filter((c): c is string => typeof c === "string");
+      if (typeof pick.answer !== "string" || !choices.includes(pick.answer)) continue;
+      const drill: Drill = {
+        id: `${idPrefix}bank:${cid}`,
+        prompt_md: pick.prompt_md,
+        lens: detectConceptLens(cid),
+        answer_type: "choice",
+        choices,
+        answer: { value: pick.answer },
+        hints: Array.isArray(pick.hints) ? pick.hints.filter((h): h is string => typeof h === "string") : undefined,
+        solution_md: typeof pick.solution_md === "string" ? pick.solution_md : undefined,
+      };
+      out.set(cid, {
+        drill,
+        group: { archetype: "conceptual", concept_ids: [cid], drills: [drill] },
+        archetype: "conceptual",
+        conceptId: cid,
+        unitId: -1,
+      });
+    }
+  } catch {
+    // fail-open
   }
   return out;
 }
@@ -1003,8 +1074,9 @@ export async function fetchPrimerQueue(conceptIds: string[]): Promise<ReviewQueu
   const byId = new Map((rows.data ?? []).map((r) => [r.concept_id as string, r]));
   const items: ReviewQueueItem[] = [];
   const authored = await authoredItemsFor(conceptIds).catch(() => new Map<string, ReviewQueueItem>());
+  const bank = await bankItemsFor(conceptIds.filter((id) => !authored.has(id)), "primer-");
   for (const id of conceptIds) {
-    const item = authored.get(id) ?? await synthChoiceItem(byId.get(id), "primer");
+    const item = authored.get(id) ?? bank.get(id) ?? await synthChoiceItem(byId.get(id), "primer");
     if (item) items.push(item);
   }
   return items;
