@@ -1916,6 +1916,29 @@ export async function fetchDailyPlan(dateYmd: string): Promise<DailyPlan | null>
   return (data as DailyPlan | null) ?? null;
 }
 
+/** "Start næste bundt": slet dagens plan-række og bed learn-plan komponere
+ *  en ny NU. Rotationen vælger næste lektion selv (servedThisWeek tæller den
+ *  netop gennemførte med via lr_daily_lesson, som overlever sletningen), og
+ *  læsningen fortsætter fra sidste reading-event. Kaster ved fejl — en
+ *  halvt-slettet dag uden ny plan skal være synlig, ikke stille. */
+export async function requestNextBundle(dateYmd: string): Promise<void> {
+  const { error } = await supabasePublic
+    .from("lr_daily_plan")
+    .delete()
+    .eq("user_id", await nodeUserId())
+    .eq("plan_date", dateYmd);
+  if (error) throw new Error(`lr_daily_plan: ${error.message}`);
+  const res = await fetch(
+    `${(import.meta.env.VITE_SUPABASE_URL as string).replace(/\/$/, "")}/functions/v1/learn-plan`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${SUPABASE_ANON_KEY}` },
+      body: JSON.stringify({}),
+    },
+  );
+  if (!res.ok) throw new Error(`learn-plan: ${res.status}`);
+}
+
 export async function markDailyPlanDone(dateYmd: string): Promise<void> {
   const { error } = await supabasePublic
     .from("lr_daily_plan")

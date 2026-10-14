@@ -15,7 +15,7 @@
  */
 
 import { useCallback, useEffect, useState } from "react";
-import { fetchDailyPlan, fetchPrimerQueue, markDailyPlanDone, type DailyPlan } from "./api";
+import { fetchDailyPlan, fetchPrimerQueue, markDailyPlanDone, requestNextBundle, type DailyPlan } from "./api";
 import { Markdown } from "./Markdown";
 import { ReviewSession } from "./ReviewSession";
 
@@ -27,6 +27,7 @@ function todayYmd(): string {
 
 export function TodayPanel() {
   const [plan, setPlan] = useState<DailyPlan | null>(null);
+  const [nextBusy, setNextBusy] = useState(false);
   const [state, setState] = useState<"loading" | "missing" | "error" | "ready">("loading");
   const [briefOpen, setBriefOpen] = useState(false);
   const [primerOpen, setPrimerOpen] = useState(false);
@@ -119,8 +120,23 @@ export function TodayPanel() {
           Today <span className="ml-1 font-normal text-[#1A1A24]/45">{plan!.plan_date}</span>
         </h2>
         {done ? (
-          <span className="rounded-full bg-gradient-to-r from-indigo-500 to-fuchsia-600 px-2.5 py-0.5 text-xs font-semibold text-white">
-            day complete
+          <span className="flex items-center gap-2">
+            <span className="rounded-full bg-gradient-to-r from-indigo-500 to-fuchsia-600 px-2.5 py-0.5 text-xs font-semibold text-white">
+              day complete
+            </span>
+            <button
+              onClick={async () => {
+                if (nextBusy) return;
+                setNextBusy(true);
+                try { await requestNextBundle(date); await load(); }
+                catch (e) { console.error("[learn] next bundle failed", e); }
+                finally { setNextBusy(false); }
+              }}
+              className="rounded-full border border-[#1A1A24]/15 px-2.5 py-0.5 text-xs font-medium text-[#1A1A24]/70 hover:border-[#1A1A24]/30 hover:text-[#1A1A24] disabled:opacity-50"
+              disabled={nextBusy}
+            >
+              {nextBusy ? "komponerer…" : "næste bundt →"}
+            </button>
           </span>
         ) : (
           <button
