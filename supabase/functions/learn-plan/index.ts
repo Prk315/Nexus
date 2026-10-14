@@ -113,6 +113,8 @@ function phaseOf(
 // ── Row shapes ─────────────────────────────────────────────────────────────
 
 interface SettingsRow {
+  focus_course_id?: number | null;
+  focus_until?: string | null;
   user_id: string;
   reading_minutes: number;
   lesson_minutes: number;
@@ -263,10 +265,19 @@ function pickReading(
   today: string,
   minutes: number,
   enrollments: EnrollRow[],
+  focusCourseId: number | null = null,
 ): ReadingPick | null {
-  const readable = materials.filter(
+  let readable = materials.filter(
     (m) => m.status === "active" && ["book", "document", "paper"].includes(m.kind),
   );
+  // Fokus-uge (lr_learn_settings.focus_course_id + focus_until): dagen
+  // bindes til ÉT kursus, og fordi lektionen følger læsningens kursus,
+  // følger hele bundtet med. Falder tilbage til alt når fokus-kurset ikke
+  // har læsbart materiale — et fokus må aldrig gøre dagen tom.
+  if (focusCourseId != null) {
+    const focused = readable.filter((m) => m.course_id === focusCourseId);
+    if (focused.length) readable = focused;
+  }
   let best: { m: MaterialRow; score: number } | null = null;
   for (const m of readable) {
     const pos = positionOf(m, events);
@@ -578,7 +589,11 @@ Deno.serve(async (req: Request) => {
     }
 
     // ── Compose the four blocks ──────────────────────────────────────────
-    const reading = pickReading(materials, events, today, cfg.reading_minutes, enrollments);
+    const focusCourseId =
+      cfg.focus_course_id != null && cfg.focus_until != null && cfg.focus_until >= today
+        ? cfg.focus_course_id
+        : null;
+    const reading = pickReading(materials, events, today, cfg.reading_minutes, enrollments, focusCourseId);
 
     const phases = enrollments.map((e) => phaseOf(today, e));
     const phase: Phase = phases.includes("prime")
@@ -620,8 +635,12 @@ Deno.serve(async (req: Request) => {
       (servedThisWeek.get(a.id) ?? 0) - (servedThisWeek.get(b.id) ?? 0) ||
       weekOf(a) - weekOf(b) ||
       b.priority - a.priority || a.title.localeCompare(b.title);
-    const lessonCandidates = materials
+    let lessonCandidates = materials
       .filter((m) => m.kind === "lesson" && m.status === "active");
+    if (focusCourseId != null) {
+      const f = lessonCandidates.filter((m) => m.course_id === focusCourseId);
+      if (f.length) lessonCandidates = f;
+    }
     const sameCourse = reading?.material.course_id != null
       ? lessonCandidates.filter((m) => m.course_id === reading.material.course_id)
       : [];
