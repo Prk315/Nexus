@@ -242,6 +242,39 @@ without `flashcards` flow exactly as before (fully backward compatible).
 4. Every unit exercises ≥ 2 lenses; each unit contains ≥ 1 `translate` drill.
 5. KaTeX: never place math inside code fences (KaTeX auto-render skips `pre`/`code`).
 
+## Unit-baren (pinned, 2026-10-15 — målt mod LA, den beviste standard)
+
+Enhver NY unit — og enhver unit der rører draft→approved — måles mod dette.
+Tallene er LA-stiens målte niveau (73 units, det indhold der faktisk har
+båret et kursus til 24/28 mestrede enheder); baren er altså ikke aspiration,
+den er "hvad der vides at virke". PGM M1 blev målt til 40 % af teoridybden
+og 62 % af drill-volumen — deraf denne sektion.
+
+**Pr. unit (minimum):**
+- **Teori:** ≥ 7 bokse og ≥ 7.000 tegn i alt. Hver FORMELBÆRENDE boks har en
+  gennemregnet instans (tal, kodeblok) inde i `statement_md` — §11-reglen
+  fra course_lessons/DESIGN.md: en formel uden regnet eksempel er en påstand.
+  `connect_md` er obligatorisk på hver boks (peg frem eller tilbage i stien).
+- **Definitioner:** fuld formel definition (domæne, betingelser) ELLER
+  eksplicit afstamning til det den udspringer af — og et næsten-men-ikke-
+  modeksempel (som remark-boks eller afsnit; skemaet har intet dedikeret felt).
+- **Drills:** ≥ 14, med ≥ 3 `master_demo`-grupper. Fordeling: ≥ 40 %
+  regne-svar (`numeric`/`vector`/`matrix`/`tiles`), ≤ 35 % `choice`.
+  Præcis 2 hints + `solution_md` på HVER drill, ingen undtagelser.
+- **Linser:** alle kursets linser ≥ 20 % af drills — en linse under en
+  femtedel er et perspektiv kurset lover men ikke leverer (PGM's query-linse
+  lå på 12 %, målt).
+- **Test:** ≥ 5 spørgsmål, præcis ét korrekt pr. valgsæt, dækker teori-
+  boksenes familier; `unlock_ratio` 0.66.
+- **Grounding:** `grounding_items` udfyldt; `excluded_concepts` altid med
+  `_note` der siger HVORFOR.
+
+**Håndhævelse:** audit-tallene (bokse/tegn/drills/typefordeling/linse-
+fordeling/hints/demos/test) beregnes FØR en unit kaldes færdig, og draft-
+indhold der ikke består, promoveres ikke — samme posture som §11 for
+lektioner: v1-udkast må eksistere, men Player bør ikke servere dem som
+færdige. Eksisterende godkendte units re-audits når de alligevel røres.
+
 ## Phases
 
 - **Phase 0 — Foundation** *(in progress)*: `lr_` schema in NEXUS + data port from
