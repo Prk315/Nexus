@@ -315,6 +315,10 @@ export interface LrMemoryState {
   lens_counts: LensCounts;
   last_reviewed: string;
   last_decayed: string;
+  /** Spaced-repetition-stabilitet i dage (SM-2/FSRS-familien): hvor længe
+   * konceptet kan hvile før det er due igen. Vokser multiplikativt ved
+   * succes, krymper ved fejl — opdateres i memory.applyGrade. */
+  stability_days: number;
 }
 
 export interface LrAttemptLog {

@@ -152,6 +152,7 @@ export function defaultMemoryState(
     value_beta: DEFAULT_BETA,
     heat: DEFAULT_HEAT,
     lens_counts: {},
+    stability_days: 1,
     last_reviewed: nowIso,
     last_decayed: nowIso,
   };
@@ -241,8 +242,23 @@ export function applyGrade(
   const nextAlpha = state.value_alpha + (correct ? weight : 0.0);
   const nextBeta = state.value_beta + (correct ? 0.0 : weight);
 
+  // Spaced repetition: stabiliteten (dage til næste due) vokser med succes
+  // og krymper ved fejl — SM-2-formet, cappet ved 180 dage. Grade 0 = "ved
+  // ikke" → halvér og øv snart; 1 = svær korrekt → let vækst; 2 = god →
+  // ×2.2; 3 = let → ×2.8. Litteratur: Landauer & Bjork 1978 (expanding
+  // retrieval), Cepeda 2006, SM-2/FSRS.
+  const prevS = state.stability_days && state.stability_days > 0 ? state.stability_days : 1;
+  const stability_days = grade === 0
+    ? Math.max(1, prevS * 0.5)
+    : grade === 1
+      ? Math.max(1, prevS * 1.2)
+      : grade === 2
+        ? Math.min(180, Math.max(2, prevS * 2.2))
+        : Math.min(180, Math.max(3, prevS * 2.8));
+
   return {
     ...state,
+    stability_days,
     heat: spikedHeat,
     value_alpha: nextAlpha,
     value_beta: nextBeta,
