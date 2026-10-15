@@ -987,6 +987,25 @@ async function bankItemsFor(conceptIds: string[], idPrefix: string): Promise<Map
   return out;
 }
 
+/** Ingest-tekst er fuld af rå LaTeX ($\\mathbb{F}$ — 40% af beskrivelserne)
+ *  og HTML-tags (<sup>, 16%) — ulæseligt på et kort. Dette er en TEKST-
+ *  oprydning, ikke en renderer: kommandoer reduceres til deres argument,
+ *  dollars og tags stripes. */
+function cleanIngestText(raw: string): string {
+  let r = raw;
+  r = r.replace(/<[^>]+>/g, "");
+  for (let i = 0; i < 6; i++) {
+    r = r.replace(/\\(?:mathbb|mathbf|boldsymbol|mathrm|text|mathcal|operatorname)\{([^{}]*)\}/g, "$1");
+  }
+  r = r.replace(/\\langle/g, "⟨").replace(/\\rangle/g, "⟩")
+    .replace(/\\times/g, "×").replace(/\\to\b/g, "→")
+    .replace(/\\le\b/g, "≤").replace(/\\ge\b/g, "≥")
+    .replace(/\\in\b/g, "∈").replace(/\\ldots|\\dots/g, "…")
+    .replace(/\\lambda/g, "λ");
+  r = r.replace(/\\[a-zA-Z]+/g, "").replace(/[${}]/g, "");
+  return r.replace(/\s+/g, " ").trim();
+}
+
 async function synthChoiceItem(
   c: { concept_id: string; t_id: number | null; title: string | null; description: string | null } | undefined,
   idPrefix: string,
@@ -994,53 +1013,39 @@ async function synthChoiceItem(
   if (!c?.title || !c?.description || c.t_id == null) return null;
   if (c.title.length > 60 || c.title === c.title.toUpperCase()) return null;
   // distraktorer: titler OG beskrivelser fra samme emne-nabolag (t_id ± 2)
+  const course = c.concept_id.split("-")[0];
   const sib = await supabasePublic.from("lr_concept")
     .select("concept_id, title, description")
     .gte("t_id", c.t_id - 2).lte("t_id", c.t_id + 2)
     .neq("concept_id", c.concept_id).limit(24);
   const sibs = (sib.data ?? [])
-    .map((r) => ({ title: (r.title ?? "").trim(), description: (r.description ?? "").trim() }))
+    // KUN samme kursus (id-præfiks): en DBMS-sætning blandt LA-valg
+    // afslører sig selv og lærer intet.
+    .filter((r) => (r.concept_id as string).split("-")[0] === course)
+    .map((r) => ({ title: cleanIngestText(r.title ?? ""), description: cleanIngestText(r.description ?? "") }))
     .filter((r) => r.title && r.title !== c.title && r.title.length <= 60 && r.title !== r.title.toUpperCase());
   const titlePool = [...new Set(sibs.map((r) => r.title))];
   if (titlePool.length < 3) return null;
   const desc = clipForPrompt(c.description);
   if (!desc) return null;
 
-  // Tre kortformer, bedste først — alle deterministiske (samme kort, samme
-  // dag), alle auto-tjekbare. "Hvilket begreb beskrives her?" alene var for
-  // svag en øvelse: ren genkendelse af en beskrivelse.
+  // To kortformer (term→beskrivelse-varianten er DRÆBT 2026-10-15:
+  // bog-beskrivelser deler opsætningsklausul — "Lad enten F = R eller
+  // F = C, lad (V, ⟨−,−⟩) være …" — så fire beskrivelses-valg var
+  // identiske indtil klippegrænsen, med rå LaTeX/HTML ovenpå; ulæseligt).
+  // Cloze når termen står i sin egen beskrivelse, ellers beskrivelse→term
+  // på SANERET tekst.
+  const cdesc = cleanIngestText(desc);
   let prompt: string;
-  let choices: string[];
-  let answer: string;
-
-  // a) CLOZE: termen optræder i sin egen beskrivelse → blank den ud og spørg
-  //    hvad der mangler. Stærkere retrieval end at genkende beskrivelsen.
   const term = c.title.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   const clozeRe = new RegExp(term, "i");
-  if (clozeRe.test(desc)) {
-    prompt = `Udfyld det manglende begreb:\n\n> ${desc.replace(clozeRe, "_____")}`;
-    choices = seededShuffle([c.title, ...seededShuffle(titlePool, c.concept_id).slice(0, 3)], c.concept_id + "|c");
-    answer = c.title;
+  if (clozeRe.test(cdesc)) {
+    prompt = `Udfyld det manglende begreb:\n\n> ${cdesc.replace(clozeRe, "_____")}`;
   } else {
-    // b/c) vekslen pr. koncept: term→beskrivelse eller beskrivelse→term.
-    let h = 2166136261;
-    for (let i = 0; i < c.concept_id.length; i++) { h ^= c.concept_id.charCodeAt(i); h = Math.imul(h, 16777619); }
-    const descPool = sibs
-      .map((r) => clipForPrompt(r.description, 180))
-      .filter((t): t is string => !!t && t !== desc);
-    const myShort = clipForPrompt(c.description, 180);
-    if ((h >>> 0) % 2 === 0 && [...new Set(descPool)].length >= 3 && myShort) {
-      // term → beskrivelse: "hvad siger definitionen af X?"
-      prompt = `Hvad beskriver **${c.title}**?`;
-      choices = seededShuffle([myShort, ...seededShuffle([...new Set(descPool)], c.concept_id).slice(0, 3)], c.concept_id + "|d");
-      answer = myShort;
-    } else {
-      // beskrivelse → term (den klassiske), som fallback
-      prompt = `Hvilket begreb beskrives her?\n\n> ${desc}`;
-      choices = seededShuffle([c.title, ...seededShuffle(titlePool, c.concept_id).slice(0, 3)], c.concept_id + "|c");
-      answer = c.title;
-    }
+    prompt = `Hvilket begreb beskrives her?\n\n> ${cdesc}`;
   }
+  const choices = seededShuffle([c.title, ...seededShuffle(titlePool, c.concept_id).slice(0, 3)], c.concept_id + "|c");
+  const answer = c.title;
 
   const drill: Drill = {
     id: `${idPrefix}:${c.concept_id}`,

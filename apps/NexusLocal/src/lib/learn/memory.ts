@@ -242,19 +242,26 @@ export function applyGrade(
   const nextAlpha = state.value_alpha + (correct ? weight : 0.0);
   const nextBeta = state.value_beta + (correct ? 0.0 : weight);
 
-  // Spaced repetition: stabiliteten (dage til næste due) vokser med succes
-  // og krymper ved fejl — SM-2-formet, cappet ved 180 dage. Grade 0 = "ved
-  // ikke" → halvér og øv snart; 1 = svær korrekt → let vækst; 2 = god →
-  // ×2.2; 3 = let → ×2.8. Litteratur: Landauer & Bjork 1978 (expanding
-  // retrieval), Cepeda 2006, SM-2/FSRS.
+  // Spaced repetition — intervaller efter brugerens kalibrering (2026-10-15):
+  // kun "igen" (grade 0) må bringe kortet tilbage inden for 24 timer; alt
+  // korrekt skal have mærkbart længere mellemrum. Gulvene gør første rigtige
+  // svar til mindst 2/4/8 dage; vækstfaktorerne er SM-2/FSRS-skala.
+  //
+  // Én vækst pr. DØGN: samme koncept kan optræde flere gange i én session
+  // (flere drills), og ×2.8 pr. kort komponerede stabiliteten til 180 dage
+  // på én eftermiddag. Succes på en dag hvor konceptet allerede er vokset,
+  // beholder stabiliteten; "igen" krymper altid.
   const prevS = state.stability_days && state.stability_days > 0 ? state.stability_days : 1;
+  const grownToday = state.last_reviewed?.slice(0, 10) === nowIso.slice(0, 10);
   const stability_days = grade === 0
-    ? Math.max(1, prevS * 0.5)
-    : grade === 1
-      ? Math.max(1, prevS * 1.2)
-      : grade === 2
-        ? Math.min(180, Math.max(2, prevS * 2.2))
-        : Math.min(180, Math.max(3, prevS * 2.8));
+    ? Math.max(0.5, prevS * 0.5)
+    : grownToday
+      ? prevS
+      : grade === 1
+        ? Math.max(2, prevS * 1.4)
+        : grade === 2
+          ? Math.min(180, Math.max(4, prevS * 2.5))
+          : Math.min(180, Math.max(8, prevS * 3.2));
 
   return {
     ...state,
