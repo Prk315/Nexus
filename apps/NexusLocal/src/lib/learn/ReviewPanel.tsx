@@ -25,7 +25,7 @@
  */
 
 import { useEffect, useState } from "react";
-import { fetchLearnState, fetchMemoryStates } from "./api";
+import { fetchLearnState, fetchMemoryStates, fetchReviewQueue } from "./api";
 import { isStable } from "./memory";
 import type { LrLearnState } from "./types";
 import { ReviewSession } from "./ReviewSession";
@@ -72,7 +72,7 @@ export function ReviewPanel() {
   const [verdict, setVerdict] = useState<LrLearnState | null | undefined>(undefined);
   const [lastKnown, setLastKnown] = useState<LrLearnState | null>(null);
   const [stability, setStability] = useState<{ stable: number; total: number } | null>(null);
-  const [sessionOpen, setSessionOpen] = useState(false);
+  const [sessionOpen, setSessionOpen] = useState<false | "normal" | "full">(false);
 
   useEffect(() => {
     // `lr_learn_state` is computed for ONE user, not per-course. Dette
@@ -150,13 +150,22 @@ export function ReviewPanel() {
               All caught up
             </button>
           ) : (
-            <button
-              type="button"
-              onClick={() => setSessionOpen(true)}
-              className="w-full rounded-xl bg-gradient-to-r from-indigo-500 to-fuchsia-600 px-4 py-3 text-[15px] font-semibold text-white transition-transform active:scale-[0.985] md:max-w-[26rem]"
-            >
-              {`Start review${verdict.due_concepts?.length ? ` · ${verdict.due_concepts.length}` : ""}`}
-            </button>
+            <div className="flex flex-col gap-1.5 md:max-w-[26rem]">
+              <button
+                type="button"
+                onClick={() => setSessionOpen("normal")}
+                className="w-full rounded-xl bg-gradient-to-r from-indigo-500 to-fuchsia-600 px-4 py-3 text-[15px] font-semibold text-white transition-transform active:scale-[0.985]"
+              >
+                {`Start review${verdict.due_concepts?.length ? ` · ${verdict.due_concepts.length}` : ""}`}
+              </button>
+              <button
+                type="button"
+                onClick={() => setSessionOpen("full")}
+                className="w-full rounded-xl bg-black/[0.04] px-4 py-2 text-[12.5px] font-medium text-[#1A1A24]/70 ring-1 ring-black/[0.06] hover:bg-black/[0.07]"
+              >
+                Gennemgå ALT due — giv hele hukommelsen varme
+              </button>
+            </div>
           )}
           <div className="text-[10px] text-[#6E6E78]/60">{minutesAgoLabel(verdict.computed_at)}</div>
         </>
@@ -190,7 +199,7 @@ export function ReviewPanel() {
 
           <button
             type="button"
-            onClick={() => setSessionOpen(true)}
+            onClick={() => setSessionOpen("normal")}
             className="w-full rounded-xl bg-gradient-to-r from-indigo-500 to-fuchsia-600 px-4 py-3 text-[15px] font-semibold text-white transition-transform active:scale-[0.985] md:max-w-[26rem]"
           >
             Start review
@@ -198,7 +207,14 @@ export function ReviewPanel() {
         </>
       )}
 
-      {sessionOpen && <ReviewSession onClose={() => setSessionOpen(false)} />}
+      {sessionOpen && (
+        <ReviewSession
+          onClose={() => setSessionOpen(false)}
+          {...(sessionOpen === "full"
+            ? { source: () => fetchReviewQueue(100).then((q) => q ?? []), title: "Alt due" }
+            : {})}
+        />
+      )}
     </section>
   );
 }

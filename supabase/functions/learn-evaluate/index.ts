@@ -194,6 +194,8 @@ interface MemoryStateRow {
   heat: number;
   lens_counts: Record<string, number> | null;
   last_decayed: string;
+  last_reviewed: string | null;
+  stability_days: number | null;
 }
 
 interface UnitConceptRow {
@@ -422,7 +424,7 @@ async function compute(
       await supabase
         .from("lr_memory_state")
         .select(
-          "concept_id, value_alpha, value_beta, heat, lens_counts, last_decayed",
+          "concept_id, value_alpha, value_beta, heat, lens_counts, last_decayed, last_reviewed, stability_days",
         )
         .eq("user_id", DEFAULT_USER)
         .in("concept_id", retainedIds),
@@ -468,10 +470,20 @@ async function compute(
 
   // Due-by-threshold, UNCAPPED — the DAG-v2 prereq gate below can still add
   // more concept_ids on top of this set before DUE_CAP is applied.
+  // Spaced repetition (2026-10-15): heat er TILSTAND (ACT-R-aktivering,
+  // 24h-halvering) og var fejlagtigt planlæggeren — "decayed < 0.5" gjorde
+  // ALT due igen ~24 timer efter hvert review, for evigt, uanset mestring.
+  // Litteraturen (expanding retrieval, SM-2, FSRS) planlægger på voksende
+  // STABILITET: due når der er gået stability_days siden sidste review —
+  // eller straks, når kompetencen er under baren (kæmpende øves dagligt).
   const dueThresholdIds = new Set<string>();
   for (const row of decayed) {
     const comp = row.value_alpha / (row.value_alpha + row.value_beta);
-    if (row.decayedHeat < DUE_HEAT_THRESHOLD || comp < DUE_COMP_THRESHOLD) {
+    const daysSince = row.last_reviewed
+      ? (now.getTime() - Date.parse(row.last_reviewed)) / 86_400_000
+      : Number.POSITIVE_INFINITY;
+    const stability = row.stability_days && row.stability_days > 0 ? row.stability_days : 1;
+    if (comp < DUE_COMP_THRESHOLD || daysSince >= stability) {
       dueThresholdIds.add(row.concept_id);
     }
   }
