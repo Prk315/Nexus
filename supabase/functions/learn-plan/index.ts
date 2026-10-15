@@ -20,6 +20,14 @@
 //              and may move further ahead in the curriculum.
 //   review   — the spaced-repetition session learn-evaluate/learn-daily
 //              already drive; this block carries the due count.
+//   unit     — ONE course-path unit (the Brilliant-style lr_unit spine),
+//              chosen at random among the paths — but always the FRONTIER
+//              unit of the chosen path (lowest idx not mastered), never a
+//              jump ahead. Random is seeded by the date, so a re-run or
+//              `force` regeneration of the same day picks the same course.
+//              Only frontiers with authored content (draft or live — the
+//              app serves drafts behind Godkend) are eligible; a path whose
+//              next unit has no content yet simply sits out the draw.
 //
 // It then FANS OUT: four PathFinder tasks under the Learn plan, and a Vault
 // daily note (brief + empty Noter/Opgaver/Eksempler sections) in the Learn
@@ -375,6 +383,82 @@ function clipSentence(raw: string, budget = 220): string {
   return out;
 }
 
+// ── Course-path unit (the daily unit from the learning paths) ──────────────
+
+const UNIT_MINUTES = 25;
+
+interface UnitPick {
+  course_id: number;
+  course_title: string;
+  unit_id: number;
+  code: string;
+  title: string | null;
+}
+
+/** The day's course-path unit: pick a course at random (seeded by the date,
+ *  so the same day always draws the same course) among active courses whose
+ *  FRONTIER unit — lowest idx not mastered — has authored content. Never
+ *  serves a unit past the frontier: "tilfældigt kursus, men den unit man er
+ *  kommet til". Focus week narrows the draw to the focus course when it is
+ *  eligible. Null when no path has a servable frontier — the block is then
+ *  omitted honestly rather than inventing work. */
+async function pickUnit(
+  db: SupabaseClient,
+  userId: string,
+  today: string,
+  focusCourseId: number | null,
+): Promise<UnitPick | null> {
+  const courses = unwrap<{ c_id: number; title: string }>(
+    "lr_course",
+    await db.from("lr_course").select("c_id,title").eq("active", true),
+  );
+  const units = unwrap<{ unit_id: number; course_id: number; idx: number; code: string; title: string | null }>(
+    "lr_unit",
+    await db.from("lr_unit").select("unit_id,course_id,idx,code,title"),
+  );
+  const prog = unwrap<{ unit_id: number; status: string }>(
+    "lr_unit_progress",
+    await db.from("lr_unit_progress").select("unit_id,status").eq("user_id", userId),
+  );
+  const mastered = new Set(prog.filter((p) => p.status === "mastered").map((p) => p.unit_id));
+
+  const frontiers: UnitPick[] = [];
+  for (const c of courses) {
+    const spine = units.filter((u) => u.course_id === c.c_id).sort((a, b) => a.idx - b.idx);
+    const next = spine.find((u) => !mastered.has(u.unit_id));
+    if (next) {
+      frontiers.push({
+        course_id: c.c_id, course_title: c.title,
+        unit_id: next.unit_id, code: next.code, title: next.title,
+      });
+    }
+  }
+  if (!frontiers.length) return null;
+
+  // Draft counts as servable: the app's unit player reads draft+live (the
+  // Godkend flow lives in-app), so a lifted-but-unapproved unit is real work.
+  const content = unwrap<{ unit_id: number }>(
+    "lr_unit_content",
+    await db.from("lr_unit_content").select("unit_id")
+      .in("unit_id", frontiers.map((f) => f.unit_id))
+      .in("status", ["draft", "live"]),
+  );
+  const servable = new Set(content.map((c) => c.unit_id));
+  let eligible = frontiers.filter((f) => servable.has(f.unit_id));
+  if (!eligible.length) return null;
+
+  if (focusCourseId != null) {
+    const f = eligible.filter((e) => e.course_id === focusCourseId);
+    if (f.length) eligible = f;
+  }
+  // Stable order before the seeded draw, so the pick is a function of the
+  // date and the eligible SET — not of row-return order.
+  eligible.sort((a, b) => a.course_id - b.course_id);
+  let h = 0;
+  for (let i = 0; i < today.length; i++) h = (h * 31 + today.charCodeAt(i)) >>> 0;
+  return eligible[h % eligible.length];
+}
+
 // ── Brief composition (deterministic, honest) ──────────────────────────────
 
 interface WeekTotals { pages: number; minutes: number; days: Set<string> }
@@ -397,6 +481,7 @@ function composeBrief(args: {
   reading: ReadingPick | null;
   lessonLine: string;
   reviewLine: string;
+  unit: UnitPick | null;
   minutes: { intro: number; reading: number; lesson: number; review: number };
 }): string {
   const L: string[] = [];
@@ -460,6 +545,9 @@ function composeBrief(args: {
     : `2. **Reading** — no active reading material; add one in PathFinder → Learn.`);
   L.push(`3. **Lesson** (${args.minutes.lesson} min) — ${args.lessonLine}`);
   L.push(`4. **Repetition** (${args.minutes.review} min) — ${args.reviewLine}`);
+  L.push(args.unit
+    ? `5. **Kursus-unit** (~${UNIT_MINUTES} min) — **${args.unit.code}${args.unit.title ? ` · ${args.unit.title}` : ""}** (${args.unit.course_title}) — åbn stien i Nexus Learn.`
+    : `5. **Kursus-unit** — ingen sti har en klar unit i dag (frontier mangler indhold).`);
   return L.join("\n");
 }
 
@@ -594,6 +682,7 @@ Deno.serve(async (req: Request) => {
         ? cfg.focus_course_id
         : null;
     const reading = pickReading(materials, events, today, cfg.reading_minutes, enrollments, focusCourseId);
+    const unit = await pickUnit(db, userId, today, focusCourseId);
 
     const phases = enrollments.map((e) => phaseOf(today, e));
     const phase: Phase = phases.includes("prime")
@@ -796,6 +885,7 @@ Deno.serve(async (req: Request) => {
       reading,
       lessonLine,
       reviewLine,
+      unit,
       minutes,
     });
 
@@ -825,6 +915,16 @@ Deno.serve(async (req: Request) => {
         }
         : { retention: true, phase },
       review: { minutes: minutes.review, due_concepts: dueCount },
+      unit: unit
+        ? {
+          minutes: UNIT_MINUTES,
+          course_id: unit.course_id,
+          course_title: unit.course_title,
+          unit_id: unit.unit_id,
+          code: unit.code,
+          title: unit.title,
+        }
+        : null,
     };
 
     // ── Fan-out: PathFinder tasks (idempotent by title+date+plan) ────────
@@ -842,6 +942,12 @@ Deno.serve(async (req: Request) => {
           ? [{ title: `Learn · Lesson: ${lessonMaterial.title} (${today})`, estimate: minutes.lesson }]
           : []),
         { title: `Learn · Repetition (${today})`, estimate: minutes.review },
+        ...(unit
+          ? [{
+            title: `Learn · Unit: ${unit.code}${unit.title ? ` — ${unit.title}` : ""} (${today})`,
+            estimate: UNIT_MINUTES,
+          }]
+          : []),
       ];
       const existing = unwrap<TaskRow>(
         "pf_tasks",
@@ -923,6 +1029,7 @@ Deno.serve(async (req: Request) => {
       phase,
       reading: reading ? `${reading.material.title} ${reading.from}–${reading.to}` : null,
       lesson: lessonMaterial ? `${lessonMaterial.title} (${lessonDays}/${quota}${lessonDay ? "" : " met"})` : "none",
+      unit: unit ? `${unit.code} (${unit.course_title})` : null,
       pf_tasks: pfTaskIds.length,
       vault_note: vaultNoteId,
     });

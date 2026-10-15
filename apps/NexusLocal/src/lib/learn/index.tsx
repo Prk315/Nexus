@@ -101,7 +101,7 @@ export function LearnPage() {
             </div>
           </div>
           {tab === "overblik" ? (
-            <OverblikLayout />
+            <OverblikLayout onOpenCourseTab={() => pick("course")} />
           ) : (
             <>
               <PathPanel />
@@ -120,7 +120,7 @@ export function LearnPage() {
 /** Overblik: I/O-grafen øverst, derunder to kolonner — træet til venstre,
  *  dagen+review+kursuskort i den dobbelt så brede højrekolonne. På smalle
  *  skærme stakkes med GØR-fladen først; træet er planlægning. */
-function OverblikLayout() {
+function OverblikLayout({ onOpenCourseTab }: { onOpenCourseTab: () => void }) {
   const { series } = useRoadmap();
   return (
     <>
@@ -130,7 +130,7 @@ function OverblikLayout() {
                 <RoadmapTree />
               </div>
               <div className="order-1 flex flex-col gap-6 lg:order-2 lg:col-span-2">
-                <TodayPanel />
+                <TodayPanel onOpenCourseTab={onOpenCourseTab} />
                 <ReviewPanel />
                 <CodePanel />
                 <hr className="border-[#E3E2DC]" />

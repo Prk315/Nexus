@@ -18,6 +18,8 @@ import { useCallback, useEffect, useState } from "react";
 import { fetchDailyPlan, fetchPrimerQueue, markDailyPlanDone, requestNextBundle, type DailyPlan } from "./api";
 import { Markdown } from "./Markdown";
 import { ReviewSession } from "./ReviewSession";
+import { useCourse } from "./CourseContext";
+import { COURSE_LIST } from "./courses";
 
 function todayYmd(): string {
   return new Intl.DateTimeFormat("en-CA", {
@@ -25,7 +27,8 @@ function todayYmd(): string {
   }).format(new Date());
 }
 
-export function TodayPanel() {
+export function TodayPanel({ onOpenCourseTab }: { onOpenCourseTab?: () => void }) {
+  const { setCourseKey } = useCourse();
   const [plan, setPlan] = useState<DailyPlan | null>(null);
   const [nextBusy, setNextBusy] = useState(false);
   const [state, setState] = useState<"loading" | "missing" | "error" | "ready">("loading");
@@ -112,6 +115,34 @@ export function TodayPanel() {
         : <>start in the review section below</>,
     },
   ];
+
+  // Daily course-path unit (random path, frontier unit). Older plan rows
+  // lack the field entirely — the row is then simply absent, never "none".
+  if (b.unit !== undefined) {
+    const courseKey = b.unit
+      ? COURSE_LIST.find((c) => c.courseId === b.unit!.course_id)?.key ?? null
+      : null;
+    rows.push({
+      n: 5, label: "Unit", minutes: b.unit?.minutes,
+      body: b.unit
+        ? (
+          <>
+            <strong>{b.unit.code}</strong>
+            {b.unit.title ? <> · {b.unit.title}</> : null}
+            <span className="ml-1 text-xs text-[#1A1A24]/45">({b.unit.course_title})</span>
+            {courseKey && (
+              <button
+                onClick={() => { setCourseKey(courseKey); onOpenCourseTab?.(); }}
+                className="ml-1.5 inline p-0 align-baseline text-sm font-medium leading-[inherit] text-indigo-600 underline-offset-2 hover:underline"
+              >
+                open path →
+              </button>
+            )}
+          </>
+        )
+        : <span className="text-[#1A1A24]/45">no path has a servable frontier unit today</span>,
+    });
+  }
 
   return (
     <section className="rounded-2xl border border-[#1A1A24]/10 bg-white/60 p-4 md:p-5">
