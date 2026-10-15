@@ -72,7 +72,7 @@ export interface CourseDef {
   /** `lr_course.c_id` / `lr_unit.course_id` — the one hard DB key everything
    * else in this file exists to avoid hardcoding a second time. */
   courseId: number;
-  key: "la" | "dbms" | "pgm" | "prob";
+  key: "la" | "dbms" | "pgm" | "prob" | "kal" | "uml";
   /** Full title, this course's own language ("Lineær Algebra" — LA is
    * Danish-content, DBMS is English-content, per each course's own
    * `contentLanguage`). Used in the path header ("Learn · {title}"). */
@@ -334,6 +334,106 @@ const PROB_TRANSLATE_BAR: Record<string, string> = {
   "sim-formal": "bg-gradient-to-r from-fuchsia-500 to-indigo-500",
 };
 
+// KAL (Lindstrøm): tre perspektiver for analyse — billedet (grafer/geometri),
+// formlen (ε-δ og definitioner), og udregningen (teknikker).
+const KAL_LENSES: Record<string, LensToken> = {
+  billede: {
+    label: "Billede",
+    long: "Billedet — grafer, geometri & intuition",
+    hex: "#f59e0b",
+    chip: "bg-amber-50 text-amber-700 ring-1 ring-amber-600/25",
+    chipOn: "bg-amber-100 text-amber-800 ring-1 ring-amber-600/40",
+    dot: "bg-amber-500",
+    edge: "border-l-2 border-amber-500/60",
+    tint: "bg-amber-50",
+  },
+  formel: {
+    label: "Formel",
+    long: "Formlen — definitioner, ε-δ og beviser",
+    hex: "#6366f1",
+    chip: "bg-indigo-50 text-indigo-700 ring-1 ring-indigo-600/25",
+    chipOn: "bg-indigo-100 text-indigo-800 ring-1 ring-indigo-600/40",
+    dot: "bg-indigo-500",
+    edge: "border-l-2 border-indigo-500/60",
+    tint: "bg-indigo-50",
+  },
+  regne: {
+    label: "Regne",
+    long: "Udregningen — teknikker & algoritmer",
+    hex: "#10b981",
+    chip: "bg-emerald-50 text-emerald-700 ring-1 ring-emerald-600/25",
+    chipOn: "bg-emerald-100 text-emerald-800 ring-1 ring-emerald-600/40",
+    dot: "bg-emerald-500",
+    edge: "border-l-2 border-emerald-500/60",
+    tint: "bg-emerald-50",
+  },
+};
+
+const KAL_SOLID_BAR: Record<string, string> = {
+  billede: "bg-amber-500",
+  formel: "bg-indigo-500",
+  regne: "bg-emerald-500",
+};
+
+const KAL_TRANSLATE_BAR: Record<string, string> = {
+  "billede-formel": "bg-gradient-to-r from-amber-500 to-indigo-500",
+  "billede-regne": "bg-gradient-to-r from-amber-500 to-emerald-500",
+  "formel-billede": "bg-gradient-to-r from-indigo-500 to-amber-500",
+  "formel-regne": "bg-gradient-to-r from-indigo-500 to-emerald-500",
+  "regne-billede": "bg-gradient-to-r from-emerald-500 to-amber-500",
+  "regne-formel": "bg-gradient-to-r from-emerald-500 to-indigo-500",
+};
+
+// UML (Shalev-Shwartz & Ben-David): bogens egen theory→algorithms-akse som
+// linser: statement, bevis, algoritme.
+const UML_LENSES: Record<string, LensToken> = {
+  formal: {
+    label: "Formal",
+    long: "Formal view — definitions & theorems",
+    hex: "#8b5cf6",
+    chip: "bg-violet-50 text-violet-700 ring-1 ring-violet-600/25",
+    chipOn: "bg-violet-100 text-violet-800 ring-1 ring-violet-600/40",
+    dot: "bg-violet-500",
+    edge: "border-l-2 border-violet-500/60",
+    tint: "bg-violet-50",
+  },
+  proof: {
+    label: "Proof",
+    long: "Proof view — the argument & its load-bearing step",
+    hex: "#f43f5e",
+    chip: "bg-rose-50 text-rose-700 ring-1 ring-rose-600/25",
+    chipOn: "bg-rose-100 text-rose-800 ring-1 ring-rose-600/40",
+    dot: "bg-rose-500",
+    edge: "border-l-2 border-rose-500/60",
+    tint: "bg-rose-50",
+  },
+  algo: {
+    label: "Algo",
+    long: "Algorithmic view — what you would run",
+    hex: "#06b6d4",
+    chip: "bg-cyan-50 text-cyan-700 ring-1 ring-cyan-600/25",
+    chipOn: "bg-cyan-100 text-cyan-800 ring-1 ring-cyan-600/40",
+    dot: "bg-cyan-500",
+    edge: "border-l-2 border-cyan-500/60",
+    tint: "bg-cyan-50",
+  },
+};
+
+const UML_SOLID_BAR: Record<string, string> = {
+  formal: "bg-violet-500",
+  proof: "bg-rose-500",
+  algo: "bg-cyan-500",
+};
+
+const UML_TRANSLATE_BAR: Record<string, string> = {
+  "formal-proof": "bg-gradient-to-r from-violet-500 to-rose-500",
+  "formal-algo": "bg-gradient-to-r from-violet-500 to-cyan-500",
+  "proof-formal": "bg-gradient-to-r from-rose-500 to-violet-500",
+  "proof-algo": "bg-gradient-to-r from-rose-500 to-cyan-500",
+  "algo-formal": "bg-gradient-to-r from-cyan-500 to-violet-500",
+  "algo-proof": "bg-gradient-to-r from-cyan-500 to-rose-500",
+};
+
 export const COURSES: Record<CourseKey, CourseDef> = {
   la: {
     courseId: 2,
@@ -426,6 +526,48 @@ export const COURSES: Record<CourseKey, CourseDef> = {
       { re: /Given (?:as|in) (?:the |a )?simulation\b/i, lens: "sim" },
     ],
   },
+  kal: {
+    courseId: 6,
+    key: "kal",
+    title: "Kalkulus",
+    shortLabel: "KAL",
+    contentLanguage: "da",
+    itemSlugPrefix: "kal-x-",
+    hasLearnState: false,
+    // 6 moduler / 13 units langs Lindstrøms kapitler 1-12; forfattes modul
+    // for modul mod Unit-baren, modul 1 først.
+    complete: false,
+    lensOrder: ["billede", "formel", "regne"],
+    lenses: KAL_LENSES,
+    solidBar: KAL_SOLID_BAR,
+    translateBar: KAL_TRANSLATE_BAR,
+    sourceLensPatterns: [
+      { re: /Givet (?:som|i) (?:et )?billede/i, lens: "billede" },
+      { re: /Givet (?:som|i) (?:en )?formel/i, lens: "formel" },
+      { re: /Givet (?:som|i) (?:en )?udregning/i, lens: "regne" },
+    ],
+  },
+  uml: {
+    courseId: 7,
+    key: "uml",
+    title: "Understanding Machine Learning",
+    shortLabel: "UML",
+    contentLanguage: "en",
+    itemSlugPrefix: "uml-x-",
+    hasLearnState: false,
+    // 8 moduler / 25 units langs SSBD ch. 2-31; forfattes mod Unit-baren,
+    // modul 1 (ERM + PAC) først.
+    complete: false,
+    lensOrder: ["formal", "proof", "algo"],
+    lenses: UML_LENSES,
+    solidBar: UML_SOLID_BAR,
+    translateBar: UML_TRANSLATE_BAR,
+    sourceLensPatterns: [
+      { re: /Given (?:as|in) (?:the )?formal/i, lens: "formal" },
+      { re: /Given (?:as|in) (?:the |a )?proof\b/i, lens: "proof" },
+      { re: /Given (?:as|in) (?:the |an )?algorithm/i, lens: "algo" },
+    ],
+  },
 };
 
 export const DEFAULT_COURSE_KEY: CourseKey = "la";
@@ -438,4 +580,4 @@ export function isCourseKey(value: string): value is CourseKey {
   return value === "la" || value === "dbms" || value === "pgm" || value === "prob";
 }
 
-export const COURSE_LIST: CourseDef[] = [COURSES.la, COURSES.dbms, COURSES.pgm, COURSES.prob];
+export const COURSE_LIST: CourseDef[] = [COURSES.la, COURSES.dbms, COURSES.pgm, COURSES.prob, COURSES.kal, COURSES.uml];
