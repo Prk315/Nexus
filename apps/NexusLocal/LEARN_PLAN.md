@@ -258,7 +258,13 @@ og 62 % af drill-volumen — deraf denne sektion.
 - **Definitioner:** fuld formel definition (domæne, betingelser) ELLER
   eksplicit afstamning til det den udspringer af — og et næsten-men-ikke-
   modeksempel (som remark-boks eller afsnit; skemaet har intet dedikeret felt).
-- **Drills:** ≥ 14, med ≥ 3 `master_demo`-grupper. Fordeling: ≥ 40 %
+- **Drills:** ≥ 14, med ≥ 3 `master_demo`-grupper. Hver drill er
+  SELVBÆRENDE: al nødvendig data (matricer, CPD'er, talværdier) står i
+  promptens egen tekst — «med samme A og b som før» er forbudt, fordi
+  Review/primer serverer drills enkeltvis uden gruppens kontekst
+  (brugerrapporteret 2026-10-15, PGM M1). Tiles bruger feltet `md`
+  ($...$-wrappet KaTeX eller ren tekst), ALDRIG `latex`, og distraktorer
+  er blot brikker uden for `answer.sequence`. Fordeling: ≥ 40 %
   regne-svar (`numeric`/`vector`/`matrix`/`tiles`), ≤ 35 % `choice`.
   Præcis 2 hints + `solution_md` på HVER drill, ingen undtagelser.
 - **Linser:** alle kursets linser ≥ 20 % af drills — en linse under en
