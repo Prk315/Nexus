@@ -1897,6 +1897,13 @@ export interface DailyPlanBlocks {
     url?: string | null; retention?: boolean; phase?: string;
   };
   review: { minutes: number; due_concepts: number | null };
+  /** Daily course-path unit (added 2026-10-15): a random eligible path's
+   *  FRONTIER unit. Optional — plan rows from before the field simply lack
+   *  it, and an unknown block key is dropped, never fatal. */
+  unit?: {
+    minutes: number; course_id: number; course_title: string;
+    unit_id: number; code: string; title: string | null;
+  } | null;
 }
 
 export interface DailyPlan {
