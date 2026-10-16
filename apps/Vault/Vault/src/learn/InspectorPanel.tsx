@@ -173,6 +173,29 @@ export function InspectorPanel({ node, graph, onNavigate, onClose }: InspectorPa
           )}
         </div>
 
+        {/* Retrievability — per-card recall probability now. The stability
+            sub-line explains WHY two cards with the same gap differ. */}
+        <div className="learn-readout">
+          <div className="learn-readout-label">
+            <span>Retrievability</span>
+            <span>{node.retrievability != null ? `${(node.retrievability * 100).toFixed(0)}%` : "—"}</span>
+          </div>
+          <div className="learn-bar">
+            <div
+              className="learn-bar-fill"
+              style={{
+                width: `${Math.min(100, (node.retrievability ?? 0) * 100)}%`,
+                background: heatColor(node.retrievability ?? 0),
+              }}
+            />
+          </div>
+          <div className="learn-readout-sub">
+            {node.stabilityDays != null
+              ? `stability ${node.stabilityDays >= 10 ? Math.round(node.stabilityDays) : node.stabilityDays} days`
+              : "no review history"}
+          </div>
+        </div>
+
         {/* Heat — decayed live to graph.loadedAt. The stored + last-reviewed
             sub-line is what makes a near-zero value read as decay. */}
         <div className="learn-readout">
