@@ -55,6 +55,14 @@ function LensLegend({ lens }: { lens: Lens }) {
   let stops: { color: string; size: number; label: string }[];
   let caption: string;
   switch (lens) {
+    case "retrievability":
+      stops = [
+        { color: LR.inert, size: 8, label: "never reviewed" },
+        { color: heatColor(0.4), size: 8, label: "fading" },
+        { color: heatColor(1), size: 12, label: "in memory" },
+      ];
+      caption = "colour = 2^(−days since review / card's stability) · size = stability — big & dim = strong memory going cold";
+      break;
     case "mastery":
       stops = [
         { color: LR.inert, size: 8, label: "never practiced" },
@@ -107,7 +115,9 @@ export function LearnMode({ active }: LearnModeProps) {
   const [graph, setGraph] = useState<LearnGraph | null>(null);
   const [status, setStatus] = useState<LoadStatus>("loading");
   const [error, setError] = useState<string | null>(null);
-  const [lens, setLens] = useState<Lens>("mastery");
+  // Retrievability is the default: "is the graph lit?" should answer "can I
+  // still recall this?", not "did I touch it in the last 24 h" (heat's job).
+  const [lens, setLens] = useState<Lens>("retrievability");
   const [courseFilter, setCourseFilter] = useState<number | "all">("all");
   const [selectedId, setSelectedId] = useState<string | null>(null);
 

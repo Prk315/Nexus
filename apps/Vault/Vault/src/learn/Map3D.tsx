@@ -54,6 +54,9 @@ function isTouching(l: any, selectedId: string | null): boolean {
 
 function nodeValFor(n: LearnNode, lens: Lens): number {
   switch (lens) {
+    // Size = durability (stability vs the 180-day cap), colour = recall now:
+    // a big dim node is a strong memory going cold — exactly the card to review.
+    case "retrievability": return 1 + 7 * clamp01((n.stabilityDays ?? 0) / 180);
     case "mastery":    return 1 + 7 * clamp01(((n.confidence ?? 0) - 2) / 18);
     case "heat":       return 1 + 5 * clamp01(n.heatNow);
     case "importance": return 1 + 26 * clamp01(n.importance); // linear on purpose; drama is the point
@@ -63,6 +66,9 @@ function nodeValFor(n: LearnNode, lens: Lens): number {
 
 function nodeColorFor(n: LearnNode, lens: Lens): string {
   switch (lens) {
+    case "retrievability":
+      // null = never reviewed — inert, never "cold": absent is not zero.
+      return n.retrievability == null ? LR.inert : heatColor(n.retrievability);
     case "mastery":
       return n.mastery == null ? LR.inert : mixHex(LR.slate, courseHue(n.courseId), n.mastery);
     case "heat":
@@ -76,6 +82,7 @@ function nodeColorFor(n: LearnNode, lens: Lens): string {
 
 function glowTest(n: LearnNode, lens: Lens): boolean {
   switch (lens) {
+    case "retrievability": return (n.retrievability ?? 0) >= 0.85;
     case "mastery":    return (n.mastery ?? 0) >= 0.8 && (n.confidence ?? 0) >= MIN_EVIDENCE;
     case "heat":       return n.heatNow >= 0.55;
     case "importance": return n.importance >= 0.5;

@@ -86,6 +86,14 @@ export interface LearnNode {
   /** Raw stored heat, undecayed. Inspector shows both; the map only uses heatNow. */
   heatStored: number | null;
   lastReviewed: string | null;  // ISO
+  /** lr_memory_state.stability_days — the card's own spaced-repetition
+   *  interval (grows ×2.5–3.2 per success, cap 180). null with no state row. */
+  stabilityDays: number | null;
+  /** Predicted recall probability at `loadedAt`:
+   *  R = 2^(−days since last review / stability_days). Decay is PER CARD —
+   *  a card at stability 180 holds ~94% after two weeks, a fresh card at 4
+   *  is ~9% by then. null when never reviewed (absent is not zero). */
+  retrievability: number | null;
   /** memory.ts `isStable`: mean >= 0.6 && confidence >= 4. false with no state. */
   stable: boolean;
   /** Membership of lr_retained_concept (concepts of mastered units). */
@@ -133,6 +141,7 @@ interface PrereqRow { prereq_id: string; concept_id: string }
 interface MemoryRow {
   concept_id: string; value_alpha: number; value_beta: number;
   heat: number; last_reviewed: string | null; last_decayed: string | null;
+  stability_days: number | null;
 }
 interface RetainedRow { concept_id: string }
 
@@ -182,7 +191,7 @@ export async function loadLearnGraph(signal?: AbortSignal): Promise<LearnGraph> 
         signal),
       fetchAll<MemoryRow>(
         () => supabase.from("lr_memory_state")
-          .select("concept_id,value_alpha,value_beta,heat,last_reviewed,last_decayed")
+          .select("concept_id,value_alpha,value_beta,heat,last_reviewed,last_decayed,stability_days")
           .eq("user_id", LEARN_USER_ID)
           .order("concept_id"),
         signal),
@@ -221,6 +230,8 @@ export async function loadLearnGraph(signal?: AbortSignal): Promise<LearnGraph> 
     let heatNow = 0;
     let heatStored: number | null = null;
     let lastReviewed: string | null = null;
+    let stabilityDays: number | null = null;
+    let retrievability: number | null = null;
     if (mem) {
       mastery = valueMean(mem.value_alpha, mem.value_beta);
       confidence = valueConfidence(mem.value_alpha, mem.value_beta);
@@ -229,6 +240,14 @@ export async function loadLearnGraph(signal?: AbortSignal): Promise<LearnGraph> 
       // last_decayed is never null today; defensively fall back to undecayed.
       heatNow = mem.last_decayed ? decayHeat(mem.heat, mem.last_decayed, loadedAt) : mem.heat;
       lastReviewed = mem.last_reviewed;
+      stabilityDays = mem.stability_days;
+      // Retrievability: time since review against the card's OWN stability.
+      // No review timestamp → null, never 0 — "never met" is not "forgotten".
+      if (mem.last_reviewed) {
+        const s = mem.stability_days && mem.stability_days > 0 ? mem.stability_days : 1;
+        const days = Math.max(0, (loadedAt.getTime() - new Date(mem.last_reviewed).getTime()) / 86_400_000);
+        retrievability = Math.min(1, Math.pow(2, -days / s));
+      }
     }
 
     const node: LearnNode = {
@@ -250,6 +269,8 @@ export async function loadLearnGraph(signal?: AbortSignal): Promise<LearnGraph> 
       heatNow,
       heatStored,
       lastReviewed,
+      stabilityDays,
+      retrievability,
       stable,
       retained: retainedSet.has(c.concept_id),
       prereqIds: [],

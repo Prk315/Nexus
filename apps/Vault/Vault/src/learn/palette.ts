@@ -1,7 +1,13 @@
-/** The four map lenses. Order here is the HUD switcher order. */
-export type Lens = "mastery" | "heat" | "importance" | "retention";
-export const LENSES: readonly Lens[] = ["mastery", "heat", "importance", "retention"] as const;
+/** The five map lenses. Order here is the HUD switcher order.
+ *  `retrievability` leads: it answers "can I still recall this NOW?", the
+ *  question "is the graph lit?" was always really asking. Unlike heat (a
+ *  global 24 h activity glow) its decay is PER CARD — time since review
+ *  measured against the card's own stability_days, so a saturated card
+ *  stays bright for months while a fresh one fades in days. */
+export type Lens = "retrievability" | "mastery" | "heat" | "importance" | "retention";
+export const LENSES: readonly Lens[] = ["retrievability", "mastery", "heat", "importance", "retention"] as const;
 export const LENS_LABEL: Record<Lens, string> = {
+  retrievability: "Retrievability",
   mastery: "Mastery",
   heat: "Heat",
   importance: "Importance",
