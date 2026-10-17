@@ -1895,6 +1895,13 @@ export interface DailyPlanBlocks {
   lesson: {
     minutes?: number; material_id?: string; title?: string;
     url?: string | null; retention?: boolean; phase?: string;
+    /** Forudsætningslæsning (added 2026-10-17): hvilke kapitler af kursets
+     *  primære bog lektionens uge bygger på, mod den faktiske læseposition.
+     *  null/absent = kunne ikke afgøres — der gættes aldrig. */
+    required_reading?: {
+      book_title: string; chapter_prefix: string;
+      required_through: number; read_through: number; met: boolean;
+    } | null;
   };
   review: { minutes: number; due_concepts: number | null };
   /** Daily course-path unit (added 2026-10-15): a random eligible path's

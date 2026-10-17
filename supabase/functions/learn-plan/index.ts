@@ -737,11 +737,58 @@ Deno.serve(async (req: Request) => {
       (sameCourse.length ? sameCourse : lessonCandidates).sort(rotation)[0] ?? null;
     const quota = cfg.lessons_per_week ?? 3;
     const lessonDay = lessonMaterial != null && lessonDays < quota;
+
+    // ── Forudsætningslæsning for dagens lektion: lektionen bærer sin
+    // kursusuge i start_unit, og enrollmentens week1_chapter +
+    // chapters_per_week oversætter ugen til bogkapitler. Sammenholdt med
+    // læsepositionen i kursets PRIMÆRE bog (første chapter_prefix — kun den
+    // følger forelæsningstakten) bliver det til én ærlig linje: "læs kap.
+    // X–Y først" eller "forudsætninger læst ✓". Mangler ugen, enrollmenten
+    // eller bogen, siges INTET — et gæt om forudsætninger er værre end
+    // tavshed (absent is not zero).
+    interface RequiredReading {
+      book_title: string;
+      chapter_prefix: string;
+      required_through: number;   // læs t.o.m. dette kapitel
+      read_through: number;       // hvor langt læsningen faktisk er
+      met: boolean;
+    }
+    let requiredReading: RequiredReading | null = null;
+    if (lessonMaterial && lessonMaterial.course_id != null && lessonMaterial.start_unit > 0) {
+      const e = enrollments.find((x) => x.c_id === lessonMaterial.course_id);
+      if (e && e.chapter_prefix) {
+        const primary = e.chapter_prefix.split(",")[0].trim().toUpperCase();
+        const book = materials.find((m) =>
+          m.course_id === lessonMaterial.course_id &&
+          ["book", "document"].includes(m.kind) && m.status === "active" &&
+          m.chapter_prefix != null && m.chapter_prefix.toUpperCase() === primary);
+        if (book) {
+          const week = lessonMaterial.start_unit;
+          const requiredThrough = e.week1_chapter + Math.floor((week - 1) * Number(e.chapters_per_week));
+          const readCh = readChapterOf(book, positionOf(book, events));
+          if (readCh != null) {
+            requiredReading = {
+              book_title: book.title,
+              chapter_prefix: primary,
+              required_through: requiredThrough,
+              read_through: readCh,
+              met: readCh >= requiredThrough,
+            };
+          }
+        }
+      }
+    }
+    const readingGateLine = requiredReading == null
+      ? ""
+      : requiredReading.met
+        ? ` Forudsætninger læst ✓ (${requiredReading.chapter_prefix} kap. ≤ ${requiredReading.required_through}).`
+        : ` ⚠️ Læs FØRST **${requiredReading.book_title}, kap. ${requiredReading.read_through + 1}–${requiredReading.required_through}** — lektionen bygger på dem (du er på kap. ${requiredReading.read_through}).`;
+
     const lessonLine = lessonMaterial == null
       ? "no active lesson material — the next lesson needs authoring."
       : lessonDay
-        ? `**${lessonMaterial.title}** — lesson ${lessonDays + 1} of ${quota} this week. ${lessonMaterial.url ?? ""}`.trim()
-        : `week's target met (${lessonDays}/${quota}) — continue ahead if you like: ${lessonMaterial.url ?? ""}`.trim();
+        ? `**${lessonMaterial.title}** — lesson ${lessonDays + 1} of ${quota} this week.${readingGateLine} ${lessonMaterial.url ?? ""}`.trim()
+        : `week's target met (${lessonDays}/${quota}) — continue ahead if you like:${readingGateLine} ${lessonMaterial.url ?? ""}`.trim();
 
     // Due count: absent is UNKNOWN, never zero.
     const dueCount = state && Array.isArray(state.due_concepts)
@@ -912,6 +959,7 @@ Deno.serve(async (req: Request) => {
           week_done: lessonDays,
           week_target: quota,
           target_met: !lessonDay,
+          required_reading: requiredReading,
         }
         : { retention: true, phase },
       review: { minutes: minutes.review, due_concepts: dueCount },
