@@ -275,6 +275,15 @@ og 62 % af drill-volumen — deraf denne sektion.
 - **Grounding:** `grounding_items` udfyldt; `excluded_concepts` altid med
   `_note` der siger HVORFOR.
 
+**Stemmen (2026-10-17 — brugerfeedback, målt):** §11 S1–S5 i LearnAndRetain
+`pipeline/course_lessons/DESIGN.md` gælder OGSÅ unit-teoribokse: udled, påstå
+ikke (en konstatering uden sit hvorfor hører ikke i `statement_md`); længden
+følger forklaringens behov — aldrig kompression for elegancens skyld; aforisme
+og økonomi-metafor (buy/price/spend/købe/pris) må ALDRIG bære en forklaring —
+metafor kun efter fuld udledning; symboler defineres før brug; dansk som
+standard (engelske fagtermer hvor faget bruger dem). Rodårsagen var målt i
+MLA: ~1.400 tegn/komponent + one-liners i stedet for udledning = "for svær".
+
 **Håndhævelse:** audit-tallene (bokse/tegn/drills/typefordeling/linse-
 fordeling/hints/demos/test) beregnes FØR en unit kaldes færdig, og draft-
 indhold der ikke består, promoveres ikke — samme posture som §11 for
