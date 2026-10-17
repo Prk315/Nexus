@@ -552,7 +552,7 @@ export const COURSES: Record<CourseKey, CourseDef> = {
     key: "uml",
     title: "Understanding Machine Learning",
     shortLabel: "UML",
-    contentLanguage: "en",
+    contentLanguage: "da",
     itemSlugPrefix: "uml-x-",
     hasLearnState: false,
     // 8 moduler / 25 units langs SSBD ch. 2-31; forfattes mod Unit-baren,
