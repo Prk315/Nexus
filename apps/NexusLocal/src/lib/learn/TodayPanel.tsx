@@ -105,6 +105,18 @@ export function TodayPanel({ onOpenCourseTab }: { onOpenCourseTab?: () => void }
                 open ↗
               </a>
             )}
+            {b.lesson?.required_reading && (
+              b.lesson.required_reading.met
+                ? <span className="ml-1.5 text-xs text-emerald-700">forudsætninger læst ✓</span>
+                : (
+                  <span className="ml-1.5 text-xs font-medium text-amber-700">
+                    ⚠ læs først {b.lesson.required_reading.book_title} kap.{" "}
+                    {b.lesson.required_reading.read_through + 1}
+                    {b.lesson.required_reading.required_through > b.lesson.required_reading.read_through + 1
+                      ? `–${b.lesson.required_reading.required_through}` : ""}
+                  </span>
+                )
+            )}
           </>
         ),
     },
