@@ -47,6 +47,7 @@ import { RoadmapTree, CourseCards } from "./RoadmapPanel";
 import { IOChart } from "./IOChart";
 import { useRoadmap } from "./roadmapData";
 import { OverviewStrip } from "./OverviewStrip";
+import { MathKeyboardBar } from "./MathKeyboardBar";
 import { InfinitePanel } from "./InfinitePanel";
 import { ChallengePanel } from "./ChallengePanel";
 import { SprintPanel } from "./SprintPanel";
@@ -90,6 +91,8 @@ export function LearnPage() {
   );
   return (
     <CourseProvider>
+      {/* Global på touch: klæber til ethvert fokuseret tekstfelt i Learn. */}
+      <MathKeyboardBar />
       <div className="-mx-6 -mb-6 flex-1 overflow-y-auto bg-[#F6F5F1] text-[#1A1A24]">
         <div className={`mx-auto flex flex-col gap-6 px-4 pb-16 pt-6 sm:px-6 md:gap-8 md:px-8 md:pb-24 md:pt-10 ${
           tab === "overblik" ? "max-w-6xl" : "max-w-xl md:max-w-2xl"}`}>
