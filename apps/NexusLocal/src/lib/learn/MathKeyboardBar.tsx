@@ -25,9 +25,11 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 
+// "." og "/" i Mat-rækken er ikke pynt: iOS' danske decimal-pad har komma
+// og INTET punktum, og brøksvar ("2/3") er standardformen i drills.
 const MATH_KEYS = [
-  "√", "²", "³", "^", "·", "×", "÷", "±", "≈", "≠", "≤", "≥",
-  "π", "σ", "μ", "λ", "Σ", "θ", "∞", "∈", "⊥", "‖", "→", "½",
+  ".", "/", "√", "²", "³", "^", "·", "×", "÷", "≈", "≠", "±",
+  "π", "σ", "μ", "λ", "Σ", "θ", "∞", "∈", "≤", "≥", "→", "½",
 ];
 const CODE_KEYS = [
   "=", "+", "-", "*", "/", "_", "(", ")", "[", "]", "{", "}",
