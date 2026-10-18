@@ -631,8 +631,30 @@ export async function fetchReviewQueue(limit: number = REVIEW_QUEUE_SIZE): Promi
   const state = await fetchLearnState();
   if (!state) return null;
 
-  const due = state.due_concepts ?? [];
+  let due = state.due_concepts ?? [];
   if (due.length === 0) return [];
+
+  // ⚠️ Samme ryk-tilbage-i-dag-filter som memoryWideDue, men for det
+  // KLASSISKE spor: lr_learn_state genberegnes kun hvert ~15. minut, så
+  // "runde 2" lige efter "runde 1" fik præcis samme due-liste serveret
+  // igen (brugerrapporteret 2026-10-18: to runder i træk, flere identiske
+  // kort). Et kort besvaret inden for de sidste 20 timer er ikke due —
+  // medmindre det blev besvaret "igen" (stability ≤ 1), som pr.
+  // kalibreringen MÅ vende tilbage samme dag. Fail-open: kan memory-
+  // tilstanden ikke læses, står den oprindelige kø urørt.
+  try {
+    const states = await fetchMemoryStates(due.map((d) => d.concept_id));
+    const nowMs = Date.now();
+    const filtered = due.filter((d) => {
+      const m = states[d.concept_id];
+      if (!m?.last_reviewed) return true;
+      const hoursAgo = (nowMs - new Date(m.last_reviewed).getTime()) / 3_600_000;
+      return hoursAgo >= 20 || (m.stability_days ?? 1) <= 1;
+    });
+    // Alle due netop gennemgået = ægte tom kø i dag ("alt klaret"), ikke en fejl.
+    due = filtered;
+    if (due.length === 0) return [];
+  } catch { /* fail-open */ }
 
   const unitIds = Array.from(new Set(due.map((d) => d.unit_id)));
   const contentEntries = await Promise.all(
@@ -792,7 +814,7 @@ async function memoryWideDue(
   const userId = await nodeUserId();
   const now = new Date();
   const mem = await supabasePublic.from("lr_memory_state")
-    .select("concept_id, value_alpha, value_beta, heat, last_decayed")
+    .select("concept_id, value_alpha, value_beta, heat, last_decayed, last_reviewed, stability_days")
     .eq("user_id", userId);
   if (mem.error) throw mem.error;
 
@@ -803,8 +825,22 @@ async function memoryWideDue(
       const decayed = r.last_decayed
         ? (r.heat ?? 0) * Math.exp(-(Math.log(2) / 24) * Math.max(0, (now.getTime() - new Date(r.last_decayed).getTime()) / 3_600_000))
         : (r.heat ?? 0);
-      return { id: r.concept_id as string, mean, decayed, evidence: a + b - 2 };
+      return {
+        id: r.concept_id as string, mean, decayed, evidence: a + b - 2,
+        reviewedHoursAgo: r.last_reviewed
+          ? (now.getTime() - new Date(r.last_reviewed as string).getTime()) / 3_600_000
+          : Infinity,
+        stability: (r.stability_days as number | null) ?? 1,
+      };
     })
+    // ⚠️ Ryk-tilbage-i-dag-filteret: et kort besvaret for nylig er IKKE due
+    // igen samme dag — det var kilden til "samme kort, session efter
+    // session" (brugerrapporteret 2026-10-18): lav-kompetence-klausulen
+    // (mean < 0.6) holdt netop gennemgåede kort i puljen, og den
+    // deterministiske sortering serverede dem forrest igen. Undtagelsen er
+    // "igen"-svar (stability ≤ 1): de MÅ komme tilbage inden for dagen —
+    // det er hele kalibreringen fra 2026-10-15.
+    .filter((m) => m.reviewedHoursAgo >= 20 || m.stability <= 1)
     .filter((m) => m.evidence >= 1 && !excluded.has(m.id) &&
       (m.decayed < DUE_HEAT || m.mean < DUE_COMP))
     // mest trængende først: lav kompetence og kold hukommelse vægter op
