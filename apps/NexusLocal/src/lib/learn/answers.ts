@@ -79,8 +79,18 @@ function fracEqual(a: Frac, b: Frac): boolean {
   return ra.n === rb.n && ra.d === rb.d;
 }
 
+/** Dansk decimal-komma → punktum, men KUN mellem cifre: iOS' danske
+ *  decimal-pad har komma og intet punktum, så "0,5" skal læses som 0.5.
+ *  Vektor/matrix-input rammes ikke — deres komponenter splittes FØR denne
+ *  normalisering når der er mellemrum, og "1,5" som enkeltsvar er i dansk
+ *  kontekst et decimaltal, ikke en liste. */
+function normalizeDecimal(raw: string): string {
+  return raw.replace(/(\d),(\d)/g, "$1.$2");
+}
+
 /** Whitespace-tolerant exact comparison of a raw user string against a numeric/string target. */
 function numbersEqual(userRaw: string, target: number | string): boolean {
+  userRaw = normalizeDecimal(userRaw);
   const userFrac = parseFraction(userRaw);
   const targetFrac = typeof target === "number" ? fracFromNumber(target) : parseFraction(String(target));
   if (userFrac && targetFrac) return fracEqual(userFrac, targetFrac);
@@ -162,7 +172,7 @@ function parseMatrixSegment(seg: string): Frac[][] | null {
 export function checkNumeric(userInput: string, answer: DrillAnswer): boolean {
   if (typeof answer.value !== "number" && typeof answer.value !== "string") return false;
   const target = answer.value;
-  const candidates = equationSegments(userInput).filter((s) => parseFraction(s) !== null);
+  const candidates = equationSegments(userInput).map(normalizeDecimal).filter((s) => parseFraction(s) !== null);
   if (candidates.length === 0) {
     // Fallback: no segment parsed as an exact rational — try the whole input
     // through the float-tolerant path so odd-but-honest inputs aren't bricked.
@@ -290,7 +300,9 @@ export function checkAnswer(
 export function inputParses(answerType: AnswerType, userInput: string): boolean {
   switch (answerType) {
     case "numeric":
-      return equationSegments(userInput).some((s) => parseFraction(s) !== null);
+      // normalizeDecimal: dansk decimal-komma accepteres — iOS' danske
+      // decimal-pad HAR intet punktum, så "0,5" må ikke være en formatfejl.
+      return equationSegments(userInput).some((s) => parseFraction(normalizeDecimal(s)) !== null);
     case "vector":
       return equationSegments(userInput).some((s) => parseVectorSegment(s) !== null);
     case "matrix":

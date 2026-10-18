@@ -64,7 +64,12 @@ export function ReviewSession({ onClose, source, title, emptyText }: {
         if (!alive) return;
         setQueue(q);
         if (q && q.length > 0) {
-          const conceptIds = Array.from(new Set(q.flatMap((item) => item.group.concept_ids)));
+          // ⚠️ item.conceptId SKAL med: en authored drill kan matche due-
+          // konceptet via drillens egne concept_ids uden at GRUPPENS liste
+          // indeholder det — uden denne linje manglede selve due-kortet i
+          // både baseline og grading-løkken, så kortet aldrig forbedredes
+          // (brugerrapporteret: binomial-coefficient frosset på stabilitet 1).
+          const conceptIds = Array.from(new Set(q.flatMap((item) => [item.conceptId, ...item.group.concept_ids])));
           try {
             const states = await fetchMemoryStates(conceptIds);
             if (!alive) return;
@@ -100,7 +105,9 @@ export function ReviewSession({ onClose, source, title, emptyText }: {
 
     setMemoryCache((prev) => {
       const next = { ...prev };
-      for (const conceptId of group.concept_ids) {
+      // Samme regel som baseline-loadet: due-kortet selv krediteres ALTID,
+      // også når gruppen ikke lister det (drill-niveau-match).
+      for (const conceptId of new Set([current.conceptId, ...group.concept_ids])) {
         const existing = prev[conceptId] ?? defaultMemoryState("default", conceptId);
         const updated = applyGrade(existing, grade, lens);
         next[conceptId] = updated;
