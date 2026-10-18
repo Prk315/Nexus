@@ -605,15 +605,34 @@ async function compute(
   // ── Step 4: streak ────────────────────────────────────────────────────
   const todayLocal = localDate(now);
   const windowStart = shiftDate(todayLocal, -STREAK_WINDOW_DAYS);
-  const attemptRows = unwrap<{ at: string }>(
-    "lr_attempt_log",
-    await supabase
-      .from("lr_attempt_log")
-      .select("at")
-      .eq("user_id", DEFAULT_USER)
-      .gte("at", windowStart),
-  );
-  const attemptLocalDates = new Set(attemptRows.map((r) => localDate(new Date(r.at))));
+  // ⚠️ PostgREST capper på 1000 rækker, og uden ORDER kom de 1000 ÆLDSTE
+  // forsøg tilbage — "i dag" var aldrig iblandt dem, så streaken stod
+  // permanent på 0 trods daglige sessioner (målt 2026-10-18: forsøg hver
+  // dag siden 12/10, streak_days=0, last_session 15/10 = præcis hvor den
+  // 1000. ældste række landede). NYESTE først + paginering; vi stopper så
+  // snart siderne har passeret et hul på >1 dag, for bagved kan intet
+  // forlænge streaken — kun lastSessionDate (= nyeste dato, side 1) og de
+  // sammenhængende dage fra i dag/i går og bagud bruges af computeStreak.
+  const attemptLocalDates = new Set<string>();
+  const PAGE = 1000;
+  for (let from = 0; from < 20 * PAGE; from += PAGE) {
+    const page = unwrap<{ at: string }>(
+      "lr_attempt_log",
+      await supabase
+        .from("lr_attempt_log")
+        .select("at")
+        .eq("user_id", DEFAULT_USER)
+        .gte("at", windowStart)
+        .order("at", { ascending: false })
+        .range(from, from + PAGE - 1),
+    );
+    for (const r of page) attemptLocalDates.add(localDate(new Date(r.at)));
+    if (page.length < PAGE) break;
+    // Hul-tjek: ældste dato hentet indtil nu; er dagen før den også
+    // dækket? Ellers er kæden brudt og resten af historikken irrelevant.
+    const oldest = [...attemptLocalDates].sort()[0];
+    if (!attemptLocalDates.has(shiftDate(oldest, 1)) && attemptLocalDates.size > 1) break;
+  }
   const { streakDays, lastSessionDate } = computeStreak(attemptLocalDates, todayLocal);
 
   return {
