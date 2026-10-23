@@ -19,6 +19,7 @@
     "dev:stonks": "npm run dev --workspace=apps/Stonks",
     "dev:protocol": "npm run dev --workspace=apps/Protocol",
     "dev:nexuslocal": "npm run dev --workspace=apps/NexusLocal",
+    "nexus": "tsx packages/nexus-cli/src/index.ts",
     "build:all": "npm run build --workspaces --if-present",
     "lint:all": "npm run lint --workspaces --if-present",
     "ios": "./ios-build.sh",
