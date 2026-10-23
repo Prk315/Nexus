@@ -118,16 +118,25 @@
   background: none;
   cursor: pointer;
 }
+/* A notch, not a divider (pf 1226). At rest the seam is a short centred mark
+   — enough to find, nothing to read as a panel border slicing the rail off
+   the page it annotates. The full line appears under the pointer, when it is
+   about to mean something. */
 .colrail-seg::before {
   content: "";
   position: absolute;
-  inset: 10px auto 10px 50%;
+  top: 50%;
+  left: 50%;
+  height: 28px;
+  transform: translateY(-50%);
   width: 1px;
-  background: var(--border-base);
-  transition: background var(--duration) var(--ease), width var(--duration) var(--ease);
+  background: var(--border-strong);
+  transition:
+    background var(--duration) var(--ease),
+    width var(--duration) var(--ease),
+    height var(--duration) var(--ease);
 }
-.colrail-seg:hover::before { background: var(--fg-subdued); width: 2px; }
-.colrail-seg.is-on::before { background: var(--border-strong); }
+.colrail-seg:hover::before { background: var(--fg-subdued); width: 2px; height: calc(100% - 20px); }
 .colrail-seg.is-on:hover::before { background: var(--accent); }
 
 /* ── Columns ────────────────────────────────────────────────────────────────*/
@@ -273,6 +282,12 @@
   right: 6px;
   left: 0;
   display: flex;
+  /* Packed against the SEAM, tick nearest the page (pf 1226). Left-aligned,
+     the entries stood at the far side of a 190px column with a hundred empty
+     pixels between a name and the block it names — the "redundant gap". The
+     tick leads because it is the pointer: name, then dot, then the block. */
+  flex-direction: row-reverse;
+  justify-content: flex-start;
   align-items: flex-start;
   gap: 4px;
   padding: 0;
@@ -281,7 +296,7 @@
   color: var(--fg-subdued);
   font-size: 10.5px;
   line-height: 1.25;
-  text-align: left;
+  text-align: right;
   cursor: pointer;
   opacity: 0.55;
   transition: opacity var(--duration) var(--ease), color var(--duration) var(--ease);
