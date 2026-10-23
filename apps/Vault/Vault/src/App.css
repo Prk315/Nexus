@@ -9902,6 +9902,32 @@ body.vault-block-dragging .tt-bubble {
   overflow-x: auto;
 }
 
+/* Graph search (pf 1223): matches red, context greyed, the rest hidden. */
+.dir-graph-search {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: 0 0 auto;
+}
+.dir-graph-search input {
+  width: 150px;
+  padding: 3px 8px;
+  font-size: 12px;
+  color: var(--fg-base);
+  background: var(--bg-raised);
+  border: 1px solid var(--border-base);
+  border-radius: 999px;
+  outline: none;
+}
+.dir-graph-search input:focus {
+  border-color: var(--accent);
+}
+.dir-search-count {
+  font-size: 11px;
+  color: var(--danger-solid);
+  white-space: nowrap;
+}
+
 .dir-tag-chip {
   flex: 0 0 auto;
   background: none;

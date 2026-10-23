@@ -3,6 +3,7 @@ import {
   capFolderGraph,
   breadcrumb,
   containingFolder,
+  searchSubgraph,
   descendantSubgraph,
   folderGraph,
   layoutRadial,
@@ -243,5 +244,44 @@ describe("capFolderGraph", () => {
     expect(capped.edges).toContainEqual(["R2-c3", "R2-c3-g1"]);
     // The exemption is for the focus alone, not its ring.
     expect(capped.nodeIds).toHaveLength(21);
+  });
+});
+
+describe("searchSubgraph", () => {
+  it("is off for a blank query, not all-matching", () => {
+    expect(searchSubgraph(uniGraph(), "")).toBeNull();
+    expect(searchSubgraph(uniGraph(), "   ")).toBeNull();
+  });
+
+  it("matches the name case-insensitively, as a substring", () => {
+    const res = searchSubgraph(uniGraph(), "mathema")!;
+    expect(res.matches.has("Mathematics")).toBe(true);
+    expect(res.matches.has("Robotics")).toBe(false);
+  });
+
+  it("keeps the whole connected component around a match, both directions", () => {
+    const g = buildGraph([
+      { id: "A", children: [{ id: "B", children: [{ id: "Target" }] }, { id: "C" }] },
+      { id: "Island", children: [{ id: "Island-child" }] },
+    ]);
+    const res = searchSubgraph(g, "target")!;
+    expect(res.matches).toEqual(new Set(["Target"]));
+    // Upward to the root, and across to the sibling branch.
+    expect(res.kept).toEqual(new Set(["A", "B", "C", "Target"]));
+    expect(res.kept.has("Island")).toBe(false);
+  });
+
+  it("no hits keeps nothing", () => {
+    const res = searchSubgraph(uniGraph(), "zzz-not-here")!;
+    expect(res.matches.size).toBe(0);
+    expect(res.kept.size).toBe(0);
+  });
+
+  it("does not hang on a cycle", () => {
+    const g = buildGraph([{ id: "A", children: [{ id: "B" }] }]);
+    g.edges["B"] = ["A"];
+    g.back_edges["A"] = ["B"];
+    const res = searchSubgraph(g, "a")!;
+    expect(res.kept).toEqual(new Set(["A", "B"]));
   });
 });

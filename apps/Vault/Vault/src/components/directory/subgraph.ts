@@ -277,6 +277,47 @@ export function projectIso(
   };
 }
 
+export interface SearchResult {
+  /** Nodes whose name matches the query — these draw red. */
+  matches: Set<string>;
+  /** The matches plus everything connected to one; all else is hidden. */
+  kept: Set<string>;
+}
+
+/**
+ * What a graph search shows: the matches, and their connected context.
+ *
+ * Matching is a case-insensitive substring of the node NAME — the same thing
+ * the sidebar shows, so what you can read is what you can find. Context walks
+ * edges BOTH ways (a match's parents matter as much as its children: "where
+ * does this live" is half of why anyone searches a graph), so `kept` is the
+ * union of the weakly-connected components containing a match. The caller
+ * draws matches red, the rest of `kept` greyed, and hides everything else —
+ * hidden rather than dimmed, exactly like the folder zoom (pf 1223).
+ *
+ * A blank query is null, not "everything matches": the caller treats null as
+ * "search is off" and leaves the graph exactly as it was.
+ */
+export function searchSubgraph(graph: VaultGraph, query: string): SearchResult | null {
+  const q = query.trim().toLowerCase();
+  if (!q) return null;
+  const matches = new Set<string>();
+  for (const node of Object.values(graph.nodes)) {
+    if (node.name.toLowerCase().includes(q)) matches.add(node.id);
+  }
+  const kept = new Set<string>(matches);
+  const stack = [...matches];
+  while (stack.length) {
+    const cur = stack.pop()!;
+    for (const next of [...(graph.edges[cur] ?? []), ...(graph.back_edges[cur] ?? [])]) {
+      if (kept.has(next) || !graph.nodes[next]) continue;
+      kept.add(next);
+      stack.push(next);
+    }
+  }
+  return { matches, kept };
+}
+
 /**
  * The folder chain above `id`, root-first, ending with `id`.
  *

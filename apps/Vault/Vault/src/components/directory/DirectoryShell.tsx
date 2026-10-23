@@ -5,7 +5,7 @@ import { DirectoryTree } from "./DirectoryTree";
 import type { ImportKind } from "./DirectoryTree";
 import { FolderDirectory } from "./FolderDirectory";
 import { Minimap } from "./Minimap";
-import { containingFolder, descendantSubgraph, tagSubgraph } from "./subgraph";
+import { containingFolder, descendantSubgraph, searchSubgraph, tagSubgraph } from "./subgraph";
 import { DEFAULT_GRAPH_FILTERS } from "../GraphFilterPanel";
 import { ErrorFence } from "./ErrorFence";
 import { LayoutSwitch } from "./LayoutSwitch";
@@ -152,6 +152,29 @@ export function DirectoryShell(props: Props) {
     };
   }, [graphData, visible]);
 
+  // Search layers ON TOP of the focus: zoom to UNI, search "linear", and the
+  // hits light up within UNI. Matches draw red, their connected context stays
+  // greyed, everything else is hidden — the same hide-not-dim rule as the
+  // folder zoom (pf 1223).
+  const [searchText, setSearchText] = useState("");
+  const search = useMemo(() => searchSubgraph(graph, searchText), [graph, searchText]);
+  const shownData = useMemo(() => {
+    if (!search) return focusedData;
+    const end = (v: any) => (typeof v === "object" && v ? v.id : v);
+    return {
+      nodes: focusedData.nodes.filter((n: any) => search.kept.has(n.id)),
+      links: focusedData.links.filter(
+        (l: any) => search.kept.has(end(l.source)) && search.kept.has(end(l.target)),
+      ),
+    };
+  }, [focusedData, search]);
+  // Matches the graph can actually show — a hit outside the current focus is
+  // real but off screen, and the count should not claim otherwise.
+  const shownMatches = useMemo(
+    () => (search ? focusedData.nodes.filter((n: any) => search.matches.has(n.id)).length : 0),
+    [focusedData, search],
+  );
+
   // Tags worth drawing as clusters, most-used first.
   const clusterTags = useMemo(() => {
     const counts = new Map<string, number>();
@@ -197,7 +220,7 @@ export function DirectoryShell(props: Props) {
         : null;
 
   // Changing what is on screen should re-frame it; the key is what changed.
-  const fitSignal = `${focus.type}:${focus.type === "folder" ? focus.id : focus.type === "tag" ? focus.tag : ""}:${focusedData.nodes.length}`;
+  const fitSignal = `${focus.type}:${focus.type === "folder" ? focus.id : focus.type === "tag" ? focus.tag : ""}:${shownData.nodes.length}:${search ? searchText.trim().toLowerCase() : ""}`;
 
   return (
     <div className="dir-shell">
@@ -309,6 +332,25 @@ export function DirectoryShell(props: Props) {
                 </>
               )}
             </div>
+            <div className="dir-graph-search">
+              <input
+                value={searchText}
+                onChange={(e) => setSearchText(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Escape") {
+                    setSearchText("");
+                    (e.target as HTMLInputElement).blur();
+                  }
+                }}
+                placeholder="Search the graph…"
+                aria-label="Search the graph"
+              />
+              {search && (
+                <span className="dir-search-count" aria-live="polite">
+                  {shownMatches} match{shownMatches === 1 ? "" : "es"}
+                </span>
+              )}
+            </div>
             <div className="dir-tagbar">
               {clusterTags.map((tag) => (
                 <button
@@ -356,7 +398,8 @@ export function DirectoryShell(props: Props) {
                 <Suspense fallback={<div className="loading-state">Loading graph…</div>}>
                   <ForceGraphView
                     graph={graph}
-                    filteredGraphData={focusedData}
+                    filteredGraphData={shownData}
+                    searchMatches={search ? search.matches : null}
                     graphFilters={DEFAULT_GRAPH_FILTERS}
                     is3D={is3D}
                     setIs3D={setIs3D}

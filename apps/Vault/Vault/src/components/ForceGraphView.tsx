@@ -67,7 +67,19 @@ export interface ForceGraphViewProps {
    * passes nothing and keeps its plain background click.
    */
   onClusterClick?: (tag: string) => void;
+  /**
+   * Active graph search (pf 1223): these ids draw red, every other node in
+   * the data greys out. The CALLER decides what is in the data — the search's
+   * kept set arrives as `filteredGraphData`, this prop only colours it.
+   */
+  searchMatches?: Set<string> | null;
 }
+
+// The search's two colours. Literals because this file paints canvases and
+// THREE materials, where CSS variables do not resolve; they mirror
+// --danger-solid and the link grey.
+const SEARCH_HIT = "#ef4444";
+const SEARCH_DIM = "rgba(156,163,175,0.35)";
 
 export function ForceGraphView({
   graph,
@@ -86,6 +98,7 @@ export function ForceGraphView({
   height,
   fitSignal,
   onClusterClick,
+  searchMatches,
 }: ForceGraphViewProps) {
   const fullGraphRef = useRef<any>(undefined);
   // Cluster bubble meshes and label sprites keyed by tag name
@@ -279,8 +292,23 @@ export function ForceGraphView({
   // Keep ref fresh so the D3 cluster force always sees current nodes
   filteredNodesRef.current = filteredGraphData.nodes as any[];
 
-  const fullGraphPaint = (node: any, ctx: CanvasRenderingContext2D, globalScale: number) =>
+  const fullGraphPaint = (node: any, ctx: CanvasRenderingContext2D, globalScale: number) => {
+    // The 2D renderer's version of the search colours: context fades to the
+    // same alpha the 3D dim carries, a hit keeps full colour and gains a red
+    // ring (drawNode's own palette stays untouched either way).
+    const dimmed = searchMatches ? !searchMatches.has(node.id) : false;
+    if (dimmed) ctx.save();
+    if (dimmed) ctx.globalAlpha = 0.35;
     drawNode(node, ctx, globalScale, graph.tag_colors, node.id === selectedId, node.id === linkSource, linkMode, graphFilters.fontSize);
+    if (dimmed) ctx.restore();
+    if (searchMatches?.has(node.id) && node.x != null && node.y != null) {
+      ctx.beginPath();
+      ctx.arc(node.x, node.y, 7 + 3 / globalScale, 0, Math.PI * 2);
+      ctx.strokeStyle = SEARCH_HIT;
+      ctx.lineWidth = 2 / globalScale;
+      ctx.stroke();
+    }
+  };
 
   function fullGraphPaintLink(link: any, ctx: CanvasRenderingContext2D, globalScale: number) {
     const start = typeof link.source === "object" ? link.source : null;
@@ -450,7 +478,11 @@ export function ForceGraphView({
         graphData={filteredGraphData}
         backgroundColor="#f8f9fa"
         nodeLabel={(node: any) => node.name}
-        nodeColor={(node: any) => resolveNodeColor(node, graph.tag_colors)}
+        nodeColor={(node: any) =>
+          searchMatches
+            ? (searchMatches.has(node.id) ? SEARCH_HIT : SEARCH_DIM)
+            : resolveNodeColor(node, graph.tag_colors)
+        }
         nodeRelSize={5}
         linkColor={() => "#9ca3af"}
         linkWidth={1.5}
