@@ -1,0 +1,23 @@
+<!doctype html>
+<!-- Dev-only: the REAL DirectoryShell on a fixture graph, with NO Supabase
+     session and no App around it. Open http://localhost:1433/directoryproto.html
+
+     It exists because "the layout doesn't show up" has several causes that look
+     identical in the app — a stored layout preference, a lazy chunk that
+     rejects, a throw inside the graph — and none of them are distinguishable
+     from a terminal. Here the shell is the only thing on the page, so if it
+     renders, the shell is not what is broken. It also self-reports: the banner
+     at the top turns red and names the error on any uncaught exception or
+     rejected promise, which is what a headless fetch can then read. -->
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <title>directory shell harness</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  </head>
+  <body style="margin: 0">
+    <div id="status" data-state="booting" style="font: 12px system-ui; padding: 4px 8px">booting…</div>
+    <div id="root" style="height: calc(100vh - 24px)"></div>
+    <script type="module" src="/src/directoryproto.tsx"></script>
+  </body>
+</html>
