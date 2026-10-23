@@ -545,6 +545,7 @@ function App() {
   return (
     <div style={{ display: "flex", flexDirection: "column", height: "100vh" }}>
       <NexusHeader
+        autoHide
         appName="Vault"
         userEmail={user?.email}
         onSignOut={() => signOut()}
