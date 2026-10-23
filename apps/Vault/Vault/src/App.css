@@ -1452,44 +1452,108 @@ body {
 .tab-item.tab-active .tab-close { opacity: 0.7; }
 .tab-close:hover { opacity: 1 !important; background: var(--bg-muted); }
 
-.editor-toolbar {
+/* ── Editor chrome strip ─────────────────────────────────────────────────────
+   One short row where three used to be — the title line, the tag bar and the
+   link chips. The node's name is deliberately not repeated here: the tab above
+   already carries it, and the second copy was costing a whole row.
+
+   Everything below is tokenised. This strip sits directly above the editing
+   surface, which is the worst place in the app for a colour that only works on
+   one theme. */
+.chrome-strip {
+  position: relative;
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  padding: 10px 20px;
+  gap: 8px;
+  padding: 3px 20px;
+  min-height: 30px;
   border-bottom: 1px solid var(--border-faint);
   background: var(--bg-base);
 }
 
-.note-title {
-  font-size: 13px;
-  font-weight: 500;
-  color: var(--fg-muted);
-  letter-spacing: 0.01em;
+/* Pushes the status cluster to the trailing edge, so the strip reads as "what
+   this note is" then "is it safe". */
+.chrome-strip-gap {
+  flex: 1 1 auto;
+  min-width: 8px;
 }
 
-.toolbar-actions {
-  display: flex;
-  gap: 6px;
-}
-
-.toolbar-actions button {
+/* History used to inherit `.toolbar-actions button` from the title line. Same
+   pill, one size down to sit in the shorter strip. */
+.editor-history-btn {
   background: var(--bg-raised);
   border: 1px solid var(--border-base);
   border-radius: 100px;
   color: var(--fg-muted);
-  padding: 4px 14px;
-  font-size: 12px;
+  padding: 2px 10px;
+  font-size: 11px;
   font-weight: 500;
   cursor: pointer;
   box-shadow: none;
+  flex-shrink: 0;
   transition: all var(--duration) var(--ease);
 }
 
-.toolbar-actions button:hover {
+.editor-history-btn:hover {
   background: var(--bg-muted);
   color: var(--fg-primary);
   border-color: var(--border-strong);
+}
+
+/* ── Links, collapsed to a count ─────────────────────────────────────────────
+   The chips were a full row that was empty on most notes and one line long on
+   the rest. The count is always one line; the chips are one click away and are
+   the same chips, × included. */
+.links-summary {
+  position: relative;
+  flex-shrink: 0;
+}
+
+.links-count {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  background: none;
+  border: 1px solid transparent;
+  border-radius: 100px;
+  padding: 1px 7px;
+  font-size: 11px;
+  font-weight: 500;
+  line-height: 1.5;
+  cursor: pointer;
+  box-shadow: none;
+  transition: background var(--duration) var(--ease),
+              border-color var(--duration) var(--ease);
+}
+
+.links-count:hover,
+.links-count-open {
+  background: var(--bg-raised);
+  border-color: var(--border-faint);
+}
+
+.links-count-out { color: var(--edge-out); }
+.links-count-in  { color: var(--edge-in); }
+
+/* Drops OVER the editor rather than pushing it down: expanding a list must not
+   reflow the document being read underneath it. */
+.links-popover {
+  position: absolute;
+  top: calc(100% + 5px);
+  left: 0;
+  z-index: 40;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 5px;
+  max-width: 420px;
+  max-height: 220px;
+  overflow-y: auto;
+  padding: 7px 9px;
+  background: var(--bg-base);
+  border: 1px solid var(--border-base);
+  border-radius: 8px;
+  box-shadow: var(--shadow-md);
 }
 
 /* ── TipTap editor ──────────────────────────────────────────────────────── */
@@ -5390,20 +5454,30 @@ body.vault-block-dragging .tt-bubble {
 
 
 /* ── Tag bar ────────────────────────────────────────────────────────────── */
+/* Nested inside `.chrome-strip` now rather than being a row of its own, so it
+   carries no padding, border, background or height of its own.
+
+   It deliberately does NOT wrap: a note with a dozen tags would otherwise grow
+   the strip back into the stack of rows this replaced. The overflow scrolls
+   instead, and the suggestion dropdown is `position: fixed` off the input's
+   rect, so nothing clips it. */
 .tag-bar {
   display: flex;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
   align-items: center;
-  gap: 5px;
-  padding: 6px 20px;
-  border-bottom: 1px solid var(--border-faint);
-  background: var(--bg-base);
-  min-height: 36px;
+  gap: 4px;
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow-x: auto;
+  scrollbar-width: none;
 }
+
+.tag-bar::-webkit-scrollbar { display: none; }
 
 .tag-chip {
   display: inline-flex;
   align-items: center;
+  flex-shrink: 0;
   gap: 4px;
   background: var(--bg-raised);
   border: 1px solid var(--border-faint);
@@ -5443,9 +5517,10 @@ body.vault-block-dragging .tt-bubble {
   border: none;
   outline: none;
   color: var(--fg-muted);
-  font-size: 12px;
-  width: 90px;
-  min-width: 60px;
+  font-size: 11px;
+  width: 64px;
+  min-width: 52px;
+  flex-shrink: 0;
 }
 
 .tag-input::placeholder { color: var(--fg-ghost); }
@@ -5479,18 +5554,9 @@ body.vault-block-dragging .tt-bubble {
   background: var(--bg-subtle);
 }
 
-/* ── Edge bar ───────────────────────────────────────────────────────────── */
-.edge-bar {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 5px;
-  padding: 5px 20px;
-  border-bottom: 1px solid var(--border-faint);
-  background: var(--bg-deep);
-  min-height: 32px;
-}
-
+/* ── Edge chips ──────────────────────────────────────────────────────────────
+   `.edge-bar` — the full-height row these used to sit in — is gone. The chips
+   are unchanged and now live inside `.links-popover`, behind the count. */
 .edge-chip {
   display: inline-flex;
   align-items: center;

@@ -1,3 +1,4 @@
+import { useRef, useState } from "react";
 import { LayoutGrid, Network, Bot, Mail, MessageSquare, Clock, CalendarDays, UserRound, Settings, LogOut } from "lucide-react";
 import { DropdownMenu } from "radix-ui";
 import { useConnectedApps } from "../hooks/useConnectedApps";
@@ -89,6 +90,20 @@ interface NexusHeaderProps {
    * different control.
    */
   jobsApi?: JobsPanelProps["api"];
+  /**
+   * Opt-in: hide the bar until the pointer reaches the top edge of the window,
+   * or something inside it takes focus. Keyboard users therefore never lose it.
+   *
+   * ABSENT IS THE OLD BEHAVIOUR, exactly — the bar renders in normal flow and
+   * nothing about it moves. Every app but the one that asks for this keeps
+   * rendering as it always did, which is the whole reason this is a prop rather
+   * than a change to the header.
+   *
+   * When on, the bar leaves the layout (the wrapper is zero-height and the bar
+   * is absolutely positioned over the content beneath), so the app below gains
+   * the 44px the bar used to occupy. Only a 6px hover strip stays behind.
+   */
+  autoHide?: boolean;
 }
 
 // Small icon button — used for the right-side action row
@@ -138,12 +153,32 @@ export function NexusHeader({
   onConvertMailToTask,
   mailApi,
   jobsApi,
+  autoHide,
 }: NexusHeaderProps) {
   const { apps, isNexusRunning } = useConnectedApps();
 
-  return (
+  // Auto-hide reveal state. Two independent reasons to be visible, so neither
+  // can switch the other off: the pointer is in the top edge, or focus is
+  // somewhere inside the bar. Both are plain React handlers on the wrapper —
+  // there is no window listener here, and the "hover zone" is a real element
+  // rather than a mousemove watcher.
+  const autoHideRef = useRef<HTMLDivElement>(null);
+  const [pointerInside, setPointerInside] = useState(false);
+  const [focusInside, setFocusInside] = useState(false);
+  const revealed = !autoHide || pointerInside || focusInside;
+
+  const bar = (
     <header
-      className="relative h-11 border-b border-border bg-background/95 backdrop-blur-sm flex items-center px-3 gap-2 shrink-0"
+      className={cn(
+        "h-11 border-b border-border bg-background/95 backdrop-blur-sm flex items-center px-3 gap-2 shrink-0",
+        // `absolute` is also a containing block, so the center slot below keeps
+        // positioning against the bar either way.
+        autoHide ? "absolute inset-x-0 top-0 transition-[transform,opacity] duration-200 ease-out" : "relative",
+        // Hidden with transform + opacity, never `visibility`/`display`: those
+        // would take the bar out of the tab order, and focusing it from the
+        // keyboard is the other half of how it is reached.
+        autoHide && !revealed && "-translate-y-full opacity-0 pointer-events-none"
+      )}
       // Allow dragging the window by the header on desktop only
       data-tauri-drag-region={isMobileDevice ? undefined : ""}
     >
@@ -315,5 +350,34 @@ export function NexusHeader({
         </DropdownMenu.Root>
       </div>
     </header>
+  );
+
+  if (!autoHide) return bar;
+
+  return (
+    <div
+      ref={autoHideRef}
+      className="relative h-0 shrink-0 z-50"
+      onMouseEnter={() => setPointerInside(true)}
+      onMouseLeave={() => {
+        // A Radix menu renders in a PORTAL, outside this subtree — so moving
+        // the pointer from the trigger into its own open menu reads here as
+        // leaving the header, and the bar would slide away underneath the menu
+        // the user is still reading. The trigger keeps `data-state="open"`
+        // while that is true, which is the one tell that survives the portal.
+        if (autoHideRef.current?.querySelector('[data-state="open"]')) return;
+        setPointerInside(false);
+      }}
+      // React's onFocus/onBlur bubble (the native events do not), so these see
+      // focus landing on any control inside the bar.
+      onFocus={() => setFocusInside(true)}
+      onBlur={() => setFocusInside(false)}
+    >
+      {/* The hover zone — all that is left holding the top edge once the bar
+          itself is out of flow. Deliberately thin: it sits over the top of
+          whatever the app renders beneath and swallows clicks there. */}
+      <div className="absolute inset-x-0 top-0 h-1.5" aria-hidden="true" />
+      {bar}
+    </div>
   );
 }
