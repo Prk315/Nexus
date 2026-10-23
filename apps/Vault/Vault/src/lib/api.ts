@@ -16,7 +16,7 @@ export async function loadGraph(): Promise<VaultGraph> {
   // node again regardless of what the database allows. vault_tag_colors stays
   // owner-only (no team policy on it — tag colors are per-viewer).
   const [nodesRes, edgesRes, colorsRes] = await Promise.all([
-    supabase.from("vault_nodes").select("id, name, kind, tags, team_id, user_id"),
+    supabase.from("vault_nodes").select("id, name, kind, tags, team_id, user_id, deleted_at"),
     supabase.from("vault_edges").select("from_id, to_id"),
     supabase.from("vault_tag_colors").select("tag, color").eq("user_id", getUserId()),
   ]);
@@ -25,8 +25,13 @@ export async function loadGraph(): Promise<VaultGraph> {
   if (colorsRes.error) err(colorsRes.error);
 
   const nodes: Record<string, VaultNode> = {};
+  // Binned nodes are filtered HERE, not server-side: their ids are needed to
+  // drop the edges that point at them, or a note linking a binned note renders
+  // a dangling edge into nothing. The rows still exist — that is the bin.
+  const binned = new Set<string>();
   sharedNodeIds.clear();
   for (const n of nodesRes.data!) {
+    if (n.deleted_at != null) { binned.add(n.id); continue; }
     nodes[n.id] = { id: n.id, name: n.name, kind: n.kind as NodeKind, tags: n.tags ?? [], team_id: n.team_id ?? null, user_id: n.user_id };
     // Feeds assertNotCoedited, so the co-editing guard costs a query only on
     // notes that could actually have CRDT state. team_id is already in the
@@ -37,6 +42,7 @@ export async function loadGraph(): Promise<VaultGraph> {
   const edges: Record<string, string[]> = {};
   const back_edges: Record<string, string[]> = {};
   for (const e of edgesRes.data!) {
+    if (binned.has(e.from_id) || binned.has(e.to_id)) continue;
     (edges[e.from_id] ??= []).push(e.to_id);
     (back_edges[e.to_id] ??= []).push(e.from_id);
   }
@@ -59,7 +65,52 @@ export async function createNode(name: string, kind: NodeKind): Promise<VaultGra
   return loadGraph();
 }
 
+// Deleting is a state, not an event: the node is moved to the bin and NOTHING
+// is destroyed — content, annotations, journals, CRDT state and version history
+// all stay put until the bin is emptied. Two book nodes died on 2026-10-21 to
+// an iPad double-tap, on a free plan with no backups; this is what brings the
+// next ones back. The old destructive path lives on only in `emptyTrash`.
 export async function deleteNode(id: string): Promise<VaultGraph> {
+  const { error } = await supabase.from("vault_nodes")
+    .update({ deleted_at: new Date().toISOString() })
+    .eq("id", id);
+  if (error) err(error);
+  // Edges survive untouched — loadGraph drops the ones touching a binned node,
+  // so a restore puts the node back with every link it had.
+  return loadGraph();
+}
+
+export async function restoreNode(id: string): Promise<VaultGraph> {
+  const { error } = await supabase.from("vault_nodes")
+    .update({ deleted_at: null })
+    .eq("id", id);
+  if (error) err(error);
+  return loadGraph();
+}
+
+export interface TrashItem {
+  id: string;
+  name: string;
+  kind: NodeKind;
+  deleted_at: string;
+}
+
+// Own nodes only, deliberately: a teammate's binned shared node is theirs to
+// restore or destroy (the guard trigger enforces the same ownership on the
+// transition itself).
+export async function listTrash(): Promise<TrashItem[]> {
+  const { data, error } = await supabase.from("vault_nodes")
+    .select("id, name, kind, deleted_at")
+    .eq("user_id", getUserId())
+    .not("deleted_at", "is", null)
+    .order("deleted_at", { ascending: false });
+  if (error) err(error);
+  return (data ?? []).map(n => ({ id: n.id, name: n.name, kind: n.kind as NodeKind, deleted_at: n.deleted_at! }));
+}
+
+// Permanently destroy one binned node. The ONLY destructive path left — the
+// pre-bin `deleteNode` body, called per node from `emptyTrash`.
+async function hardDeleteNode(id: string): Promise<void> {
   // Clean up content rows that won't cascade (no FK on vault_content / vault_journals).
   // `_textannot` and `_bookmarks` were a pre-existing orphan gap (same suffix-key
   // shape as `_annot`/`_hl`); `_margins` is the margin-notes layer added alongside.
@@ -85,6 +136,14 @@ export async function deleteNode(id: string): Promise<VaultGraph> {
   const { error } = await supabase.from("vault_nodes").delete().eq("id", id);
   if (error) err(error);
   // vault_edges cascade-deletes via FK
+}
+
+export async function emptyTrash(): Promise<VaultGraph> {
+  // Sequential, not Promise.all over nodes: each hardDeleteNode already fans
+  // out ~11 queries, and the bin is small (the partial index's whole premise).
+  for (const item of await listTrash()) {
+    await hardDeleteNode(item.id);
+  }
   return loadGraph();
 }
 

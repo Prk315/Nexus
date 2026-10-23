@@ -1,5 +1,19 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 
+// How long the destructive button stays inert after the dialog appears.
+//
+// A dialog that opens in response to a tap materialises UNDER the finger, and
+// the second tap of a double-tap then lands on whatever is now at that point.
+// On iPad that is how a double-tap near the right edge of a sidebar row could
+// delete a node outright: tap one pressed ×, tap two pressed "Delete node"
+// before the dialog had even been seen. So the destructive button only starts
+// accepting input once a gesture could plausibly have begun after reading it.
+//
+// Cancel is deliberately NOT delayed — the safe action must always be
+// immediately available, and 300ms of an unresponsive "Delete" is invisible to
+// anyone who actually meant to press it.
+const CONFIRM_ARM_MS = 400;
+
 // In-app confirmation modal.
 //
 // window.confirm() is suppressed in Tauri's WKWebView (iOS) and silently
@@ -27,6 +41,12 @@ export function ConfirmDialog({
   onConfirm, onCancel,
 }: ConfirmDialogProps) {
   const cancelRef = useRef<HTMLButtonElement>(null);
+  const [armed, setArmed] = useState(false);
+
+  useEffect(() => {
+    const t = window.setTimeout(() => setArmed(true), CONFIRM_ARM_MS);
+    return () => window.clearTimeout(t);
+  }, []);
 
   // Cancel is the focused default: Enter/Space on an untouched dialog must
   // never destroy anything.
@@ -62,7 +82,15 @@ export function ConfirmDialog({
           <button ref={cancelRef} className="confirm-btn confirm-btn-cancel" onClick={onCancel}>
             {cancelLabel}
           </button>
-          <button className="confirm-btn confirm-btn-danger" onClick={onConfirm}>
+          <button
+            className="confirm-btn confirm-btn-danger"
+            // `aria-disabled` rather than `disabled`: the button must keep its
+            // normal appearance, because a 400ms flicker of a greyed-out
+            // "Delete" reads as a broken dialog to the overwhelming majority
+            // who are not mid-double-tap.
+            aria-disabled={!armed}
+            onClick={() => { if (armed) onConfirm(); }}
+          >
             {confirmLabel}
           </button>
         </div>
