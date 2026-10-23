@@ -221,10 +221,14 @@ export function ForceGraphView({
   useEffect(() => {
     if (fitSignal === undefined) return;
     const t = setTimeout(() => {
-      try { fullGraphRef.current?.zoomToFit(500, 90); } catch { /* not placed yet */ }
+      // Same proportional padding as onEngineStop's settled fit (fitPad is
+      // declared below with the canvas size; recompute here rather than
+      // reaching forward past where it exists yet).
+      const pad = Math.max(20, Math.min(60, Math.min(width ?? window.innerWidth - 260, height ?? window.innerHeight) * 0.08));
+      try { fullGraphRef.current?.zoomToFit(500, pad); } catch { /* not placed yet */ }
     }, 600);
     return () => clearTimeout(t);
-  }, [fitSignal]);
+  }, [fitSignal, width, height]);
 
   /**
    * Which cluster bubble a background press landed on.
@@ -412,6 +416,10 @@ export function ForceGraphView({
   // here exactly as before, keeping the overlay's sizing untouched.
   const canvasWidth = width ?? window.innerWidth - 260;
   const canvasHeight = height ?? window.innerHeight;
+  // Fit padding scales with the canvas. The old fixed 120px was tuned on a
+  // full-window graph; in the grid shell's ~400px-tall cell it consumed 240px
+  // of the 400 and squeezed a zoomed folder into a strip (pf 1225).
+  const fitPad = Math.max(20, Math.min(60, Math.min(canvasWidth, canvasHeight) * 0.08));
 
   // 2D canvas graph — used both as the explicit 2D mode and as the WebGL fallback.
   const twoDGraph = (
@@ -462,7 +470,7 @@ export function ForceGraphView({
         } : undefined}
         onEngineStop={() => {
           savePositions(filteredGraphData.nodes);
-          fullGraphRef.current?.zoomToFit(400, 120);
+          fullGraphRef.current?.zoomToFit(400, fitPad);
         }}
       />
     </WebGLErrorBoundary>

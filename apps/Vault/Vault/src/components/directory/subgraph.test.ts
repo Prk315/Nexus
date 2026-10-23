@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
 import {
+  capFolderGraph,
   breadcrumb,
   containingFolder,
   descendantSubgraph,
@@ -183,5 +184,64 @@ describe("containingFolder", () => {
     const g = buildGraph([{ id: "Loose", kind: "Note" }]);
     expect(containingFolder(g, null)).toBeNull();
     expect(containingFolder(g, "Loose")).toBeNull();
+  });
+});
+
+describe("capFolderGraph", () => {
+  // Four roots, four children each, three grandchildren under every child:
+  // rings of 4 / 16 / 48.
+  function deepVault() {
+    return buildGraph(
+      ["R1", "R2", "R3", "R4"].map((r) => ({
+        id: r,
+        children: [1, 2, 3, 4].map((c) => ({
+          id: `${r}-c${c}`,
+          children: [1, 2, 3].map((gc) => ({ id: `${r}-c${c}-g${gc}` })),
+        })),
+      })),
+    );
+  }
+
+  it("returns a small vault untouched — the dev seed must not change shape", () => {
+    const g = uniGraph();
+    const sub = folderGraph(g);
+    expect(capFolderGraph(g, sub, 36)).toBe(sub);
+  });
+
+  it("keeps the shallowest whole rings that fit, and drops the rest whole", () => {
+    const g = deepVault();
+    const capped = capFolderGraph(g, folderGraph(g), 36);
+    // Rings 0+1 are 20 nodes; ring 2 would blow the budget of 36.
+    expect(capped.nodeIds).toHaveLength(20);
+    expect(capped.nodeIds).toContain("R1");
+    expect(capped.nodeIds).toContain("R3-c2");
+    expect(capped.nodeIds.some((id) => id.includes("-g"))).toBe(false);
+  });
+
+  it("keeps ring 0 even when the roots alone exceed the budget", () => {
+    const g = buildGraph(
+      Array.from({ length: 10 }, (_, i) => ({ id: `R${i}` })),
+    );
+    const capped = capFolderGraph(g, folderGraph(g), 4);
+    expect(capped.nodeIds).toHaveLength(10);
+  });
+
+  it("never leaves an edge pointing at a dropped node", () => {
+    const g = deepVault();
+    const capped = capFolderGraph(g, folderGraph(g), 36);
+    const members = new Set(capped.nodeIds);
+    expect(capped.edges.every(([a, b]) => members.has(a) && members.has(b))).toBe(true);
+  });
+
+  it("the focused folder survives the cap, with its chain back to a root", () => {
+    const g = deepVault();
+    const capped = capFolderGraph(g, folderGraph(g), 36, "R2-c3-g1");
+    expect(capped.nodeIds).toContain("R2-c3-g1");
+    // Its breadcrumb is intact, so the thread draws connected.
+    expect(capped.nodeIds).toContain("R2-c3");
+    expect(capped.nodeIds).toContain("R2");
+    expect(capped.edges).toContainEqual(["R2-c3", "R2-c3-g1"]);
+    // The exemption is for the focus alone, not its ring.
+    expect(capped.nodeIds).toHaveLength(21);
   });
 });

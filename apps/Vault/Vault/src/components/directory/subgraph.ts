@@ -94,6 +94,86 @@ export function folderGraph(graph: VaultGraph): SubGraph {
   return { nodeIds: order, edges: inducedEdges(graph, members) };
 }
 
+/**
+ * BFS depth from the subgraph's roots — the ring each member draws on.
+ *
+ * Shared by `layoutRadial` and `capFolderGraph` so "which ring" can never
+ * disagree between what is kept and where it is placed. Members unreachable
+ * from any root (a pure cycle) land on ring 1, as before.
+ */
+export function subgraphDepths(graph: VaultGraph, sub: SubGraph): Map<string, number> {
+  const members = new Set(sub.nodeIds);
+  const depth = new Map<string, number>();
+  const roots = sub.nodeIds.filter(
+    (id) => !(graph.back_edges[id] ?? []).some((p) => members.has(p)),
+  );
+  const queue: string[] = [];
+  for (const r of roots) {
+    depth.set(r, 0);
+    queue.push(r);
+  }
+  while (queue.length) {
+    const cur = queue.shift()!;
+    const d = depth.get(cur)!;
+    for (const next of graph.edges[cur] ?? []) {
+      if (!members.has(next) || depth.has(next)) continue;
+      depth.set(next, d + 1);
+      queue.push(next);
+    }
+  }
+  for (const id of sub.nodeIds) if (!depth.has(id)) depth.set(id, 1);
+  return depth;
+}
+
+/**
+ * The shallowest whole rings of a subgraph that fit a node budget.
+ *
+ * The minimap orients; it does not enumerate. On the seeded dev vault the
+ * folder graph is a couple of dozen nodes and this returns it unchanged — but
+ * on a real vault it is well over a hundred, and 150×120 pixels of radial
+ * layout turns that into a uniform grey blob (pf 1225). Dropping the DEEPEST
+ * rings first loses the least orientation: the roots and their children are
+ * the shape of the directory, ring four is texture.
+ *
+ * Rings are kept whole or not at all — half a ring reads as "those folders
+ * don't exist", a missing ring reads as "the map stops here". Ring 0 is always
+ * kept even if it alone exceeds the budget: a map with no roots is no map.
+ *
+ * `keep` (the currently focused folder) is exempt from the cap along with its
+ * breadcrumb chain: the map's one job while zoomed is saying WHERE you are,
+ * and a "you are here" dot that disappears past ring two does the opposite.
+ * The chain draws as a sparse thread leading out of the kept rings.
+ */
+export function capFolderGraph(
+  graph: VaultGraph,
+  sub: SubGraph,
+  budget: number,
+  keep?: string | null,
+): SubGraph {
+  if (sub.nodeIds.length <= budget) return sub;
+  const depth = subgraphDepths(graph, sub);
+  const ringSize = new Map<number, number>();
+  for (const id of sub.nodeIds) {
+    const d = depth.get(id)!;
+    ringSize.set(d, (ringSize.get(d) ?? 0) + 1);
+  }
+  let keepDepth = 0;
+  let total = ringSize.get(0) ?? 0;
+  for (let d = 1; ringSize.has(d); d++) {
+    if (total + ringSize.get(d)! > budget) break;
+    total += ringSize.get(d)!;
+    keepDepth = d;
+  }
+  const members = new Set(sub.nodeIds.filter((id) => depth.get(id)! <= keepDepth));
+  if (keep && depth.has(keep)) {
+    for (const id of breadcrumb(graph, keep)) if (depth.has(id)) members.add(id);
+  }
+  return {
+    nodeIds: sub.nodeIds.filter((id) => members.has(id)),
+    edges: sub.edges.filter(([a, b]) => members.has(a) && members.has(b)),
+  };
+}
+
 export interface Placed {
   id: string;
   /** Normalised to the unit cube, so the caller owns the pixel size. */
@@ -117,29 +197,7 @@ export interface Placed {
  * to re-read every glance is not doing a map's job.
  */
 export function layoutRadial(graph: VaultGraph, sub: SubGraph): Placed[] {
-  const members = new Set(sub.nodeIds);
-  const depth = new Map<string, number>();
-
-  // Roots of the SUBGRAPH: no parent that is itself a member.
-  const roots = sub.nodeIds.filter(
-    (id) => !(graph.back_edges[id] ?? []).some((p) => members.has(p)),
-  );
-  const queue: string[] = [];
-  for (const r of roots) {
-    depth.set(r, 0);
-    queue.push(r);
-  }
-  while (queue.length) {
-    const cur = queue.shift()!;
-    const d = depth.get(cur)!;
-    for (const next of graph.edges[cur] ?? []) {
-      if (!members.has(next) || depth.has(next)) continue;
-      depth.set(next, d + 1);
-      queue.push(next);
-    }
-  }
-  // A member unreachable from any root (a pure cycle) still needs a ring.
-  for (const id of sub.nodeIds) if (!depth.has(id)) depth.set(id, 1);
+  const depth = subgraphDepths(graph, sub);
 
   const byDepth = new Map<number, string[]>();
   for (const id of sub.nodeIds) {

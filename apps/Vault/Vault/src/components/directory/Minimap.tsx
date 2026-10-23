@@ -1,6 +1,12 @@
 import { useMemo } from "react";
 import { VaultGraph } from "../../types";
-import { folderGraph, layoutRadial, projectIso } from "./subgraph";
+import { capFolderGraph, folderGraph, layoutRadial, projectIso } from "./subgraph";
+
+// The most folders the map will draw. At 150×120 the radial layout holds its
+// shape up to roughly this many dots; past it, rings overlap into a blob and
+// the map stops being one (pf 1225 — a real vault has hundreds of folders).
+// Deeper rings are dropped whole; see capFolderGraph.
+const NODE_BUDGET = 36;
 
 // The folder map in the corner of the graph.
 //
@@ -26,7 +32,7 @@ interface Props {
 
 export function Minimap({ graph, currentId, onPick, width = 150, height = 120 }: Props) {
   const { nodes, edges } = useMemo(() => {
-    const sub = folderGraph(graph);
+    const sub = capFolderGraph(graph, folderGraph(graph), NODE_BUDGET, currentId);
     const placed = layoutRadial(graph, sub);
     const at = new Map(
       placed.map((p) => [p.id, { ...projectIso(p, { width, height, pad: 12 }), depth: p.depth }]),
@@ -44,7 +50,7 @@ export function Minimap({ graph, currentId, onPick, width = 150, height = 120 }:
         pb: at.get(b)!,
       })),
     };
-  }, [graph, width, height]);
+  }, [graph, currentId, width, height]);
 
   if (nodes.length === 0) return null;
 
