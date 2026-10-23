@@ -1,0 +1,85 @@
+{
+  "v": 1,
+  "root": {
+    "kind": "grid",
+    "id": "surface",
+    "pos": { "x": 0, "y": 0, "w": 3, "h": 5 },
+    "viewport": "pan-zoom",
+    "cols": 3,
+    "rows": 5,
+    "children": [
+      {
+        "kind": "grid",
+        "id": "left-column",
+        "pos": { "x": 0, "y": 0, "w": 1, "h": 4 },
+        "viewport": "scroll",
+        "cols": 1,
+        "rows": 5,
+        "children": [
+          {
+            "kind": "leaf",
+            "id": "reader-1",
+            "pos": { "x": 0, "y": 0, "w": 1, "h": 5 },
+            "renderer": "reader",
+            "state": { "name": "Kalkulus (reader)" },
+            "attributes": {
+              "kind": "grid",
+              "id": "reader-1-attrs",
+              "pos": { "x": 0, "y": 0, "w": 2, "h": 1 },
+              "viewport": "fixed",
+              "cols": 2,
+              "rows": 1,
+              "children": [
+                {
+                  "kind": "leaf",
+                  "id": "reader-1-outline",
+                  "pos": { "x": 0, "y": 0, "w": 1, "h": 1 },
+                  "renderer": "placeholder",
+                  "state": { "name": "Outline" }
+                },
+                {
+                  "kind": "leaf",
+                  "id": "reader-1-highlights",
+                  "pos": { "x": 1, "y": 0, "w": 1, "h": 1 },
+                  "renderer": "placeholder",
+                  "state": { "name": "Highlights" }
+                }
+              ]
+            }
+          }
+        ]
+      },
+      {
+        "kind": "grid",
+        "id": "right-workspace",
+        "pos": { "x": 1, "y": 0, "w": 2, "h": 4 },
+        "viewport": "pan-zoom",
+        "cols": 2,
+        "rows": 4,
+        "children": [
+          {
+            "kind": "leaf",
+            "id": "canvas-top",
+            "pos": { "x": 0, "y": 0, "w": 2, "h": 1 },
+            "renderer": "canvas",
+            "state": { "name": "Working canvas" }
+          },
+          {
+            "kind": "leaf",
+            "id": "canvas-bottom",
+            "pos": { "x": 0, "y": 1, "w": 2, "h": 1 },
+            "renderer": "canvas",
+            "state": { "name": "Scratch canvas" }
+          }
+        ]
+      },
+      {
+        "kind": "leaf",
+        "id": "note-1",
+        "pos": { "x": 0, "y": 4, "w": 3, "h": 1 },
+        "renderer": "note",
+        "state": { "name": "Session notes" }
+      }
+    ]
+  }
+}

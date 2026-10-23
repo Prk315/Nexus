@@ -38,6 +38,7 @@ const DatabaseEditor = lazyWithReload(() => import("./DatabaseEditor").then(m =>
 // Ten 200 kB page images' worth of layout code and its own stylesheet; the
 // same reason as every other entry here.
 const ReaderEditor = lazyWithReload(() => import("./reader/ReaderEditor").then(m => ({ default: m.ReaderEditor })));
+const SurfaceEditor = lazyWithReload(() => import("./surface/SurfaceEditor").then(m => ({ default: m.SurfaceEditor })));
 // GraphView pulls react-force-graph-2d — not "genuinely light" despite being
 // canvas-drawn, so it rides the same lazy path as the editors above.
 const GraphView = lazyWithReload(() => import("./GraphView").then(m => ({ default: m.GraphView })));
@@ -1136,6 +1137,16 @@ export const EditorPane = forwardRef<EditorPaneHandle, EditorPaneProps>(
                   name={selectedNode.name}
                   content={content}
                   onChange={setContent}
+                />
+              </EditorErrorBoundary>
+            ) : selectedNode?.kind.type === "Surface" ? (
+              <EditorErrorBoundary key={selectedId} label="SurfaceEditor">
+                <SurfaceEditor
+                  nodeId={selectedId!}
+                  name={selectedNode.name}
+                  content={content}
+                  onChange={setContent}
+                  graph={graph}
                 />
               </EditorErrorBoundary>
             ) : selectedNode?.kind.type === "Journal" ? (

@@ -640,6 +640,8 @@ function App() {
                   <option>Database</option>
                   <option>Journal</option>
                   <option>Books</option>
+                  <option>Reader</option>
+                  <option>Surface</option>
                 </select>
                 <button className="link-mode-btn" disabled={!fullGraphNewName.trim()} onClick={async () => {
                   if (fullGraphNewName.trim()) {
@@ -730,6 +732,8 @@ function App() {
                 <option>Workbook</option>
                 <option>Journal</option>
                 <option>Books</option>
+                <option>Reader</option>
+                <option>Surface</option>
               </select>
               <button onClick={handleCreateNode}>+</button>
             </div>

@@ -140,6 +140,8 @@ export function TreeRow({ nodeId, graph, selectedId, expanded, depth, parentId, 
                 <option>Table</option>
                 <option>Database</option>
                 <option>Workbook</option>
+                <option>Reader</option>
+                <option>Surface</option>
               </select>
               <button className="node-menu-add" onClick={handleCreate} disabled={!childName.trim()}>+</button>
             </div>
