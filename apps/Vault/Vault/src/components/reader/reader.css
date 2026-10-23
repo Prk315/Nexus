@@ -1,0 +1,447 @@
+/* Reader node prototype.
+ *
+ * Imported from ReaderEditor.tsx rather than from main.tsx, unlike
+ * pathfinderBlock.css and versionHistory.css. Those two are listed there for
+ * ORDER — they need App.css's :root block to exist first. Nothing here depends
+ * on cascade order, only on custom properties, which resolve wherever they are
+ * used; and ReaderEditor is lazy-loaded, so keeping its stylesheet in its own
+ * chunk is the whole point of loading it lazily.
+ *
+ * ONE SURFACE. The outline, the concept rail and the page share a single
+ * background with no border, divider or tint between them, so the three read
+ * as one page rather than as three panels. Nothing in here may reintroduce a
+ * rule, a card or a second background between the columns — the whole Cornell
+ * idea is that the cue is in the margin OF the page, not in a sidebar beside
+ * it. The seam is the toggle rail, and it is the only line inside the scroller.
+ *
+ * Every colour is a token from App.css's :root, which lib/theme.ts rewrites
+ * inline on <html> for the chosen theme. That is what makes the reader work on
+ * Paper and on Ink without a single dark-mode rule here. The one thing that
+ * deliberately does NOT follow the theme is the page itself: it is a
+ * photograph of paper, and a book page tinted to match a dark UI is no longer
+ * the page. It stays white, with its contrast against the surround carried by
+ * the border and shadow instead.
+ */
+
+.reader-root {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+  background: var(--bg-base);
+  color: var(--fg-main);
+  outline: none;
+}
+
+.reader-message {
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 48px;
+  color: var(--fg-muted);
+  text-align: center;
+}
+.reader-message strong { color: var(--fg-main); }
+.reader-message p { max-width: 46ch; margin: 0; line-height: 1.5; }
+
+/* ── Top rail ───────────────────────────────────────────────────────────────
+   Spec §6: a thin grey line across the top, holding the data-layer toggle and
+   nothing else. The header bar is a later piece of work, and the quickest way
+   to prejudge it is to start growing one here. */
+.reader-toprail {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  height: 26px;
+  padding: 0 10px;
+  border-bottom: 1px solid var(--border-base);
+  background: var(--bg-base);
+  font-size: 11px;
+  color: var(--fg-subdued);
+  user-select: none;
+}
+.toprail-title { font-weight: 500; color: var(--fg-secondary); }
+.toprail-where { margin-left: auto; font-variant-numeric: tabular-nums; }
+.toprail-of { color: var(--fg-ghost); }
+
+.toprail-seg {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 1px 7px;
+  border: 1px solid transparent;
+  border-radius: 999px;
+  background: none;
+  color: var(--fg-subdued);
+  font: inherit;
+  cursor: pointer;
+  transition: color var(--duration) var(--ease), background var(--duration) var(--ease);
+}
+.toprail-seg:hover { color: var(--fg-main); background: var(--bg-subtle); }
+.toprail-seg.is-on { color: var(--on-accent); background: var(--accent); border-color: var(--accent); }
+.toprail-seg kbd {
+  padding: 0 3px;
+  border: 1px solid currentColor;
+  border-radius: 3px;
+  font: inherit;
+  font-size: 9px;
+  opacity: 0.7;
+}
+
+/* ── Column rail ────────────────────────────────────────────────────────────
+   One hairline in two segments, standing BETWEEN the outline and the concept
+   rail — the seam the columns fold along. On the window's left edge it read as
+   a control bar bounding the whole reader; here a lit segment is simply the
+   edge of the column it opens. Sticky, so the seam runs the height of the view
+   however far the pages have scrolled. */
+.reader-body { display: flex; flex: 1; min-height: 0; }
+
+.reader-colrail-hold {
+  z-index: 1;
+  position: sticky;
+  top: 0;
+  flex: none;
+  align-self: flex-start;
+  height: 100vh;
+}
+.reader-colrail {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+}
+.colrail-seg {
+  flex: 1;
+  position: relative;
+  padding: 0;
+  border: none;
+  background: none;
+  cursor: pointer;
+}
+.colrail-seg::before {
+  content: "";
+  position: absolute;
+  inset: 10px auto 10px 50%;
+  width: 1px;
+  background: var(--border-base);
+  transition: background var(--duration) var(--ease), width var(--duration) var(--ease);
+}
+.colrail-seg:hover::before { background: var(--fg-subdued); width: 2px; }
+.colrail-seg.is-on::before { background: var(--border-strong); }
+.colrail-seg.is-on:hover::before { background: var(--accent); }
+
+/* ── Columns ────────────────────────────────────────────────────────────────*/
+.reader-scroll {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  /* Same background as the page and both columns — see the file header. */
+  background: var(--bg-base);
+}
+.reader-cols {
+  display: flex;
+  align-items: flex-start;
+  /* `safe` matters once zoom takes the page wider than the window: plain
+     `center` overflows in BOTH directions and the left edge of the page becomes
+     unreachable, however far you scroll. */
+  justify-content: safe center;
+  gap: 0;
+  min-height: 100%;
+}
+
+/* ── The merged column ──────────────────────────────────────────────────────
+   One column holding both. The concept rail is what it shows at rest and scrolls
+   WITH the pages, because a cue beside the wrong paragraph is worse than no cue.
+   The outline is a layer over it, transparent until the pointer or focus enters
+   the column — so the structure of the book is one hover away without spending a
+   second column on it, and the rail never loses its alignment to do it. */
+.reader-aside {
+  position: relative;
+  flex: none;
+}
+
+/* The outline covers the VIEWPORT while taking no space in the column.
+ *
+ * Two elements, and both are load-bearing. The hold is absolutely positioned
+ * over the whole tall column, so it contributes no height — the column's height
+ * stays the rail's, which is what keeps every entry level with its block. The
+ * outline inside it is sticky, so it stays pinned to the viewport however far
+ * the pages have scrolled.
+ *
+ * The obvious one-element version was `margin-top: -100%` on a sticky element,
+ * and it is wrong in a way that is easy to miss: a percentage margin — even
+ * margin-TOP — resolves against the containing block's WIDTH. On a 190px column
+ * that is -190px, not one column-height, so the outline sat at the very bottom
+ * of the document, 9000px below the viewport, while the rail beneath it dimmed
+ * on hover exactly as designed. The symptom was an empty column. */
+.reader-aside-outline-hold {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;   /* never steals a click meant for a rail entry */
+}
+.reader-aside-outline {
+  position: sticky;
+  top: 0;
+  height: 100vh;
+  padding: 28px 10px 28px 2px;
+  overflow: auto;
+  overscroll-behavior: contain;
+  background: var(--bg-base);
+  opacity: 0;
+  /* `visibility`, not opacity alone. A transparent element is still FOCUSABLE,
+     so on opacity alone a Tab from the page walked into an outline nobody could
+     see and the focus ring vanished off-screen. Delaying visibility by the fade
+     duration lets the element stay rendered while it fades OUT, and drop out of
+     the tab order the instant it is closed. */
+  visibility: hidden;
+  transition: opacity 120ms var(--ease), visibility 0s linear 120ms;
+}
+.reader-aside.is-open .reader-aside-outline {
+  opacity: 1;
+  visibility: visible;
+  pointer-events: auto;
+  transition: opacity 120ms var(--ease), visibility 0s;
+}
+
+/* The rail fades back rather than disappearing: the concepts are still the
+   column's subject, and a hard swap makes the hover feel like a different panel. */
+.reader-rail { transition: opacity 120ms var(--ease); }
+.reader-rail.is-dimmed { opacity: 0; pointer-events: none; }
+
+/* ── Outline ────────────────────────────────────────────────────────────────*/
+.reader-outline { font-size: 12px; line-height: 1.35; }
+.reader-aside-outline { scrollbar-width: thin; }
+.reader-outline-empty { color: var(--fg-ghost); font-style: italic; }
+.outline-list { margin: 0; padding: 0; list-style: none; }
+.outline-item { margin: 0; }
+
+.outline-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 2px;
+  border-radius: 4px;
+  border-left: 2px solid transparent;
+  transition: background var(--duration) var(--ease), border-color var(--duration) var(--ease);
+}
+.outline-row:hover { background: var(--bg-subtle); }
+.outline-row.is-on-path { border-left-color: var(--border-strong); }
+.outline-row.is-active { background: var(--bg-muted); border-left-color: var(--accent); }
+
+.outline-twisty {
+  flex: none;
+  width: 14px;
+  padding: 2px 0 0;
+  border: none;
+  background: none;
+  color: var(--fg-ghost);
+  font-size: 9px;
+  line-height: 1.5;
+  cursor: pointer;
+}
+.outline-twisty.is-leaf { cursor: default; }
+.outline-twisty:hover { color: var(--fg-main); }
+
+.outline-label {
+  flex: 1;
+  min-width: 0;
+  padding: 3px 4px 3px 0;
+  border: none;
+  background: none;
+  color: var(--fg-secondary);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  overflow-wrap: anywhere;
+}
+.outline-label:hover { color: var(--fg-main); }
+.outline-label[data-kind="h1"] { font-weight: 600; color: var(--fg-main); }
+.outline-label[data-kind="h2"] { font-weight: 500; color: var(--fg-primary); }
+.outline-label[data-kind="definition"] { color: var(--edge-in); }
+.outline-label[data-kind="theorem"] { color: var(--accent); }
+.outline-label[data-kind="example"] { color: var(--edge-out); }
+.outline-label[data-kind="proof"] { color: var(--fg-muted); font-style: italic; }
+
+/* ── Concept rail ───────────────────────────────────────────────────────────
+   Spec §4. Entries are positioned as a PERCENTAGE of their page's box, so the
+   rail is correct at any column width without measuring anything. */
+.reader-rail { position: relative; padding-left: 8px; padding-right: 10px; }
+
+.rail-page { position: relative; }
+
+.rail-entry {
+  position: absolute;
+  right: 6px;
+  left: 0;
+  display: flex;
+  align-items: flex-start;
+  gap: 4px;
+  padding: 0;
+  border: none;
+  background: none;
+  color: var(--fg-subdued);
+  font-size: 10.5px;
+  line-height: 1.25;
+  text-align: left;
+  cursor: pointer;
+  opacity: 0.55;
+  transition: opacity var(--duration) var(--ease), color var(--duration) var(--ease);
+}
+.rail-page.is-current .rail-entry { opacity: 1; }
+.rail-entry:hover { color: var(--fg-main); opacity: 1; }
+.rail-entry.is-visible { color: var(--fg-main); }
+
+/* What tells the kinds apart now that the filter chips are gone: a RESULT
+   (definition, theorem) is set in the text colour with a filled tick, and
+   supporting material (example, proof) is lighter with a hollow one. Weight and
+   a 5px mark, rather than four controls nobody asked for and a default that
+   silently hid half the page's concepts. */
+.rail-entry-tick {
+  flex: none;
+  width: 5px;
+  height: 5px;
+  margin-top: 4px;
+  border-radius: 50%;
+  border: 1px solid currentColor;
+  background: currentColor;
+}
+.rail-entry-text { overflow-wrap: anywhere; }
+
+.rail-entry[data-kind="definition"],
+.rail-entry[data-kind="theorem"] { color: var(--fg-secondary); font-weight: 500; }
+.rail-entry[data-kind="definition"] .rail-entry-tick { border-radius: 1px; }
+
+.rail-entry[data-kind="example"],
+.rail-entry[data-kind="proof"] { color: var(--fg-subdued); }
+.rail-entry[data-kind="example"] .rail-entry-tick,
+.rail-entry[data-kind="proof"] .rail-entry-tick { background: none; }
+.rail-entry[data-kind="proof"] { font-style: italic; }
+.rail-entry:hover, .rail-entry.is-visible { color: var(--fg-main); }
+
+/* ── Pages ──────────────────────────────────────────────────────────────────*/
+.reader-pages { flex: none; }
+
+/* No border, no radius, no shadow: a frame around the page would be exactly
+   the divider this layout exists to remove. `overflow: hidden` is what makes
+   the element a WINDOW onto the sheet — the img inside is the whole PNG,
+   scaled and offset so the crop box fills this box. */
+.reader-page {
+  position: relative;
+  margin: 0;
+  overflow: hidden;
+  background: #fff; /* paper, not a themed surface — see the file header */
+}
+.reader-page-img {
+  display: block;
+  /* Rendered at 2x and sized down here, so the type stays crisp on a HiDPI
+     screen and does not soften when the column is wide. */
+  max-width: none;
+  user-select: none;
+}
+
+/* ── Data layer ─────────────────────────────────────────────────────────────
+   Spec §3: hidden by default, one keystroke away, and never mistaken for the
+   page. Everything here is drawn ON TOP with a visible seam. */
+.reader-data { position: absolute; inset: 0; }
+
+/* The wash is nearly opaque, and that is a correction rather than a taste.
+ * At 55% the printed words showed through the parsed words, and the two do not
+ * line up — the data layer re-wraps the text at its own measure — so every
+ * block rendered as double vision and neither copy could be read. The layer
+ * covers what it replaces; the page is still the truth, and `d` puts it back. */
+.rb {
+  position: absolute;
+  border: 1px dashed var(--border-strong);
+  border-radius: 2px;
+  background: rgb(253 253 252 / 94%);
+  overflow: hidden;
+}
+.rb[data-type="concept"] { border-color: var(--accent); background: rgb(253 253 252 / 97%); }
+.rb[data-type="heading"] { border-color: var(--edge-in); }
+.rb[data-type="math"]    { border-color: var(--warning); }
+.rb[data-type="figure"]  { border-style: solid; background: none; border-color: var(--edge-out); }
+.rb[data-type="exercise"]{ border-color: var(--sticky, var(--warning)); }
+
+/* Revealed on hover, not always drawn. The chip sits at the block's top-left,
+ * which is exactly where its first line of text starts, so a permanent label
+ * covered the first three words of every block it was describing. The border
+ * colour already says what kind of block this is; the chip carries the part
+ * that is worth asking for — "Definisjon 3.3.1" rather than "concept". */
+.rb-type {
+  position: absolute;
+  top: 0;
+  left: 0;
+  z-index: 1;
+  opacity: 0;
+  transition: opacity var(--duration) var(--ease);
+  padding: 0 3px;
+  background: var(--bg-base);
+  color: var(--fg-muted);
+  font-size: 8px;
+  line-height: 1.5;
+  letter-spacing: 0.04em;
+  border-bottom-right-radius: 2px;
+  pointer-events: none;
+}
+.rb:hover .rb-type { opacity: 1; }
+
+.rb-text {
+  padding: 1px 3px;
+  color: #101014; /* on the white wash above, not on the themed surface */
+  font-family: ui-serif, Georgia, "Times New Roman", serif;
+  line-height: 1.22;
+  user-select: text;
+  cursor: text;
+  overflow-wrap: anywhere;
+}
+.rb[data-type="math"] .rb-text {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: inherit;
+}
+
+.rb-copy {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  padding: 0 4px;
+  border: 1px solid var(--border-strong);
+  border-radius: 3px 0 0 0;
+  background: var(--bg-base);
+  color: var(--fg-secondary);
+  font-size: 8.5px;
+  cursor: pointer;
+}
+.rb-copy:hover { color: var(--on-accent); background: var(--accent); border-color: var(--accent); }
+
+/* The click-through from a rail or outline entry. Shown whether or not the
+   data layer is open: a navigation that does not say where it landed is a
+   scroll, not a navigation. */
+.rb-flash {
+  position: absolute;
+  border-radius: 3px;
+  outline: 2px solid var(--accent);
+  background: color-mix(in oklch, var(--accent) 16%, transparent);
+  animation: reader-flash 1.4s var(--ease) forwards;
+  pointer-events: none;
+}
+@keyframes reader-flash {
+  0%   { opacity: 0; }
+  12%  { opacity: 1; }
+  70%  { opacity: 1; }
+  100% { opacity: 0; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .rb-flash { animation-duration: 1ms; opacity: 1; }
+}
+
+.reader-toast {
+  position: absolute;
+  right: 16px;
+  bottom: 16px;
+  padding: 5px 10px;
+  border-radius: var(--radius);
+  background: var(--fg-main);
+  color: var(--bg-base);
+  font-size: 11px;
+  box-shadow: var(--shadow-md);
+}

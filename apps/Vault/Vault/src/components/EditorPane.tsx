@@ -35,6 +35,9 @@ const WorkbookEditor = lazyWithReload(() => import("./WorkbookEditor").then(m =>
 const BookshelfEditor = lazyWithReload(() => import("./BookshelfEditor").then(m => ({ default: m.BookshelfEditor })));
 const JournalEditor = lazyWithReload(() => import("./JournalEditor").then(m => ({ default: m.JournalEditor })));
 const DatabaseEditor = lazyWithReload(() => import("./DatabaseEditor").then(m => ({ default: m.DatabaseEditor })));
+// Ten 200 kB page images' worth of layout code and its own stylesheet; the
+// same reason as every other entry here.
+const ReaderEditor = lazyWithReload(() => import("./reader/ReaderEditor").then(m => ({ default: m.ReaderEditor })));
 // GraphView pulls react-force-graph-2d — not "genuinely light" despite being
 // canvas-drawn, so it rides the same lazy path as the editors above.
 const GraphView = lazyWithReload(() => import("./GraphView").then(m => ({ default: m.GraphView })));
@@ -202,6 +205,14 @@ export const EditorPane = forwardRef<EditorPaneHandle, EditorPaneProps>(
     const isDatabaseSelected = selectedId
       ? graph.nodes[selectedId]?.kind.type === "Database"
       : false;
+    // A Reader's content row is a POINTER to the reader JSON, and the reader is
+    // read-only, so there is nothing here to save and a great deal to lose:
+    // whatever wrote over that pointer would leave a node that can never find
+    // its pages again. Belt and braces — ReaderEditor never calls onChange, so
+    // `content` never diverges from `persistedContent` either.
+    const isReaderSelected = selectedId
+      ? graph.nodes[selectedId]?.kind.type === "Reader"
+      : false;
 
     const selectedNode = selectedId ? graph.nodes[selectedId] : null;
 
@@ -283,6 +294,9 @@ export const EditorPane = forwardRef<EditorPaneHandle, EditorPaneProps>(
       !isPdfSelected &&
       !isVideoSelected &&
       !isDatabaseSelected &&
+      // A Reader's row holds a pointer, not a document. Its versions would be
+      // a list of identical one-line JSON blobs with a Restore button on them.
+      !isReaderSelected &&
       selectedNode?.kind.type !== "Journal";
 
     useEffect(() => {
@@ -467,7 +481,8 @@ export const EditorPane = forwardRef<EditorPaneHandle, EditorPaneProps>(
 
     // Auto-save
     useEffect(() => {
-      if (!selectedId || isFolderSelected || isPdfSelected || isVideoSelected || isDatabaseSelected)
+      if (!selectedId || isFolderSelected || isPdfSelected || isVideoSelected || isDatabaseSelected
+          || isReaderSelected)
         return;
       // Byte-identical to what's already on the server — this is the mount pass
       // right after selectNode loaded it, not an edit. Writing it back burns a
@@ -1087,6 +1102,16 @@ export const EditorPane = forwardRef<EditorPaneHandle, EditorPaneProps>(
               />
             ) : selectedNode?.kind.type === "Pdf" ? (
               <PdfViewer key={selectedId} content={content} nodeId={selectedId!} />
+            ) : selectedNode?.kind.type === "Reader" ? (
+              // Before this case existed, a Reader node fell all the way
+              // through to NoteEditor — which is not a missing feature but a
+              // data-loss bug: Tiptap would have mounted on the pointer JSON
+              // and the autosave would have written its own idea of that
+              // document back. The boundary and the key match every other
+              // editor in this chain.
+              <EditorErrorBoundary key={selectedId} label="ReaderEditor">
+                <ReaderEditor content={content} nodeId={selectedId!} />
+              </EditorErrorBoundary>
             ) : selectedNode?.kind.type === "Parsed" ? (
               <EditorErrorBoundary key={selectedId} label="ParsedViewer">
                 <ParsedViewer content={content} onChange={setContent} nodeId={selectedId!} graph={graph} />

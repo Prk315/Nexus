@@ -10,7 +10,15 @@ export type NodeKind =
   | { type: "Database" }
   | { type: "Workbook" }
   | { type: "Journal" }
-  | { type: "Books" };
+  | { type: "Books" }
+  // A book read as the PDF draws it, with the parsed blocks underneath.
+  // Its vault_content row is a pointer to the reader JSON, not the document —
+  // see components/reader/loadReader.ts. EVERY switch on NodeKind must grow a
+  // case for it: EditorPane's render chain falls through to NoteEditor, which
+  // would mount Tiptap on that pointer and let the 400ms autosave write a blank
+  // document over it (lib/noteSchemaGuard.ts explains why that is unrecoverable
+  // — vault_content keeps no history of its own).
+  | { type: "Reader" };
 
 export interface VaultNode {
   id: string;
