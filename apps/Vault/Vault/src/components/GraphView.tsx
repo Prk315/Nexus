@@ -116,24 +116,43 @@ export function GraphView({
 
   return (
     <div className="graph-container">
+      {/* One short strip of icon buttons. It used to be three pill buttons
+          spelling out "Link", "+ Node" and `Delete "<the whole node name>"`,
+          which on a folder graph was wider than the graph under it and grew
+          with the name. The create form still appears inline, and only after
+          "+" — and Delete still routes to the app's single confirm gate. */}
       {!hideToolbar && (
         <div className="graph-toolbar">
           {!creating ? (
             <>
-              <button className={`link-mode-btn ${linkMode ? "active" : ""}`} onClick={onToggleLinkMode}>
-                {linkMode ? (linkSource ? "Select target…" : "Select source…") : "Link"}
+              <button
+                className={`gtb-btn${linkMode ? " active" : ""}`}
+                onClick={onToggleLinkMode}
+                title={linkMode ? "Cancel linking" : "Link two nodes"}
+                aria-label="Link two nodes"
+                aria-pressed={linkMode}
+              >
+                ⊸
               </button>
               {onCreateNode && (
-                <button className="link-mode-btn" onClick={openCreate}>+ Node</button>
+                <button className="gtb-btn" onClick={openCreate} title="New node" aria-label="New node">
+                  +
+                </button>
               )}
               {onDeleteNode && selectedId && (
                 <button
-                  className="link-mode-btn graph-delete-btn"
+                  className="gtb-btn gtb-danger"
                   onClick={() => onDeleteNode(selectedId)}
                   title={`Delete "${selectedName}"`}
+                  aria-label={`Delete ${selectedName ?? "node"}`}
                 >
-                  Delete{selectedName ? ` "${selectedName}"` : ""}
+                  ×
                 </button>
+              )}
+              {/* The one thing a tooltip cannot carry: link mode is modal, so
+                  which end you are picking has to be on screen. */}
+              {linkMode && (
+                <span className="gtb-hint">{linkSource ? "Select target…" : "Select source…"}</span>
               )}
             </>
           ) : (
@@ -158,8 +177,8 @@ export function GraphView({
                 <option>Database</option>
                 <option>Workbook</option>
               </select>
-              <button className="link-mode-btn" onClick={handleCreate} disabled={!newName.trim()}>✓</button>
-              <button className="link-mode-btn" onClick={closeCreate}>✕</button>
+              <button className="gtb-btn" onClick={handleCreate} disabled={!newName.trim()} title="Create">✓</button>
+              <button className="gtb-btn" onClick={closeCreate} title="Cancel">✕</button>
             </>
           )}
         </div>

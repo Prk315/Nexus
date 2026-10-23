@@ -4,6 +4,7 @@ import ForceGraph3D from "react-force-graph-3d";
 import * as THREE from "three";
 import SpriteText from "three-spritetext";
 import { drawNode, resolveNodeColor } from "../canvas/drawNode";
+import { hitTestClusters } from "./directory/clusters";
 import type { VaultGraph } from "../types";
 import type { GraphFilters } from "./GraphFilterPanel";
 
@@ -49,7 +50,36 @@ export interface ForceGraphViewProps {
   appMode: "vault" | "learn";
   onNodeClick: (id: string) => void;
   savePositions: (nodes: any[]) => void;
+
+  // ── Embedding (all optional) ──────────────────────────────────────────────
+  // The overlay is full-bleed and sizes itself from the window. The directory
+  // layout puts the same graph in a grid cell, which the window cannot answer
+  // for. Defaults reproduce the overlay's numbers exactly, so passing none of
+  // these leaves the overlay pixel-identical.
+  /** Canvas width. Default: `window.innerWidth - 260`, the overlay's value. */
+  width?: number;
+  /** Canvas height. Default: `window.innerHeight`. */
+  height?: number;
+  /** Re-fits the camera whenever this string changes. */
+  fitSignal?: string;
+  /**
+   * Pressing a tag's cluster bubble. Only wired when supplied — the overlay
+   * passes nothing and keeps its plain background click.
+   */
+  onClusterClick?: (tag: string) => void;
+  /**
+   * Active graph search (pf 1223): these ids draw red, every other node in
+   * the data greys out. The CALLER decides what is in the data — the search's
+   * kept set arrives as `filteredGraphData`, this prop only colours it.
+   */
+  searchMatches?: Set<string> | null;
 }
+
+// The search's two colours. Literals because this file paints canvases and
+// THREE materials, where CSS variables do not resolve; they mirror
+// --danger-solid and the link grey.
+const SEARCH_HIT = "#ef4444";
+const SEARCH_DIM = "rgba(156,163,175,0.35)";
 
 export function ForceGraphView({
   graph,
@@ -64,6 +94,11 @@ export function ForceGraphView({
   appMode,
   onNodeClick,
   savePositions,
+  width,
+  height,
+  fitSignal,
+  onClusterClick,
+  searchMatches,
 }: ForceGraphViewProps) {
   const fullGraphRef = useRef<any>(undefined);
   // Cluster bubble meshes and label sprites keyed by tag name
@@ -193,11 +228,87 @@ export function ForceGraphView({
     return () => cancelAnimationFrame(rafId);
   }, [fullGraph, appMode, is3D, graphFilters.showClusters]);
 
+  // Re-fit the camera when the caller says the visible set changed. Deferred
+  // past the warm-up for the same reason applyForces is: fitting to nodes the
+  // simulation has not placed yet frames the origin.
+  useEffect(() => {
+    if (fitSignal === undefined) return;
+    const t = setTimeout(() => {
+      // Same proportional padding as onEngineStop's settled fit (fitPad is
+      // declared below with the canvas size; recompute here rather than
+      // reaching forward past where it exists yet).
+      const pad = Math.max(20, Math.min(60, Math.min(width ?? window.innerWidth - 260, height ?? window.innerHeight) * 0.08));
+      try { fullGraphRef.current?.zoomToFit(500, pad); } catch { /* not placed yet */ }
+    }, 600);
+    return () => clearTimeout(t);
+  }, [fitSignal, width, height]);
+
+  /**
+   * Which cluster bubble a background press landed on.
+   *
+   * Screen space, not a raycast: the bubbles are BackSide spheres drawn for
+   * looks, and projecting their centre and radius reuses `hitTestClusters` —
+   * the same tested function the 2D graph uses — instead of adding a second,
+   * untested notion of "inside a cluster" that could disagree with what is
+   * drawn.
+   */
+  function clusterAt(e: MouseEvent): string | null {
+    const fg = fullGraphRef.current;
+    if (!fg?.camera || clusterMeshesRef.current.size === 0) return null;
+    try {
+      const camera = fg.camera();
+      const renderer = fg.renderer?.();
+      const canvas: HTMLCanvasElement | undefined = renderer?.domElement;
+      if (!camera || !canvas) return null;
+      const rect = canvas.getBoundingClientRect();
+      const w = rect.width;
+      const h = rect.height;
+      const toScreen = (v: THREE.Vector3) => {
+        const p = v.clone().project(camera);
+        return { x: ((p.x + 1) / 2) * w, y: ((1 - p.y) / 2) * h };
+      };
+      const right = new THREE.Vector3();
+      camera.getWorldDirection(right);
+      right.cross(camera.up).normalize();
+
+      const circles = [...clusterMeshesRef.current.entries()].map(([tag, mesh]) => {
+        const centre = toScreen(mesh.position);
+        const worldR = mesh.scale.x;
+        const edge = toScreen(mesh.position.clone().add(right.clone().multiplyScalar(worldR)));
+        return {
+          tag,
+          x: centre.x,
+          y: centre.y,
+          r: Math.hypot(edge.x - centre.x, edge.y - centre.y),
+          count: 2,
+        };
+      });
+      return hitTestClusters(circles, { x: e.clientX - rect.left, y: e.clientY - rect.top });
+    } catch {
+      return null;
+    }
+  }
+
   // Keep ref fresh so the D3 cluster force always sees current nodes
   filteredNodesRef.current = filteredGraphData.nodes as any[];
 
-  const fullGraphPaint = (node: any, ctx: CanvasRenderingContext2D, globalScale: number) =>
+  const fullGraphPaint = (node: any, ctx: CanvasRenderingContext2D, globalScale: number) => {
+    // The 2D renderer's version of the search colours: context fades to the
+    // same alpha the 3D dim carries, a hit keeps full colour and gains a red
+    // ring (drawNode's own palette stays untouched either way).
+    const dimmed = searchMatches ? !searchMatches.has(node.id) : false;
+    if (dimmed) ctx.save();
+    if (dimmed) ctx.globalAlpha = 0.35;
     drawNode(node, ctx, globalScale, graph.tag_colors, node.id === selectedId, node.id === linkSource, linkMode, graphFilters.fontSize);
+    if (dimmed) ctx.restore();
+    if (searchMatches?.has(node.id) && node.x != null && node.y != null) {
+      ctx.beginPath();
+      ctx.arc(node.x, node.y, 7 + 3 / globalScale, 0, Math.PI * 2);
+      ctx.strokeStyle = SEARCH_HIT;
+      ctx.lineWidth = 2 / globalScale;
+      ctx.stroke();
+    }
+  };
 
   function fullGraphPaintLink(link: any, ctx: CanvasRenderingContext2D, globalScale: number) {
     const start = typeof link.source === "object" ? link.source : null;
@@ -329,6 +440,15 @@ export function ForceGraphView({
   // Keep the ref pointing at the latest version so the rAF loop is always current
   updateClusterMeshesRef.current = updateClusterMeshes;
 
+  // Resolved once per render so both branches agree. `window` is read lazily
+  // here exactly as before, keeping the overlay's sizing untouched.
+  const canvasWidth = width ?? window.innerWidth - 260;
+  const canvasHeight = height ?? window.innerHeight;
+  // Fit padding scales with the canvas. The old fixed 120px was tuned on a
+  // full-window graph; in the grid shell's ~400px-tall cell it consumed 240px
+  // of the 400 and squeezed a zoomed folder into a strip (pf 1225).
+  const fitPad = Math.max(20, Math.min(60, Math.min(canvasWidth, canvasHeight) * 0.08));
+
   // 2D canvas graph — used both as the explicit 2D mode and as the WebGL fallback.
   const twoDGraph = (
     <ForceGraph2D
@@ -344,8 +464,8 @@ export function ForceGraphView({
       warmupTicks={60}
       cooldownTime={4000}
       d3VelocityDecay={0.35}
-      width={window.innerWidth - 260}
-      height={window.innerHeight}
+      width={canvasWidth}
+      height={canvasHeight}
       onEngineStop={() => savePositions(filteredGraphData.nodes)}
       onNodeClick={(node: any) => onNodeClick(node.id)}
     />
@@ -358,7 +478,11 @@ export function ForceGraphView({
         graphData={filteredGraphData}
         backgroundColor="#f8f9fa"
         nodeLabel={(node: any) => node.name}
-        nodeColor={(node: any) => resolveNodeColor(node, graph.tag_colors)}
+        nodeColor={(node: any) =>
+          searchMatches
+            ? (searchMatches.has(node.id) ? SEARCH_HIT : SEARCH_DIM)
+            : resolveNodeColor(node, graph.tag_colors)
+        }
         nodeRelSize={5}
         linkColor={() => "#9ca3af"}
         linkWidth={1.5}
@@ -369,12 +493,16 @@ export function ForceGraphView({
         warmupTicks={60}
         cooldownTime={4000}
         d3VelocityDecay={0.35}
-        width={window.innerWidth - 260}
-        height={window.innerHeight}
+        width={canvasWidth}
+        height={canvasHeight}
         onNodeClick={(node: any) => onNodeClick(node.id)}
+        onBackgroundClick={onClusterClick ? (e: MouseEvent) => {
+          const tag = clusterAt(e);
+          if (tag) onClusterClick(tag);
+        } : undefined}
         onEngineStop={() => {
           savePositions(filteredGraphData.nodes);
-          fullGraphRef.current?.zoomToFit(400, 120);
+          fullGraphRef.current?.zoomToFit(400, fitPad);
         }}
       />
     </WebGLErrorBoundary>

@@ -41,6 +41,9 @@ export default defineConfig({
   test: {
     environment: "node",
     setupFiles: ["./src/test/domSetup.ts"],
-    include: ["src/**/*.test.ts"],
+    // `.tsx` as well: the directory layout's failure mode is a pane that
+    // renders nothing, and the only test that can see that is one that mounts
+    // the component. Everything else here stays type-level and pure.
+    include: ["src/**/*.test.ts", "src/**/*.test.tsx"],
   },
 });
