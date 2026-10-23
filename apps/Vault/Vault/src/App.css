@@ -9366,6 +9366,8 @@ body.vault-block-dragging .tt-bubble {
   padding: 16px 12px;
   font-size: 13px;
   color: var(--fg-muted);
+}
+
 /* ── Directory prototype (?layout=grid) ─────────────────────────────────────
    Header / sidebar / graph / folder directory, behind the layout toggle so the
    shipped shell is untouched.
