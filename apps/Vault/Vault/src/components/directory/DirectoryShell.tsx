@@ -59,6 +59,14 @@ interface Props {
   tagsSlot: ReactNode;
   /** The TrashPanel, wired by App like tagsSlot — the shell owns no bin state. */
   binSlot: ReactNode;
+  /**
+   * The editor panes, wired by App like the other slots. PROVISIONAL CALL
+   * (spec: "editor replaces the graph area, or a fourth region"): opening a
+   * non-folder node replaces the graph area with this, behind a slim bar
+   * whose "‹ Graph" returns. A folder press, a tag press or "All" also return
+   * — those are statements about the graph, so the graph answers them.
+   */
+  editorSlot: ReactNode;
 
   expanded: Set<string>;
   onToggleExpanded: (id: string) => void;
@@ -99,6 +107,7 @@ export function DirectoryShell(props: Props) {
     onToggleTheme,
     tagsSlot,
     binSlot,
+    editorSlot,
     expanded,
     onToggleExpanded,
     onSelect,
@@ -188,23 +197,32 @@ export function DirectoryShell(props: Props) {
       .map(([t]) => t);
   }, [focusedData]);
 
+  // Whether the editor stands where the graph does. Selection does not carry
+  // this by itself: a note stays selected while you go back to the graph, so
+  // the two are separate facts.
+  const [editorOpen, setEditorOpen] = useState(false);
+
   function focusFolder(id: string) {
     setFocus({ type: "folder", id });
     setOpenFolder(id);
+    setEditorOpen(false);
   }
 
   function focusTag(tag: string) {
     setFocus((f) => (f.type === "tag" && f.tag === tag ? { type: "all" } : { type: "tag", tag }));
+    setEditorOpen(false);
   }
 
   function resetFocus() {
     setFocus({ type: "all" });
+    setEditorOpen(false);
   }
 
   function selectNode(id: string) {
     onSelect(id);
     const folder = containingFolder(graph, id);
     setOpenFolder(folder);
+    if (graph.nodes[id] && graph.nodes[id].kind?.type !== "Folder") setEditorOpen(true);
   }
 
   // The pane follows the SELECTION, not the graph focus: picking a note in
@@ -315,7 +333,23 @@ export function DirectoryShell(props: Props) {
           )}
         </aside>
 
-        <section className="dir-graph" aria-label="Graph">
+        <section className="dir-graph" aria-label={editorOpen ? "Editor" : "Graph"}>
+          {/* The editor is mounted WHETHER OR NOT it is shown. Selection
+              reaches it through an imperative pane handle (App.selectNode →
+              activePaneRef), and a pane that only mounts once something is
+              selected is a null ref at exactly the moment the selection is
+              delivered. display:none keeps its tabs alive across the
+              graph ↔ editor swap for free. */}
+          {editorOpen && selectedId && graph.nodes[selectedId] ? (
+            // The editor standing where the graph stood — see editorSlot.
+            <div className="dir-editor-bar">
+              <button className="dir-focus-chip" onClick={() => setEditorOpen(false)}>
+                ‹ Graph
+              </button>
+              <span className="dir-editor-name">{graph.nodes[selectedId].name}</span>
+            </div>
+          ) : (
+            <>
           <div className="dir-graph-bar">
             <div className="dir-focus">
               <button
@@ -417,6 +451,9 @@ export function DirectoryShell(props: Props) {
                     onNodeClick={(id: string) => {
                       onGraphNodeClick(id);
                       setOpenFolder(containingFolder(graph, id));
+                      // A note clicked in the graph opens like one clicked in
+                      // the tree — unless the click is one half of a link.
+                      if (!linkMode && graph.nodes[id]?.kind?.type !== "Folder") setEditorOpen(true);
                     }}
                     savePositions={onSavePositions}
                   />
@@ -429,6 +466,14 @@ export function DirectoryShell(props: Props) {
               currentId={focus.type === "folder" ? focus.id : null}
               onPick={focusFolder}
             />
+          </div>
+            </>
+          )}
+          <div
+            className="dir-editor-hold"
+            style={{ display: editorOpen && selectedId && graph.nodes[selectedId] ? undefined : "none" }}
+          >
+            {editorSlot}
           </div>
         </section>
 

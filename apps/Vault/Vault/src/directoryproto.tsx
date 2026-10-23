@@ -96,6 +96,7 @@ function Harness() {
       onToggleTheme={noop}
       tagsSlot={<div style={{ padding: 12, fontSize: 12 }}>tags panel (not in the harness)</div>}
       binSlot={<div style={{ padding: 12, fontSize: 12 }}>bin panel (not in the harness)</div>}
+      editorSlot={<div style={{ padding: 12, fontSize: 12 }}>editor (not in the harness)</div>}
       expanded={expanded}
       onToggleExpanded={(id) =>
         setExpanded((prev) => {

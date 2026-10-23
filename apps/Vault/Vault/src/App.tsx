@@ -586,6 +586,44 @@ function App() {
     return { nodes, links };
   }, [graphData, graphFilters]);
 
+  // The editor panes, built once and mounted by exactly one layout: the
+  // classic layout's main area, or the grid shell's editorSlot (where the
+  // provisional call is that the editor replaces the graph area — see
+  // DirectoryShell). Either way selection reaches it through activePaneRef.
+  const editorArea = (
+    <main className="editor-area">
+      {panes.map((pane, i) => (
+        <React.Fragment key={pane.id}>
+          {i > 0 && (
+            <div
+              className="pane-divider"
+              onMouseDown={e => onPaneDividerMouseDown(e, i)}
+            />
+          )}
+          <EditorPane
+            ref={getPaneRef(pane.id)}
+            graph={graph}
+            isActive={activePaneId === pane.id}
+            canClose={panes.length > 1}
+            onActivate={() => setActivePaneId(pane.id)}
+            onClose={() => closePane(pane.id)}
+            onAddPane={() => addPaneAfter(pane.id)}
+            onSelectionChange={nodeId => setPaneSelectedIds(prev => ({ ...prev, [pane.id]: nodeId }))}
+            removeEdge={removeEdge}
+            addEdge={addEdge}
+            createNode={createNode}
+            deleteNode={handleDeleteNode}
+            addTag={addTag}
+            removeTag={removeTag}
+            setTagColor={setTagColor}
+            savePositions={savePositions}
+            style={{ flex: paneSizes[i], pointerEvents: isPaneResizing ? "none" : undefined }}
+          />
+        </React.Fragment>
+      ))}
+    </main>
+  );
+
   return (
     <div style={{ display: "flex", flexDirection: "column", height: "100vh" }}>
       <NexusHeader
@@ -769,6 +807,7 @@ function App() {
             />
           }
           binSlot={<TrashPanel onRestore={restoreNode} onEmpty={handleEmptyTrash} />}
+          editorSlot={editorArea}
           expanded={expandedNodes}
           onToggleExpanded={toggleExpanded}
           onSelect={selectNode}
@@ -953,37 +992,7 @@ function App() {
         )}
       </aside>
 
-      <main className="editor-area">
-        {panes.map((pane, i) => (
-          <React.Fragment key={pane.id}>
-            {i > 0 && (
-              <div
-                className="pane-divider"
-                onMouseDown={e => onPaneDividerMouseDown(e, i)}
-              />
-            )}
-            <EditorPane
-              ref={getPaneRef(pane.id)}
-              graph={graph}
-              isActive={activePaneId === pane.id}
-              canClose={panes.length > 1}
-              onActivate={() => setActivePaneId(pane.id)}
-              onClose={() => closePane(pane.id)}
-              onAddPane={() => addPaneAfter(pane.id)}
-              onSelectionChange={nodeId => setPaneSelectedIds(prev => ({ ...prev, [pane.id]: nodeId }))}
-              removeEdge={removeEdge}
-              addEdge={addEdge}
-              createNode={createNode}
-              deleteNode={handleDeleteNode}
-              addTag={addTag}
-              removeTag={removeTag}
-              setTagColor={setTagColor}
-              savePositions={savePositions}
-              style={{ flex: paneSizes[i], pointerEvents: isPaneResizing ? "none" : undefined }}
-            />
-          </React.Fragment>
-        ))}
-      </main>
+      {editorArea}
       </>
       )}
     </div>

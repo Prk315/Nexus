@@ -9902,6 +9902,33 @@ body.vault-block-dragging .tt-bubble {
   overflow-x: auto;
 }
 
+/* Editor standing in for the graph (provisional — see DirectoryShell). */
+.dir-editor-bar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--border-faint);
+  flex: none;
+}
+.dir-editor-name {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--fg-secondary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.dir-editor-hold {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+}
+.dir-editor-hold .editor-area {
+  flex: 1;
+  min-width: 0;
+}
+
 /* Graph search (pf 1223): matches red, context greyed, the rest hidden. */
 .dir-graph-search {
   display: flex;
