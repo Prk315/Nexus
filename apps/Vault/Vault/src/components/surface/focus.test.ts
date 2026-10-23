@@ -405,3 +405,60 @@ describe("a focus that no longer fits its document", () => {
     expect(clamped.mode).toBe("surface");
   });
 });
+
+describe("pf 1224 — zoom-out stops at fit, never further", () => {
+  const VP = { w: 800, h: 600 };
+
+  it("stops at the fit zoom once everything is visible", () => {
+    // Content spans 6 × 5 cells = 1920 × 1200; 800/1920 binds.
+    const s = run([
+      { type: "setViewport", path: [], ...VP },
+      ...Array(40).fill({ type: "zoom", factor: 0.8, ox: 0, oy: 0 }),
+    ]);
+    expect(viewFor(s.focus, []).zoom).toBeCloseTo(VP.w / (6 * CELL_W), 6);
+  });
+
+  it("stops at 100% when the content fits before the floor", () => {
+    const s = run([
+      { type: "setViewport", path: [], w: 4000, h: 3000 },
+      ...Array(40).fill({ type: "zoom", factor: 0.8, ox: 0, oy: 0 }),
+    ]);
+    expect(viewFor(s.focus, []).zoom).toBe(1);
+  });
+
+  it("zooming in is never floored, and out again returns to the same stop", () => {
+    const s = run([
+      { type: "setViewport", path: [], ...VP },
+      ...Array(40).fill({ type: "zoom", factor: 0.8, ox: 0, oy: 0 }),
+      { type: "zoom", factor: 2, ox: 0, oy: 0 },
+      ...Array(40).fill({ type: "zoom", factor: 0.8, ox: 0, oy: 0 }),
+    ]);
+    expect(viewFor(s.focus, []).zoom).toBeCloseTo(VP.w / (6 * CELL_W), 6);
+  });
+
+  it("an empty grid keeps the old hard floor — there is no fit to stop at", () => {
+    const empty: Surface = {
+      v: 1,
+      root: {
+        kind: "grid", id: "root", pos: { x: 0, y: 0, w: 4, h: 4 },
+        viewport: "pan-zoom", cols: 4, rows: 4, children: [],
+      },
+    };
+    const s = reduceAll(initialState(empty), [
+      { type: "setViewport", path: [], ...VP },
+      ...Array(40).fill({ type: "zoom", factor: 0.8, ox: 0, oy: 0 }),
+    ]);
+    expect(viewFor(s.focus, []).zoom).toBeCloseTo(0.15, 6);
+  });
+
+  it("before the viewport is measured the old floor stands, with no jump later", () => {
+    // Unmeasured: zoom-out reaches MIN_ZOOM exactly as before.
+    const out = run(Array(40).fill({ type: "zoom", factor: 0.8, ox: 0, oy: 0 }));
+    expect(viewFor(out.focus, []).zoom).toBeCloseTo(0.15, 6);
+    // Measuring afterwards leaves the view below the floor; a further zoom-out
+    // must hold it there rather than jumping up to fit.
+    const measured = reduce(out, { type: "setViewport", path: [], ...VP });
+    const held = reduce(measured, { type: "zoom", factor: 0.8, ox: 0, oy: 0 });
+    expect(viewFor(held.focus, []).zoom).toBeCloseTo(0.15, 6);
+  });
+});

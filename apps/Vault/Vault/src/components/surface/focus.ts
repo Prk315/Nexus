@@ -163,6 +163,24 @@ export function isFocusedGrid(focus: FocusState, path: Path): boolean {
 
 const clampZoom = (z: number) => Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, z));
 
+/**
+ * The zoom below which zooming OUT may not go: the fit zoom, capped at 1.
+ *
+ * "Zoom-out stops at 100% visibility, never further than fit" (pf 1224):
+ * past the point where every brick is on screen, further zoom-out only
+ * shrinks the surface into the middle of the window — wasted space with
+ * nothing left to reveal. Capped at 1 because small content fits long before
+ * 100%, and a floor ABOVE 100% would forbid ever seeing it at natural size.
+ *
+ * MIN_ZOOM before the viewport is measured or when the grid is empty — there
+ * is no fit to stop at, and clamping against a guess would jump later.
+ */
+function zoomFloor(grid: GridNode, viewport: { w: number; h: number }): number {
+  const r = contentRect(grid);
+  if (!r || viewport.w <= 0 || viewport.h <= 0) return MIN_ZOOM;
+  return Math.max(MIN_ZOOM, Math.min(1, viewport.w / r.w, viewport.h / r.h));
+}
+
 function centerOf(b: Brick): { cx: number; cy: number } {
   return { cx: b.pos.x + b.pos.w / 2, cy: b.pos.y + b.pos.h / 2 };
 }
@@ -392,7 +410,14 @@ export function reduce(state: SurfaceState, action: Action): SurfaceState {
     case "zoom": {
       if (grid.viewport !== "pan-zoom") return state;
       const cur = viewFor(focus, focus.gridPath);
-      const zoom = clampZoom(cur.zoom * action.factor);
+      // Zooming out stops at the fit floor — but never JUMPS to it: a view
+      // already below the floor (the content grew under it) stays where it is
+      // and simply cannot go further out. Zooming in is never floored.
+      const floor =
+        action.factor < 1
+          ? Math.min(cur.zoom, zoomFloor(grid, viewportFor(focus, focus.gridPath)))
+          : MIN_ZOOM;
+      const zoom = Math.max(floor, clampZoom(cur.zoom * action.factor));
       if (zoom === cur.zoom) return state;
       // Keep the point under the cursor fixed: it is the difference between
       // zooming a document and zooming a coordinate system.
