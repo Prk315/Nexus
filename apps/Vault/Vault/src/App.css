@@ -1099,8 +1099,9 @@ body {
 
 .node-menu-dropdown {
   display: flex;
-  align-items: center;
-  gap: 4px;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 0;
   padding: 4px 8px 4px 0;
 }
 
@@ -1239,6 +1240,106 @@ body {
 
 .delete-btn:hover {
   color: var(--destructive);
+}
+
+/* ── Tree rows on a touch screen ───────────────────────────────────────────
+   A row action may never be revealed by :hover here. `visibility: hidden`
+   reserves layout space, so × occupies a fixed slot in the row whether or not
+   it is visible, and iOS applies a sticky :hover to whatever was just tapped —
+   so a double-tap near the right end of a row (all of which is `.tree-label`,
+   since it is `flex: 1`) reveals × on tap one and PRESSES it on tap two. Two
+   book nodes were deleted that way on an iPad, and ⊘ unlink sits one slot over
+   with the same problem.
+
+   So on coarse pointers the row carries exactly one affordance: ⋯, always
+   visible, whose worst case is opening a menu. Everything else moves into that
+   menu (`.node-menu-touch-actions` in TreeRow). Nothing can appear under a
+   finger, because nothing appears at all.
+
+   `display: none`, not `visibility: hidden` — the buttons must stop being
+   hit-testable AND stop reserving the slot the stray tap was landing in. */
+/* The `.active` variants are spelled out because the reveal rules above are
+   `.tree-item.active .delete-btn` — one class MORE specific than a plain
+   `.tree-item .delete-btn`, which would therefore lose and leave × visible on
+   exactly the row a first tap had just selected: the bug itself. */
+@media (hover: none) {
+  .tree-item .share-btn,
+  .tree-item .fav-btn,
+  .tree-item .unlink-btn,
+  .tree-item .delete-btn,
+  .tree-item:hover .share-btn,
+  .tree-item:hover .fav-btn,
+  .tree-item:hover .unlink-btn,
+  .tree-item:hover .delete-btn,
+  .tree-item.active .share-btn,
+  .tree-item.active .fav-btn,
+  .tree-item.active .unlink-btn,
+  .tree-item.active .delete-btn,
+  .node-list li:hover .delete-btn,
+  .node-list li.active .delete-btn {
+    display: none;
+  }
+
+  /* ⋯ is the one way in, so it cannot be hover-gated either. */
+  .tree-item .node-menu-btn,
+  .tree-item:hover .node-menu-btn,
+  .tree-item.active .node-menu-btn {
+    visibility: visible;
+    font-size: 17px;
+    padding: 0 8px;
+  }
+
+  .node-menu-touch-actions { display: flex; }
+}
+
+/* A folder that IS shared or favourited still has to show it — those two
+   buttons double as the state indicator, and their `.share-active` /
+   `.fav-active` rules already force visibility. Keep that, minus the tap
+   target: a plain marker cannot be pressed by accident. */
+@media (hover: none) {
+  .tree-item .share-btn.share-active,
+  .tree-item:hover .share-btn.share-active,
+  .tree-item.active .share-btn.share-active,
+  .tree-item .fav-btn.fav-active,
+  .tree-item:hover .fav-btn.fav-active,
+  .tree-item.active .fav-btn.fav-active {
+    display: inline;
+    pointer-events: none;
+  }
+}
+
+/* The ⋯ dropdown: create row on top, touch-only actions beneath. */
+.node-menu-create {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+}
+
+.node-menu-touch-actions {
+  display: none;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.node-menu-action {
+  background: var(--bg-base);
+  border: 1px solid var(--border-base);
+  border-radius: 100px;
+  color: var(--fg-main);
+  /* Finger-sized. A destructive action reached by a deliberate tap is fine;
+     one reached by a sloppy tap is what this whole block exists to stop. */
+  min-height: 34px;
+  padding: 0 12px;
+  font-size: 12px;
+  cursor: pointer;
+  box-shadow: none;
+}
+
+.node-menu-action-danger {
+  color: var(--destructive);
+  border-color: var(--destructive);
 }
 
 /* ── Editor area ────────────────────────────────────────────────────────── */
@@ -9080,3 +9181,62 @@ body.vault-block-dragging .tt-bubble {
    other block. Needs !important for the same reason .columns-row does: this
    sets display:flex at equal specificity and later in the file. */
 .code-cell-block.is-folded { display: none !important; }
+
+/* ── Bin panel ─────────────────────────────────────────────────────────────
+   Deleted nodes, newest first. Restore is one tap; the only destructive act
+   is "Empty bin…", which routes through App's confirm like every other one. */
+.trash-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 8px 6px;
+  overflow-y: auto;
+}
+.trash-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 6px;
+  font-size: 12px;
+  color: var(--fg-muted);
+}
+.trash-empty-btn {
+  border: 1px solid var(--border-base);
+  background: none;
+  border-radius: 5px;
+  padding: 3px 8px;
+  font-size: 12px;
+  color: var(--danger-solid);
+  cursor: pointer;
+}
+.trash-empty-btn:hover { background: var(--danger-tint); }
+.trash-list { margin: 0; }
+.trash-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 6px;
+}
+.trash-label {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 13px;
+}
+.trash-restore-btn {
+  border: 1px solid var(--border-base);
+  background: none;
+  border-radius: 5px;
+  padding: 3px 8px;
+  font-size: 12px;
+  color: var(--accent);
+  cursor: pointer;
+  flex-shrink: 0;
+}
+.trash-restore-btn:hover { border-color: var(--accent); }
+.trash-empty {
+  padding: 16px 12px;
+  font-size: 13px;
+  color: var(--fg-muted);
+}

@@ -46,6 +46,16 @@ export function useGraph() {
     setGraph(g);
   }
 
+  async function restoreNode(id: string) {
+    const g = await api.restoreNode(id);
+    setGraph(g);
+  }
+
+  async function emptyTrash() {
+    const g = await api.emptyTrash();
+    setGraph(g);
+  }
+
   async function addEdge(fromId: string, toId: string) {
     const g = await api.addEdge(fromId, toId);
     setGraph(g);
@@ -113,5 +123,5 @@ export function useGraph() {
     setGraph(g);
   }
 
-  return { graph, graphData, savePositions, loadGraph, createNode, deleteNode, addEdge, removeEdge, addTag, removeTag, setTagColor, createTag, renameTag, deleteTagGlobal, shareNode, unshareNode };
+  return { graph, graphData, savePositions, loadGraph, createNode, deleteNode, restoreNode, emptyTrash, addEdge, removeEdge, addTag, removeTag, setTagColor, createTag, renameTag, deleteTagGlobal, shareNode, unshareNode };
 }

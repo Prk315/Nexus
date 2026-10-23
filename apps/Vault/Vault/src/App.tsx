@@ -13,6 +13,7 @@ import { TreeRow } from "./components/TreeRow";
 import { SearchModal } from "./components/SearchModal";
 import { GraphFilterPanel, GraphFilters, DEFAULT_GRAPH_FILTERS } from "./components/GraphFilterPanel";
 import { TagsPanel } from "./components/TagsPanel";
+import { TrashPanel } from "./components/TrashPanel";
 import { EditorPane, EditorPaneHandle } from "./components/EditorPane";
 import { useConfirm } from "./components/ConfirmDialog";
 import { otherMemberName } from "./lib/teamMembers";
@@ -55,13 +56,13 @@ function detectWebGL(): boolean {
 function App() {
   useNexusRegistration("Vault");
   const { user, signOut } = useNexusAuth();
-  const { graph, graphData, savePositions, loadGraph, createNode, deleteNode, addEdge, removeEdge, addTag, removeTag, setTagColor, createTag, renameTag, deleteTagGlobal, shareNode, unshareNode } = useGraph();
+  const { graph, graphData, savePositions, loadGraph, createNode, deleteNode, restoreNode, emptyTrash, addEdge, removeEdge, addTag, removeTag, setTagColor, createTag, renameTag, deleteTagGlobal, shareNode, unshareNode } = useGraph();
 
   const { confirm, dialog: confirmDialog } = useConfirm();
 
   const [newName, setNewName] = useState("");
   const [newKind, setNewKind] = useState("Note");
-  const [sidebarView, setSidebarView] = useState<"list" | "graph" | "tags">("list");
+  const [sidebarView, setSidebarView] = useState<"list" | "graph" | "tags" | "bin">("list");
   const [themeOpen, setThemeOpen] = useState(false);
   // Applied to <html> on mount, before anything renders a colour — see useTheme.
   const [theme, setTheme] = useTheme();
@@ -388,22 +389,36 @@ function App() {
 
     const details = [
       `Kind: ${node.kind.type}`,
-      "Its content — notes, annotations, highlights, journal pages — is deleted with it.",
-      ...(childCount  ? [`${childCount} child node${childCount === 1 ? "" : "s"} will be kept, but unlinked from this node.`] : []),
-      ...(parentCount ? [`${parentCount} link${parentCount === 1 ? "" : "s"} from parent node${parentCount === 1 ? "" : "s"} will be removed.`] : []),
-      "This cannot be undone.",
+      "It moves to the bin with all its content, and can be restored from there.",
+      ...(childCount  ? [`${childCount} child node${childCount === 1 ? "" : "s"} will be kept, but unlinked until it is restored.`] : []),
+      ...(parentCount ? [`${parentCount} link${parentCount === 1 ? "" : "s"} from parent node${parentCount === 1 ? "" : "s"} will be hidden until it is restored.`] : []),
     ];
 
     const ok = await confirm({
       title: `Delete "${node.name}"?`,
       details,
-      confirmLabel: "Delete node",
+      confirmLabel: "Move to bin",
     });
     if (!ok) return false;
 
     await deleteNode(id);
     Object.values(paneRefs.current).forEach(ref => ref.current?.closeTabIfOpen(id));
     return true;
+  }
+
+  // The ONLY destructive action left in the app, so it gets the strongest
+  // wording the dialog has — everything else is a bin move or reversible.
+  async function handleEmptyTrash() {
+    const ok = await confirm({
+      title: "Empty the bin?",
+      details: [
+        "Every node in the bin is permanently deleted, with all its content, annotations, journals and version history.",
+        "This cannot be undone.",
+      ],
+      confirmLabel: "Delete forever",
+    });
+    if (!ok) return;
+    await emptyTrash();
   }
 
   async function handleToggleShare(id: string, isShared: boolean) {
@@ -677,6 +692,7 @@ function App() {
               <button className={sidebarView === "list" ? "active" : ""} onClick={() => setSidebarView("list")}>List</button>
               <button className={sidebarView === "graph" ? "active" : ""} onClick={() => setSidebarView("graph")}>Graph</button>
               <button className={sidebarView === "tags" ? "active" : ""} onClick={() => setSidebarView("tags")}>Tags</button>
+              <button className={sidebarView === "bin" ? "active" : ""} onClick={() => setSidebarView("bin")}>Bin</button>
             </div>
             {/* Not a fourth tab: the theme is judged against the app behind it,
                 so replacing the tree with a settings pane while tuning it hides
@@ -802,6 +818,8 @@ function App() {
               </>
             )}
           </>
+        ) : sidebarView === "bin" ? (
+          <TrashPanel onRestore={restoreNode} onEmpty={handleEmptyTrash} />
         ) : sidebarView === "tags" ? (
           <TagsPanel
             graph={graph}
