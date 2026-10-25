@@ -2472,9 +2472,9 @@ The pieces:
 | Piece | Where | Does |
 |---|---|---|
 | `mail-triage` | `integrations/n8n/workflows/` | Gmail trigger → persist untriaged → classify → POST verdicts |
-| `mail-drain` | `integrations/n8n/workflows/` | every 5 min: classify anything still untriaged |
+| `mail-drain` | `integrations/n8n/workflows/` | every 15 min: **claims** a batch of untriaged rows and classifies them |
 | `mail-heartbeat` | `integrations/n8n/workflows/` | every 15 min: calls Gmail, records "we looked" |
-| `n8n-ingest` | `supabase/functions/n8n-ingest/` | n8n → `mail_messages` (upsert on `user_id,external_id`), applies `mail_rules`, and answers `{"action":"pending"}` with the untriaged ids |
+| `n8n-ingest` | `supabase/functions/n8n-ingest/` | n8n → `mail_messages` (upsert on `user_id,external_id`), applies `mail_rules`, and answers `{"action":"pending"}` (read-only) and `{"action":"claim"}` (stamps `claimed_at`) with untriaged ids |
 | `n8n-requests` | `supabase/functions/n8n-requests/` | n8n claims/completes rows in `n8n_requests` |
 | `mail_messages`, `mail_rules`, `mail_categories`, `n8n_requests` | `supabase/migrations/20260823120000_n8n_mail_bus.sql` | the bus |
 
@@ -2493,9 +2493,25 @@ always meant, and `MailPanel` already sorts those rows to the top under their ow
 `untriaged` bucket. `mail-drain` empties it on a schedule, re-fetching each body **from
 Gmail by id** — bodies are never stored, which is the whole reason the model is local.
 
+**The drain claims its batch; it does not merely read it.** Verdicts are written in one
+upsert at the *end* of a pass, so while a batch is in the model its rows still look
+untriaged. With the original 5-minute schedule and ~370-second passes, the next pass read
+the same rows and classified them again: measured over fourteen passes on 2026-09-08,
+**140 classifications advanced 36 distinct messages — 74% of the GPU wasted**, some mail
+scored eight times. `{"action":"claim"}` stamps `claimed_at` atomically
+(`claim_untriaged_mail`, `for update skip locked`) before any inference; the interval is
+now 15 minutes so passes do not overlap at all. `{"action":"pending"}` stays **read-only**
+and is what the heartbeat and briefs use — asking how deep the queue is must not move a
+row.
+
+The lesson generalises: **a queue whose "taken" state is only written at the end of the
+work is not a queue.** It was invisible for weeks because an empty queue drains in about
+a second and never overlaps; only a 200-message backlog exposed it.
+
 A failed classification leaves the row untriaged for the next pass. Nothing is marked
 done that was not done; the cost is that a permanently unparseable message retries
-forever, visible as a row that never leaves the top of the panel.
+forever, visible as a row that never leaves the top of the panel — now at most every 30
+minutes (the claim staleness window) rather than every 5.
 
 `n8n_requests` is the other direction: the UI cannot reach n8n either, so an action
 ("sync now", "send this reply", "archive") is a **row n8n polls for**, not a webhook.

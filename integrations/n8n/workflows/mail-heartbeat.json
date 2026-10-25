@@ -74,7 +74,7 @@
       "credentials": {
         "gmailOAuth2": {
           "id": null,
-          "name": "Nexus Gmail"
+          "name": "Gmail account"
         }
       },
       "onError": "stopWorkflow"

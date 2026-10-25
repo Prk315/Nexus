@@ -133,8 +133,14 @@ $ docker exec n8n wget -qO- http://host.docker.internal:11434/api/tags
 
 ### 3. The Gmail credential
 
-In n8n: **Credentials → New → Gmail OAuth2 API**, and name it exactly
-**`Nexus Gmail`** so the imported workflow binds to it.
+In n8n: **Credentials → New → Gmail OAuth2 API**. On this instance it is called
+**`Gmail account`**, which is what the workflow JSONs name.
+
+The name is a fallback, not the binding — `import-workflow.sh` resolves credentials by
+**type** and rewrites the id. But keep it accurate anyway: this README told you to call
+it `Nexus Gmail` for weeks while the instance actually had `Gmail account`, which is
+harmless right up until something has to resolve by name, and then it is a 0-second
+failure with a misleading message.
 
 Google Cloud Console side: create an OAuth client (type *Web application*),
 enable the **Gmail API**, and add n8n's callback URL — shown on the credential
@@ -719,7 +725,7 @@ import always arrives with `{"id": null}` and n8n resolves credentials by **id**
 by name, so a perfectly-named credential still reports "uses invalid credential" until
 you select it on the node.
 
-## Three n8n traps that cost a morning
+## Four n8n traps that cost a morning
 
 ### A workflow with `active = 1` is not necessarily active
 
@@ -822,17 +828,41 @@ console.log('PUBLISHED (trigger):\n  '+refs(h.nodes).join('\n  '));"
 ```
 
 The fix is to make the credential ids part of an actual import, so n8n creates a real
-version, and then publish that:
+version, and then publish that. **Use the script — do not do this by hand:**
 
 ```bash
-# resolve {"id": null} to the real ids in a COPY — never commit instance ids to the repo
-docker cp /tmp/mail-triage.resolved.json n8n:/tmp/wf.json
-docker compose exec -T n8n n8n import:workflow --input=/tmp/wf.json
-docker compose exec -T n8n n8n publish:workflow --id nexusMailTriage1
-docker compose restart n8n
+./import-workflow.sh workflows/mail-drain.json nexusMailDrain1
 ```
 
+It resolves `{"id": null}` against the live instance into a temporary copy, imports,
+publishes and restarts. Instance ids are never written back to the repo.
+
 Then re-run the comparison above and confirm the **published** side carries real ids.
+
+### The same error message, a completely different cause
+
+`uses invalid credential` also appears when the credential reference is genuinely
+unbound — and then it fails *every* run, triggered or manual, which is how you tell the
+two apart.
+
+The workflow JSONs here carry `{"id": null}` deliberately: credential ids are instance
+state and do not belong in git. But **`import:workflow` takes that null literally.** The
+node imports bound to nothing, the import reports success, `publish` reports success,
+the startup log lists the workflow as activated — and every scheduled pass dies in 0 s.
+
+This is exactly what happened on 2026-09-08 while shipping the drain claim. The import
+was correct in every respect the checks covered: the classify prompt was diffed against
+the live copy first, the published snapshot was confirmed to carry the new nodes, and
+the startup log confirmed activation. The diff compared node **`parameters`**, and
+`credentials` sits outside `parameters` — so the one field the import destroyed was the
+one field not being compared.
+
+A second, quieter version of the same trap: the JSONs referenced the Gmail credential by
+the name `"Nexus Gmail"`, but the credential on this instance is called `"Gmail
+account"`. A stale name is harmless while ids are bound and fatal the moment resolution
+has to fall back to the name. Names in the repo are now aligned to the instance.
+
+**If you diff a workflow before importing, diff whole nodes, not `parameters`.**
 
 Genuine OAuth expiry does exist and looks different: it fails manual runs too. Google
 expires refresh tokens for apps left in **Testing**, so publish the consent screen
@@ -852,8 +882,8 @@ The pipeline is now split at the write:
 mail-triage   Gmail ─┬─► persist rows with NO verdict      (fast, no model)
                      └─► classify ──► write verdicts       (best effort)
 
-mail-drain    every 5 min ──► "which rows have no verdict?" ──► re-fetch body
-                          ──► classify ──► write verdicts
+mail-drain    every 15 min ──► CLAIM a batch of unverdicted rows ──► re-fetch body
+                           ──► classify ──► write verdicts
 ```
 
 **`score IS NULL` is the queue.** That is not a new state bolted on: it is what the column
@@ -885,12 +915,63 @@ Ordering is `received_at` ascending, so a backlog drains oldest-first. After a n
 asleep the morning's mail is classified in the order it arrived, rather than leaving the
 oldest — the most likely to be waited on — until last.
 
+`pending` is **read-only, deliberately**. The heartbeat and the briefs use it to ask how
+deep the queue is, and asking must never move a row. The drain uses `claim` instead.
+
+### The `claim` action, and the 74% that was being wasted
+
+`{"action":"claim","limit":N}` returns the same ids-only shape as `pending`, but stamps
+`claimed_at` on every row it hands out, atomically, before any inference happens.
+
+It exists because the drain used to call `pending` and that was a genuine bug, invisible
+until a backlog existed:
+
+- verdicts are written in one upsert at the **end** of a pass;
+- a pass over ten messages takes **~370 s** on the local 7B;
+- the schedule fired every **300 s**.
+
+So the next pass started while the first was still mid-inference, read the very same
+unscored rows — nothing said *taken* — and ran the model over them again. Measured on
+2026-09-08 across fourteen consecutive passes: **140 classifications performed, 36
+distinct messages advanced.** 74% of the GPU wasted, individual messages classified up to
+eight times. Throughput was ~6 messages/hour on hardware that manages ~90.
+
+Two changes close it, and both are needed:
+
+1. **The interval is now 15 minutes**, comfortably longer than a pass. This keeps Ollama
+   serial, which matters on a 16 GB machine.
+2. **The drain claims instead of asking.** The interval is a *guess* about how long
+   inference takes, and that guess is wrong the moment a message is long, Ollama is cold
+   or the Mac is busy. The claim makes correctness independent of the guess.
+
+Atomicity lives in Postgres, not the workflow: `claim_untriaged_mail` does the select and
+the stamp in one statement under `for update skip locked` — the same primitive
+`n8n_requests` uses to hand work to n8n exactly once. Two callers cannot get the same row.
+
+A claim is honoured for **30 minutes**, then the row is reclaimable. That second arm is
+not optional: an n8n restart kills in-flight executions without unwinding anything (see
+the 0-second executions in `execution_entity` every time the container bounces), and
+without a staleness window those rows would sit claimed and unscored forever.
+
+Verify it in one query — under the old read path these returned identical ids:
+
+```sql
+with a as (select external_id from claim_untriaged_mail('<uid>'::uuid, 5)),
+     b as (select external_id from claim_untriaged_mail('<uid>'::uuid, 5))
+select (select count(*) from (select * from a intersect select * from b) x) as overlap;
+```
+
+`overlap` must be 0.
+
 ### What happens when the model fails on a message
 
 Nothing is marked done. The row keeps `score IS NULL` and the next pass tries again.
 
-The cost, stated plainly: a permanently unparseable message is retried every 5 minutes
-forever, burning roughly 24 s of inference each time. The symptom is honest — a row that
+The cost, stated plainly: a permanently unparseable message is retried forever, burning
+roughly 37 s of inference each time. It is now retried at most once every 30 minutes
+rather than every 5 — the claim it takes on a failed pass still stands until the
+staleness window expires, which turns an unparseable message from a hot loop into a slow
+drip. The symptom is honest — a row that
 never leaves the top of the panel — but if you see one, that is what it is. The
 alternative designs were worse: giving up silently would lose mail, and scoring from the
 subject line alone would produce a verdict indistinguishable from a real one.

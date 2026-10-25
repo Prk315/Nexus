@@ -1,4 +1,4 @@
-import { assertEquals, assertNotEquals } from "jsr:@std/assert@1";
+import { assert, assertEquals, assertNotEquals } from "jsr:@std/assert@1";
 import {
   boundRaw,
   applyRules,
@@ -48,6 +48,11 @@ import {
   parsePendingRequest,
   PENDING_DEFAULT_LIMIT,
   PENDING_MAX_LIMIT,
+  isClaimRequest,
+  parseClaimRequest,
+  CLAIM_DEFAULT_LIMIT,
+  CLAIM_MAX_LIMIT,
+  CLAIM_STALE_MINUTES,
   isBriefRequest,
   toBriefItems,
   BRIEF_MAX_ITEMS
@@ -1652,6 +1657,77 @@ Deno.test("pending: nonsense is refused rather than silently defaulted", () => {
       `limit=${JSON.stringify(bad)} should be refused`,
     );
   }
+});
+
+// ───────────────────────────────────────────────────────────────────────────
+// The `claim` action
+// ───────────────────────────────────────────────────────────────────────────
+
+Deno.test("isClaimRequest only fires on an explicit action", () => {
+  assertEquals(isClaimRequest({ action: "claim" }), true);
+
+  // The distinction that matters: claiming has a side effect and asking does
+  // not, so `pending` must never be routed to the claim handler by accident.
+  assertEquals(isClaimRequest({ action: "pending" }), false);
+  assertEquals(isPendingRequest({ action: "claim" }), false);
+
+  assertEquals(isClaimRequest({ messages: [] }), false);
+  assertEquals(isClaimRequest({ action: "ingest" }), false);
+  assertEquals(isClaimRequest({}), false);
+  assertEquals(isClaimRequest(null), false);
+  assertEquals(isClaimRequest("claim"), false);
+  assertEquals(isClaimRequest({ action: "CLAIM" }), false);
+  assertEquals(isClaimRequest({ action: " claim" }), false);
+});
+
+Deno.test("claim: absent limit is the default, oversized is clamped", () => {
+  assertEquals(parseClaimRequest({ action: "claim" }), {
+    ok: true,
+    limit: CLAIM_DEFAULT_LIMIT,
+  });
+  assertEquals(parseClaimRequest({ action: "claim", limit: null }), {
+    ok: true,
+    limit: CLAIM_DEFAULT_LIMIT,
+  });
+
+  assertEquals(parseClaimRequest({ action: "claim", limit: 20 }), { ok: true, limit: 20 });
+  assertEquals(parseClaimRequest({ action: "claim", limit: CLAIM_MAX_LIMIT }), {
+    ok: true,
+    limit: CLAIM_MAX_LIMIT,
+  });
+  assertEquals(parseClaimRequest({ action: "claim", limit: 100000 }), {
+    ok: true,
+    limit: CLAIM_MAX_LIMIT,
+  });
+  // A numeric string is what an n8n expression yields when it stringifies.
+  assertEquals(parseClaimRequest({ action: "claim", limit: "20" }), { ok: true, limit: 20 });
+});
+
+Deno.test("claim: nonsense is refused rather than silently defaulted", () => {
+  for (const bad of ["all", "", "  ", 0, -1, 2.5, NaN, Infinity, true, {}, []]) {
+    assertEquals(
+      parseClaimRequest({ action: "claim", limit: bad }),
+      { ok: false, error: "invalid_limit" },
+      `limit=${JSON.stringify(bad)} should be refused`,
+    );
+  }
+});
+
+Deno.test("claim: the staleness window outlasts a full-size default batch", () => {
+  // The window exists to reclaim rows from a pass that died. If it were
+  // shorter than a healthy pass it would steal rows from a pass still working
+  // on them — recreating the duplicate-classification bug this replaced, but
+  // harder to spot because the rows would look legitimately reclaimed.
+  //
+  // ~37 s per message measured on the local 7B, 2026-09-08.
+  const SECONDS_PER_MESSAGE = 37;
+  const defaultPassMinutes = (CLAIM_DEFAULT_LIMIT * SECONDS_PER_MESSAGE) / 60;
+
+  assert(
+    CLAIM_STALE_MINUTES > defaultPassMinutes,
+    `stale window ${CLAIM_STALE_MINUTES}min must exceed a default pass ` +
+      `(${defaultPassMinutes.toFixed(1)}min)`,
+  );
 });
 
 // ───────────────────────────────────────────────────────────────────────────
