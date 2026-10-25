@@ -171,7 +171,19 @@ jobs:
 
       - name: Build unsigned IPA
         working-directory: apps/NexusLocal
-        run: npx tauri ios build --no-sign --ci --verbose
+        run: |
+          # The Rust side reads SUPABASE_ANON_KEY through `option_env!` at
+          # compile time (see config.rs). A sideloaded IPA has no
+          # ~/.nexuslocalrc to fall back on, so an empty value here ships a
+          # phone build that 401s on every request — and a 401 on a select
+          # looks like "no data", not like a failure. Fail the build instead.
+          if [ -z "${SUPABASE_ANON_KEY}" ]; then
+            echo "::error::SUPABASE_ANON_KEY repo secret is not set — the iOS app would ship with no Supabase key and silently read nothing."
+            exit 1
+          fi
+          npx tauri ios build --no-sign --ci --verbose
+        env:
+          SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
 
       - name: Locate & package IPA
         id: package

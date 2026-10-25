@@ -84,7 +84,36 @@ fn default_poll_secs() -> u64 {
 // Shared NEXUS project — same values the desktop apps ship with. Swapped for
 // auth.uid()-scoped credentials once ecosystem auth is wired into the node.
 const DEFAULT_SUPABASE_URL: &str = "https://efxmzsdisaymtpebaxlp.supabase.co";
-const DEFAULT_SUPABASE_KEY: &str = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImVmeG16c2Rpc2F5bXRwZWJheGxwIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzY0NDM1NjksImV4cCI6MjA5MjAxOTU2OX0.ebOsEwVB2HXC-EV0n6ZhIKTeJML25ddMpvcZshrIQvs";
+
+/// The anon key, supplied **at compile time** rather than written here.
+///
+/// It used to be a literal in this file. The repo is public, so that published
+/// the key on every push — the same reason `usage_ingest_key` and
+/// `garmin_import_key` live in `~/.nexuslocalrc` instead of in the source.
+///
+/// Where each build gets it:
+/// - **macOS** — from `~/.nexuslocalrc`, which every existing install already
+///   has. This constant is never consulted there unless the file lacks a key.
+/// - **iOS** — from the `SUPABASE_ANON_KEY` repo secret, baked in by CI at
+///   build time (`nexuslocal-ios.yml`, "Build unsigned IPA"). A sideloaded IPA
+///   has no `~/.nexuslocalrc` to read, so the phone genuinely needs it compiled
+///   in. This is the same channel the widgets' `Secrets.swift` already uses.
+///
+/// Empty is a legitimate state — a local `cargo build` without the env var set
+/// produces a binary that reads its key from the config file, which is exactly
+/// what the daemon does anyway. It is only fatal when *neither* source has one,
+/// and [`AppConfig::load`] says so loudly rather than handing out a client that
+/// 401s on every call.
+///
+/// ⚠️ Removing the literal does **not** shrink the exposure on its own: the key
+/// remains in git history, and is still hardcoded in `TimeTrackerApp`,
+/// `packages/nexus-core`'s `ClockDropdown.tsx` and Vault's `conceptmap.html`.
+/// It only stops being reachable once all four are gone *and* the key is
+/// rotated. See `SECURITY_RLS_MIGRATION.md`.
+const DEFAULT_SUPABASE_KEY: &str = match option_env!("SUPABASE_ANON_KEY") {
+    Some(k) => k,
+    None => "",
+};
 
 impl Default for AppConfig {
     fn default() -> Self {
@@ -150,6 +179,20 @@ impl AppConfig {
         }
         if config.supabase.key.is_empty() {
             config.supabase.key = defaults.supabase.key;
+        }
+
+        // Neither the config file nor the build supplied a key. Every PostgREST
+        // call will 401, and a 401 on a `select` is indistinguishable from "no
+        // rows" once it has been through a client that swallows it — the same
+        // empty-set trap that governs the RLS migration. Say so once, here,
+        // rather than let it surface as a day with no data.
+        if config.supabase.key.is_empty() {
+            eprintln!(
+                "nexus-local: no Supabase anon key. Add `supabase.key` to {} \
+                 (or build with SUPABASE_ANON_KEY set). Every request will fail \
+                 until then.",
+                config_path().display()
+            );
         }
 
         // Persist so the file exists and is editable by the user — but never
