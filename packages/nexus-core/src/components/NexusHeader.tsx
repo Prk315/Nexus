@@ -2,20 +2,11 @@ import { LayoutGrid, Network, Bot, Mail, MessageSquare, Clock, CalendarDays, Use
 import { DropdownMenu } from "radix-ui";
 import { useConnectedApps } from "../hooks/useConnectedApps";
 import { cn } from "../utils";
+import { WEB_APPS } from "../apps";
 import type { ConnectedApp } from "../types";
 import { ClockDropdown, type ClockDropdownProps } from "./ClockDropdown";
 import { MailPanel, type MailPanelProps } from "./MailPanel";
 import { JobsPanel, type JobsPanelProps } from "./JobsPanel";
-
-// Deployed ecosystem web apps, from per-deployment env vars. Entries with no URL
-// are hidden. Used by the header's app switcher to jump between the web apps.
-const WEB_APPS: { name: string; url: string }[] = (
-  [
-    { name: "Vault", url: (import.meta as any).env?.VITE_VAULT_URL as string | undefined },
-    { name: "PathFinder", url: (import.meta as any).env?.VITE_PATHFINDER_URL as string | undefined },
-    { name: "Protocol", url: (import.meta as any).env?.VITE_PROTOCOL_URL as string | undefined },
-  ].filter((a) => !!a.url) as { name: string; url: string }[]
-);
 
 interface NexusHeaderProps {
   appName: string;
