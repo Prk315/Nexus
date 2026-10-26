@@ -994,8 +994,31 @@ async function bankItemsFor(conceptIds: string[], idPrefix: string): Promise<Map
     for (const [cid, list] of Object.entries(data.drills)) {
       if (!Array.isArray(list) || !list.length) continue;
       const pick = list[day % list.length] as {
-        prompt_md?: unknown; choices?: unknown; answer?: unknown; hints?: unknown; solution_md?: unknown;
+        prompt_md?: unknown; choices?: unknown; answer?: unknown; hints?: unknown;
+        solution_md?: unknown; answer_type?: unknown;
       };
+      // Numeric bank-kort (lesson-harvest, 2026-10-26): facit man regner sig
+      // frem til — answer: {value: tal}. Valideres separat fra choice-formen.
+      if (pick?.answer_type === "numeric" && typeof pick.prompt_md === "string"
+          && typeof (pick.answer as { value?: unknown })?.value === "number") {
+        const drill: Drill = {
+          id: `${idPrefix}bank:${cid}`,
+          prompt_md: pick.prompt_md,
+          lens: detectConceptLens(cid),
+          answer_type: "numeric",
+          answer: { value: (pick.answer as { value: number }).value },
+          hints: Array.isArray(pick.hints) ? (pick.hints as unknown[]).filter((h): h is string => typeof h === "string") : undefined,
+          solution_md: typeof pick.solution_md === "string" ? pick.solution_md : undefined,
+        };
+        out.set(cid, {
+          drill,
+          group: { archetype: "computational", concept_ids: [cid], drills: [drill] },
+          archetype: "computational",
+          conceptId: cid,
+          unitId: -1,
+        });
+        continue;
+      }
       if (typeof pick?.prompt_md !== "string" || !Array.isArray(pick.choices) || pick.choices.length < 2) continue;
       const choices = pick.choices.filter((c): c is string => typeof c === "string");
       if (typeof pick.answer !== "string" || !choices.includes(pick.answer)) continue;
