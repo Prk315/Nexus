@@ -35,6 +35,10 @@ const WorkbookEditor = lazyWithReload(() => import("./WorkbookEditor").then(m =>
 const BookshelfEditor = lazyWithReload(() => import("./BookshelfEditor").then(m => ({ default: m.BookshelfEditor })));
 const JournalEditor = lazyWithReload(() => import("./JournalEditor").then(m => ({ default: m.JournalEditor })));
 const DatabaseEditor = lazyWithReload(() => import("./DatabaseEditor").then(m => ({ default: m.DatabaseEditor })));
+// Ten 200 kB page images' worth of layout code and its own stylesheet; the
+// same reason as every other entry here.
+const ReaderEditor = lazyWithReload(() => import("./reader/ReaderEditor").then(m => ({ default: m.ReaderEditor })));
+const SurfaceEditor = lazyWithReload(() => import("./surface/SurfaceEditor").then(m => ({ default: m.SurfaceEditor })));
 // GraphView pulls react-force-graph-2d — not "genuinely light" despite being
 // canvas-drawn, so it rides the same lazy path as the editors above.
 const GraphView = lazyWithReload(() => import("./GraphView").then(m => ({ default: m.GraphView })));
@@ -202,6 +206,14 @@ export const EditorPane = forwardRef<EditorPaneHandle, EditorPaneProps>(
     const isDatabaseSelected = selectedId
       ? graph.nodes[selectedId]?.kind.type === "Database"
       : false;
+    // A Reader's content row is a POINTER to the reader JSON, and the reader is
+    // read-only, so there is nothing here to save and a great deal to lose:
+    // whatever wrote over that pointer would leave a node that can never find
+    // its pages again. Belt and braces — ReaderEditor never calls onChange, so
+    // `content` never diverges from `persistedContent` either.
+    const isReaderSelected = selectedId
+      ? graph.nodes[selectedId]?.kind.type === "Reader"
+      : false;
 
     const selectedNode = selectedId ? graph.nodes[selectedId] : null;
 
@@ -251,6 +263,23 @@ export const EditorPane = forwardRef<EditorPaneHandle, EditorPaneProps>(
 
     // ── History ───────────────────────────────────────────────────────────────
     const [showHistory, setShowHistory] = useState(false);
+
+    // ── Links, collapsed to a count ───────────────────────────────────────────
+    // The chips themselves used to be a full row of their own. They are the
+    // same chips with the same × — they just live behind the count now.
+    const [linksOpen, setLinksOpen] = useState(false);
+    const linksRef = useRef<HTMLDivElement>(null);
+    // A different node is a different set of links, so an open list from the
+    // previous one must not survive the switch.
+    useEffect(() => { setLinksOpen(false); }, [selectedId]);
+    useEffect(() => {
+      if (!linksOpen) return;
+      function onPointerDown(e: PointerEvent) {
+        if (!linksRef.current?.contains(e.target as Node)) setLinksOpen(false);
+      }
+      document.addEventListener("pointerdown", onPointerDown);
+      return () => document.removeEventListener("pointerdown", onPointerDown);
+    }, [linksOpen]);
     // The live NoteEditor's handle, when one is mounted. Null while the schema
     // guard is showing, and for every kind that renders a different editor —
     // restoreVersion has a route that does not need it.
@@ -266,6 +295,9 @@ export const EditorPane = forwardRef<EditorPaneHandle, EditorPaneProps>(
       !isPdfSelected &&
       !isVideoSelected &&
       !isDatabaseSelected &&
+      // A Reader's row holds a pointer, not a document. Its versions would be
+      // a list of identical one-line JSON blobs with a Restore button on them.
+      !isReaderSelected &&
       selectedNode?.kind.type !== "Journal";
 
     useEffect(() => {
@@ -450,7 +482,8 @@ export const EditorPane = forwardRef<EditorPaneHandle, EditorPaneProps>(
 
     // Auto-save
     useEffect(() => {
-      if (!selectedId || isFolderSelected || isPdfSelected || isVideoSelected || isDatabaseSelected)
+      if (!selectedId || isFolderSelected || isPdfSelected || isVideoSelected || isDatabaseSelected
+          || isReaderSelected)
         return;
       // Byte-identical to what's already on the server — this is the mount pass
       // right after selectNode loaded it, not an edit. Writing it back burns a
@@ -824,12 +857,91 @@ export const EditorPane = forwardRef<EditorPaneHandle, EditorPaneProps>(
           <HomePage graph={graph} onSelectNode={selectNode} />
         ) : selectedNode ? (
           <>
-            <div className="editor-toolbar">
-              <span className="note-title">
-                {nodeIcon(selectedNode.kind)} {selectedNode.name}
-              </span>
-              <div className="toolbar-actions">
-                {collabEligible && collabSession && (
+            {/* One compact strip where three rows used to be: the title line
+                (the tab already names the node, so it was saying it twice),
+                the tag bar, and the row of link chips.
+
+                Nothing it could do has gone — tags add, remove and keep their
+                colour dot; the links are the same chips with the same ×,
+                behind a count that expands; and the save status, the conflict
+                exits and History came across from the title line rather than
+                being dropped with it. */}
+            <div className="chrome-strip">
+              <TagBar
+                nodeId={selectedId!}
+                graph={graph}
+                newTag={newTag}
+                onNewTagChange={setNewTag}
+                onAddTag={(tag) => {
+                  addTag(selectedId!, tag);
+                  setNewTag("");
+                }}
+                onRemoveTag={(tag) => removeTag(selectedId!, tag)}
+                onSetTagColor={setTagColor}
+              />
+
+              {(() => {
+                const outgoing = (graph.edges[selectedId!] ?? []).filter(
+                  (id) => graph.nodes[id]
+                );
+                const incoming = (graph.back_edges[selectedId!] ?? []).filter(
+                  (id) => graph.nodes[id]
+                );
+                if (outgoing.length === 0 && incoming.length === 0) return null;
+                return (
+                  <div className="links-summary" ref={linksRef}>
+                    <button
+                      type="button"
+                      className={`links-count${linksOpen ? " links-count-open" : ""}`}
+                      onClick={() => setLinksOpen((o) => !o)}
+                      aria-expanded={linksOpen}
+                      title={`${outgoing.length} outgoing, ${incoming.length} incoming — click to list them`}
+                    >
+                      {outgoing.length > 0 && (
+                        <span className="links-count-out">{outgoing.length} →</span>
+                      )}
+                      {incoming.length > 0 && (
+                        <span className="links-count-in">{incoming.length} ←</span>
+                      )}
+                    </button>
+                    {linksOpen && (
+                      <div className="links-popover">
+                        {outgoing.map((id) => (
+                          <span key={`out-${id}`} className="edge-chip edge-chip-out">
+                            → {graph.nodes[id].name}
+                            <button
+                              className="edge-chip-remove"
+                              title="Remove this link"
+                              onClick={() => removeEdge(selectedId!, id)}
+                            >
+                              ×
+                            </button>
+                          </span>
+                        ))}
+                        {incoming.map((id) => (
+                          <span key={`in-${id}`} className="edge-chip edge-chip-in">
+                            ← {graph.nodes[id].name}
+                            <button
+                              className="edge-chip-remove"
+                              title="Remove this link"
+                              onClick={() => removeEdge(id, selectedId!)}
+                            >
+                              ×
+                            </button>
+                          </span>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                );
+              })()}
+
+              {/* Pushes the status and History to the far end, so the strip
+                  reads left-to-right as "what this note is" then "is it
+                  safe". */}
+              <span className="chrome-strip-gap" />
+
+              {collabEligible && collabSession && (
                   <span
                     className="collab-status"
                     title={
@@ -941,7 +1053,6 @@ export const EditorPane = forwardRef<EditorPaneHandle, EditorPaneProps>(
                     History
                   </button>
                 )}
-              </div>
             </div>
 
             {showHistory && selectedId && (
@@ -954,55 +1065,6 @@ export const EditorPane = forwardRef<EditorPaneHandle, EditorPaneProps>(
                 onClose={() => setShowHistory(false)}
               />
             )}
-
-            <TagBar
-              nodeId={selectedId!}
-              graph={graph}
-              newTag={newTag}
-              onNewTagChange={setNewTag}
-              onAddTag={(tag) => {
-                addTag(selectedId!, tag);
-                setNewTag("");
-              }}
-              onRemoveTag={(tag) => removeTag(selectedId!, tag)}
-              onSetTagColor={setTagColor}
-            />
-
-            {(() => {
-              const outgoing = (graph.edges[selectedId!] ?? []).filter(
-                (id) => graph.nodes[id]
-              );
-              const incoming = (graph.back_edges[selectedId!] ?? []).filter(
-                (id) => graph.nodes[id]
-              );
-              if (outgoing.length === 0 && incoming.length === 0) return null;
-              return (
-                <div className="edge-bar">
-                  {outgoing.map((id) => (
-                    <span key={id} className="edge-chip edge-chip-out">
-                      → {graph.nodes[id].name}
-                      <button
-                        className="edge-chip-remove"
-                        onClick={() => removeEdge(selectedId!, id)}
-                      >
-                        ×
-                      </button>
-                    </span>
-                  ))}
-                  {incoming.map((id) => (
-                    <span key={id} className="edge-chip edge-chip-in">
-                      ← {graph.nodes[id].name}
-                      <button
-                        className="edge-chip-remove"
-                        onClick={() => removeEdge(id, selectedId!)}
-                      >
-                        ×
-                      </button>
-                    </span>
-                  ))}
-                </div>
-              );
-            })()}
 
             <Suspense fallback={<div className="loading-state">Loading…</div>}>
             {isFolderSelected && folderGraphData ? (
@@ -1041,6 +1103,16 @@ export const EditorPane = forwardRef<EditorPaneHandle, EditorPaneProps>(
               />
             ) : selectedNode?.kind.type === "Pdf" ? (
               <PdfViewer key={selectedId} content={content} nodeId={selectedId!} />
+            ) : selectedNode?.kind.type === "Reader" ? (
+              // Before this case existed, a Reader node fell all the way
+              // through to NoteEditor — which is not a missing feature but a
+              // data-loss bug: Tiptap would have mounted on the pointer JSON
+              // and the autosave would have written its own idea of that
+              // document back. The boundary and the key match every other
+              // editor in this chain.
+              <EditorErrorBoundary key={selectedId} label="ReaderEditor">
+                <ReaderEditor content={content} nodeId={selectedId!} />
+              </EditorErrorBoundary>
             ) : selectedNode?.kind.type === "Parsed" ? (
               <EditorErrorBoundary key={selectedId} label="ParsedViewer">
                 <ParsedViewer content={content} onChange={setContent} nodeId={selectedId!} graph={graph} />
@@ -1065,6 +1137,16 @@ export const EditorPane = forwardRef<EditorPaneHandle, EditorPaneProps>(
                   name={selectedNode.name}
                   content={content}
                   onChange={setContent}
+                />
+              </EditorErrorBoundary>
+            ) : selectedNode?.kind.type === "Surface" ? (
+              <EditorErrorBoundary key={selectedId} label="SurfaceEditor">
+                <SurfaceEditor
+                  nodeId={selectedId!}
+                  name={selectedNode.name}
+                  content={content}
+                  onChange={setContent}
+                  graph={graph}
                 />
               </EditorErrorBoundary>
             ) : selectedNode?.kind.type === "Journal" ? (

@@ -60,6 +60,8 @@ export function kindColor(kind: NodeKind): string {
     case "Workbook": return "#f59e0b";
     case "Journal": return "#f43f5e";
     case "Books":   return "#10b981";
+    case "Reader":  return "#c026d3";
+    case "Surface": return "#6366f1";
   }
 }
 
@@ -77,6 +79,8 @@ export function nodeIcon(kind: NodeKind): string {
     case "Workbook": return "⊟";
     case "Journal": return "✍";
     case "Books":   return "📚";
+    case "Reader":  return "◫";
+    case "Surface": return "▦";
   }
 }
 

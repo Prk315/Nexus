@@ -16,6 +16,11 @@ import { TagsPanel } from "./components/TagsPanel";
 import { TrashPanel } from "./components/TrashPanel";
 import { EditorPane, EditorPaneHandle } from "./components/EditorPane";
 import { useConfirm } from "./components/ConfirmDialog";
+import { DirectoryShell } from "./components/directory/DirectoryShell";
+import { ErrorFence } from "./components/directory/ErrorFence";
+import { LayoutSwitch } from "./components/directory/LayoutSwitch";
+import type { ImportKind } from "./components/directory/DirectoryTree";
+import { useLayoutMode, usePersistentExpanded } from "./components/directory/useDirectory";
 import { otherMemberName } from "./lib/teamMembers";
 import { lazyWithReload } from "./lib/lazyLoad";
 import "./App.css";
@@ -75,8 +80,12 @@ function App() {
   const [fullGraphNewName, setFullGraphNewName] = useState("");
   const [fullGraphNewKind, setFullGraphNewKind] = useState("Note");
   const [graphFilters, setGraphFilters] = useState<GraphFilters>(DEFAULT_GRAPH_FILTERS);
-  const [expandedNodes, setExpandedNodes] = useState<Set<string>>(new Set());
+  // Remembered across reloads — collapsing a tree you re-open all day and having
+  // it forget is the kind of small tax that makes a sidebar feel disposable.
+  const [expandedNodes, setExpandedNodes] = usePersistentExpanded();
   const [sidebarOpen, setSidebarOpen] = useState(true);
+  // The directory prototype's shell vs. the shipped one. ?layout=classic to compare.
+  const [layout, setLayout] = useLayoutMode();
   // Top-level dual mode: the Vault workspace vs. the Learn & Retain concept map.
   const [appMode, setAppMode] = useState<"vault" | "learn">("vault");
   // Cross-app calendar (PathFinder's day, read+written via shared Supabase session)
@@ -105,6 +114,14 @@ function App() {
   const videoImportRef = useRef<HTMLInputElement>(null);
   const parsedImportRef = useRef<HTMLInputElement>(null);
   const [importingParsed, setImportingParsed] = useState(false);
+  /**
+   * The folder an in-flight import should land in, set by the tree's "+" menu
+   * just before the file picker opens. A ref rather than state: the picker is a
+   * native dialog, so nothing re-renders between arming it and the change
+   * event, and it must be CLEARED as it is read — a cancelled dialog fires no
+   * event, and a stale parent would silently adopt the next import.
+   */
+  const importParentRef = useRef<string | null>(null);
   /** Last import failure. Cleared on the next attempt, and dismissable —
    *  an error that cannot be got rid of becomes furniture. */
   const [importError, setImportError] = useState<string | null>(null);
@@ -268,6 +285,26 @@ function App() {
   }
 
   /**
+   * One entry point for "make a node", with or without a parent.
+   *
+   * The sidebar's old creation block could only make ROOT nodes, so anything
+   * that belonged in a folder took a second step. The tree's "+" names the
+   * parent by construction; a null parent is still the old behaviour.
+   */
+  async function handleCreateInto(parentId: string | null, name: string, kind: string) {
+    if (parentId) await handleCreateChild(parentId, name, kind);
+    else await createNode(name, kind);
+  }
+
+  /** Arm an import for a folder (or the root) and open the existing picker. */
+  function requestImport(parentId: string | null, kind: ImportKind) {
+    importParentRef.current = parentId;
+    if (kind === "Pdf") pdfImportRef.current?.click();
+    else if (kind === "Video") videoImportRef.current?.click();
+    else parsedImportRef.current?.click();
+  }
+
+  /**
    * Import a file as a new node: create the node, upload the file, point the
    * node at it.
    *
@@ -297,10 +334,14 @@ function App() {
     if (!file) return;
 
     const name = file.name.replace(stripExt, "");
+    // Read-and-clear: see importParentRef.
+    const parentId = importParentRef.current;
+    importParentRef.current = null;
     const oldIds = new Set(Object.keys(graph.nodes));
     const g = await createNode(name, kind);
     const newId = Object.keys(g.nodes).find(id => !oldIds.has(id));
     if (!newId) return;
+    if (parentId) await addEdge(parentId, newId);
 
     setImportError(null);
     try {
@@ -326,6 +367,8 @@ function App() {
   async function handleImportParsed(e: React.ChangeEvent<HTMLInputElement>) {
     const files = Array.from(e.target.files ?? []);
     e.target.value = "";
+    const parsedParentId = importParentRef.current;
+    importParentRef.current = null;
     if (!files.length) return;
 
     type Chapter = { md?: File; images: Map<string, File> };
@@ -355,6 +398,7 @@ function App() {
       const g = await createNode(name, "Parsed");
       const newId = Object.keys(g.nodes).find((id) => !oldIds.has(id));
       if (!newId) throw new Error("Could not create Parsed node");
+      if (parsedParentId) await addEdge(parsedParentId, newId);
 
       const combined: string[] = [];
       for (const chapter of chapters) {
@@ -542,9 +586,48 @@ function App() {
     return { nodes, links };
   }, [graphData, graphFilters]);
 
+  // The editor panes, built once and mounted by exactly one layout: the
+  // classic layout's main area, or the grid shell's editorSlot (where the
+  // provisional call is that the editor replaces the graph area — see
+  // DirectoryShell). Either way selection reaches it through activePaneRef.
+  const editorArea = (
+    <main className="editor-area">
+      {panes.map((pane, i) => (
+        <React.Fragment key={pane.id}>
+          {i > 0 && (
+            <div
+              className="pane-divider"
+              onMouseDown={e => onPaneDividerMouseDown(e, i)}
+            />
+          )}
+          <EditorPane
+            ref={getPaneRef(pane.id)}
+            graph={graph}
+            isActive={activePaneId === pane.id}
+            canClose={panes.length > 1}
+            onActivate={() => setActivePaneId(pane.id)}
+            onClose={() => closePane(pane.id)}
+            onAddPane={() => addPaneAfter(pane.id)}
+            onSelectionChange={nodeId => setPaneSelectedIds(prev => ({ ...prev, [pane.id]: nodeId }))}
+            removeEdge={removeEdge}
+            addEdge={addEdge}
+            createNode={createNode}
+            deleteNode={handleDeleteNode}
+            addTag={addTag}
+            removeTag={removeTag}
+            setTagColor={setTagColor}
+            savePositions={savePositions}
+            style={{ flex: paneSizes[i], pointerEvents: isPaneResizing ? "none" : undefined }}
+          />
+        </React.Fragment>
+      ))}
+    </main>
+  );
+
   return (
     <div style={{ display: "flex", flexDirection: "column", height: "100vh" }}>
       <NexusHeader
+        autoHide
         appName="Vault"
         userEmail={user?.email}
         onSignOut={() => signOut()}
@@ -639,6 +722,8 @@ function App() {
                   <option>Database</option>
                   <option>Journal</option>
                   <option>Books</option>
+                  <option>Reader</option>
+                  <option>Surface</option>
                 </select>
                 <button className="link-mode-btn" disabled={!fullGraphNewName.trim()} onClick={async () => {
                   if (fullGraphNewName.trim()) {
@@ -669,6 +754,81 @@ function App() {
         />
       )}
 
+      {/* The file pickers are shared by both layouts — the classic sidebar's
+          three buttons and the directory tree's "+" menu both click these,
+          which is what "reuse the import handlers" means literally. */}
+      <input
+        ref={pdfImportRef}
+        type="file"
+        accept=".pdf"
+        style={{ display: "none" }}
+        onChange={handleImportPdf}
+      />
+      <input
+        ref={videoImportRef}
+        type="file"
+        accept="video/*"
+        style={{ display: "none" }}
+        onChange={handleImportVideo}
+      />
+      <input
+        ref={parsedImportRef}
+        type="file"
+        // @ts-expect-error non-standard folder-picker attributes
+        webkitdirectory=""
+        directory=""
+        multiple
+        style={{ display: "none" }}
+        onChange={handleImportParsed}
+      />
+
+      {layout === "grid" ? (
+        <ErrorFence label="The directory layout could not be drawn. Switch to the classic layout with ?layout=classic.">
+        <DirectoryShell
+          graph={graph}
+          graphData={graphData}
+          selectedId={selectedId}
+          currentUserId={user?.id ?? null}
+          sidebarWidth={sidebarResize.width}
+          sidebarDragging={sidebarResize.dragging}
+          onStartResize={sidebarResize.startResize}
+          sidebarView={sidebarView}
+          onSidebarView={setSidebarView}
+          themeOpen={themeOpen}
+          onToggleTheme={() => setThemeOpen(v => !v)}
+          themeSlot={<ThemePanel theme={theme} onChange={setTheme} />}
+          tagsSlot={
+            <TagsPanel
+              graph={graph}
+              onCreateTag={createTag}
+              onRenameTag={renameTag}
+              onDeleteTag={handleDeleteTagGlobal}
+              onSetTagColor={setTagColor}
+            />
+          }
+          binSlot={<TrashPanel onRestore={restoreNode} onEmpty={handleEmptyTrash} />}
+          editorSlot={editorArea}
+          expanded={expandedNodes}
+          onToggleExpanded={toggleExpanded}
+          onSelect={selectNode}
+          onDelete={handleDeleteNode}
+          onCreate={handleCreateInto}
+          onImport={requestImport}
+          importingParsed={importingParsed}
+          onUnlink={async (parentId, childId) => removeEdge(parentId, childId)}
+          onToggleShare={handleToggleShare}
+          linkMode={linkMode}
+          linkSource={linkSource}
+          onToggleLinkMode={toggleLinkMode}
+          onGraphNodeClick={handleGraphNodeClick}
+          onSavePositions={savePositions}
+          onOpenSearch={() => setSearchOpen(true)}
+          layout={layout}
+          onLayout={setLayout}
+        />
+        </ErrorFence>
+      ) : (
+      <>
       <button
         className={`sidebar-toggle-tab${sidebarOpen ? "" : " closed"}`}
         onClick={() => setSidebarOpen(v => !v)}
@@ -704,6 +864,9 @@ function App() {
               aria-label="Colour scheme"
               aria-pressed={themeOpen}
             >◐</button>
+            {/* The way back to the directory layout. It has to be HERE and not
+                only in the grid shell's header — see LayoutSwitch.tsx. */}
+            <LayoutSwitch layout={layout} onLayout={setLayout} compact />
           </div>
         </div>
 
@@ -729,41 +892,19 @@ function App() {
                 <option>Workbook</option>
                 <option>Journal</option>
                 <option>Books</option>
+                <option>Reader</option>
+                <option>Surface</option>
               </select>
               <button onClick={handleCreateNode}>+</button>
             </div>
             <div className="import-pdf-row">
-              <input
-                ref={pdfImportRef}
-                type="file"
-                accept=".pdf"
-                style={{ display: "none" }}
-                onChange={handleImportPdf}
-              />
-              <input
-                ref={videoImportRef}
-                type="file"
-                accept="video/*"
-                style={{ display: "none" }}
-                onChange={handleImportVideo}
-              />
-              <input
-                ref={parsedImportRef}
-                type="file"
-                // @ts-expect-error non-standard folder-picker attributes
-                webkitdirectory=""
-                directory=""
-                multiple
-                style={{ display: "none" }}
-                onChange={handleImportParsed}
-              />
-              <button className="import-pdf-btn" onClick={() => pdfImportRef.current?.click()}>
+              <button className="import-pdf-btn" onClick={() => requestImport(null, "Pdf")}>
                 Import PDF
               </button>
-              <button className="import-pdf-btn" onClick={() => videoImportRef.current?.click()}>
+              <button className="import-pdf-btn" onClick={() => requestImport(null, "Video")}>
                 Import Video
               </button>
-              <button className="import-pdf-btn" disabled={importingParsed} onClick={() => parsedImportRef.current?.click()}>
+              <button className="import-pdf-btn" disabled={importingParsed} onClick={() => requestImport(null, "Parsed")}>
                 {importingParsed ? "Importing…" : "Import Parsed"}
               </button>
             </div>
@@ -851,37 +992,9 @@ function App() {
         )}
       </aside>
 
-      <main className="editor-area">
-        {panes.map((pane, i) => (
-          <React.Fragment key={pane.id}>
-            {i > 0 && (
-              <div
-                className="pane-divider"
-                onMouseDown={e => onPaneDividerMouseDown(e, i)}
-              />
-            )}
-            <EditorPane
-              ref={getPaneRef(pane.id)}
-              graph={graph}
-              isActive={activePaneId === pane.id}
-              canClose={panes.length > 1}
-              onActivate={() => setActivePaneId(pane.id)}
-              onClose={() => closePane(pane.id)}
-              onAddPane={() => addPaneAfter(pane.id)}
-              onSelectionChange={nodeId => setPaneSelectedIds(prev => ({ ...prev, [pane.id]: nodeId }))}
-              removeEdge={removeEdge}
-              addEdge={addEdge}
-              createNode={createNode}
-              deleteNode={handleDeleteNode}
-              addTag={addTag}
-              removeTag={removeTag}
-              setTagColor={setTagColor}
-              savePositions={savePositions}
-              style={{ flex: paneSizes[i], pointerEvents: isPaneResizing ? "none" : undefined }}
-            />
-          </React.Fragment>
-        ))}
-      </main>
+      {editorArea}
+      </>
+      )}
     </div>
     {learnMounted && (
       // Mounted once and kept alive so its graph/camera state survive. Map3D
