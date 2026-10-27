@@ -48,6 +48,7 @@ import { IOChart } from "./IOChart";
 import { useRoadmap } from "./roadmapData";
 import { OverviewStrip } from "./OverviewStrip";
 import { MathKeyboardBar } from "./MathKeyboardBar";
+import { ToolDock } from "./tools/ToolDock";
 import { InfinitePanel } from "./InfinitePanel";
 import { ChallengePanel } from "./ChallengePanel";
 import { SprintPanel } from "./SprintPanel";
@@ -93,6 +94,8 @@ export function LearnPage() {
     <CourseProvider>
       {/* Global på touch: klæber til ethvert fokuseret tekstfelt i Learn. */}
       <MathKeyboardBar />
+      {/* Universel Calc/Python-dock — virker også oven på Review-overlayet. */}
+      <ToolDock />
       <div className="-mx-6 -mb-6 flex-1 overflow-y-auto bg-[#F6F5F1] text-[#1A1A24]">
         <div className={`mx-auto flex flex-col gap-6 px-4 pb-16 pt-6 sm:px-6 md:gap-8 md:px-8 md:pb-24 md:pt-10 ${
           tab === "overblik" ? "max-w-6xl" : "max-w-xl md:max-w-2xl"}`}>
