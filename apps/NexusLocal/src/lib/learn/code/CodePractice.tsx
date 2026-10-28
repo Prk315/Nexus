@@ -327,7 +327,7 @@ function CodeSession({ exercise, onClose, activity }: {
     if (exercise.language === "python") {
       const full = `${code}\n\n${spec.tests ?? "print('OK')"}`;
       res = await runPython(full);
-      pass = res.ok && res.stdout.trim().split("\n").at(-1) === "OK";
+      pass = res.ok && res.stdout.trim().split("\n").slice(-1)[0] === "OK";
     } else {
       res = await runC(code);
       pass = res.ok && spec.expected_stdout != null && res.stdout === spec.expected_stdout;

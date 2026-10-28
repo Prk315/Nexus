@@ -256,7 +256,7 @@ export function buildWeekTree(
 ): WeekNode[] {
   const today = todayYmd();
   const courseOf = new Map(enrolls.map((e) => [e.c_id, e.label]));
-  const examDate = mats.filter((m) => m.due_date).map((m) => m.due_date!).sort().at(-1) ?? null;
+  const examDate = mats.filter((m) => m.due_date).map((m) => m.due_date!).sort().slice(-1)[0] ?? null;
   const lastWeek = examDate ? Math.floor(daysBetween(TERM_START, examDate) / 7) + 1 : 10;
   const curWeek = Math.min(lastWeek, Math.floor(daysBetween(TERM_START, today) / 7) + 1);
   const weekOf = (ymd: string) => Math.floor(daysBetween(TERM_START, ymd) / 7) + 1;
