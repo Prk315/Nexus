@@ -40,7 +40,8 @@ nexus -p dev vault mkdir "<name>" [--parent <id>] [--tag t ...]
 nexus -p dev vault mknote "<name>" [--parent <id>] [--tag t ...]
 nexus -p dev vault note set <id> --md file.md | --stdin   [--force]
 nexus -p dev vault note append <id> --md file.md | --stdin
-nexus -p dev vault rm <id> --yes
+nexus -p dev vault rm <id> --yes      # moves to the bin (restorable in Vault → Bin), never a hard delete
+nexus -p dev vault note set ...       # Note nodes only — every other kind (Pdf, Reader, Surface, …) is refused
 nexus -p me  pf task add "<title>" [--parent id] [--plan id] [--due YYYY-MM-DD] [--priority p]
 nexus -p me  pf task done <id> | undone <id>
 nexus -p me  pf task stage <id> <refine|schedule|active|done>   # gate error is verbatim

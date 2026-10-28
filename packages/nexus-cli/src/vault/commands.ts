@@ -105,10 +105,26 @@ export async function writeNote(
 ): Promise<{ id: string; name: string; updated_at: string; warnings: string[]; blocks: number }> {
   const node = await s.api.getNode(id);
   if (!node) throw new UserError(`node ${id} not found`);
+  if (node.deleted_at != null) {
+    throw new UserError(`refusing to write note ${id} "${node.name}": it is in the bin (deleted ${node.deleted_at}); restore it in Vault → Bin first`);
+  }
   if (node.team_id != null) {
     throw new UserError(`refusing to write note ${id} "${node.name}": it is shared (team_id ${node.team_id}) and may be co-edited; edit it in Vault`);
   }
-  if (node.kind?.type === "Folder") throw new UserError(`node ${id} "${node.name}" is a folder, not a note`);
+  // Note nodes ONLY, not merely "not a folder". Every other kind stores
+  // something that LOOKS writable but is not a document: a Pdf/Video node's
+  // content is its Storage URL, a Reader/Surface node's is a JSON pointer, a
+  // Canvas/Workbook's is its own format. parseNoteContent classifies all of
+  // those as plain "json", so without this fence `note set` replaced a
+  // Reader's pointer with a ProseMirror doc — permanent loss, since History
+  // is hidden for those kinds and the snapshot trigger skips large rows.
+  if (node.kind?.type !== "Note") {
+    throw new UserError(
+      `refusing to write node ${id} "${node.name}": kind ${node.kind?.type ?? "unknown"} is not a Note — ` +
+      `its content is a ${node.kind?.type === "Pdf" || node.kind?.type === "Video" ? "storage URL" : "document in its own format"}, ` +
+      `and overwriting it would destroy the node; edit it in Vault`,
+    );
+  }
 
   const before = await s.api.readContent(id);
   const shape = parseNoteContent(before?.data);
@@ -329,23 +345,24 @@ export function registerVaultCommands(root: Command, deps: VaultDeps): void {
     .action(mk("Note"));
 
   vault.command("rm <id>")
-    .description("delete a node, its edges and its content rows. Requires --yes")
-    .option("--yes", "confirm the deletion")
+    .description("move a node to the bin (restorable in Vault's Bin tab; nothing is destroyed). Requires --yes")
+    .option("--yes", "confirm the bin move")
     .action(async (id: string, o: { yes?: boolean }, cmd: Command) => {
       const { profile, json } = cmd.optsWithGlobals<Opts>();
       requireId(id);
-      if (!o.yes) throw new UserError(`refusing to delete ${id} without --yes`);
+      if (!o.yes) throw new UserError(`refusing to bin ${id} without --yes`);
       const s = await deps.open(profile);
       const node = await s.api.getNode(id);
       if (!node) throw new UserError(`node ${id} not found`);
+      if (node.deleted_at != null) throw new UserError(`node ${id} "${node.name}" is already in the bin (deleted ${node.deleted_at})`);
       if (node.user_id !== s.who.userId) throw new UserError(`node ${id} "${node.name}" is owned by ${node.user_id}, not this profile`);
       const g = await s.api.loadGraph();
       const kids = g.children[id] ?? [];
       if (kids.length) {
-        warn(`note: ${kids.length} child node${kids.length === 1 ? "" : "s"} lose this parent edge but are NOT deleted: ${kids.join(", ")}`);
+        warn(`note: ${kids.length} child node${kids.length === 1 ? "" : "s"} stay out of the bin; their edge comes back if the node is restored: ${kids.join(", ")}`);
       }
       await s.api.deleteNode(id);
-      if (json) return printJson({ profile: s.who.profileName, deleted: id, name: node.name, kind: node.kind?.type, orphaned_children: kids });
-      write(header(s.who.profileName, s.who.email, `deleted ${node.kind?.type?.toLowerCase() ?? "node"} "${node.name}" ${id}`));
+      if (json) return printJson({ profile: s.who.profileName, binned: id, name: node.name, kind: node.kind?.type, unlinked_children: kids });
+      write(header(s.who.profileName, s.who.email, `moved ${node.kind?.type?.toLowerCase() ?? "node"} "${node.name}" ${id} to the bin (restore in Vault → Bin)`));
     });
 }
