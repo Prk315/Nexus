@@ -58,9 +58,11 @@ export type LayoutMode = "grid" | "classic";
 /**
  * Which shell to render.
  *
- * `?layout=classic` wins over the stored choice and is written back, so a link
- * is enough to compare the two without hunting for the toggle. The new layout
- * is the default on this branch — the whole point is to look at it.
+ * `?layout=classic` wins over the stored choice, is written back, and is then
+ * STRIPPED from the URL — so a link is enough to compare the two, but a
+ * bookmarked or reloaded URL cannot keep overriding the toggle forever
+ * (which was exactly the one-way-door symptom the versioned key fixed, back
+ * for anyone who arrived via a link).
  */
 export function useLayoutMode(): [LayoutMode, (m: LayoutMode) => void] {
   const [mode, setMode] = useState<LayoutMode>(() => {
@@ -79,6 +81,31 @@ export function useLayoutMode(): [LayoutMode, (m: LayoutMode) => void] {
     }
     return "grid";
   });
+
+  // The write-back and strip live in an effect so the initializer stays a
+  // read. replaceState, not pushState: the cleaned URL must not add a
+  // history entry, or Back walks through every variant of the same page.
+  useEffect(() => {
+    let fromQuery: string | null = null;
+    try {
+      fromQuery = new URLSearchParams(window.location.search).get("layout");
+    } catch {
+      return;
+    }
+    if (fromQuery !== "grid" && fromQuery !== "classic") return;
+    try {
+      localStorage.setItem(LAYOUT_KEY, fromQuery);
+    } catch {
+      /* the choice just does not survive a reload */
+    }
+    try {
+      const url = new URL(window.location.href);
+      url.searchParams.delete("layout");
+      window.history.replaceState(window.history.state, "", url);
+    } catch {
+      /* a host without history still honoured the param this load */
+    }
+  }, []);
 
   const set = useCallback((m: LayoutMode) => {
     setMode(m);

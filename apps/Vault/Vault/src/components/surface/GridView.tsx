@@ -137,7 +137,41 @@ export function GridView({
     return () => el.removeEventListener("wheel", onWheel);
   }, [focused, panZoom, dispatch]);
 
-  const visible = visibleIndices(grid.children, panZoom ? view : { x: 0, y: 0, zoom: 1 }, size);
+  // A "scroll" grid is scrolled by the BROWSER, so the culling window moves
+  // without any action passing through the reducer. Culling it at {0,0,1}
+  // meant a brick below host height + margin never mounted, and scrolling to
+  // it showed permanently blank cells — nothing re-rendered, because nothing
+  // was listening. rAF-throttled like the reader's scroll handler.
+  const [scrollPos, setScrollPos] = useState({ x: 0, y: 0 });
+  useEffect(() => {
+    const el = hostRef.current;
+    if (!el || grid.viewport !== "scroll") return;
+    let frame = 0;
+    const onScroll = () => {
+      if (frame) return;
+      frame = requestAnimationFrame(() => {
+        frame = 0;
+        setScrollPos((prev) =>
+          prev.x === el.scrollLeft && prev.y === el.scrollTop
+            ? prev
+            : { x: el.scrollLeft, y: el.scrollTop },
+        );
+      });
+    };
+    el.addEventListener("scroll", onScroll, { passive: true });
+    return () => {
+      el.removeEventListener("scroll", onScroll);
+      if (frame) cancelAnimationFrame(frame);
+    };
+  }, [grid.viewport]);
+
+  const visible = visibleIndices(
+    grid.children,
+    // Scrolled content is content translated the other way, which is exactly
+    // what a view's offset already means to isOnScreen.
+    panZoom ? view : { x: -scrollPos.x, y: -scrollPos.y, zoom: 1 },
+    size,
+  );
 
   return (
     <div

@@ -702,7 +702,11 @@ def main() -> None:
     args = ap.parse_args()
 
     os.makedirs(args.out, exist_ok=True)
-    os.makedirs(os.path.dirname(args.raw), exist_ok=True)
+    # dirname of a bare filename is "", and os.makedirs("") raises — a --raw
+    # with no directory component means "right here", which already exists.
+    raw_dir = os.path.dirname(args.raw)
+    if raw_dir:
+        os.makedirs(raw_dir, exist_ok=True)
 
     doc = fitz.open(args.pdf)
     pages = [extract_page(doc, idx, order, note, args.out)

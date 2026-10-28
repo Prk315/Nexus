@@ -102,6 +102,8 @@ function NoteLeaf({ nodeId, name }: { nodeId: string; name: string }) {
   const [status, setStatus] = useState<"" | "saving" | "saved" | "error">("");
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const loaded = useRef<string | null>(null);
+  /** An edit the debounce has not yet written. Flushed, never discarded. */
+  const pending = useRef<string | null>(null);
 
   useEffect(() => {
     let alive = true;
@@ -118,6 +120,20 @@ function NoteLeaf({ nodeId, name }: { nodeId: string; name: string }) {
     return () => {
       alive = false;
       if (timer.current) clearTimeout(timer.current);
+      // FLUSH the pending edit rather than dropping it. This cleanup runs far
+      // more often than "the surface closed": LeafView swaps the live editor
+      // for a card below the LOD threshold, and GridView unmounts culled
+      // bricks — so "type, then zoom out within 600ms" used to lose the
+      // keystrokes with the status still blank. Fire-and-forget is right
+      // here: nothing is left mounted to show the result, and a failure
+      // still lands in the console like any other brick save failure.
+      if (pending.current != null) {
+        const text = pending.current;
+        pending.current = null;
+        api.saveContent(nodeId, text).catch((e) => {
+          console.error(`[surface] note brick could not flush node ${nodeId} on unmount`, e);
+        });
+      }
     };
   }, [nodeId]);
 
@@ -127,8 +143,10 @@ function NoteLeaf({ nodeId, name }: { nodeId: string; name: string }) {
     // that back would burn a round trip per brick that comes into view.
     if (next === loaded.current) return;
     if (timer.current) clearTimeout(timer.current);
+    pending.current = next;
     setStatus("saving");
     timer.current = setTimeout(() => {
+      pending.current = null;
       api
         .saveContent(nodeId, next)
         .then(() => {
