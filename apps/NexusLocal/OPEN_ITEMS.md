@@ -97,6 +97,25 @@ Unit 8's `BlockingState` struct omits `today_minutes` even though the column exi
 so `RewardsPanel` backfills that one field with a second query against the same row.
 **Delete the backfill once the struct grows the field**, or the two reads will drift.
 
+## 5b. Pomodoro: what the Rust-driven run does not cover yet
+
+The run moved from the WebView into `timetracker/pomodoro.rs` (2026-10-28): it
+lives in `pomodoro_config.run_*`, pauses the session at each break and resumes
+it after, and drives the floating window (`float.rs`). Known gaps:
+
+- **Needs `20261028120000_pomodoro_run_state.sql` applied.** Until then status
+  reads work and every start fails with an unknown-column error naming the file.
+- **Only the desktop app advances it.** The driver is in the app, not the
+  `--daemon` (notifications and the float need Tauri). Quit the app and phases
+  stop changing until something reconciles — which then applies them *as of
+  each boundary*, and parks the next focus block rather than resuming tracking
+  for someone who was away. The phone reconciles only while it is open, and
+  fires no notifications.
+- **A cross-device skip can land as a held focus block.** Commands write the run
+  before touching the session; a reconcile on the other device in that window
+  reads "break, timer running" and flips back to focus. Milliseconds wide, and
+  the result is a paused focus block, never mis-billed time.
+
 ## 6. Dead weight in TimeTrackerApp
 
 `db/goals.rs`, `commands/goal_commands.rs`, `db/templates.rs`,

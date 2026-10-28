@@ -4,6 +4,7 @@ mod config;
 mod content_blocker;
 mod device;
 mod enforcement;
+mod float;
 mod garmin_cmd;
 mod grid;
 mod ios_bridge;
@@ -160,8 +161,11 @@ pub fn run_daemon() {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    tauri::Builder::default()
-        .plugin(tauri_plugin_opener::init())
+    let builder = tauri::Builder::default().plugin(tauri_plugin_opener::init());
+    // Pomodoro phase-change notifications. Desktop-only: see `pomodoro::alert`.
+    #[cfg(desktop)]
+    let builder = builder.plugin(tauri_plugin_notification::init());
+    builder
         .setup(|app| {
             let config = AppConfig::load();
             let device_id = device::get_or_create();
@@ -196,6 +200,12 @@ pub fn run() {
 
             #[cfg(not(mobile))]
             tray::setup(app.handle())?;
+
+            // Advances the pomodoro while no window is looking — pauses the
+            // session at each break, resumes it after, notifies. In the app
+            // rather than the daemon because both of those need Tauri.
+            #[cfg(desktop)]
+            timetracker::pomodoro::spawn_driver(app.handle().clone());
 
             // Show the status window on launch so there's an obvious entry point.
             #[cfg(desktop)]
@@ -271,6 +281,15 @@ pub fn run() {
             timetracker::session::tt_session_resume,
             timetracker::pomodoro::tt_pomodoro_get,
             timetracker::pomodoro::tt_pomodoro_set,
+            timetracker::pomodoro::tt_pomodoro_status,
+            timetracker::pomodoro::tt_pomodoro_start,
+            timetracker::pomodoro::tt_pomodoro_pause,
+            timetracker::pomodoro::tt_pomodoro_resume,
+            timetracker::pomodoro::tt_pomodoro_skip,
+            timetracker::pomodoro::tt_pomodoro_end,
+            timetracker::session::tt_recent_tasks,
+            float::tt_float_set,
+            float::tt_main_show,
             timetracker::focus::tt_focus_blocks,
             timetracker::focus::tt_focus_block_save,
             timetracker::focus::tt_focus_block_delete,

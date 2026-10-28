@@ -43,6 +43,10 @@ tauri = { version = "2", features = ["tray-icon"] }
 # 127.0.0.1 by the daemon. Same major as the Nexus IPC hub in `apps/nexus`, so
 # the workspace resolves one axum. iOS has no daemon and no listener.
 axum = "0.8"
+# Pomodoro phase-change banners (`timetracker::pomodoro::alert`). Desktop only:
+# on the phone the WebView is suspended exactly when a banner would matter, and
+# the plugin's iOS half would be one more thing to re-sign under SideStore.
+tauri-plugin-notification = "2"
 
 # iOS reads the device name via libc gethostname (subprocess spawn is sandboxed)
 [target.'cfg(target_os = "ios")'.dependencies]

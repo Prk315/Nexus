@@ -31,10 +31,12 @@
           "identifier": "default",
           "description": "Default capability",
           "windows": [
-            "main"
+            "main",
+            "float"
           ],
           "permissions": [
             "core:default",
+            "core:window:allow-start-dragging",
             "opener:default"
           ]
         }
