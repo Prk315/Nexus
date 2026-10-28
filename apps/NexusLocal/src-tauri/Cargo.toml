@@ -48,6 +48,12 @@ axum = "0.8"
 # the plugin's iOS half would be one more thing to re-sign under SideStore.
 tauri-plugin-notification = "2"
 
+# The floating timer re-classes its window as an NSPanel so it can sit over
+# other apps' full-screen Spaces (`float.rs`). Same major tao/wry already use,
+# so nothing new is downloaded.
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2 = "0.6"
+
 # iOS reads the device name via libc gethostname (subprocess spawn is sandboxed)
 [target.'cfg(target_os = "ios")'.dependencies]
 libc = "0.2"

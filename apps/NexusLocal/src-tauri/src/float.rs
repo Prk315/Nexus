@@ -49,7 +49,99 @@ pub fn show(app: &tauri::AppHandle) -> Result<(), String> {
     if let Some((x, y)) = top_right(app) {
         builder = builder.position(x, y);
     }
-    builder.build().map(|_| ()).map_err(|e| e.to_string())
+    let win = builder.build().map_err(|e| e.to_string())?;
+    #[cfg(target_os = "macos")]
+    float_over_fullscreen(&win);
+    #[cfg(not(target_os = "macos"))]
+    let _ = win;
+    Ok(())
+}
+
+/// Let the float sit over *other apps' full-screen Spaces*, not just desktops.
+///
+/// `always_on_top` + `visible_on_all_workspaces` covers ordinary Spaces, but
+/// since macOS 10.14 a plain `NSWindow` belonging to an app with a Dock icon
+/// (`ActivationPolicy::Regular`, see `lib.rs`) is barred from full-screen
+/// Spaces — a full-screen Ghostty or Chrome simply covered it. Electron's
+/// `visibleOnFullScreen` gets round this by hiding the Dock icon; this keeps
+/// the icon and does what Spotlight-style overlays do instead: re-class the
+/// window as a non-activating `NSPanel` with `FullScreenAuxiliary`.
+///
+/// Re-classing tao's window drops its `canBecomeKeyWindow` override, so the
+/// float can never take the keyboard — which it has no use for — and,
+/// non-activating, clicking it never pulls you out of the full-screen app.
+#[cfg(target_os = "macos")]
+fn float_over_fullscreen(win: &tauri::WebviewWindow) {
+    let Ok(ptr) = win.ns_window() else {
+        return;
+    };
+    // A raw pointer is not `Send`; the address is, and AppKit calls must be
+    // made on the main thread.
+    let addr = ptr as usize;
+    let _ = win.run_on_main_thread(move || unsafe {
+        make_panel(addr as *mut objc2::runtime::AnyObject)
+    });
+}
+
+/// An `NSPanel` with the same memory layout as tao's `TaoWindow`.
+///
+/// `TaoWindow` is `NSWindow` plus one `Bool` ivar, `focusable`, which tao
+/// reads back by name (`set_focusable`). `NSPanel` itself adds no ivars to
+/// `NSWindow` (both 520 bytes on macOS 26), so declaring that one ivar again
+/// here gives a class whose instances are laid out exactly like tao's — the
+/// re-class neither reads past the allocation nor strands tao's lookup.
+#[cfg(target_os = "macos")]
+fn panel_class() -> &'static objc2::runtime::AnyClass {
+    use objc2::runtime::{AnyClass, Bool, ClassBuilder};
+    use std::sync::OnceLock;
+
+    static CLASS: OnceLock<&'static AnyClass> = OnceLock::new();
+    CLASS.get_or_init(|| {
+        let name = c"NexusFloatPanel";
+        // Already registered (e.g. a second Tauri runtime in one process):
+        // re-registering would fail, so reuse it.
+        if let Some(existing) = AnyClass::get(name) {
+            return existing;
+        }
+        let mut builder = ClassBuilder::new(name, objc2::class!(NSPanel))
+            .expect("NexusFloatPanel is registered exactly once");
+        builder.add_ivar::<Bool>(c"focusable");
+        builder.register()
+    })
+}
+
+/// # Safety
+/// `window` must be a live `TaoWindow` (see [`panel_class`] for why the
+/// layouts match), and this must run on the main thread.
+#[cfg(target_os = "macos")]
+unsafe fn make_panel(window: *mut objc2::runtime::AnyObject) {
+    use objc2::msg_send;
+
+    const STYLE_NONACTIVATING_PANEL: usize = 1 << 7;
+    const JOIN_ALL_SPACES: usize = 1 << 0;
+    const STATIONARY: usize = 1 << 4;
+    const IGNORES_CYCLE: usize = 1 << 6;
+    const FULL_SCREEN_AUXILIARY: usize = 1 << 8;
+    /// `NSStatusWindowLevel`: above a full-screen app's own chrome (Chrome's
+    /// reveal-on-hover toolbar sits above the floating level).
+    const STATUS_WINDOW_LEVEL: isize = 25;
+
+    if window.is_null() {
+        return;
+    }
+    objc2::ffi::object_setClass(window, panel_class());
+
+    let mask: usize = msg_send![window, styleMask];
+    let _: () = msg_send![window, setStyleMask: mask | STYLE_NONACTIVATING_PANEL];
+    let _: () = msg_send![window, setFloatingPanel: true];
+    // NSPanel's default is to vanish whenever its app is not frontmost —
+    // which for a timer watched from inside other apps is always.
+    let _: () = msg_send![window, setHidesOnDeactivate: false];
+    let _: () = msg_send![
+        window,
+        setCollectionBehavior: JOIN_ALL_SPACES | STATIONARY | IGNORES_CYCLE | FULL_SCREEN_AUXILIARY
+    ];
+    let _: () = msg_send![window, setLevel: STATUS_WINDOW_LEVEL];
 }
 
 #[cfg(desktop)]
