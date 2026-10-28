@@ -15,7 +15,7 @@ const doc = (...content: JsonNode[]): JsonNode => ({ type: "doc", content });
 const para = (text: string): JsonNode => ({ type: "paragraph", content: [{ type: "text", text }] });
 
 interface Store {
-  node: { id: string; name: string; kind: { type: string }; team_id: string | null; user_id: string } | null;
+  node: { id: string; name: string; kind: { type: string }; team_id: string | null; user_id: string; deleted_at?: string | null } | null;
   content: { data: string; updated_at: string | null; updated_by: string | null } | null;
   /** What `contentUpdatedAt` returns on the re-check; defaults to the stored value. */
   recheck?: string | null;
@@ -24,7 +24,7 @@ interface Store {
 function mockApi(store: Store): VaultApi {
   return {
     loadGraph: vi.fn(async () => ({ nodes: {}, children: {}, parents: {} })),
-    getNode: vi.fn(async (id: string) => (store.node && store.node.id === id ? store.node : null)),
+    getNode: vi.fn(async (id: string) => (store.node && store.node.id === id ? { deleted_at: null, ...store.node } : null)),
     readContent: vi.fn(async () => store.content),
     contentUpdatedAt: vi.fn(async () => (store.recheck !== undefined ? store.recheck : store.content?.updated_at ?? null)),
     writeContent: vi.fn(async (_id: string, data: string) => {
@@ -100,7 +100,25 @@ describe("writeNote", () => {
   it("refuses a missing node and a folder", async () => {
     await expect(writeNote(session({ node: null, content: null }), NOTE_ID, "x", "set", false)).rejects.toThrow(/not found/);
     const folder = { id: FOLDER_ID, name: "UNI", kind: { type: "Folder" }, team_id: null, user_id: "uid-dev" };
-    await expect(writeNote(session({ node: folder, content: null }), FOLDER_ID, "x", "set", false)).rejects.toThrow(/is a folder/);
+    await expect(writeNote(session({ node: folder, content: null }), FOLDER_ID, "x", "set", false)).rejects.toThrow(/is not a Note/);
+  });
+
+  it("refuses every non-Note kind — a Reader pointer or a Pdf URL is not a document", async () => {
+    // --force must NOT override the kind fence: force exists for legacy HTML
+    // notes, not for destroying a pointer.
+    for (const type of ["Pdf", "Video", "Reader", "Surface", "Canvas", "Workbook"]) {
+      const node = { id: NOTE_ID, name: `a ${type}`, kind: { type }, team_id: null, user_id: "uid-dev" };
+      const s = session({ node, content: { data: '{"v":1,"source":"/x.json"}', updated_at: "2026-09-24T10:00:00+00:00", updated_by: null } });
+      await expect(writeNote(s, NOTE_ID, "x", "set", true)).rejects.toThrow(/is not a Note/);
+      expect(s.api.writeContent).not.toHaveBeenCalled();
+    }
+  });
+
+  it("refuses a node in the bin", async () => {
+    const binned = { ...noteNode(), deleted_at: "2026-10-27T10:00:00+00:00" };
+    const s = session({ node: binned, content: null });
+    await expect(writeNote(s, NOTE_ID, "x", "set", true)).rejects.toThrow(/in the bin/);
+    expect(s.api.writeContent).not.toHaveBeenCalled();
   });
 
   it("refuses legacy HTML without --force and replaces it with --force", async () => {

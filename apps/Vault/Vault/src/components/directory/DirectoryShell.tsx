@@ -1,4 +1,4 @@
-import { ReactNode, Suspense, useMemo, useState } from "react";
+import { ReactNode, Suspense, useEffect, useMemo, useState } from "react";
 import { VaultGraph } from "../../types";
 import { lazyWithReload } from "../../lib/lazyLoad";
 import { DirectoryTree } from "./DirectoryTree";
@@ -201,6 +201,22 @@ export function DirectoryShell(props: Props) {
   // this by itself: a note stays selected while you go back to the graph, so
   // the two are separate facts.
   const [editorOpen, setEditorOpen] = useState(false);
+
+  // Selection arriving from OUTSIDE the shell must open the editor exactly as
+  // the shell's own selectNode does. ⌘S search, the PDF/Video/Parsed import
+  // handlers and the full-graph overlay all go through App.selectNode, which
+  // only knows the pane handle — before this effect, those paths loaded the
+  // note into the display:none pane while the graph stayed on screen, and
+  // "nothing visibly happened". Keyed on the id CHANGING, so "‹ Graph" (which
+  // deliberately keeps the selection) is not reopened by its own selection.
+  useEffect(() => {
+    // `graph` is read but intentionally not a dependency: a graph reload must
+    // not reopen an editor someone just closed over an unchanged selection.
+    if (selectedId && graph.nodes[selectedId] && graph.nodes[selectedId].kind?.type !== "Folder") {
+      setEditorOpen(true);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedId]);
 
   function focusFolder(id: string) {
     setFocus({ type: "folder", id });

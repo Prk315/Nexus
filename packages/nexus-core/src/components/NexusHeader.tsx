@@ -1,4 +1,4 @@
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { LayoutGrid, Network, Bot, Mail, MessageSquare, Clock, CalendarDays, UserRound, Settings, LogOut } from "lucide-react";
 import { DropdownMenu } from "radix-ui";
 import { useConnectedApps } from "../hooks/useConnectedApps";
@@ -166,6 +166,27 @@ export function NexusHeader({
   const [pointerInside, setPointerInside] = useState(false);
   const [focusInside, setFocusInside] = useState(false);
   const revealed = !autoHide || pointerInside || focusInside;
+
+  // Set when mouseleave fired but was swallowed because a menu was open (see
+  // onMouseLeave below). The pointer is OUTSIDE by then, so no later mouse
+  // event will arrive to hide the bar — the menu closing is the event that
+  // has to finish the job, and the only tell for that is the trigger's
+  // data-state flipping, which a MutationObserver can watch.
+  const leftWhileMenuOpen = useRef(false);
+  useEffect(() => {
+    if (!autoHide) return;
+    const el = autoHideRef.current;
+    if (!el) return;
+    const mo = new MutationObserver(() => {
+      if (!leftWhileMenuOpen.current) return;
+      if (el.querySelector('[data-state="open"]')) return;
+      leftWhileMenuOpen.current = false;
+      // Re-entered while the menu was up? Then the ordinary handlers own it.
+      if (!el.matches(":hover")) setPointerInside(false);
+    });
+    mo.observe(el, { subtree: true, attributes: true, attributeFilter: ["data-state"] });
+    return () => mo.disconnect();
+  }, [autoHide]);
 
   const bar = (
     <header
@@ -365,7 +386,13 @@ export function NexusHeader({
         // leaving the header, and the bar would slide away underneath the menu
         // the user is still reading. The trigger keeps `data-state="open"`
         // while that is true, which is the one tell that survives the portal.
-        if (autoHideRef.current?.querySelector('[data-state="open"]')) return;
+        // The deferred hide is handed to the MutationObserver above: without
+        // it, closing the menu with the pointer already outside left the bar
+        // stuck revealed until the pointer happened to pass through again.
+        if (autoHideRef.current?.querySelector('[data-state="open"]')) {
+          leftWhileMenuOpen.current = true;
+          return;
+        }
         setPointerInside(false);
       }}
       // React's onFocus/onBlur bubble (the native events do not), so these see
