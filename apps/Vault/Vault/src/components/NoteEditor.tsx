@@ -123,13 +123,16 @@ function applyDocAttrs(editor: Editor, json: unknown): void {
   if (touched) editor.view.dispatch(tr.setMeta("addToHistory", false));
 }
 
+// Through the schema guard's parser, never a bare JSON.parse: the nexus CLI
+// writes `{__vault: n, doc}`, and handing that wrapper to Tiptap fails its
+// content check — the note opened blank and locked while the audit (which
+// unwraps) had just declared the same row safe. One parser, one opinion.
+// The next autosave writes the bare doc back; the CLI reads both shapes.
 function parseContent(raw: string) {
-  if (!raw) return "";
-  try {
-    return JSON.parse(raw);
-  } catch {
-    return raw;
-  }
+  const shape = parseNoteContent(raw);
+  if (shape.kind === "empty") return "";
+  if (shape.kind === "json") return shape.json;
+  return shape.html;
 }
 
 /**

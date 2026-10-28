@@ -16,6 +16,7 @@ import { nodeIcon } from "../nodeUtils";
 import type { VaultGraph } from "../types";
 import type { NoteDocHandle } from "./NoteEditor";
 import { lazyWithReload } from "../lib/lazyLoad";
+import { parseNoteContent } from "../lib/noteSchemaGuard";
 import { useCollabSession } from "../collab/useCollabSession";
 import { relativeTime } from "../lib/timestamps";
 import { memberName } from "@nexus/core/members";
@@ -335,8 +336,12 @@ export const EditorPane = forwardRef<EditorPaneHandle, EditorPaneProps>(
       // on the next reload.
       api.forgetContentVersion(id);
 
-      let parsed: unknown = data;
-      try { parsed = JSON.parse(data); } catch { /* legacy HTML/plain text */ }
+      // Through the schema guard's parser, not a bare JSON.parse: a snapshot
+      // of CLI-written content is an `{__vault, doc}` envelope, and handing
+      // the wrapper to Tiptap fails its content check. parseNoteContent
+      // unwraps it (and classifies legacy HTML/plain text as html).
+      const restoredShape = parseNoteContent(data);
+      const parsed: unknown = restoredShape.kind === "json" ? restoredShape.json : data;
 
       if (noteDocRef.current?.replaceDocument(parsed)) {
         // The editor emitted; the autosave effect (or the CRDT, under collab)
