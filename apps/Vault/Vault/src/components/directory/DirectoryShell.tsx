@@ -256,6 +256,12 @@ export function DirectoryShell(props: Props) {
   // Changing what is on screen should re-frame it; the key is what changed.
   const fitSignal = `${focus.type}:${focus.type === "folder" ? focus.id : focus.type === "tag" ? focus.tag : ""}:${shownData.nodes.length}:${search ? searchText.trim().toLowerCase() : ""}`;
 
+  // One fact, used three times below: the bar, the grid span and the folder
+  // strip must agree on whether the editor is standing in for the graph, or a
+  // note opens into a region still carved up by the graph's chrome — the
+  // folder strip alone held ~30% of the column while a note was open.
+  const editorShown = !!(editorOpen && selectedId && graph.nodes[selectedId]);
+
   return (
     <div className="dir-shell">
       <header className="vault-header">
@@ -349,14 +355,17 @@ export function DirectoryShell(props: Props) {
           )}
         </aside>
 
-        <section className="dir-graph" aria-label={editorOpen ? "Editor" : "Graph"}>
+        <section
+          className={`dir-graph${editorShown ? " is-editing" : ""}`}
+          aria-label={editorShown ? "Editor" : "Graph"}
+        >
           {/* The editor is mounted WHETHER OR NOT it is shown. Selection
               reaches it through an imperative pane handle (App.selectNode →
               activePaneRef), and a pane that only mounts once something is
               selected is a null ref at exactly the moment the selection is
               delivered. display:none keeps its tabs alive across the
               graph ↔ editor swap for free. */}
-          {editorOpen && selectedId && graph.nodes[selectedId] ? (
+          {editorShown && selectedId ? (
             // The editor standing where the graph stood — see editorSlot.
             <div className="dir-editor-bar">
               <button className="dir-focus-chip" onClick={() => setEditorOpen(false)}>
@@ -487,23 +496,29 @@ export function DirectoryShell(props: Props) {
           )}
           <div
             className="dir-editor-hold"
-            style={{ display: editorOpen && selectedId && graph.nodes[selectedId] ? undefined : "none" }}
+            style={{ display: editorShown ? undefined : "none" }}
           >
             {editorSlot}
           </div>
         </section>
 
-        <FolderDirectory
-          graph={graph}
-          folderId={currentFolder}
-          selectedId={selectedId}
-          onOpenFolder={(id) => {
-            setOpenFolder(id);
-            if (id) focusFolder(id);
-            else resetFocus();
-          }}
-          onSelect={selectNode}
-        />
+        {/* The folder strip is the graph's companion, not the editor's: while
+            the editor spans the full column (is-editing) the strip would sit
+            UNDER it in the same grid cells, invisibly eating a third of the
+            height. The tree sidebar stays for navigating mid-edit. */}
+        {!editorShown && (
+          <FolderDirectory
+            graph={graph}
+            folderId={currentFolder}
+            selectedId={selectedId}
+            onOpenFolder={(id) => {
+              setOpenFolder(id);
+              if (id) focusFolder(id);
+              else resetFocus();
+            }}
+            onSelect={selectNode}
+          />
+        )}
       </div>
     </div>
   );
