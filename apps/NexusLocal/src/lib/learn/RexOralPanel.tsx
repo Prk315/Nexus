@@ -136,12 +136,22 @@ export function RexOralPanel() {
             )}
           </p>
         </div>
-        <button
-          disabled={!pool || pool.length === 0}
-          onClick={() => pool && setSessionQs(weightedOrder(pool, counts))}
-          className="shrink-0 rounded-lg bg-[#1A1A24] px-3 py-2 text-xs font-semibold text-white disabled:opacity-40">
-          Start træning
-        </button>
+        <div className="flex shrink-0 items-center gap-2">
+          {/* AI-censoren bor i et Artifact (sample-capability på Bastians egen
+              Claude-subscription, samme mønster som Concept Module-lektionerne)
+              — aldrig et API-kald fra appen. Samme 45 spørgsmål, vægtet
+              shuffle, dom + hvorfor + censor-opfølgning. */}
+          <a href="https://claude.ai/artifact/Y2daFVuYYcBWgzhroLgCJL" target="_blank" rel="noreferrer"
+            className="rounded-lg border border-black/15 px-3 py-2 text-xs font-medium text-[#1A1A24]/70 hover:bg-black/[0.03]">
+            Censor ↗
+          </a>
+          <button
+            disabled={!pool || pool.length === 0}
+            onClick={() => pool && setSessionQs(weightedOrder(pool, counts))}
+            className="rounded-lg bg-[#1A1A24] px-3 py-2 text-xs font-semibold text-white disabled:opacity-40">
+            Start træning
+          </button>
+        </div>
       </div>
       {sessionQs && <RexOralSession questions={sessionQs} onClose={() => setSessionQs(null)} />}
     </section>

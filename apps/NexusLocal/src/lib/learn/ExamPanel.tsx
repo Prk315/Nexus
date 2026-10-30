@@ -116,8 +116,10 @@ export function ExamPanel() {
     });
   }
   function startSet(n: number) {
-    // Sættets baser i PDF'ens rækkefølge, men en tilfældig variant pr. base.
-    const qs = onePerBase(bySet.get(`mla-mc-s${n}`) ?? []).sort((a, b) => a.slug.localeCompare(b.slug));
+    // Sættets baser, tilfældig variant pr. base, og SHUFFLET rækkefølge —
+    // en pause-session skal aldrig starte ved samme spørgsmål igen og igen
+    // (PDF'ens rækkefølge grupperer efter emne, så den er også for læselig).
+    const qs = shuffle(onePerBase(bySet.get(`mla-mc-s${n}`) ?? []));
     setSession({ title: `MLA · Sample Questions ${n}`, questions: qs.map(permuteOptions) });
   }
   function startWeak() {
