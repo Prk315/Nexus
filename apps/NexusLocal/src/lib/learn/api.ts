@@ -2053,6 +2053,12 @@ export interface ExamQuestion {
   accept: string[];
   solution: string | null;
   explanation: string | null;
+  /** REX-strukturen: hint 1 = det matematiske udtryk man kan svare med
+   * (`intro_md`), hint 2 = teoretisk baggrund (`context_md`). For numeriske
+   * spørgsmål er context_md JSON {accept, hint2} — accept-listen blev
+   * oprindeligt gemt der alene, og formen er bevaret bagudkompatibelt. */
+  hint1: string | null;
+  hint2: string | null;
 }
 
 export async function fetchExamPool(slugPrefix: string = "mla-mc-"): Promise<ExamQuestion[]> {
@@ -2070,7 +2076,7 @@ export async function fetchExamPool(slugPrefix: string = "mla-mc-"): Promise<Exa
   const ids = rows.map((r) => r.item_id);
   const [opts, renders, written] = await Promise.all([
     supabasePublic.from("lr_mcq_option").select("option_id, item_id, body, is_correct").in("item_id", ids).order("option_id"),
-    supabasePublic.from("lr_item_render").select("item_id, solution_md, context_md").in("item_id", ids),
+    supabasePublic.from("lr_item_render").select("item_id, intro_md, solution_md, context_md").in("item_id", ids),
     supabasePublic.from("lr_written_item").select("item_id, solution").in("item_id", ids),
   ]);
   if (opts.error) throw new Error(`lr_mcq_option: ${opts.error.message}`);
@@ -2082,8 +2088,8 @@ export async function fetchExamPool(slugPrefix: string = "mla-mc-"): Promise<Exa
     list.push(o);
     optsBy.set(o.item_id, list);
   }
-  const renderBy = new Map<number, { solution_md: string | null; context_md: string | null }>();
-  for (const r of (renders.data ?? []) as Array<{ item_id: number; solution_md: string | null; context_md: string | null }>) {
+  const renderBy = new Map<number, { intro_md: string | null; solution_md: string | null; context_md: string | null }>();
+  for (const r of (renders.data ?? []) as Array<{ item_id: number; intro_md: string | null; solution_md: string | null; context_md: string | null }>) {
     renderBy.set(r.item_id, r);
   }
   const solBy = new Map<number, string>();
@@ -2094,8 +2100,15 @@ export async function fetchExamPool(slugPrefix: string = "mla-mc-"): Promise<Exa
     const o = optsBy.get(r.item_id) ?? [];
     const render = renderBy.get(r.item_id);
     let accept: string[] = [];
+    let hint2: string | null = render?.context_md ?? null;
     if (r.format === "numeric" && render?.context_md) {
-      try { accept = (JSON.parse(render.context_md) as { accept?: string[] }).accept ?? []; } catch { /* facit-visning dækker */ }
+      // Numeriske rækker bærer {accept, hint2} som JSON i context_md —
+      // accept-listen boede der alene før hint-strukturen kom til.
+      try {
+        const parsed = JSON.parse(render.context_md) as { accept?: string[]; hint2?: string };
+        accept = parsed.accept ?? [];
+        hint2 = parsed.hint2 ?? null;
+      } catch { hint2 = render.context_md; }
     }
     return {
       slug: r.slug,
@@ -2108,6 +2121,8 @@ export async function fetchExamPool(slugPrefix: string = "mla-mc-"): Promise<Exa
       accept,
       solution: solBy.get(r.item_id) ?? null,
       explanation: render?.solution_md ?? null,
+      hint1: render?.intro_md || null,
+      hint2: hint2 || null,
     };
   });
 }
@@ -2140,6 +2155,10 @@ export async function submitExamRun(row: {
   durationSecs: number;
   label: string;
   wrong: string[];
+  /** Pr.-spørgsmål-detalje (slug, udfald, antal brugte hints) — gemt i
+   * rounds-jsonb'en som råstof til en senere "practice these
+   * concepts"-funktion: sektionen kan altid slås op via sluggen. */
+  results?: Array<{ slug: string; ok: boolean; hints: number }>;
 }): Promise<void> {
   const { error } = await supabasePublic.from("lr_challenge_run").insert({
     user_id: await nodeUserId(),
@@ -2148,7 +2167,7 @@ export async function submitExamRun(row: {
     total: row.total,
     best_streak: null,
     duration_secs: row.durationSecs,
-    rounds: { scope: "mla-exam", label: row.label, wrong: row.wrong, rounds: [] },
+    rounds: { scope: "mla-exam", label: row.label, wrong: row.wrong, results: row.results ?? [], rounds: [] },
   });
   if (error) throw new Error(`lr_challenge_run: ${error.message}`);
 }
