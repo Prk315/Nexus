@@ -55,6 +55,7 @@ import { ChallengePanel } from "./ChallengePanel";
 import { SprintPanel } from "./SprintPanel";
 import { StatsPanel } from "./StatsPanel";
 import { CodePanel } from "./code/CodePractice";
+import { RexOralPanel } from "./RexOralPanel";
 
 /**
  * v6 (2026-10-05): separation + overblik. Three tabs, one concern each —
@@ -140,6 +141,7 @@ function OverblikLayout({ onOpenCourseTab }: { onOpenCourseTab: () => void }) {
                 <TodayPanel onOpenCourseTab={onOpenCourseTab} />
                 <ExamPanel />
                 <ReviewPanel />
+                <RexOralPanel />
                 <CodePanel />
                 <hr className="border-[#E3E2DC]" />
                 <CourseCards />
