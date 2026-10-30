@@ -50,6 +50,7 @@ import { OverviewStrip } from "./OverviewStrip";
 import { MathKeyboardBar } from "./MathKeyboardBar";
 import { ToolDock } from "./tools/ToolDock";
 import { InfinitePanel } from "./InfinitePanel";
+import { ExamPanel } from "./ExamPanel";
 import { ChallengePanel } from "./ChallengePanel";
 import { SprintPanel } from "./SprintPanel";
 import { StatsPanel } from "./StatsPanel";
@@ -138,6 +139,7 @@ function OverblikLayout({ onOpenCourseTab }: { onOpenCourseTab: () => void }) {
               </div>
               <div className="order-1 flex flex-col gap-6 lg:order-2 lg:col-span-2">
                 <TodayPanel onOpenCourseTab={onOpenCourseTab} />
+                <ExamPanel />
                 <ReviewPanel />
                 <RexOralPanel />
                 <CodePanel />

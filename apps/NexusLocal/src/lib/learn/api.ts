@@ -2025,3 +2025,163 @@ export async function markDailyPlanDone(dateYmd: string): Promise<void> {
     .eq("plan_date", dateYmd);
   if (error) throw new Error(`lr_daily_plan: ${error.message}`);
 }
+
+// ── MLA eksamenstræner (ExamPanel/ExamSession) ──────────────────────────────
+//
+// Samme `lr_item`-familie som Infinite exercises, men et andet hjørne af den:
+// `format in ('multiple_choice','numeric')` under slug-præfikset `mla-mc-`,
+// seedet fra kursets tre officielle "Sample Questions"-sæt (2026).
+// Eksamensformatet er multiple choice med 0..n korrekte svar pr. spørgsmål og
+// alt-eller-intet-pointgivning — derfor gemmer `ExamQuestion.correct` en
+// mængde, og grading er mængde-lighed, aldrig delvis kredit.
+//
+// Forklaringer bor i `lr_item_render.solution_md`; numeriske "skriv selv"-
+// spørgsmål har facit i `lr_written_item.solution` og en accept-liste som
+// JSON i `lr_item_render.context_md` (feltet er ellers ubrugt for mcq-items).
+
+export interface ExamQuestion {
+  slug: string;
+  section: string;
+  sourceRef: string | null;
+  kind: "mc" | "numeric";
+  prompt: string;
+  /** mc: options i indsættelsesrækkefølge (option_id stigende). */
+  options: string[];
+  /** mc: indeks i `options` der er korrekte (kan være tom eller alle). */
+  correct: number[];
+  /** numeric: normaliserede accepterede svar + facit til visning. */
+  accept: string[];
+  solution: string | null;
+  explanation: string | null;
+}
+
+export async function fetchExamPool(slugPrefix: string = "mla-mc-"): Promise<ExamQuestion[]> {
+  const { data: items, error } = await supabasePublic
+    .from("lr_item")
+    .select("item_id, slug, title, format, prompt, source_ref")
+    .like("slug", `${slugPrefix}%`)
+    .in("format", ["multiple_choice", "numeric"])
+    .order("slug");
+  if (error) throw new Error(`lr_item: ${error.message}`);
+  const rows = (items ?? []) as Array<{
+    item_id: number; slug: string; title: string; format: string; prompt: string; source_ref: string | null;
+  }>;
+  if (rows.length === 0) return [];
+  const ids = rows.map((r) => r.item_id);
+  const [opts, renders, written] = await Promise.all([
+    supabasePublic.from("lr_mcq_option").select("option_id, item_id, body, is_correct").in("item_id", ids).order("option_id"),
+    supabasePublic.from("lr_item_render").select("item_id, solution_md, context_md").in("item_id", ids),
+    supabasePublic.from("lr_written_item").select("item_id, solution").in("item_id", ids),
+  ]);
+  if (opts.error) throw new Error(`lr_mcq_option: ${opts.error.message}`);
+  if (renders.error) throw new Error(`lr_item_render: ${renders.error.message}`);
+  if (written.error) throw new Error(`lr_written_item: ${written.error.message}`);
+  const optsBy = new Map<number, Array<{ body: string; is_correct: boolean }>>();
+  for (const o of (opts.data ?? []) as Array<{ item_id: number; body: string; is_correct: boolean }>) {
+    const list = optsBy.get(o.item_id) ?? [];
+    list.push(o);
+    optsBy.set(o.item_id, list);
+  }
+  const renderBy = new Map<number, { solution_md: string | null; context_md: string | null }>();
+  for (const r of (renders.data ?? []) as Array<{ item_id: number; solution_md: string | null; context_md: string | null }>) {
+    renderBy.set(r.item_id, r);
+  }
+  const solBy = new Map<number, string>();
+  for (const w of (written.data ?? []) as Array<{ item_id: number; solution: string }>) {
+    solBy.set(w.item_id, w.solution);
+  }
+  return rows.map((r) => {
+    const o = optsBy.get(r.item_id) ?? [];
+    const render = renderBy.get(r.item_id);
+    let accept: string[] = [];
+    if (r.format === "numeric" && render?.context_md) {
+      try { accept = (JSON.parse(render.context_md) as { accept?: string[] }).accept ?? []; } catch { /* facit-visning dækker */ }
+    }
+    return {
+      slug: r.slug,
+      section: r.title,
+      sourceRef: r.source_ref,
+      kind: r.format === "numeric" ? "numeric" as const : "mc" as const,
+      prompt: r.prompt,
+      options: o.map((x) => x.body),
+      correct: o.map((x, i) => (x.is_correct ? i : -1)).filter((i) => i >= 0),
+      accept,
+      solution: solBy.get(r.item_id) ?? null,
+      explanation: render?.solution_md ?? null,
+    };
+  });
+}
+
+/** Seneste eksamensforsøg pr. spørgsmål (bruges af "svage & usete"-udvalget):
+ * slug → seneste grade (0 = forkert, 3 = rigtig). */
+export async function fetchExamAttemptIndex(slugPrefix: string = "mla-mc-"): Promise<Map<string, Grade>> {
+  const { data, error } = await supabasePublic
+    .from("lr_attempt_log")
+    .select("item_ref, grade, at")
+    .eq("user_id", await nodeUserId())
+    .like("item_ref", `${slugPrefix}%`)
+    .order("at", { ascending: true });
+  if (error) throw new Error(`lr_attempt_log: ${error.message}`);
+  const out = new Map<string, Grade>();
+  for (const row of (data ?? []) as Array<{ item_ref: string; grade: Grade }>) {
+    out.set(row.item_ref, row.grade); // stigende `at` → sidste skrivning vinder
+  }
+  return out;
+}
+
+/** Én afsluttet eksamenskørsel. Genbruger `lr_challenge_run` med scope
+ * `"mla-exam"` (rounds-jsonb'ens scope-felt, samme mønster som kapitel-
+ * checkpoints) — eksamenskørsler kolliderer derfor aldrig med Lynudfordringens
+ * bedste-score pr. kapitel. `wrong` er de forkerte slugs, så panelet kan
+ * tilbyde en målrettet genkørsel. */
+export async function submitExamRun(row: {
+  correct: number;
+  total: number;
+  durationSecs: number;
+  label: string;
+  wrong: string[];
+}): Promise<void> {
+  const { error } = await supabasePublic.from("lr_challenge_run").insert({
+    user_id: await nodeUserId(),
+    score: row.correct,
+    correct: row.correct,
+    total: row.total,
+    best_streak: null,
+    duration_secs: row.durationSecs,
+    rounds: { scope: "mla-exam", label: row.label, wrong: row.wrong, rounds: [] },
+  });
+  if (error) throw new Error(`lr_challenge_run: ${error.message}`);
+}
+
+export interface ExamRun {
+  correct: number;
+  total: number;
+  durationSecs: number | null;
+  label: string;
+  wrong: string[];
+  at: string;
+}
+
+export async function fetchExamRuns(limit: number = 50): Promise<ExamRun[]> {
+  const { data, error } = await supabasePublic
+    .from("lr_challenge_run")
+    .select("*")
+    .eq("user_id", await nodeUserId())
+    .order("at", { ascending: false })
+    .limit(200);
+  if (error) throw new Error(`lr_challenge_run: ${error.message}`);
+  const out: ExamRun[] = [];
+  for (const r of (data ?? []) as Array<LrChallengeRun & { rounds: { scope?: string | null; label?: string; wrong?: string[] } | null }>) {
+    if ((r.rounds?.scope ?? null) !== "mla-exam") continue;
+    out.push({
+      correct: r.correct,
+      total: r.total,
+      durationSecs: r.duration_secs,
+      label: r.rounds?.label ?? "Eksamen",
+      wrong: r.rounds?.wrong ?? [],
+      at: r.at ?? "",
+    });
+    if (out.length >= limit) break;
+  }
+  return out;
+}
