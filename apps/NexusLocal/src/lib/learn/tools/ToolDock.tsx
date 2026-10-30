@@ -71,8 +71,10 @@ export function ToolDock() {
 
   return (
     <>
-      {/* pills — altid synlige, nederst til højre */}
-      <div className="fixed bottom-3 right-3 z-[70] flex gap-1.5">
+      {/* pills — altid synlige, nederst til højre. z-[71]: panelet nedenfor er
+          z-[70] og SENERE i DOM, så samme z-index ville male panelet hen over
+          pillerne — usynlige og u-klikbare mens docken er åben. */}
+      <div className="fixed bottom-3 right-3 z-[71] flex gap-1.5">
         {(["calc", "py"] as const).map((t) => (
           <button key={t}
             className={`${pill} ${open && tab === t ? "bg-[#1A1A24] text-white" : "bg-white/95 text-[#1A1A24]/70 backdrop-blur"}`}
@@ -82,8 +84,11 @@ export function ToolDock() {
         ))}
       </div>
 
+      {/* Panelet er fixed og monteret UDEN FOR Learn-sidens text-[#1A1A24]-div,
+          så det arver skallens hvide tekst — farven skal sættes eksplicit her,
+          ellers er både input og resultater hvid-på-hvid. */}
       {open && (
-        <div className="fixed inset-x-0 bottom-0 z-[70] h-[42vh] border-t border-black/10 bg-[#F6F5F1]/98 pb-12 backdrop-blur">
+        <div className="fixed inset-x-0 bottom-0 z-[70] h-[42vh] border-t border-black/10 bg-[#F6F5F1]/98 pb-12 text-[#1A1A24] backdrop-blur">
           {tab === "calc" ? (
             <div className="grid h-full grid-cols-2 gap-2 p-3">
               <textarea
@@ -91,7 +96,7 @@ export function ToolDock() {
                 onChange={(e) => setCalcSrc(e.target.value)}
                 spellCheck={false}
                 placeholder={"én linje pr. udtryk · a = 5 · f(x) = x^2 · [[1,2],[3,4]] · solve(A,b) · sum([…])"}
-                className="h-full resize-none rounded-xl border border-black/10 bg-white p-3 font-mono text-[13px] outline-none"
+                className="h-full resize-none rounded-xl border border-black/10 bg-white p-3 font-mono text-[13px] text-[#1A1A24] outline-none placeholder:text-black/35"
               />
               <div
                 className="h-full overflow-y-auto rounded-xl bg-black/[0.04] p-3 font-mono text-[13px] leading-relaxed [&_.err]:text-rose-700"
@@ -119,7 +124,7 @@ export function ToolDock() {
                   spellCheck={false}
                   rows={2}
                   placeholder="Python — ⇧⏎ kører"
-                  className="flex-1 resize-none rounded-xl border border-black/10 bg-white p-2.5 font-mono text-[13px] outline-none"
+                  className="flex-1 resize-none rounded-xl border border-black/10 bg-white p-2.5 font-mono text-[13px] text-[#1A1A24] outline-none placeholder:text-black/35"
                 />
                 <div className="flex flex-col gap-1.5">
                   <button onClick={runPy} disabled={pyBusy}
