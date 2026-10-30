@@ -30,6 +30,38 @@ function shuffle<T>(arr: T[]): T[] {
   return a;
 }
 
+/** Hvert grundspørgsmål findes i tre permutationer: originalen
+ * (`mla-mc-s1-01`) og varianterne `…b`/`…c` med andre tal og andre
+ * udsagnskombinationer — så man træner at FINDE svaret, ikke huske det.
+ * Basen er sluggen uden variantbogstavet. */
+function baseOf(slug: string): string {
+  return slug.replace(/[a-z]$/, "");
+}
+
+/** Gruppér poolen pr. grundspørgsmål og træk én tilfældig variant pr. base —
+ * ingen session viser to varianter af samme spørgsmål. */
+function onePerBase(pool: ExamQuestion[]): ExamQuestion[] {
+  const groups = new Map<string, ExamQuestion[]>();
+  for (const q of pool) {
+    const b = baseOf(q.slug);
+    groups.set(b, [...(groups.get(b) ?? []), q]);
+  }
+  return [...groups.values()].map((g) => g[Math.floor(Math.random() * g.length)]);
+}
+
+/** Bland option-rækkefølgen (og remap facit-indekserne) pr. session, så
+ * heller ikke PLACERINGEN af et svar kan læres udenad. Numeriske spørgsmål
+ * er uberørte. */
+function permuteOptions(q: ExamQuestion): ExamQuestion {
+  if (q.kind !== "mc" || q.options.length < 2) return q;
+  const order = shuffle(q.options.map((_, i) => i));
+  return {
+    ...q,
+    options: order.map((i) => q.options[i]),
+    correct: q.correct.map((c) => order.indexOf(c)),
+  };
+}
+
 export function ExamPanel() {
   // undefined = loading, null = fetch fejlede.
   const [pool, setPool] = useState<ExamQuestion[] | null | undefined>(undefined);
@@ -60,6 +92,8 @@ export function ExamPanel() {
     return m;
   }, [pool]);
 
+  const baseCount = useMemo(() => new Set((pool ?? []).map((q) => baseOf(q.slug))).size, [pool]);
+
   if (pool === undefined) return null;
   if (pool === null || pool.length === 0) {
     return (
@@ -76,19 +110,28 @@ export function ExamPanel() {
   const best = runs.reduce<ExamRun | null>((b, r) => (b === null || r.correct / r.total > b.correct / b.total ? r : b), null);
 
   function startMixed() {
-    setSession({ title: "MLA · Prøveeksamen (20 blandede)", questions: shuffle(pool!).slice(0, 20) });
+    setSession({
+      title: "MLA · Prøveeksamen (20 blandede)",
+      questions: shuffle(onePerBase(pool!)).slice(0, 20).map(permuteOptions),
+    });
   }
   function startSet(n: number) {
-    const qs = bySet.get(`mla-mc-s${n}`) ?? [];
-    setSession({ title: `MLA · Sample Questions ${n}`, questions: qs });
+    // Sættets baser i PDF'ens rækkefølge, men en tilfældig variant pr. base.
+    const qs = onePerBase(bySet.get(`mla-mc-s${n}`) ?? []).sort((a, b) => a.slug.localeCompare(b.slug));
+    setSession({ title: `MLA · Sample Questions ${n}`, questions: qs.map(permuteOptions) });
   }
   function startWeak() {
-    // Aldrig-forsøgte først (i tilfældig orden), derefter senest-forkerte,
-    // derefter resten — 20 i alt. "Svag" = sidste logede grade var 0.
-    const never = shuffle(pool!.filter((q) => !attempts.has(q.slug)));
-    const wrong = shuffle(pool!.filter((q) => attempts.get(q.slug) === 0));
-    const rest = shuffle(pool!.filter((q) => (attempts.get(q.slug) ?? 0) > 0));
-    setSession({ title: "MLA · Svage & usete", questions: [...never, ...wrong, ...rest].slice(0, 20) });
+    // Aldrig-forsøgte baser først (tilfældig orden), derefter senest-forkerte,
+    // derefter resten — 20 i alt. "Svag" dømmes pr. BASE: en forkert variant
+    // gør hele grundspørgsmålet svagt, ellers kunne man "nulstille" et svagt
+    // spørgsmål ved at få en anden variant rigtig.
+    const lastByBase = new Map<string, number>();
+    for (const [slug, grade] of attempts) lastByBase.set(baseOf(slug), grade);
+    const variants = onePerBase(pool!);
+    const never = shuffle(variants.filter((q) => !lastByBase.has(baseOf(q.slug))));
+    const wrong = shuffle(variants.filter((q) => lastByBase.get(baseOf(q.slug)) === 0));
+    const rest = shuffle(variants.filter((q) => (lastByBase.get(baseOf(q.slug)) ?? 0) > 0));
+    setSession({ title: "MLA · Svage & usete", questions: [...never, ...wrong, ...rest].slice(0, 20).map(permuteOptions) });
   }
 
   const btn = "rounded-lg border border-black/15 px-3 py-1.5 text-xs font-medium text-[#1A1A24]/80 hover:bg-black/[0.03]";
@@ -97,7 +140,7 @@ export function ExamPanel() {
     <section className="rounded-2xl border border-[#E3E2DC] bg-white p-5">
       <div className="flex items-baseline justify-between gap-3">
         <h2 className="text-sm font-semibold">MLA · Eksamenstræner</h2>
-        <span className="text-[11px] text-black/40">{pool.length} spørgsmål · 0..n korrekte · alt-eller-intet</span>
+        <span className="text-[11px] text-black/40">{baseCount} spørgsmål × {Math.round(pool.length / Math.max(1, baseCount))} varianter · 0..n korrekte · alt-eller-intet</span>
       </div>
       {(last || best) && (
         <p className="mt-1 text-[13px] text-black/55 tabular-nums">
@@ -113,7 +156,7 @@ export function ExamPanel() {
         <button onClick={startWeak} className={btn}>Svage &amp; usete · 20</button>
         {[1, 2, 3].map((n) => (
           <button key={n} onClick={() => startSet(n)} className={btn}>
-            Sæt {n} · {(bySet.get(`mla-mc-s${n}`) ?? []).length}
+            Sæt {n} · {new Set((bySet.get(`mla-mc-s${n}`) ?? []).map((q) => baseOf(q.slug))).size}
           </button>
         ))}
       </div>
