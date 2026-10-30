@@ -125,6 +125,30 @@ export function LearnPage() {
   );
 }
 
+/** MatAn-eksamenstræningen er et Artifact (fuld AI-tutor på Bastians egen
+ *  Claude-subscription via sample — samme mønster som Concept
+ *  Module-lektionerne og REX Censor), så appen bærer kun linket. 9
+ *  opgavetyper fra eksamenssættene 2020–22 + prøveeksamenen, 39 aktive
+ *  varianter, 34 guidede trin. */
+function MatAnTutorCard() {
+  return (
+    <section className="rounded-2xl border border-[#E3E2DC] bg-white p-5">
+      <div className="flex items-center justify-between gap-3">
+        <div className="min-w-0">
+          <h2 className="text-sm font-semibold">MatAn · Eksamenstutor</h2>
+          <p className="mt-0.5 text-xs text-black/50">
+            9 opgavetyper · 39 aktive varianter med AI-censor · prøveeksamen 5. nov
+          </p>
+        </div>
+        <a href="https://claude.ai/artifact/Qwyn8mky2X1hQ7a1SNbFxT" target="_blank" rel="noreferrer"
+          className="shrink-0 rounded-lg bg-[#1A1A24] px-3 py-2 text-xs font-semibold text-white">
+          Åbn tutoren ↗
+        </a>
+      </div>
+    </section>
+  );
+}
+
 /** Overblik: I/O-grafen øverst, derunder to kolonner — træet til venstre,
  *  dagen+review+kursuskort i den dobbelt så brede højrekolonne. På smalle
  *  skærme stakkes med GØR-fladen først; træet er planlægning. */
@@ -140,6 +164,7 @@ function OverblikLayout({ onOpenCourseTab }: { onOpenCourseTab: () => void }) {
               <div className="order-1 flex flex-col gap-6 lg:order-2 lg:col-span-2">
                 <TodayPanel onOpenCourseTab={onOpenCourseTab} />
                 <ExamPanel />
+                <MatAnTutorCard />
                 <ReviewPanel />
                 <RexOralPanel />
                 <CodePanel />
