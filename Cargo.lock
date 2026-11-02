@@ -2817,7 +2817,7 @@ dependencies = [
 
 [[package]]
 name = "nexus-local"
-version = "0.32.0"
+version = "0.33.0"
 dependencies = [
  "async-trait",
  "axum",
@@ -2826,11 +2826,13 @@ dependencies = [
  "dirs 5.0.1",
  "libc",
  "nexus-core",
+ "objc2",
  "reqwest 0.12.28",
  "serde",
  "serde_json",
  "tauri",
  "tauri-build",
+ "tauri-plugin-notification",
  "tauri-plugin-opener",
  "tempfile",
  "tokio",

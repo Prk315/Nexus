@@ -62,7 +62,7 @@ impl Default for SessionStatus {
 /// `hourly_rate`) exist because the TimeTracker desktop app writes them; `stop`
 /// copies them into the `time_entries` row rather than dropping them.
 #[derive(Debug, Clone, Default, Deserialize)]
-struct ActiveRow {
+pub(crate) struct ActiveRow {
     /// Row identity, used as the compare-and-swap key on every write. A
     /// stop-and-start on another device mints a new uuid under the same
     /// `user_id`, which is exactly the replacement we need to detect.
@@ -99,15 +99,18 @@ const ALREADY_RUNNING: &str = "A session is already running";
 const SESSION_MOVED: &str = "The session changed on another device — reload and try again";
 
 // ── commands ─────────────────────────────────────────────────────────────────
+//
+// Thin wrappers over the inner functions below. Each samples `now` once and
+// passes it down. The pomodoro driver (`pomodoro.rs`) calls the same inner
+// functions with a *phase boundary* as `at` — that is how a break that began
+// while the Mac was asleep still pauses the session at the moment it began,
+// rather than billing the nap as focus.
 
 #[tauri::command]
 pub async fn tt_session_status() -> Result<SessionStatus, String> {
     let rest = configured()?;
-    let now = Utc::now();
-    Ok(match fetch_active(&rest).await? {
-        Some(row) => derive_status(&row, now),
-        None => SessionStatus::default(),
-    })
+    let row = fetch_active(&rest).await?;
+    Ok(status_of(row.as_ref(), Utc::now()))
 }
 
 #[tauri::command]
@@ -116,8 +119,70 @@ pub async fn tt_session_start(
     project: Option<String>,
 ) -> Result<SessionStatus, String> {
     let rest = configured()?;
-    let now = Utc::now();
+    start(&rest, &task_name, project, Utc::now()).await
+}
 
+#[tauri::command]
+pub async fn tt_session_pause() -> Result<SessionStatus, String> {
+    let rest = configured()?;
+    let now = Utc::now();
+    let row = fetch_active(&rest).await?.ok_or(NO_SESSION)?;
+    pause_row(&rest, &row, now, now).await
+}
+
+#[tauri::command]
+pub async fn tt_session_resume() -> Result<SessionStatus, String> {
+    let rest = configured()?;
+    let now = Utc::now();
+    let row = fetch_active(&rest).await?.ok_or(NO_SESSION)?;
+    resume_row(&rest, &row, now, now).await
+}
+
+#[tauri::command]
+pub async fn tt_session_stop() -> Result<SessionStatus, String> {
+    let rest = configured()?;
+    let row = fetch_active(&rest).await?.ok_or(NO_SESSION)?;
+    stop_row(&rest, &row, Utc::now()).await
+}
+
+/// One recently tracked task, for the one-tap start chips.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct RecentTask {
+    pub task_name: String,
+    pub project: Option<String>,
+}
+
+/// The most recent distinct `(task_name, project)` pairs from `time_entries`,
+/// newest first. Starting a focus block on yesterday's task should be one tap,
+/// not two text fields.
+#[tauri::command]
+pub async fn tt_recent_tasks(limit: Option<usize>) -> Result<Vec<RecentTask>, String> {
+    let rest = configured()?;
+    let user = eq(rest.user_id());
+    // Over-fetch: a day of pomodoros on one task is a dozen identical rows, and
+    // the dedupe below would otherwise leave a single chip.
+    let rows = rest
+        .select(
+            T_TIME_ENTRIES,
+            &[
+                ("select", "task_name,project"),
+                ("user_id", user.as_str()),
+                ("order", "end_time.desc"),
+                ("limit", "80"),
+            ],
+        )
+        .await?;
+    Ok(distinct_tasks(&rows, limit.unwrap_or(6).clamp(1, 20)))
+}
+
+// ── inner functions (shared with the pomodoro driver) ────────────────────────
+
+pub(crate) async fn start(
+    rest: &Rest,
+    task_name: &str,
+    project: Option<String>,
+    now: DateTime<Utc>,
+) -> Result<SessionStatus, String> {
     let task_name = task_name.trim().to_string();
     if task_name.is_empty() {
         return Err("Task name cannot be empty".to_string());
@@ -133,7 +198,7 @@ pub async fn tt_session_start(
 
     // UNIQUE(user_id) means this is one session per user across every device, so
     // the pre-check reads whatever another device may have started.
-    if let Some(existing) = fetch_active(&rest).await? {
+    if let Some(existing) = fetch_active(rest).await? {
         return Err(busy_message(&existing));
     }
 
@@ -164,26 +229,29 @@ pub async fn tt_session_start(
     })
 }
 
-#[tauri::command]
-pub async fn tt_session_pause() -> Result<SessionStatus, String> {
-    let rest = configured()?;
-    let now = Utc::now();
-
-    let row = fetch_active(&rest).await?.ok_or(NO_SESSION)?;
+/// Pause `row` as of `at`. `now` is the wall clock and only stamps
+/// `updated_at` — a back-dated `updated_at` would lose last-write-wins
+/// comparisons it should win.
+pub(crate) async fn pause_row(
+    rest: &Rest,
+    row: &ActiveRow,
+    at: DateTime<Utc>,
+    now: DateTime<Utc>,
+) -> Result<SessionStatus, String> {
     if row.paused_at.is_some() {
         return Err("Session is already paused".to_string());
     }
 
-    // Snapshot the derived elapsed and stamp `paused_at` from the *same* `now`,
-    // so `paused_at - start_time == elapsed_seconds` holds exactly.
-    let elapsed = elapsed_at(&row.start_time, now);
-    let paused_at = now.to_rfc3339();
+    // Snapshot the derived elapsed and stamp `paused_at` from the *same*
+    // instant, so `paused_at - start_time == elapsed_seconds` holds exactly.
+    let at = pause_instant(&row.start_time, at, now);
+    let elapsed = elapsed_at(&row.start_time, at);
     update_active(
-        &rest,
+        rest,
         &row.id,
         &json!({
             "elapsed_seconds": elapsed,
-            "paused_at": paused_at,
+            "paused_at": at.to_rfc3339(),
             "updated_at": now.to_rfc3339(),
         }),
     )
@@ -191,28 +259,31 @@ pub async fn tt_session_pause() -> Result<SessionStatus, String> {
 
     Ok(SessionStatus {
         state: "paused".to_string(),
-        task_name: Some(row.task_name),
-        project: row.project,
-        start_time: Some(row.start_time),
+        task_name: Some(row.task_name.clone()),
+        project: row.project.clone(),
+        start_time: Some(row.start_time.clone()),
         elapsed_seconds: elapsed,
     })
 }
 
-#[tauri::command]
-pub async fn tt_session_resume() -> Result<SessionStatus, String> {
-    let rest = configured()?;
-    let now = Utc::now();
-
-    let row = fetch_active(&rest).await?.ok_or(NO_SESSION)?;
+/// Resume `row` as if it had resumed at `at` — the time between `at` and `now`
+/// counts as tracked.
+pub(crate) async fn resume_row(
+    rest: &Rest,
+    row: &ActiveRow,
+    at: DateTime<Utc>,
+    now: DateTime<Utc>,
+) -> Result<SessionStatus, String> {
     if row.paused_at.is_none() {
         return Err("Session is not paused".to_string());
     }
 
     // Back-date the start so the plain `now - start_time` derivation keeps
     // working with no notion of "paused for N seconds" anywhere downstream.
-    let new_start = back_dated_start(now, row.elapsed_seconds).to_rfc3339();
+    let at = resume_instant(row.paused_at.as_deref(), at, now);
+    let new_start = back_dated_start(at, row.elapsed_seconds).to_rfc3339();
     update_active(
-        &rest,
+        rest,
         &row.id,
         &json!({
             "start_time": new_start,
@@ -224,20 +295,18 @@ pub async fn tt_session_resume() -> Result<SessionStatus, String> {
 
     Ok(SessionStatus {
         state: "running".to_string(),
-        task_name: Some(row.task_name),
-        project: row.project,
+        task_name: Some(row.task_name.clone()),
+        project: row.project.clone(),
+        elapsed_seconds: elapsed_at(&new_start, now),
         start_time: Some(new_start),
-        elapsed_seconds: row.elapsed_seconds.max(0),
     })
 }
 
-#[tauri::command]
-pub async fn tt_session_stop() -> Result<SessionStatus, String> {
-    let rest = configured()?;
-    let now = Utc::now();
-
-    let row = fetch_active(&rest).await?.ok_or(NO_SESSION)?;
-
+pub(crate) async fn stop_row(
+    rest: &Rest,
+    row: &ActiveRow,
+    now: DateTime<Utc>,
+) -> Result<SessionStatus, String> {
     let end = session_end(row.paused_at.as_deref(), now);
     let duration = elapsed_at(&row.start_time, end);
 
@@ -296,7 +365,7 @@ pub async fn tt_session_stop() -> Result<SessionStatus, String> {
 
 // ── remote plumbing ──────────────────────────────────────────────────────────
 
-fn configured() -> Result<Rest, String> {
+pub(crate) fn configured() -> Result<Rest, String> {
     let rest = Rest::load();
     if rest.is_configured() {
         Ok(rest)
@@ -305,7 +374,7 @@ fn configured() -> Result<Rest, String> {
     }
 }
 
-async fn fetch_active(rest: &Rest) -> Result<Option<ActiveRow>, String> {
+pub(crate) async fn fetch_active(rest: &Rest) -> Result<Option<ActiveRow>, String> {
     let filter = eq(rest.user_id());
     let value = rest
         .select(
@@ -455,6 +524,64 @@ fn derive_status(row: &ActiveRow, now: DateTime<Utc>) -> SessionStatus {
             elapsed_at(&row.start_time, now)
         },
     }
+}
+
+pub(crate) fn status_of(row: Option<&ActiveRow>, now: DateTime<Utc>) -> SessionStatus {
+    row.map(|r| derive_status(r, now)).unwrap_or_default()
+}
+
+impl ActiveRow {
+    pub(crate) fn is_paused(&self) -> bool {
+        self.paused_at.is_some()
+    }
+}
+
+/// When a pause requested for `at` actually lands: never before the session
+/// began (that would leave `paused_at < start_time` and a zero elapsed), and
+/// never in the future.
+fn pause_instant(start_time: &str, at: DateTime<Utc>, now: DateTime<Utc>) -> DateTime<Utc> {
+    let at = at.min(now);
+    match parse_ts(start_time) {
+        Some(start) => at.max(start.min(now)),
+        None => at,
+    }
+}
+
+/// When a resume requested for `at` actually lands: never before the pause it
+/// ends — that would count the same stretch twice — and never in the future.
+fn resume_instant(paused_at: Option<&str>, at: DateTime<Utc>, now: DateTime<Utc>) -> DateTime<Utc> {
+    let at = at.min(now);
+    match paused_at.and_then(parse_ts) {
+        Some(paused) => at.max(paused.min(now)),
+        None => at,
+    }
+}
+
+/// Distinct `(task_name, project)` pairs in row order, blank names skipped.
+fn distinct_tasks(rows: &Value, limit: usize) -> Vec<RecentTask> {
+    let mut out: Vec<RecentTask> = Vec::new();
+    for row in rows.as_array().into_iter().flatten() {
+        let Some(name) = row.get("task_name").and_then(Value::as_str).map(str::trim) else {
+            continue;
+        };
+        if name.is_empty() {
+            continue;
+        }
+        let project = row
+            .get("project")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|p| !p.is_empty())
+            .map(str::to_string);
+        let task = RecentTask { task_name: name.to_string(), project };
+        if !out.contains(&task) {
+            out.push(task);
+            if out.len() == limit {
+                break;
+            }
+        }
+    }
+    out
 }
 
 #[cfg(test)]
@@ -727,5 +854,76 @@ mod tests {
         };
         assert!(busy_message(&paused).contains("paused"));
         assert!(busy_message(&paused).contains("deep work"));
+    }
+
+    /// The pomodoro pauses at the phase boundary, which can be well before the
+    /// moment the driver gets to run (a Mac waking from sleep).
+    #[test]
+    fn a_back_dated_pause_lands_at_the_boundary() {
+        let now = at("2026-08-05T13:00:00+00:00");
+        let boundary = at("2026-08-05T12:25:00+00:00");
+        let landed = pause_instant("2026-08-05T12:00:00+00:00", boundary, now);
+        assert_eq!(landed, boundary);
+        assert_eq!(elapsed_at("2026-08-05T12:00:00+00:00", landed), 25 * 60);
+    }
+
+    #[test]
+    fn a_pause_never_lands_before_the_session_began() {
+        let now = at("2026-08-05T13:00:00+00:00");
+        let landed = pause_instant(
+            "2026-08-05T12:30:00+00:00",
+            at("2026-08-05T12:25:00+00:00"),
+            now,
+        );
+        assert_eq!(landed, at("2026-08-05T12:30:00+00:00"));
+    }
+
+    #[test]
+    fn a_resume_never_lands_before_the_pause_or_after_now() {
+        let now = at("2026-08-05T13:00:00+00:00");
+        let paused = Some("2026-08-05T12:25:00+00:00");
+        assert_eq!(
+            resume_instant(paused, at("2026-08-05T12:20:00+00:00"), now),
+            at("2026-08-05T12:25:00+00:00"),
+        );
+        assert_eq!(
+            resume_instant(paused, at("2026-08-05T14:00:00+00:00"), now),
+            now,
+        );
+        assert_eq!(
+            resume_instant(paused, at("2026-08-05T12:30:00+00:00"), now),
+            at("2026-08-05T12:30:00+00:00"),
+        );
+    }
+
+    /// Resuming at the end of a break that ended 10 minutes ago bills those 10
+    /// minutes: `now - start` must equal the pre-pause elapsed plus them.
+    #[test]
+    fn a_back_dated_resume_counts_the_time_since_the_boundary() {
+        let now = at("2026-08-05T13:00:00+00:00");
+        let boundary = at("2026-08-05T12:50:00+00:00");
+        let start = back_dated_start(boundary, 25 * 60);
+        assert_eq!((now - start).num_seconds(), 25 * 60 + 10 * 60);
+    }
+
+    #[test]
+    fn recent_tasks_are_distinct_and_in_order() {
+        let rows = json!([
+            { "task_name": "LA exercises", "project": "Learn" },
+            { "task_name": "LA exercises", "project": "Learn" },
+            { "task_name": "  ", "project": null },
+            { "task_name": "LA exercises", "project": "" },
+            { "task_name": "mail", "project": null },
+            { "task_name": "reading", "project": "Vault" },
+        ]);
+        let tasks = distinct_tasks(&rows, 3);
+        assert_eq!(
+            tasks,
+            vec![
+                RecentTask { task_name: "LA exercises".into(), project: Some("Learn".into()) },
+                RecentTask { task_name: "LA exercises".into(), project: None },
+                RecentTask { task_name: "mail".into(), project: None },
+            ]
+        );
     }
 }

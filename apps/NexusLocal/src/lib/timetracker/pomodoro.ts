@@ -1,20 +1,21 @@
 /**
- * Pomodoro phase machine — pure functions only.
+ * Pomodoro wire types and display helpers — pure functions only.
  *
- * Ported from `apps/TimeTrackerApp/src/hooks/useTimer.ts`, where the same logic
- * was welded into a `useEffect` over four Redux dispatches and could only be
- * exercised by watching a clock for 25 minutes. Everything here is a plain
- * function of its arguments, so the cycle is verifiable without a running timer.
+ * The phase machine itself is Rust now (`src-tauri/src/timetracker/pomodoro.rs`).
+ * It used to live here, ported from TimeTracker's `useTimer.ts`, and that is
+ * exactly why a reload restarted the cycle and breaks were billed as work: the
+ * WebView forgot the phase, and nothing paused the session at a boundary. What
+ * is left here is the shape of what Rust reports and how to draw it.
  *
  * Field names are snake_case because this is the exact wire shape of Rust's
- * `PomodoroConfig` (`src-tauri/src/timetracker/pomodoro.rs`). Tauri camelCases
- * *parameter* names — `invoke("tt_pomodoro_set", { config })` — not the contents
- * of the struct it deserializes.
+ * structs. Tauri camelCases *parameter* names — `invoke("tt_pomodoro_set",
+ * { config })` — not the contents of the struct it deserializes.
  */
 
 export type Phase = "work" | "break" | "long_break";
 
 export type PomodoroConfig = {
+  /** Unused since the run moved to Rust; kept so a save round-trips the column. */
   enabled: boolean;
   work_minutes: number;
   break_minutes: number;
@@ -48,8 +49,7 @@ export const MAX_VALUE = 4294967295;
  * Clamp a config read from anywhere that isn't `tt_pomodoro_set`.
  *
  * Rust validates the write path, but a row predating that validation — or a
- * hand-edited one — can still hold a zero, and `x % 0` is `NaN`, which never
- * equals 0, so the cycle would silently never reach a long break.
+ * hand-edited one — can still hold a zero, and `x % 0` is `NaN`.
  */
 export function sanitizeConfig(config: PomodoroConfig): PomodoroConfig {
   const atLeast = (n: number, fallback: number) =>
@@ -63,64 +63,70 @@ export function sanitizeConfig(config: PomodoroConfig): PomodoroConfig {
   };
 }
 
-/** How long a phase runs, in seconds. */
-export function phaseDurationSeconds(phase: Phase, config: PomodoroConfig): number {
-  const safe = sanitizeConfig(config);
-  switch (phase) {
-    case "work":
-      return safe.work_minutes * 60;
-    case "break":
-      return safe.break_minutes * 60;
-    case "long_break":
-      return safe.long_break_minutes * 60;
-  }
-}
+/** Mirror of `SessionStatus` in `session.rs`. */
+export type SessionStatus = {
+  state: "idle" | "running" | "paused";
+  task_name: string | null;
+  project: string | null;
+  /** RFC3339 UTC, back-dated on resume so `now - start_time` is the elapsed. */
+  start_time: string | null;
+  elapsed_seconds: number;
+};
+
+/** Mirror of `RunView` in `pomodoro.rs`. Exactly one of the two clocks is set. */
+export type RunView = {
+  phase: Phase;
+  completed: number;
+  done_in_cycle: number;
+  ends_at: string | null;
+  held_seconds: number | null;
+  total_seconds: number;
+};
+
+/** Mirror of `PomodoroStatus` — the payload of every `pomodoro:status` event. */
+export type PomodoroStatus = {
+  config: PomodoroConfig;
+  run: RunView | null;
+  session: SessionStatus;
+};
+
+/** Mirror of `RecentTask` in `session.rs`. */
+export type RecentTask = { task_name: string; project: string | null };
+
+export const STATUS_EVENT = "pomodoro:status";
 
 /**
- * The phase that follows `phase` once its countdown hits zero.
+ * Seconds left in the current phase, rounded up so a phase reads its full
+ * length for its first second and 0 only once the deadline has passed.
  *
- * `completed` is the **post-increment** count of finished work sessions — the
- * work phase that just ended is already counted. That is what makes the fourth
- * session of a 4-per-cycle config the one that earns the long break, and it is
- * the same convention as TimeTracker's `newCompleted = completedSessions + 1`.
- * Both breaks return to work; only a work phase advances the counter.
+ * Derived from the deadline Rust wrote rather than counted down locally, so
+ * every window and device shows the same second and a suspended WebView
+ * catches up on its first tick instead of drifting.
  */
-export function nextPhase(phase: Phase, completed: number, config: PomodoroConfig): Phase {
-  if (phase !== "work") return "work";
-  const perCycle = sanitizeConfig(config).sessions_per_cycle;
-  return completed % perCycle === 0 ? "long_break" : "break";
+export function remainingOf(run: RunView, nowMs: number): number {
+  if (run.held_seconds !== null) return Math.max(0, run.held_seconds);
+  const ends = run.ends_at ? Date.parse(run.ends_at) : NaN;
+  if (!Number.isFinite(ends)) return 0;
+  return Math.max(0, Math.ceil((ends - nowMs) / 1000));
 }
 
-/**
- * Seconds left until `deadlineMs`, rounded up so a phase reads its full
- * duration for its first second and reaches 0 only once the deadline passes.
- *
- * Deriving from a wall-clock deadline rather than decrementing a counter is
- * what makes the countdown survive the WebView suspending: iOS stops the app's
- * timers when it backgrounds, and a `remaining - 1` per tick silently loses
- * every suspended minute. It also matches how the session itself derives
- * elapsed time (`now - start_time`), so the two cannot drift apart.
- */
-export function remainingFromDeadline(deadlineMs: number | null, nowMs: number): number {
-  if (deadlineMs === null || !Number.isFinite(deadlineMs)) return 0;
-  return Math.max(0, Math.ceil((deadlineMs - nowMs) / 1000));
-}
-
-/** Notification copy for a transition. TimeTracker fired one on every switch. */
-export function phaseMessage(next: Phase): string {
-  switch (next) {
-    case "long_break":
-      return "Long break — well earned!";
-    case "break":
-      return "Short break time!";
-    case "work":
-      return "Break over — back to work!";
-  }
+/** Elapsed seconds of a session, derived the same way Rust derives it. */
+export function elapsedOf(session: SessionStatus, nowMs: number): number {
+  if (session.state !== "running") return session.elapsed_seconds;
+  const start = session.start_time ? Date.parse(session.start_time) : NaN;
+  if (!Number.isFinite(start)) return session.elapsed_seconds;
+  return Math.max(0, Math.floor((nowMs - start) / 1000));
 }
 
 export function phaseLabel(phase: Phase): string {
   return phase === "long_break" ? "Long break" : phase === "break" ? "Break" : "Focus";
 }
+
+export const PHASE_COLOR: Record<Phase, string> = {
+  work: "#818cf8", // indigo-400
+  break: "#34d399", // emerald-400
+  long_break: "#fbbf24", // amber-400
+};
 
 /** `mm:ss`, with hours folded into minutes — no phase runs past 99 minutes in practice. */
 export function formatRemaining(seconds: number): string {
@@ -128,4 +134,13 @@ export function formatRemaining(seconds: number): string {
   const m = Math.floor(clamped / 60);
   const s = clamped % 60;
   return `${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}`;
+}
+
+/** `h:mm:ss` for the count-up timer. */
+export function formatElapsed(total: number): string {
+  const s = Math.max(0, Math.floor(total));
+  const h = Math.floor(s / 3600);
+  const m = Math.floor(s / 60) % 60;
+  const sec = s % 60;
+  return `${h}:${String(m).padStart(2, "0")}:${String(sec).padStart(2, "0")}`;
 }

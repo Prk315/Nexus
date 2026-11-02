@@ -1,6 +1,6 @@
 [package]
 name = "nexus-local"
-version = "0.32.0"
+version = "0.33.0"
 description = "Nexus Local — the ecosystem's local grid of background service modules"
 authors = []
 edition = "2021"
@@ -43,6 +43,16 @@ tauri = { version = "2", features = ["tray-icon"] }
 # 127.0.0.1 by the daemon. Same major as the Nexus IPC hub in `apps/nexus`, so
 # the workspace resolves one axum. iOS has no daemon and no listener.
 axum = "0.8"
+# Pomodoro phase-change banners (`timetracker::pomodoro::alert`). Desktop only:
+# on the phone the WebView is suspended exactly when a banner would matter, and
+# the plugin's iOS half would be one more thing to re-sign under SideStore.
+tauri-plugin-notification = "2"
+
+# The floating timer re-classes its window as an NSPanel so it can sit over
+# other apps' full-screen Spaces (`float.rs`). Same major tao/wry already use,
+# so nothing new is downloaded.
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2 = "0.6"
 
 # iOS reads the device name via libc gethostname (subprocess spawn is sandboxed)
 [target.'cfg(target_os = "ios")'.dependencies]

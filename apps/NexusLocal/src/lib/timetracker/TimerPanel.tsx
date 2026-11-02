@@ -1,17 +1,14 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
-
-/// Mirror of `SessionStatus` in `src-tauri/src/timetracker/session.rs`. serde uses
-/// the default (snake_case) field naming, so the keys arrive exactly as declared.
-type SessionStatus = {
-  state: "idle" | "running" | "paused";
-  task_name: string | null;
-  project: string | null;
-  /// RFC3339 UTC. On resume this is *back-dated* so `now - start_time` stays the
-  /// true elapsed — never substitute `Date.now()` for it.
-  start_time: string | null;
-  elapsed_seconds: number;
-};
+import { listen } from "@tauri-apps/api/event";
+import {
+  STATUS_EVENT,
+  formatElapsed,
+  type PomodoroStatus,
+  type RecentTask,
+  type SessionStatus,
+} from "./pomodoro";
+import { useRecentTasks } from "./usePomodoro";
 
 const IDLE: SessionStatus = {
   state: "idle",
@@ -26,12 +23,11 @@ const IDLE: SessionStatus = {
 /// not a merge — a timer started on the phone shows up here within 10s.
 const POLL_MS = 10_000;
 
-function formatElapsed(total: number): string {
-  const s = Math.max(0, Math.floor(total));
-  const h = Math.floor(s / 3600);
-  const m = Math.floor(s / 60) % 60;
-  const sec = s % 60;
-  return `${h}:${String(m).padStart(2, "0")}:${String(sec).padStart(2, "0")}`;
+/// Tell the pomodoro (and through its event, every window) that the session
+/// just changed under it. Without this a Stop here would leave the floating
+/// timer counting down until the driver's next poll.
+function nudgePomodoro() {
+  invoke("tt_pomodoro_status").catch(() => {});
 }
 
 /// Epoch **seconds as a float** for the Live Activity. Prefers the (possibly
@@ -60,9 +56,11 @@ function endLiveActivity() {
 }
 
 /// Session recorder: start / pause / resume / stop against the Rust commands in
-/// `timetracker::session`, with a live H:MM:SS clock. The 1s tick is display-only
-/// smoothing — `tt_session_status` stays authoritative and is re-read on mount, on
-/// window focus, and every 10s.
+/// `timetracker::session`, with a live H:MM:SS clock. "Focus" (and Enter) starts
+/// the timer and a pomodoro together; the chips do the same on a recent task in
+/// one tap. The 1s tick is display-only smoothing — `tt_session_status` stays
+/// authoritative and is re-read on mount, on window focus, on every pomodoro
+/// broadcast, and every 10s.
 export function TimerPanel() {
   const [session, setSession] = useState<SessionStatus>(IDLE);
   const [error, setError] = useState<string | null>(null);
@@ -124,6 +122,29 @@ export function TimerPanel() {
     };
   }, [refresh]);
 
+  // The pomodoro pauses and resumes this session at phase boundaries, and its
+  // controls live in other windows too. Its broadcast carries the session, so
+  // take it straight from there rather than waiting out the 10s poll.
+  useEffect(() => {
+    let cancelled = false;
+    let unlisten: (() => void) | undefined;
+    listen<PomodoroStatus>(STATUS_EVENT, (event) => {
+      if (busyRef.current || !mounted.current) return;
+      seq.current++;
+      setSession(event.payload.session);
+      setError(null);
+    })
+      .then((un) => {
+        if (cancelled) un();
+        else unlisten = un;
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+      unlisten?.();
+    };
+  }, []);
+
   // Display-only tick. Torn down whenever the timer is not running, so a paused
   // or idle panel holds no interval.
   useEffect(() => {
@@ -149,6 +170,7 @@ export function TimerPanel() {
       try {
         const s = await call();
         onSuccess?.(s);
+        nudgePomodoro();
         if (mounted.current && my === seq.current) {
           setSession(s);
           setError(null);
@@ -164,6 +186,25 @@ export function TimerPanel() {
     },
     []
   );
+
+  /// Timer and pomodoro in one go. Rust starts the session as part of
+  /// `tt_pomodoro_start`, so this is one round trip, not two.
+  async function handleFocus(task?: RecentTask) {
+    const name = (task?.task_name ?? taskName).trim();
+    if (!name || busy) return;
+    const s = await run(
+      () =>
+        invoke<PomodoroStatus>("tt_pomodoro_start", {
+          taskName: name,
+          project: (task ? task.project : project.trim()) || null,
+        }).then((p) => p.session),
+      startLiveActivity
+    );
+    if (s && mounted.current) {
+      setTaskName("");
+      setProject("");
+    }
+  }
 
   async function handleStart() {
     const name = taskName.trim();
@@ -200,6 +241,8 @@ export function TimerPanel() {
 
   const idle = session.state === "idle";
   const running = session.state === "running";
+  const recents = useRecentTasks(session.state);
+  const canStart = !busy && !!taskName.trim();
 
   return (
     <section className="flex flex-col gap-2">
@@ -240,7 +283,7 @@ export function TimerPanel() {
               value={taskName}
               onChange={(e) => setTaskName(e.target.value)}
               onKeyDown={(e) => {
-                if (e.key === "Enter") void handleStart();
+                if (e.key === "Enter") void handleFocus();
               }}
               placeholder="What are you working on?"
               className="rounded-lg border border-white/10 bg-white/[0.03] px-3 py-2 text-xs text-white/80 placeholder:text-white/25"
@@ -249,7 +292,7 @@ export function TimerPanel() {
               value={project}
               onChange={(e) => setProject(e.target.value)}
               onKeyDown={(e) => {
-                if (e.key === "Enter") void handleStart();
+                if (e.key === "Enter") void handleFocus();
               }}
               placeholder="Project (optional)"
               className="rounded-lg border border-white/10 bg-white/[0.03] px-3 py-2 text-xs text-white/80 placeholder:text-white/25"
@@ -259,17 +302,28 @@ export function TimerPanel() {
 
         <div className="mt-2 flex gap-2">
           {idle && (
-            <button
-              onClick={() => void handleStart()}
-              disabled={busy || !taskName.trim()}
-              className={`flex-1 rounded-lg px-3 py-2 text-xs font-medium ${
-                busy || !taskName.trim()
-                  ? "bg-white/10 text-white/30"
-                  : "bg-indigo-500/20 text-indigo-300"
-              }`}
-            >
-              Start
-            </button>
+            <>
+              <button
+                onClick={() => void handleFocus()}
+                disabled={!canStart}
+                title="Start the timer with a pomodoro — tracking pauses during breaks"
+                className={`flex-[2] rounded-lg px-3 py-2 text-xs font-medium ${
+                  canStart ? "bg-indigo-500/20 text-indigo-300" : "bg-white/10 text-white/30"
+                }`}
+              >
+                🍅 Focus
+              </button>
+              <button
+                onClick={() => void handleStart()}
+                disabled={!canStart}
+                title="Start a plain timer, no pomodoro"
+                className={`flex-1 rounded-lg px-3 py-2 text-xs font-medium ${
+                  canStart ? "bg-white/[0.06] text-white/60" : "bg-white/10 text-white/30"
+                }`}
+              >
+                Timer
+              </button>
+            </>
           )}
 
           {running && (
@@ -308,6 +362,23 @@ export function TimerPanel() {
             </button>
           )}
         </div>
+
+        {idle && recents.length > 0 && (
+          <div className="mt-2 flex flex-wrap gap-1.5">
+            {recents.map((t) => (
+              <button
+                key={`${t.task_name}|${t.project ?? ""}`}
+                onClick={() => void handleFocus(t)}
+                disabled={busy}
+                title={`Focus on “${t.task_name}”${t.project ? ` · ${t.project}` : ""}`}
+                className="max-w-full truncate rounded-full border border-white/10 bg-white/[0.03] px-2.5 py-1 text-[10px] text-white/55 hover:border-indigo-400/40 hover:text-indigo-200 disabled:opacity-40"
+              >
+                ▶ {t.task_name}
+                {t.project && <span className="text-white/30"> · {t.project}</span>}
+              </button>
+            ))}
+          </div>
+        )}
 
         {error && (
           <div className="mt-2 rounded-lg bg-red-500/10 p-2 text-[10px] text-red-300 break-words">

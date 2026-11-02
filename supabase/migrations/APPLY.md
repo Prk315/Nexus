@@ -22,6 +22,7 @@ query after each.
 | 11 | `20260827160000_vault_content_versions.sql` | `vault_content_versions` + a snapshot trigger on `vault_content` and a byte-budgeted retention trigger — Vault's note history. **Already applied live on 2026-08-27**; the only file here that adds a trigger to an existing hot write path — see §11 |
 | 12 | `20260827180000_vault_updated_by.sql` | `updated_by` on `vault_content` / `vault_journals` / `vault_content_versions`, stamped from `auth.uid()` — who actually wrote a document last. **Already applied live on 2026-08-27**; see §12 |
 | 13 | `20260827200000_pf_agent_brief.sql` | `pf_agent_brief(p_user_id text)` — one call returning goals, active tasks, what is due and live plans as a compact jsonb snapshot, for terminal agents. **Already applied live on 2026-08-27**; read-only, adds no table; see §13 |
+| 14 | `20261028120000_pomodoro_run_state.sql` | five `run_*` columns on `pomodoro_config` — the live pomodoro run, CAS-guarded by `run_rev`. Additive; **apply before shipping a Nexus Local build that starts pomodoros**, or `tt_pomodoro_start` fails with an unknown-column error (reads keep working) |
 
 ⚠️ **File 10 is the one exception to "not applied by the code that wrote it"** —
 it was applied to `efxmzsdisaymtpebaxlp` at the time it was written, and the file
