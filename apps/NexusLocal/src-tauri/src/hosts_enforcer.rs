@@ -90,6 +90,13 @@ const REQUEST_PATH: &str = "/Users/Shared/NexusLocal/hosts-enforcer-removal-requ
 const REMOVAL_STATE_PATH: &str = "/Library/Application Support/NexusLocal/hosts-enforcer.removal";
 /// How long a removal request waits before the enforcer uninstalls itself.
 pub const REMOVAL_DELAY_SECS: i64 = 24 * 60 * 60;
+
+/// The root helper's own revision — **bump only when code the root process
+/// runs changes** (`run`, removal handling, `blocking::write_hosts_direct` and
+/// what it calls). Comparing against the app version instead flagged the helper
+/// as outdated on every app release, asking for an admin password to reinstall
+/// identical code; a warning that is usually wrong trains you to ignore it.
+const HELPER_REVISION: &str = "0.35.1";
 const INTERVAL_SECS: u32 = 30;
 /// A run older than this means launchd is not running the job.
 const STALE_AFTER_SECS: i64 = 3 * INTERVAL_SECS as i64;
@@ -335,7 +342,7 @@ pub fn tt_hosts_enforcer_status() -> HostsEnforcerStatus {
             supported: true,
             installed,
             running,
-            outdated: installed && installed_version.as_deref() != Some(app_version.as_str()),
+            outdated: installed && installed_version.as_deref() != Some(HELPER_REVISION),
             installed_version,
             app_version,
             last_run_at: stamp.as_ref().map(|s| s.at.clone()),
@@ -383,7 +390,7 @@ pub async fn tt_hosts_enforcer_install() -> Result<(), String> {
             supabase_url: app.supabase.url,
             supabase_key: app.supabase.key,
             user_id: app.user_id,
-            version: env!("CARGO_PKG_VERSION").to_string(),
+            version: HELPER_REVISION.to_string(),
         };
         let json = serde_json::to_string_pretty(&config).map_err(|e| e.to_string())?;
         let script = install_script(&exe.display().to_string(), &json, &daemon_plist());

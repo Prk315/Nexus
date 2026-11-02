@@ -309,8 +309,8 @@ export function EnforcementPanel() {
               )}
               {enforcer.installed && enforcer.outdated && (
                 <div className="mt-1 text-amber-200/80">
-                  Helper is from v{enforcer.installed_version ?? "?"}, the app is v
-                  {enforcer.app_version} — reinstall to update it.
+                  The installed helper ({enforcer.installed_version ?? "unknown"}) predates
+                  a change to what it runs — reinstall to update it.
                 </div>
               )}
               {enforcer.installed &&
