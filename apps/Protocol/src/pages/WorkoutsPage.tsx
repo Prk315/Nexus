@@ -184,7 +184,7 @@ export default function WorkoutsPage() {
       {/* Activity stats (steps, calories, sessions + trends) */}
       <ActivityModule />
 
-      {/* Runs — imported from Garmin/Strava */}
+      {/* Runs — imported from Garmin/Strava, or logged by hand */}
       <RunsCard />
 
       {/* Strength training plans — programs, training days, prescribed exercises */}

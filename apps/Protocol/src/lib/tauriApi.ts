@@ -318,7 +318,8 @@ export const getRunningSessions = (planId?: string): Promise<RunningSession[]> =
 
 export async function createRunningSession(session: CreateRunningSession): Promise<RunningSession> {
   const id = crypto.randomUUID();
-  await pushRunningSessionToCloud({ ...session, id, completed: false });
+  const completed = session.completed ?? false;
+  await pushRunningSessionToCloud({ ...session, id, completed });
   return {
     id, ...session,
     plan_id: session.plan_id ?? null,
@@ -331,7 +332,7 @@ export async function createRunningSession(session: CreateRunningSession): Promi
     cadence_avg: session.cadence_avg ?? null,
     calories: session.calories ?? null,
     notes: session.notes ?? null,
-    completed: false,
+    completed,
     created_at: new Date().toISOString(),
   };
 }
