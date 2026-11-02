@@ -17,7 +17,7 @@
 //! /Library/LaunchDaemons/com.bastianthomsen.nexuslocal.hosts.plist    runs it as root, every 30s
 //! ```
 //!
-//! All three are root-owned. Each run reads `blocking_state` and renders it into
+//! All three are root-owned (plus two small state files beside the config). Each run reads `blocking_state` and renders it into
 //! `/etc/hosts` directly (`blocking::write_hosts_direct`) — the same verdict, the
 //! same `render_hosts`, no dialog. The user daemon stops writing hosts while
 //! this is installed and keeps quitting blocked apps, which never needed root.
@@ -32,7 +32,26 @@
 //! It is also deliberately not fed by a file the daemon writes. That would be
 //! simpler on the root side, but a user-writable hand-off is an unblock that
 //! needs no password — `echo > ~/.nexuslocal/…` — which is the same hole with a
-//! different door. Switching this off is `Remove`, which asks for the password.
+//! different door.
+//!
+//! # Leaving is slow on purpose
+//!
+//! There is no Remove button. The app can only *request* removal, and the
+//! enforcer uninstalls itself [`REMOVAL_DELAY_SECS`] after it first sees the
+//! request — still blocking the whole time, and the request can be withdrawn.
+//! An instant uninstall, even behind the admin password, is the same impulse
+//! decision the enforcer exists to take off the table; a day later the impulse
+//! has usually passed, and if it hasn't, the decision was a real one.
+//!
+//! The request lives in `/Users/Shared` because it has to be writable without
+//! a password — it only starts a clock. The clock itself is root's: the
+//! enforcer stamps when it *first saw* the request in a root-owned file, so no
+//! edit to the request can backdate it. Withdrawing the request and asking again
+//! restarts the full delay.
+//!
+//! What this cannot stop is an administrator in a terminal — `sudo launchctl
+//! bootout system/com.bastianthomsen.nexuslocal.hosts` works, as it must on a
+//! machine you own. The bar is "not one click", not "impossible".
 //!
 //! # Two things it cannot be made to do
 //!
@@ -62,6 +81,15 @@ const CONFIG_PATH: &str = "/Library/Application Support/NexusLocal/hosts-enforce
 /// to a non-root caller.
 const STAMP_PATH: &str = "/Library/Application Support/NexusLocal/hosts-enforcer.last";
 const LOG_PATH: &str = "/Library/Logs/nexus-local-hosts.log";
+/// The app's removal request. Writable without a password — it only starts a
+/// clock — hence `/Users/Shared`, which a root process can find without
+/// knowing whose home directory to look in.
+const REQUEST_DIR: &str = "/Users/Shared/NexusLocal";
+const REQUEST_PATH: &str = "/Users/Shared/NexusLocal/hosts-enforcer-removal-request";
+/// When root first saw the request. Root-owned, so it cannot be backdated.
+const REMOVAL_STATE_PATH: &str = "/Library/Application Support/NexusLocal/hosts-enforcer.removal";
+/// How long a removal request waits before the enforcer uninstalls itself.
+pub const REMOVAL_DELAY_SECS: i64 = 24 * 60 * 60;
 const INTERVAL_SECS: u32 = 30;
 /// A run older than this means launchd is not running the job.
 const STALE_AFTER_SECS: i64 = 3 * INTERVAL_SECS as i64;
@@ -150,7 +178,99 @@ pub fn run(config_path: &str) -> i32 {
     if let Ok(json) = serde_json::to_string(&stamp) {
         let _ = std::fs::write(STAMP_PATH, json);
     }
+
+    // After the pass, never instead of it: a pending removal keeps blocking
+    // until the moment it takes effect.
+    handle_removal(chrono::Utc::now());
     0
+}
+
+/// Root's record of a removal request.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct RemovalState {
+    seen_at: String,
+}
+
+/// What a run does about removal, given whether a request exists and when root
+/// first saw it. Pure, so the timing rules are tested rather than trusted.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Removal {
+    /// No request, nothing recorded.
+    Idle,
+    /// The request was withdrawn: forget it, so asking again restarts the delay.
+    Cancelled,
+    /// First sighting: start the clock now.
+    Started,
+    /// Counting down to this instant.
+    Waiting(chrono::DateTime<chrono::Utc>),
+    /// The delay has elapsed.
+    Due,
+}
+
+fn removal_step(
+    requested: bool,
+    seen_at: Option<chrono::DateTime<chrono::Utc>>,
+    now: chrono::DateTime<chrono::Utc>,
+) -> Removal {
+    let delay = chrono::Duration::seconds(REMOVAL_DELAY_SECS);
+    match (requested, seen_at) {
+        (false, None) => Removal::Idle,
+        (false, Some(_)) => Removal::Cancelled,
+        (true, None) => Removal::Started,
+        (true, Some(seen)) if now - seen >= delay => Removal::Due,
+        (true, Some(seen)) => Removal::Waiting(seen + delay),
+    }
+}
+
+/// An unreadable state file counts as never seen — which restarts the clock.
+/// Every failure here must lengthen the wait, never shorten it.
+fn read_seen_at() -> Option<chrono::DateTime<chrono::Utc>> {
+    let raw = std::fs::read_to_string(REMOVAL_STATE_PATH).ok()?;
+    let state: RemovalState = serde_json::from_str(&raw).ok()?;
+    chrono::DateTime::parse_from_rfc3339(&state.seen_at)
+        .ok()
+        .map(|d| d.with_timezone(&chrono::Utc))
+}
+
+#[cfg(target_os = "macos")]
+fn handle_removal(now: chrono::DateTime<chrono::Utc>) {
+    let requested = std::path::Path::new(REQUEST_PATH).exists();
+    match removal_step(requested, read_seen_at(), now) {
+        Removal::Idle | Removal::Waiting(_) => {}
+        Removal::Cancelled => {
+            let _ = std::fs::remove_file(REMOVAL_STATE_PATH);
+            eprintln!("[hosts-enforcer] {} removal request withdrawn", now.to_rfc3339());
+        }
+        Removal::Started => {
+            let state = RemovalState { seen_at: now.to_rfc3339() };
+            if let Ok(json) = serde_json::to_string(&state) {
+                let _ = std::fs::write(REMOVAL_STATE_PATH, json);
+            }
+            let due = now + chrono::Duration::seconds(REMOVAL_DELAY_SECS);
+            eprintln!(
+                "[hosts-enforcer] {} removal requested — takes effect at {}",
+                now.to_rfc3339(),
+                due.to_rfc3339()
+            );
+        }
+        Removal::Due => {
+            eprintln!("[hosts-enforcer] {} removal delay elapsed — uninstalling", now.to_rfc3339());
+            self_uninstall();
+        }
+    }
+}
+
+/// Delete everything, then unload — which ends this process, so it goes last.
+/// `/etc/hosts` is left as it is: the user daemon takes the job back, with its
+/// dialogs, and leaving must not double as an unblock.
+#[cfg(target_os = "macos")]
+fn self_uninstall() {
+    for path in [REQUEST_PATH, REMOVAL_STATE_PATH, STAMP_PATH, CONFIG_PATH, PLIST_PATH, HELPER_PATH] {
+        let _ = std::fs::remove_file(path);
+    }
+    let _ = std::process::Command::new("launchctl")
+        .args(["bootout", &format!("system/{LABEL}")])
+        .status();
 }
 
 /// The host part of the Supabase URL, lower-cased.
@@ -170,7 +290,7 @@ fn without_host(domains: Vec<String>, host: &str) -> Vec<String> {
         .collect()
 }
 
-// ── the user side: status, install, remove ───────────────────────────────────
+// ── the user side: status, install, request removal ──────────────────────────
 
 #[derive(Debug, Clone, Serialize)]
 pub struct HostsEnforcerStatus {
@@ -184,6 +304,12 @@ pub struct HostsEnforcerStatus {
     pub last_run_at: Option<String>,
     pub last_ok: Option<bool>,
     pub last_outcome: Option<String>,
+    /// The app has asked for removal.
+    pub removal_requested: bool,
+    /// When the enforcer will remove itself — set once root has seen the
+    /// request (within one run of it being made).
+    pub removal_due_at: Option<String>,
+    pub removal_delay_secs: i64,
 }
 
 #[tauri::command]
@@ -215,6 +341,10 @@ pub fn tt_hosts_enforcer_status() -> HostsEnforcerStatus {
             last_run_at: stamp.as_ref().map(|s| s.at.clone()),
             last_ok: stamp.as_ref().map(|s| s.ok),
             last_outcome: stamp.map(|s| s.outcome),
+            removal_requested: std::path::Path::new(REQUEST_PATH).exists(),
+            removal_due_at: read_seen_at()
+                .map(|seen| (seen + chrono::Duration::seconds(REMOVAL_DELAY_SECS)).to_rfc3339()),
+            removal_delay_secs: REMOVAL_DELAY_SECS,
         }
     }
     #[cfg(not(target_os = "macos"))]
@@ -229,6 +359,9 @@ pub fn tt_hosts_enforcer_status() -> HostsEnforcerStatus {
             last_run_at: None,
             last_ok: None,
             last_outcome: None,
+            removal_requested: false,
+            removal_due_at: None,
+            removal_delay_secs: REMOVAL_DELAY_SECS,
         }
     }
 }
@@ -264,24 +397,33 @@ pub async fn tt_hosts_enforcer_install() -> Result<(), String> {
     }
 }
 
-/// Remove it. Also one admin password — which is the point: switching site
-/// blocking off must cost what it cost before the enforcer existed.
-///
-/// `/etc/hosts` is left as it is. After removal the user daemon takes the job
-/// back on, with its dialogs; dropping the block on the way out would make
-/// "remove" a one-step unblock.
+/// Ask the enforcer to remove itself [`REMOVAL_DELAY_SECS`] from now. No
+/// password: this only starts a clock, and the clock is root's.
 #[tauri::command]
-pub async fn tt_hosts_enforcer_remove() -> Result<(), String> {
+pub fn tt_hosts_enforcer_request_removal() -> Result<(), String> {
     #[cfg(target_os = "macos")]
     {
-        let script = remove_script();
-        tokio::task::spawn_blocking(move || run_as_admin(&script))
-            .await
-            .map_err(|e| e.to_string())?
+        if !installed() {
+            return Err("the root enforcer is not installed".to_string());
+        }
+        std::fs::create_dir_all(REQUEST_DIR)
+            .map_err(|e| format!("cannot create {REQUEST_DIR}: {e}"))?;
+        std::fs::write(REQUEST_PATH, chrono::Utc::now().to_rfc3339())
+            .map_err(|e| format!("cannot write the removal request: {e}"))
     }
     #[cfg(not(target_os = "macos"))]
     {
         Err("the root enforcer is macOS-only".to_string())
+    }
+}
+
+/// Withdraw a removal request. Asking again later restarts the full delay.
+#[tauri::command]
+pub fn tt_hosts_enforcer_cancel_removal() -> Result<(), String> {
+    match std::fs::remove_file(REQUEST_PATH) {
+        Ok(()) => Ok(()),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(e) => Err(format!("cannot withdraw the removal request: {e}")),
     }
 }
 
@@ -318,20 +460,6 @@ fn install_script(exe: &str, config_json: &str, plist: &str) -> String {
         // that isn't loaded fails — which is fine.
         format!("(launchctl bootout system/{LABEL} 2>/dev/null || true)"),
         format!("launchctl bootstrap system {}", sh_quote(PLIST_PATH)),
-    ]
-    .join(" && ")
-}
-
-fn remove_script() -> String {
-    [
-        format!("(launchctl bootout system/{LABEL} 2>/dev/null || true)"),
-        format!(
-            "rm -f {} {} {} {}",
-            sh_quote(PLIST_PATH),
-            sh_quote(HELPER_PATH),
-            sh_quote(CONFIG_PATH),
-            sh_quote(STAMP_PATH)
-        ),
     ]
     .join(" && ")
 }
@@ -436,12 +564,51 @@ mod tests {
         assert!(!s.contains(" ; "), "steps must be &&-chained: {s}");
     }
 
+    fn at(s: &str) -> chrono::DateTime<chrono::Utc> {
+        chrono::DateTime::parse_from_rfc3339(s).unwrap().with_timezone(&chrono::Utc)
+    }
+
     #[test]
-    fn remove_unloads_before_deleting() {
-        let s = remove_script();
-        let unload = s.find("bootout").unwrap();
-        let delete = s.find("rm -f").unwrap();
-        assert!(unload < delete, "{s}");
+    fn no_request_means_nothing_happens() {
+        assert_eq!(removal_step(false, None, at("2026-11-02T12:00:00Z")), Removal::Idle);
+    }
+
+    #[test]
+    fn a_request_starts_the_clock_rather_than_removing() {
+        assert_eq!(removal_step(true, None, at("2026-11-02T12:00:00Z")), Removal::Started);
+    }
+
+    #[test]
+    fn a_seen_request_waits_out_the_whole_delay() {
+        let seen = at("2026-11-02T12:00:00Z");
+        let almost = seen + chrono::Duration::seconds(REMOVAL_DELAY_SECS - 1);
+        assert_eq!(
+            removal_step(true, Some(seen), almost),
+            Removal::Waiting(seen + chrono::Duration::seconds(REMOVAL_DELAY_SECS))
+        );
+        let due = seen + chrono::Duration::seconds(REMOVAL_DELAY_SECS);
+        assert_eq!(removal_step(true, Some(seen), due), Removal::Due);
+    }
+
+    /// Withdrawing must forget the clock, or ask-cancel-ask-again would remove
+    /// instantly on the strength of the first request.
+    #[test]
+    fn a_withdrawn_request_is_forgotten() {
+        let seen = at("2026-11-01T12:00:00Z");
+        assert_eq!(removal_step(false, Some(seen), at("2026-11-02T13:00:00Z")), Removal::Cancelled);
+    }
+
+    #[test]
+    fn the_delay_is_a_day_not_a_click() {
+        const { assert!(REMOVAL_DELAY_SECS >= 24 * 60 * 60) };
+    }
+
+    #[test]
+    fn the_request_is_not_where_root_keeps_its_clock() {
+        // The request is user-writable; the clock must not be, or backdating
+        // it would be an instant uninstall.
+        assert!(REQUEST_PATH.starts_with("/Users/Shared/"));
+        assert!(REMOVAL_STATE_PATH.starts_with(SUPPORT_DIR));
     }
 
     #[test]

@@ -317,7 +317,8 @@ pub fn run() {
             // every-platform registration rule as above.
             hosts_enforcer::tt_hosts_enforcer_status,
             hosts_enforcer::tt_hosts_enforcer_install,
-            hosts_enforcer::tt_hosts_enforcer_remove,
+            hosts_enforcer::tt_hosts_enforcer_request_removal,
+            hosts_enforcer::tt_hosts_enforcer_cancel_removal,
             // Foreground-app / web time tracking (see usage.rs). These read the
             // daemon's JSONL day files from disk — on macOS the tracker runs in
             // the daemon, not here.

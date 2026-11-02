@@ -30,6 +30,10 @@ import { invoke } from "@tauri-apps/api/core";
  * password installs a system LaunchDaemon that writes /etc/hosts itself. Without
  * it every change of blocked sites is a password dialog — including the re-lock
  * when a meal unblock ends, which Cancel would simply skip.
+ *
+ * There is deliberately no Remove button. The panel can only *request* removal;
+ * the enforcer uninstalls itself a day later, blocking the whole time, and the
+ * request can be withdrawn. Leaving on impulse is the thing it exists to stop.
  */
 
 type Status = {
@@ -54,7 +58,16 @@ type EnforcerStatus = {
   last_run_at: string | null;
   last_ok: boolean | null;
   last_outcome: string | null;
+  removal_requested: boolean;
+  removal_due_at: string | null;
+  removal_delay_secs: number;
 };
+
+/** "in 23 h" / "in 40 min" until an instant. */
+function until(iso: string): string {
+  const s = Math.max(0, Math.round((Date.parse(iso) - Date.now()) / 1000));
+  return s >= 5400 ? `in ${Math.round(s / 3600)} h` : `in ${Math.max(1, Math.round(s / 60))} min`;
+}
 
 function ago(iso: string | null): string {
   if (!iso) return "never";
@@ -155,20 +168,34 @@ export function EnforcementPanel() {
     if (alive()) setBusy(false);
   }
 
-  /** Install, reinstall or remove the root enforcer — each one admin password. */
-  async function setEnforcerInstalled(install: boolean) {
+  /** Install or reinstall the root enforcer — one admin password. */
+  async function installEnforcer() {
     setBusy(true);
-    setMsg(install ? "waiting for the admin password…" : "removing — admin password needed…");
+    setMsg("waiting for the admin password…");
     try {
-      await invoke(install ? "tt_hosts_enforcer_install" : "tt_hosts_enforcer_remove");
-      if (alive())
-        setMsg(
-          install
-            ? "root enforcer installed — site changes now apply on their own within 30s"
-            : "root enforcer removed — site changes need a password again",
-        );
+      await invoke("tt_hosts_enforcer_install");
+      if (alive()) setMsg("root enforcer installed — site changes now apply on their own within 30s");
     } catch (e) {
       // A cancelled dialog lands here too ("User canceled"), which is fine to show.
+      if (alive()) setMsg(String(e));
+    }
+    await load();
+    if (alive()) setBusy(false);
+  }
+
+  /** Start or withdraw the delayed removal. No password — it only starts a clock. */
+  async function setRemovalRequested(request: boolean) {
+    setBusy(true);
+    setMsg("");
+    try {
+      await invoke(request ? "tt_hosts_enforcer_request_removal" : "tt_hosts_enforcer_cancel_removal");
+      if (alive())
+        setMsg(
+          request
+            ? "removal requested — blocking continues until it takes effect"
+            : "removal request withdrawn",
+        );
+    } catch (e) {
       if (alive()) setMsg(String(e));
     }
     await load();
@@ -266,8 +293,8 @@ export function EnforcementPanel() {
                 <div className="mt-0.5 text-white/40">
                   Today every change to blocked sites asks for your password — including
                   the re-lock when a meal's 30 minutes end, and Cancel skips it. Install
-                  once and changes apply on their own within 30s. Removing it asks for the
-                  password again.
+                  once and changes apply on their own within 30s. It can't be removed on
+                  the spot — removal takes effect a day after you ask.
                 </div>
               ) : !enforcer.running ? (
                 <div className="mt-0.5 text-amber-200/80">
@@ -286,11 +313,25 @@ export function EnforcementPanel() {
                   {enforcer.app_version} — reinstall to update it.
                 </div>
               )}
+              {enforcer.installed &&
+                (enforcer.removal_requested ? (
+                  <div className="mt-1 text-amber-200/80">
+                    {enforcer.removal_due_at
+                      ? `Removal requested — it uninstalls itself ${until(enforcer.removal_due_at)} (${new Date(enforcer.removal_due_at).toLocaleString()}). Sites stay blocked until then.`
+                      : "Removal requested — the countdown starts on the enforcer's next run (within 30s)."}
+                  </div>
+                ) : (
+                  <div className="mt-1 text-white/30">
+                    No uninstall button, on purpose: a removal request takes effect{" "}
+                    {Math.round(enforcer.removal_delay_secs / 3600)} h later, and blocking
+                    continues meanwhile.
+                  </div>
+                ))}
             </div>
             <div className="flex shrink-0 flex-col gap-1">
               {(!enforcer.installed || enforcer.outdated) && (
                 <button
-                  onClick={() => setEnforcerInstalled(true)}
+                  onClick={installEnforcer}
                   disabled={busy}
                   className="rounded bg-indigo-500/20 px-2.5 py-1 text-[10px] font-medium text-indigo-300 disabled:opacity-40"
                 >
@@ -299,11 +340,11 @@ export function EnforcementPanel() {
               )}
               {enforcer.installed && (
                 <button
-                  onClick={() => setEnforcerInstalled(false)}
+                  onClick={() => setRemovalRequested(!enforcer.removal_requested)}
                   disabled={busy}
                   className="rounded bg-white/[0.06] px-2.5 py-1 text-[10px] text-white/45 disabled:opacity-40"
                 >
-                  Remove
+                  {enforcer.removal_requested ? "Cancel removal" : "Request removal"}
                 </button>
               )}
             </div>
