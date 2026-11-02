@@ -290,6 +290,20 @@ silent. Every deviation from that property — a dropped trailing newline, an un
 `effective_domains` — is a password dialog every thirty seconds. There are tests
 pinning it; don't loosen them.
 
+**The root enforcer removes the dialog — and the loophole it was.** A password
+per *change* made every re-lock optional: Cancel at the end of a meal unblock kept
+the sites open. `hosts_enforcer.rs` installs (one password, from the Enforcement
+panel) a system LaunchDaemon running a root copy of the binary as
+`--hosts-enforcer` every 30s; it reads `blocking_state` itself and writes
+`/etc/hosts` directly. While it is installed the daemon writes no hosts entries and
+`clear` is refused; Remove costs the password again. It takes no input from the
+user on purpose — a user-writable hand-off file would be a passwordless unblock.
+Because root now writes from an anon-writable table, `normalize_domain` admits only
+RFC 1123 hostnames and the Supabase API host is never blocked. The helper is a
+*copy*: an app update needs a Reinstall (the panel flags the version skew). Its
+last run is in `/Library/Application Support/NexusLocal/hosts-enforcer.last`; its
+log is `/Library/Logs/nexus-local-hosts.log`.
+
 A *refused* dialog is the other half: `osascript` exits nonzero and the tick would
 retry 30 seconds later, forever. A 10-minute backoff (`HOSTS_RETRY_BACKOFF_SECS`)
 suppresses the retry, and is cleared by any successful write or by the verdict
