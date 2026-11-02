@@ -17,6 +17,8 @@ import {
   type BlockedAppRow,
   type BlockedSiteRow,
   blockActive,
+  checkoutActive,
+  type CheckoutRow,
   entryLocalDate,
   evaluate,
   type EvaluateInput,
@@ -731,4 +733,70 @@ Deno.test("a meal session claims the explanation over a satisfied unlock rule", 
   );
   assertEquals(out.effective_domains, []);
   assertEquals(out.reasons["youtube.com"].source, "meal_session");
+});
+
+// ── Day checkout ("finish day") ──────────────────────────────────────────────
+// One press frees everything until local midnight. The end is the server's:
+// a checkout is active only while its local_date is today's.
+
+const checkout = (local_date: string, started_at: string): CheckoutRow => ({
+  user_id: "default",
+  local_date,
+  started_at,
+});
+
+/** Everything the evaluator can block, with a schedule window running. */
+const busyDay = (over: Partial<EvaluateInput> = {}): EvaluateInput =>
+  input({
+    sites: [site("youtube.com"), site("reddit.com")],
+    apps: [app("Steam")],
+    blocks: [focusBlock("b1", "Deep work", "09:00", "17:00", "1,2,3,4,5")],
+    blockSites: new Map([["b1", ["news.com"]]]),
+    blockApps: new Map([["b1", ["Discord"]]]),
+    nowMs: NOW_MS,
+    ...over,
+  });
+
+Deno.test("a checkout for today frees every domain and process", () => {
+  const out = evaluate(
+    busyDay({
+      checkouts: [checkout("2026-08-16", "2026-08-16T09:00:00+00:00")],
+      todayLocal: "2026-08-16",
+    }),
+  );
+  assertEquals(out.effective_domains, []);
+  assertEquals(out.effective_processes, []);
+  for (const t of ["youtube.com", "reddit.com", "news.com", "Steam", "Discord"]) {
+    assertEquals(out.reasons[t]?.source, "day_checkout", t);
+    assertEquals(out.reasons[t]?.blocked, false, t);
+  }
+  // Still says what it would otherwise be.
+  assertEquals(out.reasons["news.com"]?.otherwise, "focus_block");
+});
+
+Deno.test("yesterday's checkout does nothing today — it lapses at midnight", () => {
+  const out = evaluate(
+    busyDay({
+      checkouts: [checkout("2026-08-15", "2026-08-15T19:00:00+00:00")],
+      todayLocal: "2026-08-16",
+    }),
+  );
+  assertEquals(out.effective_domains, ["news.com", "reddit.com", "youtube.com"]);
+  assertEquals(out.effective_processes, ["Discord", "Steam"]);
+});
+
+Deno.test("a checkout fails toward blocked without a local date or a valid press time", () => {
+  const today = [checkout("2026-08-16", "2026-08-16T09:00:00+00:00")];
+  assertEquals(checkoutActive(today, undefined, NOW_MS), null);
+  assertEquals(checkoutActive([checkout("2026-08-16", "garbage")], "2026-08-16", NOW_MS), null);
+  // Stamped after now: not in force yet.
+  assertEquals(
+    checkoutActive([checkout("2026-08-16", "2026-08-16T11:00:00+00:00")], "2026-08-16", NOW_MS),
+    null,
+  );
+  assertEquals(checkoutActive(today, "2026-08-16", NOW_MS)?.local_date, "2026-08-16");
+});
+
+Deno.test("no checkout leaves the verdict exactly as before", () => {
+  assertEquals(evaluate(busyDay({ todayLocal: "2026-08-16" })), evaluate(busyDay()));
 });

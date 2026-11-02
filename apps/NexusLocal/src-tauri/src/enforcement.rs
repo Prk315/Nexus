@@ -24,14 +24,18 @@
 //! stay possible; a bare `KeepAlive: true` would resurrect the app instantly and
 //! leave no way to stop it short of deleting the plist.
 //!
-//! # What this deliberately does not do
+//! # The admin password, and the way past it
 //!
 //! Writing `/etc/hosts` needs root, so each *change* of verdict raises an admin
 //! password dialog (unchanged verdicts don't — `render_hosts` is a fixed point,
-//! which is what keeps the 30s tick silent). Removing that prompt means granting
-//! passwordless sudo to a helper, which is a real weakening of the machine's
-//! security posture and not something to install behind a toggle. `hosts_error`
-//! in the status surfaces a refused dialog so it never fails silently.
+//! which is what keeps the 30s tick silent). Passwordless sudo is still not the
+//! answer: it would hand a root command to every process running as this user.
+//!
+//! But a dialog per change made every re-lock optional — Cancel at the end of a
+//! meal unblock kept the sites open. `hosts_enforcer.rs` is the fix: a root
+//! LaunchDaemon, installed with one password, that reads the verdict itself and
+//! takes no input from the user at all. While it is installed the daemon here
+//! writes no hosts entries and raises no dialogs.
 
 use serde::Serialize;
 use std::sync::atomic::{AtomicBool, Ordering};

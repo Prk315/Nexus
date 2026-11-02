@@ -151,6 +151,9 @@ async function pokeEvaluator(): Promise<void> {
   }
 }
 
+/** Today's "finish day" press, if any — see the day_checkouts migration. */
+type DayCheckout = { id: string; started_at: string };
+
 export function MealsPanel() {
   const [targets, setTargets] = useState<MealTarget[]>([]);
   const [sessions, setSessions] = useState<MealSession[]>([]);
@@ -168,6 +171,10 @@ export function MealsPanel() {
   // no write path yet. Empty on fetch failure or no plan; never blocks the
   // rest of the panel.
   const [mealPlan, setMealPlan] = useState<PlannedMealEntry[]>([]);
+  // Today's checkout: null = not finished, undefined = table unreachable (the
+  // migration isn't applied yet), in which case the button stays hidden rather
+  // than offering something that cannot work.
+  const [checkout, setCheckout] = useState<DayCheckout | null | undefined>(undefined);
 
   const alive = useRef(true);
   useEffect(() => {
@@ -181,7 +188,7 @@ export function MealsPanel() {
     const user = await nodeUserId();
     const nowIso = new Date().toISOString();
     const today = localParts(new Date()).date;
-    const [t, s, a, w] = await Promise.all([
+    const [t, s, a, w, c] = await Promise.all([
       supabasePublic
         .from("meal_unlock_targets")
         .select("id, meal, domain, process_name")
@@ -204,6 +211,12 @@ export function MealsPanel() {
         .select("domain")
         .eq("user_id", user)
         .order("domain"),
+      supabasePublic
+        .from("day_checkouts")
+        .select("id, started_at")
+        .eq("user_id", user)
+        .eq("local_date", today)
+        .limit(1),
     ]);
     if (!alive.current) return;
     if (t.error || s.error) {
@@ -216,6 +229,7 @@ export function MealsPanel() {
     setSessions((s.data ?? []) as MealSession[]);
     if (!a.error) setApps((a.data ?? []) as BlockedApp[]);
     if (!w.error) setSites((w.data ?? []) as BlockedSite[]);
+    setCheckout(c.error ? undefined : (((c.data ?? [])[0] as DayCheckout | undefined) ?? null));
     setError("");
   }, []);
 
@@ -359,6 +373,52 @@ export function MealsPanel() {
 
       await pokeEvaluator();
       setNowMs(Date.now());
+      await load();
+    } finally {
+      if (alive.current) setBusy(false);
+    }
+  }
+
+  /**
+   * "Finish day": unblock everything until local midnight. The row carries no
+   * end time on purpose — the evaluator ends it at midnight on the server's
+   * clock, and `local_date` defaults server-side, so neither can be stretched.
+   */
+  async function finishDay() {
+    setBusy(true);
+    try {
+      const { error: insErr } = await supabasePublic
+        .from("day_checkouts")
+        .insert({ user_id: await nodeUserId() });
+      // 23505: already finished today (another device, or a double tap) —
+      // the state we wanted, so just refresh into it.
+      if (insErr && insErr.code !== "23505") {
+        setError(insErr.message);
+        return;
+      }
+      setError("");
+      await pokeEvaluator();
+      await load();
+    } finally {
+      if (alive.current) setBusy(false);
+    }
+  }
+
+  /** Undo a mis-tap. Deleting re-blocks — the safe direction. */
+  async function undoFinishDay() {
+    if (!checkout) return;
+    setBusy(true);
+    try {
+      const { error: delErr } = await supabasePublic
+        .from("day_checkouts")
+        .delete()
+        .eq("id", checkout.id);
+      if (delErr) {
+        setError(delErr.message);
+        return;
+      }
+      setError("");
+      await pokeEvaluator();
       await load();
     } finally {
       if (alive.current) setBusy(false);
@@ -574,6 +634,34 @@ export function MealsPanel() {
           </div>
         );
       })}
+
+      {/* Finish day — under the last meal. Hidden until the table exists. */}
+      {checkout !== undefined &&
+        (checkout ? (
+          <div className="flex items-center gap-2 rounded-xl border border-emerald-500/25 bg-emerald-500/[0.07] p-3">
+            <span className="text-[13px]">🌙</span>
+            <span className="flex-1 text-xs text-emerald-200/90">
+              Day finished · everything unlocked until 23:59
+            </span>
+            <button
+              onClick={undoFinishDay}
+              disabled={busy}
+              className="text-[10px] text-white/35 hover:text-white/70 disabled:opacity-40"
+            >
+              Undo
+            </button>
+          </div>
+        ) : (
+          <button
+            onClick={finishDay}
+            disabled={busy}
+            className={`rounded-xl px-3 py-2.5 text-xs font-medium ${
+              busy ? "bg-white/[0.06] text-white/25" : "bg-emerald-500/15 text-emerald-300"
+            }`}
+          >
+            🌙 Finish day — unlock everything until 23:59
+          </button>
+        ))}
 
       <p className="text-[9px] leading-relaxed text-white/25">
         Takes ~30 s to lift on the Mac after starting. Re-blocks on expiry —

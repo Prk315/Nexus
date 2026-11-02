@@ -79,6 +79,15 @@ export interface MealSessionRow {
   ends_at: string;
 }
 
+/** One "finish day" press — see the day_checkouts migration. */
+export interface CheckoutRow {
+  user_id: string | null;
+  /** The local calendar day ("YYYY-MM-DD") the checkout belongs to. */
+  local_date: string;
+  /** timestamptz — when the button was pressed. */
+  started_at: string;
+}
+
 export interface MealTargetRow {
   user_id: string | null;
   meal: string;
@@ -104,6 +113,13 @@ export interface EvaluateInput {
   mealTargets?: MealTargetRow[];
   /** Epoch ms of *now*, for comparing meal session windows. */
   nowMs?: number;
+  /**
+   * "Finish day" presses, and today's local date to match them against. Both
+   * optional for the same reason as the meal fields: absent means no checkout
+   * can be active, which fails toward blocked.
+   */
+  checkouts?: CheckoutRow[];
+  todayLocal?: string;
   /** ISO weekday of *today* in local time: 1=Mon … 7=Sun. */
   weekday: number;
   /** Local minute-of-day, 0..1439. */
@@ -326,6 +342,31 @@ export function mealSessionActive(
 }
 
 /**
+ * Is a "finish day" checkout in force right now?
+ *
+ * Active while a row's `local_date` is today's local date — so it lapses at
+ * local midnight by construction, with no end time a client could stretch —
+ * and only from the moment it was pressed (a row dated today but stamped in
+ * the future is not yet in force). Missing `todayLocal`, a malformed
+ * `started_at`, or no rows: not active. Fails toward blocked.
+ */
+export function checkoutActive(
+  checkouts: CheckoutRow[] | undefined,
+  todayLocal: string | undefined,
+  nowMs: number | undefined,
+): CheckoutRow | null {
+  if (!todayLocal) return null;
+  for (const row of checkouts ?? []) {
+    if (row.local_date !== todayLocal) continue;
+    const pressed = Date.parse((row.started_at ?? "").trim());
+    if (!Number.isFinite(pressed)) continue;
+    if (typeof nowMs === "number" && nowMs < pressed) continue;
+    return row;
+  }
+  return null;
+}
+
+/**
  * Is this permanently-blocked app in force right now?
  *
  * `block_mode = "focus_only"` means the app is blocked ONLY while a timer is
@@ -358,6 +399,11 @@ export function permanentAppInForce(
  *      blocks. Where a meal session and a satisfied unlock rule both free the
  *      same target, the meal session claims the explanation — it is the
  *      time-bounded, user-initiated reason and the one about to be asked about.
+ *   5. A *day checkout* for today ("finish day") frees EVERYTHING, overriding
+ *      all of the above until local midnight. Applied last, over the finished
+ *      verdict, so every other rule is computed exactly as it would be without
+ *      it — the checkout only changes what is enforced, and the reasons still
+ *      say what each target would otherwise be.
  *
  * NOTE ON THE GLOBAL TOGGLE: `tick()` gates permanent blocks on
  * `app_blocker::is_blocker_on(&db)`, a local SQLite setting. There is no
@@ -605,6 +651,28 @@ export function evaluate(input: EvaluateInput): EvaluateOutput {
       reason.unlock_required_minutes = rule.required_minutes;
       reason.today_minutes = todayMinutes;
     }
+  }
+
+  // ── Day checkout ─────────────────────────────────────────────────────────
+  const checkout = checkoutActive(input.checkouts, input.todayLocal, nowMs);
+  if (checkout) {
+    for (const target of [...domains, ...processes]) {
+      reasons[target] = {
+        blocked: false,
+        source: "day_checkout",
+        local_date: checkout.local_date,
+        started_at: checkout.started_at,
+        until: "end of day",
+        // What it would be without the checkout, so the UI can still explain.
+        otherwise: reasons[target]?.source ?? null,
+      };
+    }
+    return {
+      effective_domains: [],
+      effective_processes: [],
+      reasons,
+      today_minutes: todayMinutes,
+    };
   }
 
   // Sorted so back-to-back runs produce byte-identical arrays — the Rust used a

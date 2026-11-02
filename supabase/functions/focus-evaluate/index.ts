@@ -52,6 +52,7 @@ import {
   type FocusBlockRow,
   isoWeekday,
   localNow,
+  type CheckoutRow,
   type MealSessionRow,
   type MealTargetRow,
   TIMEZONE,
@@ -247,6 +248,19 @@ async function computeAll(
       .select("user_id, meal, domain, process_name"),
   );
 
+  // "Finish day" checkouts for today only — a checkout lapses at local midnight,
+  // so yesterday's rows can never matter. Fail-loudly like the rest: a missing
+  // table aborts the run (stale, still blocked) rather than reading as "no
+  // checkout", which is why the migration goes on before this deploys.
+  const { date: localDate, minutes: nowMinutes } = localNow(now, TIMEZONE);
+  const checkouts = unwrap<CheckoutRow>(
+    "day_checkouts",
+    await supabase
+      .from("day_checkouts")
+      .select("user_id, local_date, started_at")
+      .eq("local_date", localDate),
+  );
+
   // Schedule payload, joined by block_id. A 404 here means work unit 1's
   // migration has not been applied; that must abort rather than quietly
   // evaluate every focus block as blocking nothing.
@@ -288,6 +302,7 @@ async function computeAll(
   const rulesByUser = byUser(rules);
   const mealSessionsByUser = byUser(mealSessions);
   const mealTargetsByUser = byUser(mealTargets);
+  const checkoutsByUser = byUser(checkouts);
 
   // Currently only 'default', but derived rather than assumed so a second user
   // does not silently go unevaluated. 'default' is always present so its row is
@@ -300,9 +315,9 @@ async function computeAll(
     ...rulesByUser.keys(),
     ...mealSessionsByUser.keys(),
     ...mealTargetsByUser.keys(),
+    ...checkoutsByUser.keys(),
   ]);
 
-  const { date: localDate, minutes: nowMinutes } = localNow(now, TIMEZONE);
   const weekday = isoWeekday(localDate);
 
   const out: { user_id: string; state: EvaluateOutput }[] = [];
@@ -322,6 +337,8 @@ async function computeAll(
         mealSessions: mealSessionsByUser.get(userId) ?? [],
         mealTargets: mealTargetsByUser.get(userId) ?? [],
         nowMs: now.getTime(),
+        checkouts: checkoutsByUser.get(userId) ?? [],
+        todayLocal: localDate,
         weekday,
         nowMinutes,
         todayMinutes,
