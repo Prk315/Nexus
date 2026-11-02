@@ -23,6 +23,7 @@ query after each.
 | 12 | `20260827180000_vault_updated_by.sql` | `updated_by` on `vault_content` / `vault_journals` / `vault_content_versions`, stamped from `auth.uid()` — who actually wrote a document last. **Already applied live on 2026-08-27**; see §12 |
 | 13 | `20260827200000_pf_agent_brief.sql` | `pf_agent_brief(p_user_id text)` — one call returning goals, active tasks, what is due and live plans as a compact jsonb snapshot, for terminal agents. **Already applied live on 2026-08-27**; read-only, adds no table; see §13 |
 | 14 | `20261028120000_pomodoro_run_state.sql` | five `run_*` columns on `pomodoro_config` — the live pomodoro run, CAS-guarded by `run_rev`. Additive; **apply before shipping a Nexus Local build that starts pomodoros**, or `tt_pomodoro_start` fails with an unknown-column error (reads keep working) |
+| 15 | `20261102120000_day_checkouts.sql` | `day_checkouts` — "finish day" unblocks everything until local midnight. **Apply before deploying the `focus-evaluate` that reads it**, or every evaluator run aborts and the verdict freezes (still blocked) |
 
 ⚠️ **File 10 is the one exception to "not applied by the code that wrote it"** —
 it was applied to `efxmzsdisaymtpebaxlp` at the time it was written, and the file
