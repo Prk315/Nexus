@@ -60,6 +60,10 @@ use std::sync::Arc;
 const MARKER_BEGIN: &str = "# BEGIN NexusLocal-Block";
 const MARKER_END: &str = "# END NexusLocal-Block";
 
+/// TimeTracker's own hosts region, left behind by the app Nexus Local replaced.
+const LEGACY_BEGIN: &str = "# BEGIN TimeTracker-Block";
+const LEGACY_END: &str = "# END TimeTracker-Block";
+
 /// How old `computed_at` may get before the verdict is reported as stale. The
 /// evaluator runs every 5 minutes, so half an hour of silence means it stopped.
 const STALE_AFTER_SECS: i64 = 30 * 60;
@@ -591,6 +595,26 @@ fn render_hosts(current: &str, domains: &[String]) -> String {
     rendered
 }
 
+/// `current` without TimeTracker's marker region. A dangling BEGIN with no END
+/// is left alone rather than swallowing the rest of the file.
+#[cfg(any(target_os = "macos", test))]
+fn strip_legacy(current: &str) -> String {
+    let lines: Vec<&str> = current.lines().collect();
+    let Some(begin) = lines.iter().position(|l| l.trim() == LEGACY_BEGIN) else {
+        return current.to_string();
+    };
+    let Some(len) = lines[begin..].iter().position(|l| l.trim() == LEGACY_END) else {
+        return current.to_string();
+    };
+    let mut out: Vec<&str> = lines[..begin].to_vec();
+    out.extend_from_slice(&lines[begin + len + 1..]);
+    let mut joined = out.join("\n");
+    if current.ends_with('\n') && !joined.is_empty() {
+        joined.push('\n');
+    }
+    joined
+}
+
 /// Escape a string for embedding in an AppleScript double-quoted literal.
 /// Backslashes first, then quotes — a hand-written `# it's a "note"` comment in
 /// /etc/hosts would otherwise terminate the script early and wedge `apply`
@@ -712,7 +736,13 @@ pub(crate) fn write_hosts_direct(domains: &[String]) -> Result<bool, String> {
         .map_err(|e| format!("cannot resolve /etc/hosts: {e}"))?;
     let current = std::fs::read_to_string(&target)
         .map_err(|e| format!("cannot read /etc/hosts: {e}"))?;
-    let next = render_hosts(&current, domains);
+    // The root path also drops TimeTracker's leftover region. Every domain in it
+    // is in our verdict anyway (IPv4-only there, both families here), so outside
+    // a break it adds nothing — and during one it re-blocks exactly the sites the
+    // meal unlocked, which is how a lunch unblock of hbo.com did nothing.
+    // Only here, not on the dialog path: with TimeTracker running and no root
+    // enforcer, stripping it would be two apps trading password prompts.
+    let next = render_hosts(&strip_legacy(&current), domains);
     if next == current {
         return Ok(false);
     }
@@ -812,6 +842,24 @@ mod tests {
     }
 
     // ── build_block ─────────────────────────────────────────────────────────
+
+    #[test]
+    fn timetrackers_leftover_region_is_dropped_and_ours_kept() {
+        let hosts = "127.0.0.1\tlocalhost\n\n# BEGIN TimeTracker-Block\n127.0.0.1 hbo.com\n# END TimeTracker-Block\n\n";
+        let domains = s(&["crunchyroll.com"]);
+        let once = render_hosts(&strip_legacy(hosts), &domains);
+        assert!(!once.contains("hbo.com"), "{once}");
+        assert!(once.contains("127.0.0.1\tlocalhost"), "{once}");
+        assert!(once.contains("::1 crunchyroll.com"), "{once}");
+        // And it settles: the next root pass writes nothing.
+        assert_eq!(render_hosts(&strip_legacy(&once), &domains), once);
+    }
+
+    #[test]
+    fn a_dangling_legacy_begin_does_not_eat_the_file() {
+        let hosts = "# BEGIN TimeTracker-Block\n127.0.0.1 localhost\n";
+        assert_eq!(strip_legacy(hosts), hosts);
+    }
 
     #[test]
     fn a_domain_cannot_smuggle_in_a_hosts_line() {
