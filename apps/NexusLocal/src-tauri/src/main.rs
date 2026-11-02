@@ -12,5 +12,16 @@ fn main() {
         return;
     }
 
+    // A third role: one root pass over /etc/hosts, run every 30s by the system
+    // LaunchDaemon `hosts_enforcer.rs` installs. The argument is its config.
+    #[cfg(target_os = "macos")]
+    {
+        let args: Vec<String> = std::env::args().collect();
+        if let Some(i) = args.iter().position(|a| a == "--hosts-enforcer") {
+            let config = args.get(i + 1).map(String::as_str).unwrap_or("");
+            std::process::exit(nexus_local_lib::run_hosts_enforcer(config));
+        }
+    }
+
     nexus_local_lib::run();
 }

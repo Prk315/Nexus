@@ -33,6 +33,16 @@
 //! node config, off by default, because writing `/etc/hosts` requires an admin
 //! prompt. Explicit `apply`/`clear` commands work regardless (user-initiated).
 //!
+//! # When the root enforcer is installed, this module stops writing hosts
+//!
+//! The admin prompt had a hole: every *change* needed a password, so the re-lock
+//! at the end of a meal unblock could simply be cancelled — every ten minutes,
+//! forever. `hosts_enforcer.rs` installs a root LaunchDaemon (one password, once)
+//! that reads the same verdict and writes `/etc/hosts` itself. While it is
+//! installed, [`apply`] here is a no-op for sites: two writers would race, and
+//! this one would still be raising dialogs. Processes are still quit from here —
+//! that never needed privileges.
+//!
 //! The gate is an [`AtomicBool`] shared with the `enforcement` commands rather
 //! than a value baked in at construction, so the toggle takes effect on the next
 //! tick instead of at the next launch. The tick loop therefore always runs and
@@ -256,9 +266,25 @@ impl Verdict {
 /// Read this user's materialized verdict. `Ok(None)` means the row does not
 /// exist — which is *not* the same as a row whose arrays are empty.
 async fn fetch_verdict(ctx: &ModuleContext) -> Result<Option<Verdict>, String> {
-    let user = format!("eq.{}", ctx.user_id);
-    let rows = ctx
-        .supabase
+    fetch_verdict_from(&ctx.supabase, &ctx.user_id).await
+}
+
+/// Just the domains, for the root enforcer — which has a Supabase client and a
+/// user id but none of the grid around them. Same `Ok(None)` = no row contract.
+#[cfg(target_os = "macos")]
+pub(crate) async fn fetch_domains(
+    supabase: &crate::grid::supabase::Supabase,
+    user_id: &str,
+) -> Result<Option<Vec<String>>, String> {
+    Ok(fetch_verdict_from(supabase, user_id).await?.map(|v| v.domains))
+}
+
+async fn fetch_verdict_from(
+    supabase: &crate::grid::supabase::Supabase,
+    user_id: &str,
+) -> Result<Option<Verdict>, String> {
+    let user = format!("eq.{user_id}");
+    let rows = supabase
         .select(
             T_BLOCKING_STATE,
             // `select=*` on purpose: the edge function owns this table's shape,
@@ -448,17 +474,54 @@ fn set_backoff(active: bool) {
 #[cfg(any(target_os = "macos", test))]
 const BLOCK_ADDRS: [&str; 2] = ["127.0.0.1", "::1"];
 
+/// A domain fit to write into `/etc/hosts`, or `None`.
+///
+/// Not cosmetic. `effective_domains` comes from `blocking_state`, which — like
+/// every productivity table — is writable with the anon key committed to this
+/// public repo, and since the root enforcer that string reaches a file root
+/// writes with no human in the loop. A domain carrying a newline would be an
+/// arbitrary hosts line (`evil\n203.0.113.9 bank.com` is a silent redirect), so
+/// only RFC 1123 hostnames get through: labels of `[a-z0-9-]`, no leading or
+/// trailing hyphen, at least one dot, a last label that isn't all digits (an IP
+/// literal in /etc/hosts blocks nothing). Lower-cased, because the hosts file is
+/// case-insensitive and two spellings would be two lines.
+#[cfg(any(target_os = "macos", test))]
+fn normalize_domain(raw: &str) -> Option<String> {
+    let d = raw.trim().trim_end_matches('.').to_ascii_lowercase();
+    if d.is_empty() || d.len() > 253 || !d.contains('.') {
+        return None;
+    }
+    let labels: Vec<&str> = d.split('.').collect();
+    let label_ok = |l: &&str| {
+        !l.is_empty()
+            && l.len() <= 63
+            && !l.starts_with('-')
+            && !l.ends_with('-')
+            && l.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')
+    };
+    if !labels.iter().all(label_ok) {
+        return None;
+    }
+    if labels.last()?.bytes().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    Some(d)
+}
+
 #[cfg(any(target_os = "macos", test))]
 fn build_block(domains: &[String]) -> String {
-    if domains.is_empty() {
+    let mut seen = std::collections::BTreeSet::new();
+    let valid: Vec<String> = domains
+        .iter()
+        .filter_map(|d| normalize_domain(d))
+        .filter(|d| seen.insert(d.clone()))
+        .collect();
+    if valid.is_empty() {
         return String::new();
     }
     let mut lines = vec![MARKER_BEGIN.to_owned()];
-    for domain in domains {
-        let domain = domain.trim();
-        if domain.is_empty() {
-            continue;
-        }
+    for domain in &valid {
+        let domain = domain.as_str();
         for addr in BLOCK_ADDRS {
             lines.push(format!("{addr} {domain}"));
         }
@@ -568,6 +631,13 @@ pub fn current_blocked() -> Result<Vec<String>, String> {
 /// should not be told to wait out a cooldown they can't see.
 #[cfg(target_os = "macos")]
 fn apply(domains: &[String], honor_backoff: bool) -> Result<(), String> {
+    // The root enforcer owns /etc/hosts and applies this same verdict within
+    // 30s, with no dialog. Writing it here as well would race it and put the
+    // password prompt — the thing it exists to remove — straight back.
+    if crate::hosts_enforcer::installed() {
+        return Ok(());
+    }
+
     let _guard = hosts_write_lock().lock().unwrap_or_else(|e| e.into_inner());
 
     let current = std::fs::read_to_string("/etc/hosts")
@@ -624,7 +694,49 @@ fn apply(_domains: &[String], _honor_backoff: bool) -> Result<(), String> {
     Err("site blocking is only implemented on macOS".to_string())
 }
 
+/// Write the hosts file directly, as root, for the root enforcer. Returns
+/// whether anything changed.
+///
+/// Same `render_hosts` as the dialog path, so the fixed-point property still
+/// holds: an unchanged verdict writes nothing, which is what lets this run every
+/// 30s without churning the file or flushing DNS for no reason. Written to a
+/// temp file beside the real one and renamed over it, so a reader — Chrome, the
+/// status panel — never sees half a file.
+#[cfg(target_os = "macos")]
+pub(crate) fn write_hosts_direct(domains: &[String]) -> Result<bool, String> {
+    use std::os::unix::fs::PermissionsExt;
+
+    // /etc is a symlink to /private/etc; rename across it is fine, but the temp
+    // file must sit in the real directory for the rename to be atomic.
+    let target = std::fs::canonicalize("/etc/hosts")
+        .map_err(|e| format!("cannot resolve /etc/hosts: {e}"))?;
+    let current = std::fs::read_to_string(&target)
+        .map_err(|e| format!("cannot read /etc/hosts: {e}"))?;
+    let next = render_hosts(&current, domains);
+    if next == current {
+        return Ok(false);
+    }
+    let tmp = target.with_file_name("hosts.nexuslocal.tmp");
+    std::fs::write(&tmp, &next).map_err(|e| format!("cannot write {}: {e}", tmp.display()))?;
+    std::fs::set_permissions(&tmp, std::fs::Permissions::from_mode(0o644))
+        .map_err(|e| format!("cannot chmod {}: {e}", tmp.display()))?;
+    std::fs::rename(&tmp, &target).map_err(|e| format!("cannot replace /etc/hosts: {e}"))?;
+    let _ = std::process::Command::new("dscacheutil").arg("-flushcache").status();
+    let _ = std::process::Command::new("killall").args(["-HUP", "mDNSResponder"]).status();
+    Ok(true)
+}
+
 fn clear() -> Result<(), String> {
+    // With the root enforcer installed, a clear would be undone within 30s —
+    // and offering it would make "unblock everything" one click with no
+    // password, which is exactly the hole the enforcer closes.
+    #[cfg(target_os = "macos")]
+    if crate::hosts_enforcer::installed() {
+        return Err(
+            "site blocking is held by the root enforcer — remove it (admin password) to clear"
+                .to_string(),
+        );
+    }
     // User-initiated: prompt even if the tick is mid-backoff.
     apply(&[], false)
 }
@@ -700,6 +812,38 @@ mod tests {
     }
 
     // ── build_block ─────────────────────────────────────────────────────────
+
+    #[test]
+    fn a_domain_cannot_smuggle_in_a_hosts_line() {
+        // effective_domains is anon-writable; root writes what this lets through.
+        let block = build_block(&s(&["evil.com\n203.0.113.9 bank.com", "bank.com 203.0.113.9"]));
+        assert_eq!(block, "", "{block}");
+    }
+
+    #[test]
+    fn only_real_hostnames_are_written() {
+        for bad in [
+            "", "localhost", "-x.com", "x-.com", "a..com", "1.2.3.4", "exa mple.com",
+            "ex_ample.com", "café.com", "x.com#", ".com",
+        ] {
+            assert_eq!(normalize_domain(bad), None, "{bad:?} should be rejected");
+        }
+        for (raw, want) in [
+            ("YouTube.com", "youtube.com"),
+            (" reddit.com. ", "reddit.com"),
+            ("m.youtube.com", "m.youtube.com"),
+            ("x-y.co.uk", "x-y.co.uk"),
+            ("9gag.com", "9gag.com"),
+        ] {
+            assert_eq!(normalize_domain(raw).as_deref(), Some(want), "{raw:?}");
+        }
+    }
+
+    #[test]
+    fn two_spellings_of_one_domain_are_one_entry() {
+        let block = build_block(&s(&["YouTube.com", "youtube.com"]));
+        assert_eq!(block.matches("127.0.0.1 youtube.com\n").count(), 1, "{block}");
+    }
 
     #[test]
     fn empty_domains_produces_empty_block() {

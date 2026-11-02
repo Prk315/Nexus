@@ -25,6 +25,11 @@ import { invoke } from "@tauri-apps/api/core";
  *
  * Renders `null` off macOS: iOS enforces through the Safari content blocker, has
  * no hosts file, and cannot enumerate processes.
+ *
+ * The third control is the **root enforcer** (`hosts_enforcer.rs`): one admin
+ * password installs a system LaunchDaemon that writes /etc/hosts itself. Without
+ * it every change of blocked sites is a password dialog — including the re-lock
+ * when a meal unblock ends, which Cancel would simply skip.
  */
 
 type Status = {
@@ -38,6 +43,25 @@ type Status = {
   hosts_error: string | null;
 };
 
+/** Mirror of `HostsEnforcerStatus` in `hosts_enforcer.rs`. */
+type EnforcerStatus = {
+  supported: boolean;
+  installed: boolean;
+  running: boolean;
+  installed_version: string | null;
+  app_version: string;
+  outdated: boolean;
+  last_run_at: string | null;
+  last_ok: boolean | null;
+  last_outcome: string | null;
+};
+
+function ago(iso: string | null): string {
+  if (!iso) return "never";
+  const s = Math.max(0, Math.round((Date.now() - Date.parse(iso)) / 1000));
+  return s < 90 ? `${s}s ago` : `${Math.round(s / 60)} min ago`;
+}
+
 /**
  * A dev binary is a real trap here: registering `target/debug/nexus-local` for
  * launch-at-login points launchd at a path that gets overwritten by every
@@ -50,6 +74,7 @@ function isDevBuild(exePath: string): boolean {
 
 export function EnforcementPanel() {
   const [status, setStatus] = useState<Status | null>(null);
+  const [enforcer, setEnforcer] = useState<EnforcerStatus | null>(null);
   const [msg, setMsg] = useState("");
   const [busy, setBusy] = useState(false);
 
@@ -58,8 +83,14 @@ export function EnforcementPanel() {
 
   const load = useCallback(async () => {
     try {
-      const s = await invoke<Status>("tt_enforcement_get");
-      if (alive()) setStatus(s);
+      const [s, e] = await Promise.all([
+        invoke<Status>("tt_enforcement_get"),
+        invoke<EnforcerStatus>("tt_hosts_enforcer_status"),
+      ]);
+      if (alive()) {
+        setStatus(s);
+        setEnforcer(e);
+      }
     } catch (e) {
       // Unlike the verdict, a failure here is genuinely unexpected — the command
       // reads local state only. Surface it rather than rendering a dead panel.
@@ -124,15 +155,39 @@ export function EnforcementPanel() {
     if (alive()) setBusy(false);
   }
 
+  /** Install, reinstall or remove the root enforcer — each one admin password. */
+  async function setEnforcerInstalled(install: boolean) {
+    setBusy(true);
+    setMsg(install ? "waiting for the admin password…" : "removing — admin password needed…");
+    try {
+      await invoke(install ? "tt_hosts_enforcer_install" : "tt_hosts_enforcer_remove");
+      if (alive())
+        setMsg(
+          install
+            ? "root enforcer installed — site changes now apply on their own within 30s"
+            : "root enforcer removed — site changes need a password again",
+        );
+    } catch (e) {
+      // A cancelled dialog lands here too ("User canceled"), which is fine to show.
+      if (alive()) setMsg(String(e));
+    }
+    await load();
+    if (alive()) setBusy(false);
+  }
+
   if (!status) return null;
   if (!status.supported) return null;
+
+  const rootSites = !!enforcer?.installed && enforcer.running;
 
   const dev = isDevBuild(status.exe_path);
   // The honest summary, in the order things actually break. The daemon is the
   // only thing that enforces on macOS, so "enforce on, service off" is not a
   // partial success — it is nothing happening.
   const gap = !status.enforcing
-    ? "Nothing is being enforced on this Mac."
+    ? rootSites
+      ? "Sites are enforced by the root enforcer, but blocked apps aren't being quit — enforcement is off."
+      : "Nothing is being enforced on this Mac."
     : !status.daemon_running
       ? "Enforcement is on, but the background service isn't running — so nothing is applying it."
       : !status.autostart
@@ -194,9 +249,72 @@ export function EnforcementPanel() {
         )}
       </div>
 
+      {enforcer?.supported && (
+        <div
+          className={`rounded-xl border p-3 text-[10px] ${
+            !enforcer.installed
+              ? "border-white/10 bg-white/[0.03]"
+              : enforcer.running && !enforcer.outdated && enforcer.last_ok !== false
+                ? "border-emerald-500/20 bg-emerald-500/[0.07]"
+                : "border-amber-500/20 bg-amber-500/[0.07]"
+          }`}
+        >
+          <div className="flex items-start gap-3">
+            <div className="min-w-0 flex-1">
+              <div className="text-xs text-white/85">Auto-lock sites (no password)</div>
+              {!enforcer.installed ? (
+                <div className="mt-0.5 text-white/40">
+                  Today every change to blocked sites asks for your password — including
+                  the re-lock when a meal's 30 minutes end, and Cancel skips it. Install
+                  once and changes apply on their own within 30s. Removing it asks for the
+                  password again.
+                </div>
+              ) : !enforcer.running ? (
+                <div className="mt-0.5 text-amber-200/80">
+                  Installed, but no run in the last 90s — check
+                  /Library/Logs/nexus-local-hosts.log. Last: {ago(enforcer.last_run_at)}.
+                </div>
+              ) : (
+                <div className="mt-0.5 text-emerald-200/80">
+                  Root enforcer running · checked {ago(enforcer.last_run_at)}
+                  {enforcer.last_outcome ? ` · ${enforcer.last_outcome}` : ""}
+                </div>
+              )}
+              {enforcer.installed && enforcer.outdated && (
+                <div className="mt-1 text-amber-200/80">
+                  Helper is from v{enforcer.installed_version ?? "?"}, the app is v
+                  {enforcer.app_version} — reinstall to update it.
+                </div>
+              )}
+            </div>
+            <div className="flex shrink-0 flex-col gap-1">
+              {(!enforcer.installed || enforcer.outdated) && (
+                <button
+                  onClick={() => setEnforcerInstalled(true)}
+                  disabled={busy}
+                  className="rounded bg-indigo-500/20 px-2.5 py-1 text-[10px] font-medium text-indigo-300 disabled:opacity-40"
+                >
+                  {enforcer.installed ? "Reinstall" : "Install"}
+                </button>
+              )}
+              {enforcer.installed && (
+                <button
+                  onClick={() => setEnforcerInstalled(false)}
+                  disabled={busy}
+                  className="rounded bg-white/[0.06] px-2.5 py-1 text-[10px] text-white/45 disabled:opacity-40"
+                >
+                  Remove
+                </button>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
       <p className="text-[10px] text-white/30">
-        Changing what is blocked needs an admin password — macOS requires it to write
-        /etc/hosts. An unchanged verdict writes nothing, so the 30s tick stays silent.
+        {enforcer?.installed
+          ? "Site changes need no password: the root enforcer applies the verdict itself. Blocked apps are still quit by the background service."
+          : "Changing what is blocked needs an admin password — macOS requires it to write /etc/hosts. An unchanged verdict writes nothing, so the 30s tick stays silent."}
       </p>
 
       {msg && <div className="text-[10px] text-white/45">{msg}</div>}

@@ -5,6 +5,7 @@ mod content_blocker;
 mod device;
 mod enforcement;
 mod float;
+mod hosts_enforcer;
 mod garmin_cmd;
 mod grid;
 mod ios_bridge;
@@ -159,6 +160,13 @@ pub fn run_daemon() {
     });
 }
 
+/// One root pass over `/etc/hosts` — see `hosts_enforcer.rs`. Never initialises
+/// Tauri, like `run_daemon`.
+#[cfg(target_os = "macos")]
+pub fn run_hosts_enforcer(config_path: &str) -> i32 {
+    hosts_enforcer::run(config_path)
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let builder = tauri::Builder::default().plugin(tauri_plugin_opener::init());
@@ -305,6 +313,11 @@ pub fn run() {
             enforcement::tt_enforcement_set,
             enforcement::tt_enforcement_apply_now,
             enforcement::tt_enforcement_autostart_set,
+            // The root enforcer (one admin password, then no dialogs). Same
+            // every-platform registration rule as above.
+            hosts_enforcer::tt_hosts_enforcer_status,
+            hosts_enforcer::tt_hosts_enforcer_install,
+            hosts_enforcer::tt_hosts_enforcer_remove,
             // Foreground-app / web time tracking (see usage.rs). These read the
             // daemon's JSONL day files from disk — on macOS the tracker runs in
             // the daemon, not here.
