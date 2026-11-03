@@ -365,6 +365,8 @@ export interface CreateRunningSession {
   elevation_gain_m?: number | null;
   cadence_avg?: number | null;
   calories?: number | null;
+  /** A run logged after the fact already happened — pass true. Defaults to false (planned). */
+  completed?: boolean;
   notes?: string | null;
 }
 
