@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import type { Dispatch, SetStateAction } from "react";
 
 // Small hooks the directory prototype needs. All of them scope their listeners
@@ -16,12 +16,20 @@ import type { Dispatch, SetStateAction } from "react";
  * draggable, so the graph cell changes size while the window does not.
  */
 export function useElementSize<T extends HTMLElement>() {
-  const ref = useRef<T | null>(null);
   const [size, setSize] = useState({ width: 0, height: 0 });
+  const observer = useRef<ResizeObserver | null>(null);
 
-  useLayoutEffect(() => {
-    const el = ref.current;
-    if (!el) return;
+  // A CALLBACK ref, not an object ref + one-shot effect. Both measured cells
+  // unmount and remount while the hook stays alive — the graph canvas leaves
+  // when the editor stands in for it, the side cell leaves whenever the
+  // sidebar shows another view — and an effect that read `ref.current` once
+  // kept observing the first (now detached) element. Mount the shell while
+  // the cell's branch is hidden and the size stayed 0×0, which the callers'
+  // `size.width > 0` mount gates turned into a graph that never drew.
+  const ref = useCallback((el: T | null) => {
+    observer.current?.disconnect();
+    observer.current = null;
+    if (!el) return; // keep the last size: the gate stays open across a swap
     const read = () => {
       const { width, height } = el.getBoundingClientRect();
       setSize((prev) =>
@@ -34,7 +42,7 @@ export function useElementSize<T extends HTMLElement>() {
     if (typeof ResizeObserver === "undefined") return;
     const ro = new ResizeObserver(read);
     ro.observe(el);
-    return () => ro.disconnect();
+    observer.current = ro;
   }, []);
 
   return { ref, size };

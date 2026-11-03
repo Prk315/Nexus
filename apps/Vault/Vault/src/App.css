@@ -9540,6 +9540,11 @@ body.vault-block-dragging .tt-bubble {
   overflow: hidden;
   background: var(--bg-base);
 }
+/* A note standing in for the graph gets the WHOLE column — the folder strip
+   unmounts with it (DirectoryShell), so row 3 is the editor's too. */
+.dir-graph.is-editing {
+  grid-row: 1 / 4;
+}
 
 .dir-folders {
   grid-row: 3;
