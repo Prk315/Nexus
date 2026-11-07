@@ -1,13 +1,12 @@
 /**
- * The always-visible overblik above the Learn tabs: one compact chip per
- * course (countdown · læsning · lektioner) plus the nearest graded deadline.
- * Deliberately TINY — it answers "hvor er jeg, og hvad brænder?" at a
- * glance; everything deeper lives in the Roadmap tab. Reads the same
- * `useRoadmap()` as the full panel, so the two can never disagree.
+ * The always-visible strip above the Learn tabs. Used to carry one roadmap
+ * chip per course (countdown · læsning · lektioner); those were retired
+ * 2026-11-07 with the rest of the roadmap surface (exam term over,
+ * `PathStatsPanel` now owns per-path progress), so only the nearest graded
+ * deadline remains — the "hvad brænder?" half of the old strip.
  */
 import { useEffect, useState } from "react";
 import { supabasePublic } from "../supabase";
-import { useRoadmap } from "./roadmapData";
 
 interface Deadline { title: string; due: string; inDays: number }
 
@@ -49,32 +48,12 @@ function useNextDeadline(): Deadline | null {
 }
 
 export function OverviewStrip() {
-  const { courses } = useRoadmap();
   const deadline = useNextDeadline();
-  if (!courses?.length && !deadline) return null;
+  if (!deadline || deadline.inDays > 7) return null;
 
   return (
-    <div className="flex flex-col gap-2">
-      <div className="flex flex-wrap justify-center gap-2">
-        {(courses ?? []).map((c) => (
-          <div key={c.label}
-            className="flex items-baseline gap-2 rounded-full bg-white px-3.5 py-1.5 text-xs shadow-sm">
-            <span className="font-semibold">{c.label}</span>
-            {c.daysLeft != null && (
-              <span className={`font-bold tabular-nums ${c.daysLeft <= 14 ? "text-[#BE123C]" : "text-[#1A1A24]"}`}>
-                {c.daysLeft}d
-              </span>
-            )}
-            <span className="tabular-nums text-[#6E6E78]">{Math.round(c.bookPct * 100)}%</span>
-            <span className="tabular-nums text-[#6E6E78]">{c.lessonsDone}/{c.lessons.length} lekt.</span>
-          </div>
-        ))}
-      </div>
-      {deadline && deadline.inDays <= 7 && (
-        <div className="mx-auto rounded-full bg-[#FDECEF] px-3.5 py-1 text-xs font-medium text-[#BE123C]">
-          ⚠︎ {deadline.title} — om {deadline.inDays} dag{deadline.inDays === 1 ? "" : "e"}
-        </div>
-      )}
+    <div className="mx-auto rounded-full bg-[#FDECEF] px-3.5 py-1 text-xs font-medium text-[#BE123C]">
+      ⚠︎ {deadline.title} — om {deadline.inDays} dag{deadline.inDays === 1 ? "" : "e"}
     </div>
   );
 }

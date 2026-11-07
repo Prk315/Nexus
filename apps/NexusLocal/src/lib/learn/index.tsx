@@ -43,9 +43,7 @@ import { CourseProvider } from "./CourseContext";
 import { TodayPanel } from "./TodayPanel";
 import { PathPanel } from "./PathPanel";
 import { ReviewPanel } from "./ReviewPanel";
-import { RoadmapTree, CourseCards } from "./RoadmapPanel";
-import { IOChart } from "./IOChart";
-import { useRoadmap } from "./roadmapData";
+import { PathStatsPanel } from "./PathStatsPanel";
 import { OverviewStrip } from "./OverviewStrip";
 import { MathKeyboardBar } from "./MathKeyboardBar";
 import { ToolDock } from "./tools/ToolDock";
@@ -149,29 +147,25 @@ function MatAnTutorCard() {
   );
 }
 
-/** Overblik: I/O-grafen øverst, derunder to kolonner — træet til venstre,
- *  dagen+review+kursuskort i den dobbelt så brede højrekolonne. På smalle
- *  skærme stakkes med GØR-fladen først; træet er planlægning. */
+/** Overblik: to kolonner — læringssti-statistikken til venstre, dagen +
+ *  review + eksamenskortene i den dobbelt så brede højrekolonne. På smalle
+ *  skærme stakkes med GØR-fladen først; statistikken er orientering.
+ *  Roadmap-træet, I/O-grafen og lektions-tidslinjen blev pensioneret
+ *  2026-11-07 (eksamenerne overstået) — PathStatsPanel afløste dem. */
 function OverblikLayout({ onOpenCourseTab }: { onOpenCourseTab: () => void }) {
-  const { series } = useRoadmap();
   return (
-    <>
-      {series && <IOChart input={series.input} output={series.output} />}
-      <div className="grid grid-cols-1 items-start gap-6 lg:grid-cols-3">
-              <div className="order-2 lg:order-1 lg:col-span-1 lg:sticky lg:top-4">
-                <RoadmapTree />
-              </div>
-              <div className="order-1 flex flex-col gap-6 lg:order-2 lg:col-span-2">
-                <TodayPanel onOpenCourseTab={onOpenCourseTab} />
-                <ExamPanel />
-                <MatAnTutorCard />
-                <ReviewPanel />
-                <RexOralPanel />
-                <CodePanel />
-                <hr className="border-[#E3E2DC]" />
-                <CourseCards />
-              </div>
-            </div>
-    </>
+    <div className="grid grid-cols-1 items-start gap-6 lg:grid-cols-3">
+      <div className="order-2 lg:order-1 lg:col-span-1 lg:sticky lg:top-4">
+        <PathStatsPanel onOpenCourseTab={onOpenCourseTab} />
+      </div>
+      <div className="order-1 flex flex-col gap-6 lg:order-2 lg:col-span-2">
+        <TodayPanel onOpenCourseTab={onOpenCourseTab} />
+        <ExamPanel />
+        <MatAnTutorCard />
+        <ReviewPanel />
+        <RexOralPanel />
+        <CodePanel />
+      </div>
+    </div>
   );
 }
