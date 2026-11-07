@@ -72,7 +72,7 @@ export interface CourseDef {
   /** `lr_course.c_id` / `lr_unit.course_id` — the one hard DB key everything
    * else in this file exists to avoid hardcoding a second time. */
   courseId: number;
-  key: "la" | "dbms" | "pgm" | "prob" | "kal" | "uml";
+  key: "la" | "dbms" | "pgm" | "prob" | "kal" | "uml" | "mc";
   /** Full title, this course's own language ("Lineær Algebra" — LA is
    * Danish-content, DBMS is English-content, per each course's own
    * `contentLanguage`). Used in the path header ("Learn · {title}"). */
@@ -434,6 +434,65 @@ const UML_TRANSLATE_BAR: Record<string, string> = {
   "algo-proof": "bg-gradient-to-r from-cyan-500 to-rose-500",
 };
 
+// --- Modern C (Gustedt) — tre-perspektiver for C -----------------------------
+//
+// kode    = hvad du SKRIVER (syntaks, idiomer, biblioteket)
+// maskine = hvad der SKER (repræsentation, hukommelse, udførelse)
+// regler  = hvad STANDARDEN LOVER (typer, konverteringer, levetid, UB)
+//
+// Det tredje ben er bogens egen pointe: Gustedts "Takeaways" er næsten alle
+// regler-udsagn, og C's farlighed bor præcis i afstanden mellem kode og
+// regler. Farverne genbruger LA's triade (cyan/indigo/fuchsia) — kun ét
+// kursus er aktivt ad gangen, og feedback-huerne (emerald/red/amber) er
+// fortsat fredede, jf. DESIGN.md §1.2.
+const MC_LENSES: Record<string, LensToken> = {
+  kode: {
+    label: "Kode",
+    long: "Kodebilledet — hvad du skriver",
+    hex: "#22d3ee",
+    chip: "bg-cyan-50 text-cyan-700 ring-1 ring-cyan-600/25",
+    chipOn: "bg-cyan-100 text-cyan-800 ring-1 ring-cyan-600/40",
+    dot: "bg-cyan-500",
+    edge: "border-l-2 border-cyan-500/60",
+    tint: "bg-cyan-50",
+  },
+  maskine: {
+    label: "Maskine",
+    long: "Maskinbilledet — hvad der sker",
+    hex: "#818cf8",
+    chip: "bg-indigo-50 text-indigo-700 ring-1 ring-indigo-600/25",
+    chipOn: "bg-indigo-100 text-indigo-800 ring-1 ring-indigo-600/40",
+    dot: "bg-indigo-500",
+    edge: "border-l-2 border-indigo-500/60",
+    tint: "bg-indigo-50",
+  },
+  regler: {
+    label: "Regler",
+    long: "Regelbilledet — hvad standarden lover",
+    hex: "#e879f9",
+    chip: "bg-fuchsia-50 text-fuchsia-700 ring-1 ring-fuchsia-600/25",
+    chipOn: "bg-fuchsia-100 text-fuchsia-800 ring-1 ring-fuchsia-600/40",
+    dot: "bg-fuchsia-500",
+    edge: "border-l-2 border-fuchsia-500/60",
+    tint: "bg-fuchsia-50",
+  },
+};
+
+const MC_SOLID_BAR: Record<string, string> = {
+  kode: "bg-cyan-500",
+  maskine: "bg-indigo-500",
+  regler: "bg-fuchsia-500",
+};
+
+const MC_TRANSLATE_BAR: Record<string, string> = {
+  "kode-maskine": "bg-gradient-to-r from-cyan-500 to-indigo-500",
+  "kode-regler": "bg-gradient-to-r from-cyan-500 to-fuchsia-500",
+  "maskine-kode": "bg-gradient-to-r from-indigo-500 to-cyan-500",
+  "maskine-regler": "bg-gradient-to-r from-indigo-500 to-fuchsia-500",
+  "regler-kode": "bg-gradient-to-r from-fuchsia-500 to-cyan-500",
+  "regler-maskine": "bg-gradient-to-r from-fuchsia-500 to-indigo-500",
+};
+
 export const COURSES: Record<CourseKey, CourseDef> = {
   la: {
     courseId: 2,
@@ -568,6 +627,27 @@ export const COURSES: Record<CourseKey, CourseDef> = {
       { re: /Given (?:as|in) (?:the |an )?algorithm/i, lens: "algo" },
     ],
   },
+  mc: {
+    courseId: 8,
+    key: "mc",
+    title: "Modern C",
+    shortLabel: "ModC",
+    contentLanguage: "da",
+    itemSlugPrefix: "mc-x-",
+    hasLearnState: false,
+    // 22 units langs Gustedts levels 0-3 (Encounter → Experience); forfattes
+    // mod Unit-baren, modul MC 0 (kap. 1-2) først.
+    complete: false,
+    lensOrder: ["kode", "maskine", "regler"],
+    lenses: MC_LENSES,
+    solidBar: MC_SOLID_BAR,
+    translateBar: MC_TRANSLATE_BAR,
+    sourceLensPatterns: [
+      { re: /Givet (?:som|i) kode/i, lens: "kode" },
+      { re: /Givet (?:som|i) maskin/i, lens: "maskine" },
+      { re: /Givet (?:som|i) regl/i, lens: "regler" },
+    ],
+  },
 };
 
 export const DEFAULT_COURSE_KEY: CourseKey = "la";
@@ -577,7 +657,10 @@ export function getCourse(key: CourseKey): CourseDef {
 }
 
 export function isCourseKey(value: string): value is CourseKey {
-  return value === "la" || value === "dbms" || value === "pgm" || value === "prob";
+  // kal/uml manglede her, så et gemt kursusvalg faldt tilbage til LA ved
+  // genindlæsning — rettet sammen med mc-tilføjelsen.
+  return value === "la" || value === "dbms" || value === "pgm" || value === "prob"
+    || value === "kal" || value === "uml" || value === "mc";
 }
 
-export const COURSE_LIST: CourseDef[] = [COURSES.la, COURSES.dbms, COURSES.pgm, COURSES.prob, COURSES.kal, COURSES.uml];
+export const COURSE_LIST: CourseDef[] = [COURSES.la, COURSES.dbms, COURSES.pgm, COURSES.prob, COURSES.kal, COURSES.uml, COURSES.mc];

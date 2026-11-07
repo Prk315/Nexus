@@ -15,9 +15,8 @@
  */
 
 import { useCallback, useEffect, useState } from "react";
-import { fetchDailyPlan, fetchPrimerQueue, markDailyPlanDone, requestNextBundle, type DailyPlan } from "./api";
+import { fetchDailyPlan, markDailyPlanDone, requestNextBundle, type DailyPlan } from "./api";
 import { Markdown } from "./Markdown";
-import { ReviewSession } from "./ReviewSession";
 import { useCourse } from "./CourseContext";
 import { COURSE_LIST } from "./courses";
 
@@ -33,7 +32,6 @@ export function TodayPanel({ onOpenCourseTab }: { onOpenCourseTab?: () => void }
   const [nextBusy, setNextBusy] = useState(false);
   const [state, setState] = useState<"loading" | "missing" | "error" | "ready">("loading");
   const [briefOpen, setBriefOpen] = useState(false);
-  const [primerOpen, setPrimerOpen] = useState(false);
   const date = todayYmd();
 
   const load = useCallback(async () => {
@@ -67,61 +65,17 @@ export function TodayPanel({ onOpenCourseTab }: { onOpenCourseTab?: () => void }
   const done = plan!.status === "done";
 
   const rows: Array<{ n: number; label: string; minutes?: number; body: React.ReactNode }> = [
+    // Review-primeren og Lesson-blokken er pensioneret (2026-11-07,
+    // eksamenerne er overstået): dagen er nu læsning → repetition → unit.
+    // Ældre plan-rækker kan stadig bære intro/lesson-data — den ignoreres.
     {
-      n: 1, label: "Review", minutes: b.intro?.minutes,
-      // Same ACTIVITY as Repetition: the recap concepts become a drill
-      // session, not a paragraph to read. Older plan rows (no primer ids)
-      // keep the read-the-brief fallback.
-      body: (b.intro?.primer_concept_ids?.length ?? 0) > 0
-        ? (
-          <>
-            {b.intro!.primer_concept_ids!.length} concepts from last session —{" "}
-            <button
-              onClick={() => setPrimerOpen(true)}
-              className="inline p-0 align-baseline text-sm font-medium leading-[inherit] text-indigo-600 underline-offset-2 hover:underline"
-            >
-              start the primer
-            </button>
-          </>
-        )
-        : <>recap of the previous pages & lesson — prime before anything new</>,
-    },
-    {
-      n: 2, label: "Reading", minutes: b.reading?.minutes,
+      n: 1, label: "Reading", minutes: b.reading?.minutes,
       body: b.reading
         ? <>{b.reading.title}, {b.reading.unit_label === "pages" ? "pp." : b.reading.unit_label} <strong>{b.reading.from}–{b.reading.to}</strong></>
         : <span className="text-[#1A1A24]/45">no active reading material</span>,
     },
     {
-      n: 3, label: "Lesson", minutes: b.lesson?.minutes,
-      body: b.lesson?.retention
-        ? <span className="text-[#1A1A24]/60">retention day — the review below <em>is</em> the work</span>
-        : (
-          <>
-            {b.lesson?.title}
-            {b.lesson?.url && (
-              <a href={b.lesson.url} target="_blank" rel="noreferrer"
-                className="ml-1.5 font-medium text-indigo-600 underline-offset-2 hover:underline">
-                open ↗
-              </a>
-            )}
-            {b.lesson?.required_reading && (
-              b.lesson.required_reading.met
-                ? <span className="ml-1.5 text-xs text-emerald-700">forudsætninger læst ✓</span>
-                : (
-                  <span className="ml-1.5 text-xs font-medium text-amber-700">
-                    ⚠ læs først {b.lesson.required_reading.book_title} kap.{" "}
-                    {b.lesson.required_reading.read_through + 1}
-                    {b.lesson.required_reading.required_through > b.lesson.required_reading.read_through + 1
-                      ? `–${b.lesson.required_reading.required_through}` : ""}
-                  </span>
-                )
-            )}
-          </>
-        ),
-    },
-    {
-      n: 4, label: "Repetition", minutes: b.review?.minutes,
+      n: 2, label: "Repetition", minutes: b.review?.minutes,
       body: b.review?.due_concepts != null
         ? <>{b.review.due_concepts} concepts due — start below</>
         : <>start in the review section below</>,
@@ -135,7 +89,7 @@ export function TodayPanel({ onOpenCourseTab }: { onOpenCourseTab?: () => void }
       ? COURSE_LIST.find((c) => c.courseId === b.unit!.course_id)?.key ?? null
       : null;
     rows.push({
-      n: 5, label: "Unit", minutes: b.unit?.minutes,
+      n: 3, label: "Unit", minutes: b.unit?.minutes,
       body: b.unit
         ? (
           <>
@@ -219,14 +173,6 @@ export function TodayPanel({ onOpenCourseTab }: { onOpenCourseTab?: () => void }
         </div>
       )}
 
-      {primerOpen && (
-        <ReviewSession
-          title="Primer"
-          emptyText="No drillable primer concepts today — read the brief instead."
-          source={() => fetchPrimerQueue(b.intro?.primer_concept_ids ?? [])}
-          onClose={() => setPrimerOpen(false)}
-        />
-      )}
     </section>
   );
 }

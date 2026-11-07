@@ -3,21 +3,15 @@
 // Composes ONE `lr_daily_plan` row per (user, day) — the study DAY, where
 // `learn-daily` composes the card LESSON inside it. Four blocks:
 //
-//   intro    — a deterministic brief: what yesterday and this week actually
-//              held, what is due soon, and a REVIEW of where you left off —
-//              the previous pages' key concepts (from the book's own concept
-//              graph) and the previous lesson — so today's lesson starts
-//              primed on what it builds on. (This replaced the say-back
-//              retrieval primes on 2026-10-08, by the learner's own call:
-//              a recap that bridges into today beats titles-only prompts
-//              for how these days are actually run.)
+//   intro    — RETIRED 2026-11-07 (eksamenerne overstået): emitted with 0
+//              minutes and no primer ids so the client type keeps its shape.
+//              The recap/primer computation above the block assembly is left
+//              intact — reinstating is one field, not a rebuild.
 //   reading  — 90 minutes of the tracked book that needs it most, as a page
 //              range computed from measured pace, starting where the last
 //              progress event left off.
-//   lesson   — the CURRENT authored lesson (Concept Module artifact), on a
-//              WEEKLY QUOTA (lessons_per_week, default 3). The quota is a
-//              floor, not a cap: a week that hits it early keeps the link
-//              and may move further ahead in the curriculum.
+//   lesson   — RETIRED 2026-11-07, emitted as null (the client type always
+//              allowed it). Selection/quota code left intact, unused.
 //   review   — the spaced-repetition session learn-evaluate/learn-daily
 //              already drive; this block carries the due count.
 //   unit     — ONE course-path unit (the Brilliant-style lr_unit spine),
@@ -539,15 +533,15 @@ function composeBrief(args: {
   L.push("");
 
   L.push("## Today");
-  L.push(`1. **Review** (${args.minutes.intro} min) — the recap above: re-anchor the previous pages and lesson, THEN start.`);
+  // Review-primeren og Lesson-blokken er pensioneret (2026-11-07, eksamenerne
+  // er overstået): dagen er læsning → repetition → unit.
   L.push(args.reading
-    ? `2. **Reading** (${args.minutes.reading} min) — ${fmtRange(args.reading.material, args.reading.from, args.reading.to)}.`
-    : `2. **Reading** — no active reading material; add one in PathFinder → Learn.`);
-  L.push(`3. **Lesson** (${args.minutes.lesson} min) — ${args.lessonLine}`);
-  L.push(`4. **Repetition** (${args.minutes.review} min) — ${args.reviewLine}`);
+    ? `1. **Reading** (${args.minutes.reading} min) — ${fmtRange(args.reading.material, args.reading.from, args.reading.to)}.`
+    : `1. **Reading** — no active reading material; add one in PathFinder → Learn.`);
+  L.push(`2. **Repetition** (${args.minutes.review} min) — ${args.reviewLine}`);
   L.push(args.unit
-    ? `5. **Kursus-unit** (~${UNIT_MINUTES} min) — **${args.unit.code}${args.unit.title ? ` · ${args.unit.title}` : ""}** (${args.unit.course_title}) — åbn stien i Nexus Learn.`
-    : `5. **Kursus-unit** — ingen sti har en klar unit i dag (frontier mangler indhold).`);
+    ? `3. **Kursus-unit** (~${UNIT_MINUTES} min) — **${args.unit.code}${args.unit.title ? ` · ${args.unit.title}` : ""}** (${args.unit.course_title}) — åbn stien i Nexus Learn.`
+    : `3. **Kursus-unit** — ingen sti har en klar unit i dag (frontier mangler indhold).`);
   return L.join("\n");
 }
 
@@ -937,7 +931,12 @@ Deno.serve(async (req: Request) => {
     });
 
     const blocks = {
-      intro: { minutes: minutes.intro, primer_concept_ids: primerIds },
+      // Pensioneret: primeren og lektionen komponeres ikke længere (eksamener
+      // overstået). intro beholder sin FORM — klientens DailyPlanBlocks-type
+      // kræver den — men bærer 0 minutter og ingen primer-koncepter; lesson er
+      // null, som typen allerede tillader. Udvælgelses-/recap-koden ovenfor
+      // står urørt, så en genindførsel er ét felt, ikke en genopbygning.
+      intro: { minutes: 0, primer_concept_ids: [] as string[] },
       reading: reading
         ? {
           minutes: minutes.reading,
@@ -950,18 +949,7 @@ Deno.serve(async (req: Request) => {
           pace: Number(reading.pace.toFixed(3)),
         }
         : null,
-      lesson: lessonMaterial
-        ? {
-          minutes: minutes.lesson,
-          material_id: lessonMaterial.id,
-          title: lessonMaterial.title,
-          url: lessonMaterial.url,
-          week_done: lessonDays,
-          week_target: quota,
-          target_met: !lessonDay,
-          required_reading: requiredReading,
-        }
-        : { retention: true, phase },
+      lesson: null,
       review: { minutes: minutes.review, due_concepts: dueCount },
       unit: unit
         ? {
@@ -978,16 +966,14 @@ Deno.serve(async (req: Request) => {
     // ── Fan-out: PathFinder tasks (idempotent by title+date+plan) ────────
     const pfTaskIds: number[] = [];
     if (cfg.pf_user_id && cfg.pf_plan_id) {
+      // Review & prime- og Lesson-tasks fan-outes ikke længere — blokkene er
+      // pensioneret, og en task for arbejde dagen ikke stiller er støj.
       const wanted: Array<{ title: string; estimate: number }> = [
-        { title: `Learn · Review & prime (${today})`, estimate: minutes.intro },
         ...(reading
           ? [{
             title: `Learn · Reading: ${fmtRange(reading.material, reading.from, reading.to)} (${today})`,
             estimate: minutes.reading,
           }]
-          : []),
-        ...(lessonDay && lessonMaterial
-          ? [{ title: `Learn · Lesson: ${lessonMaterial.title} (${today})`, estimate: minutes.lesson }]
           : []),
         { title: `Learn · Repetition (${today})`, estimate: minutes.review },
         ...(unit
