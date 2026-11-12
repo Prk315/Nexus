@@ -65,11 +65,15 @@ import { RexOralPanel } from "./RexOralPanel";
  * deadline, so the glanceable answer to "hvor er jeg, og hvad brænder?"
  * never requires picking the right tab first.
  */
-type LearnTab = "overblik" | "course";
+/** v7 (2026-11-12): tredje tab, "Eksamen" — eksamenstrænerne (MLA-sættene,
+ *  MatAn-tutoren, REX mundtlig) er deres egen aktivitet, ikke dagligt
+ *  overblik, så de flyttede fra Overblik til egen fane. */
+type LearnTab = "overblik" | "course" | "exam";
 
 function readTab(): LearnTab {
   try {
-    return localStorage.getItem("nl-learn-tab") === "course" ? "course" : "overblik";
+    const t = localStorage.getItem("nl-learn-tab");
+    return t === "course" || t === "exam" ? t : "overblik";
   } catch {
     return "overblik";
   }
@@ -105,17 +109,24 @@ export function LearnPage() {
             <div className="flex gap-1 rounded-full bg-[#EBEAE5] p-1">
               {pill("overblik", "Overblik")}
               {pill("course", "Kursus")}
+              {pill("exam", "Eksamen")}
             </div>
           </div>
-          {tab === "overblik" ? (
-            <OverblikLayout onOpenCourseTab={() => pick("course")} />
-          ) : (
+          {tab === "overblik" && <OverblikLayout onOpenCourseTab={() => pick("course")} />}
+          {tab === "course" && (
             <>
               <PathPanel />
               <ChallengePanel />
               <SprintPanel />
               <InfinitePanel />
               <StatsPanel />
+            </>
+          )}
+          {tab === "exam" && (
+            <>
+              <ExamPanel />
+              <MatAnTutorCard />
+              <RexOralPanel />
             </>
           )}
         </div>
@@ -162,10 +173,7 @@ function OverblikLayout({ onOpenCourseTab }: { onOpenCourseTab: () => void }) {
       </div>
       <div className="order-1 flex flex-col gap-6 lg:order-2 lg:col-span-2">
         <TodayPanel onOpenCourseTab={onOpenCourseTab} />
-        <ExamPanel />
-        <MatAnTutorCard />
         <ReviewPanel />
-        <RexOralPanel />
         <CodePanel />
       </div>
     </div>
