@@ -44,6 +44,7 @@ import { TodayPanel } from "./TodayPanel";
 import { PathPanel } from "./PathPanel";
 import { ReviewPanel } from "./ReviewPanel";
 import { PathStatsPanel } from "./PathStatsPanel";
+import { DojoPanel } from "./DojoPanel";
 import { OverviewStrip } from "./OverviewStrip";
 import { MathKeyboardBar } from "./MathKeyboardBar";
 import { ToolDock } from "./tools/ToolDock";
@@ -155,7 +156,8 @@ function MatAnTutorCard() {
 function OverblikLayout({ onOpenCourseTab }: { onOpenCourseTab: () => void }) {
   return (
     <div className="grid grid-cols-1 items-start gap-6 lg:grid-cols-3">
-      <div className="order-2 lg:order-1 lg:col-span-1 lg:sticky lg:top-4">
+      <div className="order-2 flex flex-col gap-6 lg:order-1 lg:col-span-1 lg:sticky lg:top-4">
+        <DojoPanel />
         <PathStatsPanel onOpenCourseTab={onOpenCourseTab} />
       </div>
       <div className="order-1 flex flex-col gap-6 lg:order-2 lg:col-span-2">

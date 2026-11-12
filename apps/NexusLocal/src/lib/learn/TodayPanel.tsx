@@ -19,6 +19,7 @@ import { fetchDailyPlan, markDailyPlanDone, requestNextBundle, type DailyPlan } 
 import { Markdown } from "./Markdown";
 import { useCourse } from "./CourseContext";
 import { COURSE_LIST } from "./courses";
+import { useDojoToday } from "./DojoPanel";
 
 function todayYmd(): string {
   return new Intl.DateTimeFormat("en-CA", {
@@ -28,6 +29,7 @@ function todayYmd(): string {
 
 export function TodayPanel({ onOpenCourseTab }: { onOpenCourseTab?: () => void }) {
   const { setCourseKey } = useCourse();
+  const dojoToday = useDojoToday();
   const [plan, setPlan] = useState<DailyPlan | null>(null);
   const [nextBusy, setNextBusy] = useState(false);
   const [state, setState] = useState<"loading" | "missing" | "error" | "ready">("loading");
@@ -89,7 +91,7 @@ export function TodayPanel({ onOpenCourseTab }: { onOpenCourseTab?: () => void }
       ? COURSE_LIST.find((c) => c.courseId === b.unit!.course_id)?.key ?? null
       : null;
     rows.push({
-      n: 3, label: "Unit", minutes: b.unit?.minutes,
+      n: rows.length + 1, label: "Unit", minutes: b.unit?.minutes,
       body: b.unit
         ? (
           <>
@@ -107,6 +109,20 @@ export function TodayPanel({ onOpenCourseTab }: { onOpenCourseTab?: () => void }
           </>
         )
         : <span className="text-[#1A1A24]/45">no path has a servable frontier unit today</span>,
+    });
+  }
+
+  // Dojo-rækken (2026-11-12): daglig deliberate practice i code-practice-
+  // repoet (VS Code). Læses direkte fra dojo_runs-broen — ikke fra
+  // lr_daily_plan, så rækken viser DAGENS faktiske kørsler uden nogen
+  // edge-fn-ændring. null = hentningen fejlede/ikke landet endnu → rækken
+  // udelades frem for at lyve.
+  if (dojoToday !== null) {
+    rows.push({
+      n: rows.length + 1, label: "Dojo",
+      body: dojoToday.runs > 0
+        ? <>{dojoToday.runs} kørsler · <strong>{dojoToday.green} grønne</strong> i dag</>
+        : <span className="text-[#1A1A24]/45">ingen træning endnu i dag — åbn dojoen i VS Code</span>,
     });
   }
 
