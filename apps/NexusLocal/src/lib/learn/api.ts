@@ -627,6 +627,26 @@ export interface ReviewQueueItem {
  * real, legitimate empty queue) when the row exists but nothing is due or
  * resolvable — that is a different, honest state from "unknown".
  */
+/** Dagens "ryk-tilbage"-regel, delt mellem køen og panelets tæller så de to
+ *  aldrig kan være uenige om hvad "klaret i dag" betyder: et kort besvaret
+ *  inden for de sidste 20 timer er ikke due — medmindre det blev besvaret
+ *  "igen" (stability ≤ 1), som pr. kalibreringen MÅ vende tilbage samme dag.
+ *  Det er denne regel der gør en afbrudt session genoptagelig: hver grading
+ *  skriver `last_reviewed` med det samme, så næste åbning serverer kun
+ *  resten. */
+export function filterStillDue<T extends { concept_id: string }>(
+  due: T[],
+  states: Record<string, LrMemoryState>
+): T[] {
+  const nowMs = Date.now();
+  return due.filter((d) => {
+    const m = states[d.concept_id];
+    if (!m?.last_reviewed) return true;
+    const hoursAgo = (nowMs - new Date(m.last_reviewed).getTime()) / 3_600_000;
+    return hoursAgo >= 20 || (m.stability_days ?? 1) <= 1;
+  });
+}
+
 export async function fetchReviewQueue(limit: number = REVIEW_QUEUE_SIZE): Promise<ReviewQueueItem[] | null> {
   const state = await fetchLearnState();
   if (!state) return null;
@@ -644,15 +664,8 @@ export async function fetchReviewQueue(limit: number = REVIEW_QUEUE_SIZE): Promi
   // tilstanden ikke læses, står den oprindelige kø urørt.
   try {
     const states = await fetchMemoryStates(due.map((d) => d.concept_id));
-    const nowMs = Date.now();
-    const filtered = due.filter((d) => {
-      const m = states[d.concept_id];
-      if (!m?.last_reviewed) return true;
-      const hoursAgo = (nowMs - new Date(m.last_reviewed).getTime()) / 3_600_000;
-      return hoursAgo >= 20 || (m.stability_days ?? 1) <= 1;
-    });
     // Alle due netop gennemgået = ægte tom kø i dag ("alt klaret"), ikke en fejl.
-    due = filtered;
+    due = filterStillDue(due, states);
     if (due.length === 0) return [];
   } catch { /* fail-open */ }
 

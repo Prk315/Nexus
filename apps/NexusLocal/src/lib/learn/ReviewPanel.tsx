@@ -25,7 +25,7 @@
  */
 
 import { useEffect, useState } from "react";
-import { fetchLearnState, fetchMemoryStates, fetchReviewQueue } from "./api";
+import { fetchLearnState, fetchMemoryStates, fetchReviewQueue, filterStillDue } from "./api";
 import { isStable } from "./memory";
 import type { LrLearnState } from "./types";
 import { ReviewSession } from "./ReviewSession";
@@ -72,7 +72,16 @@ export function ReviewPanel() {
   const [verdict, setVerdict] = useState<LrLearnState | null | undefined>(undefined);
   const [lastKnown, setLastKnown] = useState<LrLearnState | null>(null);
   const [stability, setStability] = useState<{ stable: number; total: number } | null>(null);
+  // Hvor mange af dommens due-kort der STADIG er due lige nu (samme
+  // 20-timers-regel som køen, via `filterStillDue`). Dommen genberegnes kun
+  // hvert ~15. minut, så uden denne ville tallet på knappen ligne at en
+  // afbrudt session intet gemte. null = ukendt (memory-læs fejlede) — så
+  // viser knappen dommens tal frem for at gætte.
+  const [remaining, setRemaining] = useState<number | null>(null);
   const [sessionOpen, setSessionOpen] = useState<false | "normal" | "full">(false);
+  // Genindlæs dommen+tælleren når en session lukkes, så "klaret i dag"
+  // afspejler det man lige har lavet — ikke først ved næste page-load.
+  const [tick, setTick] = useState(0);
 
   useEffect(() => {
     // `lr_learn_state` is computed for ONE user, not per-course. Dette
@@ -108,11 +117,13 @@ export function ReviewPanel() {
             if (cancelled) return;
             const entries = Object.values(states);
             setStability({ stable: entries.filter((s) => isStable(s)).length, total: entries.length });
+            setRemaining(filterStillDue(v.due_concepts, states).length);
           } catch {
-            if (!cancelled) setStability(null);
+            if (!cancelled) { setStability(null); setRemaining(null); }
           }
         } else {
           setStability(null);
+          setRemaining(0);
         }
       } else {
         try {
@@ -126,7 +137,7 @@ export function ReviewPanel() {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [tick]);
 
   return (
     <section className="flex flex-col gap-2 md:gap-3">
@@ -141,32 +152,44 @@ export function ReviewPanel() {
       {verdict !== undefined && verdict !== null && (
         <>
           <VerdictStats verdict={verdict} stability={stability} />
-          {(verdict.due_concepts?.length ?? 0) === 0 && verdict.computed_at ? (
-            <button
-              type="button"
-              disabled
-              className="flex min-h-[44px] w-full items-center justify-center rounded-lg bg-black/[0.05] px-3 py-2 text-[13px] text-[#1A1A24]/70 md:max-w-[26rem]"
-            >
-              All caught up
-            </button>
-          ) : (
-            <div className="flex flex-col gap-1.5 md:max-w-[26rem]">
-              <button
-                type="button"
-                onClick={() => setSessionOpen("normal")}
-                className="w-full rounded-xl bg-gradient-to-r from-indigo-500 to-fuchsia-600 px-4 py-3 text-[15px] font-semibold text-white transition-transform active:scale-[0.985]"
-              >
-                {`Start review${verdict.due_concepts?.length ? ` · ${verdict.due_concepts.length}` : ""}`}
-              </button>
-              <button
-                type="button"
-                onClick={() => setSessionOpen("full")}
-                className="w-full rounded-xl bg-black/[0.04] px-4 py-2 text-[12.5px] font-medium text-[#1A1A24]/70 ring-1 ring-black/[0.06] hover:bg-black/[0.07]"
-              >
-                Gennemgå ALT due — giv hele hukommelsen varme
-              </button>
-            </div>
-          )}
+          {(() => {
+            const dueTotal = verdict.due_concepts?.length ?? 0;
+            const left = remaining ?? dueTotal; // ukendt → dommens tal, aldrig et gæt
+            const doneToday = remaining !== null ? dueTotal - remaining : 0;
+            if ((dueTotal === 0 || left === 0) && verdict.computed_at) {
+              return (
+                <button
+                  type="button"
+                  disabled
+                  className="flex min-h-[44px] w-full items-center justify-center rounded-lg bg-black/[0.05] px-3 py-2 text-[13px] text-[#1A1A24]/70 md:max-w-[26rem]"
+                >
+                  {doneToday > 0 ? `Dagens kort klaret ✓ (${doneToday})` : "All caught up"}
+                </button>
+              );
+            }
+            return (
+              <div className="flex flex-col gap-1.5 md:max-w-[26rem]">
+                <button
+                  type="button"
+                  onClick={() => setSessionOpen("normal")}
+                  className="w-full rounded-xl bg-gradient-to-r from-indigo-500 to-fuchsia-600 px-4 py-3 text-[15px] font-semibold text-white transition-transform active:scale-[0.985]"
+                >
+                  {`Start review${left ? ` · ${left}` : ""}`}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setSessionOpen("full")}
+                  className="w-full rounded-xl bg-black/[0.04] px-4 py-2 text-[12.5px] font-medium text-[#1A1A24]/70 ring-1 ring-black/[0.06] hover:bg-black/[0.07]"
+                >
+                  Gennemgå ALT due — giv hele hukommelsen varme
+                </button>
+                <p className="text-[10.5px] text-[#6E6E78]/70">
+                  {doneToday > 0 && <>{doneToday} af {dueTotal} klaret i dag · </>}
+                  fremskridt gemmes pr. kort — du kan stoppe når som helst
+                </p>
+              </div>
+            );
+          })()}
           <div className="text-[10px] text-[#6E6E78]/60">{minutesAgoLabel(verdict.computed_at)}</div>
         </>
       )}
@@ -209,7 +232,7 @@ export function ReviewPanel() {
 
       {sessionOpen && (
         <ReviewSession
-          onClose={() => setSessionOpen(false)}
+          onClose={() => { setSessionOpen(false); setTick((t) => t + 1); }}
           {...(sessionOpen === "full"
             ? { source: () => fetchReviewQueue(100).then((q) => q ?? []), title: "Alt due" }
             : {})}

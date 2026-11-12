@@ -82,8 +82,8 @@
 //     brief's literal number, not a selector.py constant — it answers "has
 //     this prereq been attempted at all", not "is it session-eligible".
 //     Gating runs on the uncapped due set; DUE_CAP is applied AFTER gating,
-//     so a force-included prereq can still be capped out if it's not the
-//     30 highest-priority entries.
+//     so a force-included prereq can still be capped out if it's not among
+//     the DUE_CAP highest-priority entries.
 //
 // ── DEVIATIONS FROM THE PYTHON (per LEARN_PLAN.md's Phase 3/DAG-v2 briefs) ───
 //
@@ -130,7 +130,7 @@ const LAMBDA = 0.5;
 const PREREQ_STABLE_COMP = DUE_COMP_THRESHOLD; // 0.6, reuse the due-comp bar
 const PREREQ_STABLE_EVIDENCE = 1;
 
-const DUE_CAP = 30;
+const DUE_CAP = 90; // 30 until 2026-11-13 — tripled at day-30 streak (user call); partial sessions resume via the app's 20h answered-filter
 const FRONTIER_CAP = 3;
 // Generous lookback bound for the streak scan — far beyond any real streak,
 // just keeps the lr_attempt_log query from scanning the whole table forever.
@@ -550,7 +550,7 @@ async function compute(
       return entry;
     })
     .sort((a, b) => b.priority - a.priority)
-    .slice(0, DUE_CAP); // cap stays 30, applied AFTER gating
+    .slice(0, DUE_CAP); // cap applied AFTER gating
 
   // ── Step 3: frontier ──────────────────────────────────────────────────
   const units = unwrap<UnitRow>(
