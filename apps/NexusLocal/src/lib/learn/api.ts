@@ -586,7 +586,7 @@ export async function fetchSolvedDrillIds(drillIds: string[]): Promise<Set<strin
   return new Set(Object.keys(counts));
 }
 
-const REVIEW_QUEUE_SIZE = 10;
+const REVIEW_QUEUE_SIZE = 30; // was 10; raised with the day-cap (90) so a session is a third of the day, not a ninth
 
 /** One resolved drill in a review session, plus the bookkeeping ReviewSession.tsx needs. */
 export interface ReviewQueueItem {
