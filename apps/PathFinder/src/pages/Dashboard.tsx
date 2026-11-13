@@ -7,7 +7,7 @@
 
 import { useEffect, useState, useCallback, useMemo, useSyncExternalStore } from "react";
 import { PanelRight, PanelRightClose } from "lucide-react";
-import { getGoals, getPlans, getAllTasks, getSystems, toggleTask, createTask, patchTask, addSubtask, deleteTask, toTaskWithContext, getTaskSessionsInRange, logTaskSession, unlogTaskOccurrence, getCalBlocks, createCalBlock, updateCalBlock, deleteCalBlock, getDailyGoals, setDailyPrimaryGoal, clearDailyPrimaryGoal, addDailySecondaryGoal, updateDailySecondaryGoal, deleteDailySecondaryGoal, getCourseAssignments, updateCourseAssignment, getScheduleEntriesForDate, getHabitsForDate, toggleHabitCompletion, getHabitStacks, getTrainingSessionsForDate } from "../lib/api";
+import { getGoals, getPlans, getAllTasks, getSystems, toggleTask, createTask, patchTask, addSubtask, deleteTask, toTaskWithContext, getTaskSessionsInRange, logTaskSession, unlogTaskOccurrence, getBlockMissesInRange, markBlockMissed, unmarkBlockMissed, getCalBlocks, createCalBlock, updateCalBlock, deleteCalBlock, getDailyGoals, setDailyPrimaryGoal, clearDailyPrimaryGoal, addDailySecondaryGoal, updateDailySecondaryGoal, deleteDailySecondaryGoal, getCourseAssignments, updateCourseAssignment, getScheduleEntriesForDate, getHabitsForDate, toggleHabitCompletion, getHabitStacks, getTrainingSessionsForDate } from "../lib/api";
 import { blockMinutes } from "../lib/taskTree";
 import { isTaskRelevantToMe } from "../lib/team";
 import { getUserId } from "../lib/supabase";
@@ -37,6 +37,8 @@ export function Dashboard() {
   const [calBlocks,  setCalBlocks]  = useState<CalBlock[]>([]);
   // Sessions logged against today's calendar occurrences, keyed by cal_block_id.
   const [sessionsByBlock, setSessionsByBlock] = useState<Map<number, TaskSession>>(new Map());
+  // Today's occurrences marked "did not complete", same key.
+  const [missedBlockIds, setMissedBlockIds] = useState<Set<number>>(new Set());
   const [dailyGoals, setDailyGoals] = useState<DailyGoals>({ primary: null, secondary: [] });
   const [courseAssignments, setCourseAssignments] = useState<CourseAssignment[]>([]);
   const [scheduleEntries,  setScheduleEntries]  = useState<ScheduleEntry[]>([]);
@@ -76,11 +78,12 @@ export function Dashboard() {
     // The six side-tools (reminders, notes, brain dump, events, deadlines,
     // agreements) are no longer loaded here — they live in the sidebar and fetch
     // their own data on first open. See components/QuickPanels.tsx.
-    const [g, p, t, s, cb, dg, cas, ses, hb, hs, ts, wk] = await Promise.all([
+    const [g, p, t, s, cb, dg, cas, ses, hb, hs, ts, wk, ms] = await Promise.all([
       getGoals(), getPlans(), getAllTasks(), getSystems(), getCalBlocks(date, date),
       getDailyGoals(date),
       getCourseAssignments(), getScheduleEntriesForDate(date), getHabitsForDate(date), getHabitStacks(),
       getTrainingSessionsForDate(date), getTaskSessionsInRange(date, date),
+      getBlockMissesInRange(date, date),
     ]);
     const myUid = getUserId();
     setGoals(g); setPlans(p); setTasks(t.filter((x) => isTaskRelevantToMe(x, myUid))); setSystems(s); setCalBlocks(cb);
@@ -93,6 +96,7 @@ export function Dashboard() {
     setSessionsByBlock(new Map(
       wk.filter((x) => x.cal_block_id != null).map((x) => [x.cal_block_id!, x]),
     ));
+    setMissedBlockIds(new Set(ms.map((m) => m.cal_block_id)));
   }, [date]);
 
   useEffect(() => { load(); }, [load]);
@@ -301,6 +305,10 @@ export function Dashboard() {
       });
       return next;
     });
+    if (!existing) setMissedBlockIds((prev) => {
+      if (!prev.has(block.id)) return prev;
+      const next = new Set(prev); next.delete(block.id); return next;
+    });
 
     try {
       if (existing) {
@@ -313,6 +321,29 @@ export function Dashboard() {
           cal_block_id: block.id,
         });
       }
+    } finally {
+      load();
+    }
+  };
+
+  /** Marks a scheduled block as not completed, or clears that — mirrors Week's handler. */
+  const handleToggleMissed = async (block: CalBlock) => {
+    if (block.task_id == null) return;
+    const wasMissed = missedBlockIds.has(block.id);
+
+    setMissedBlockIds((prev) => {
+      const next = new Set(prev);
+      if (wasMissed) next.delete(block.id); else next.add(block.id);
+      return next;
+    });
+    if (!wasMissed) setSessionsByBlock((prev) => {
+      if (!prev.has(block.id)) return prev;
+      const next = new Map(prev); next.delete(block.id); return next;
+    });
+
+    try {
+      if (wasMissed) await unmarkBlockMissed(block.task_id, block.id);
+      else await markBlockMissed(block);
     } finally {
       load();
     }
@@ -488,7 +519,9 @@ export function Dashboard() {
               scheduleEntries={scheduleEntries}
               tasks={tasks}
               sessionsByBlock={sessionsByBlock}
+              missedBlockIds={missedBlockIds}
               onToggleWorked={handleToggleWorked}
+              onToggleMissed={handleToggleMissed}
               onCreateBlock={handleCreateCalBlock}
               onUpdateBlock={handleUpdateCalBlock}
               onDeleteBlock={handleDeleteCalBlock}

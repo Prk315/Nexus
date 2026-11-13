@@ -24,6 +24,7 @@ query after each.
 | 13 | `20260827200000_pf_agent_brief.sql` | `pf_agent_brief(p_user_id text)` — one call returning goals, active tasks, what is due and live plans as a compact jsonb snapshot, for terminal agents. **Already applied live on 2026-08-27**; read-only, adds no table; see §13 |
 | 14 | `20261028120000_pomodoro_run_state.sql` | five `run_*` columns on `pomodoro_config` — the live pomodoro run, CAS-guarded by `run_rev`. Additive; **apply before shipping a Nexus Local build that starts pomodoros**, or `tt_pomodoro_start` fails with an unknown-column error (reads keep working) |
 | 15 | `20261102120000_day_checkouts.sql` | `day_checkouts` — "finish day" unblocks everything until local midnight. **Apply before deploying the `focus-evaluate` that reads it**, or every evaluator run aborts and the verdict freezes (still blocked) |
+| 16 | `20261103120000_pf_block_misses.sql` | `pf_block_misses` — PathFinder's "did not complete" marks on scheduled task blocks, for the schedule-adherence stats. **Already applied live on 2026-11-03**; additive, owner-only RLS, read by nothing but PathFinder |
 
 ⚠️ **File 10 is the one exception to "not applied by the code that wrote it"** —
 it was applied to `efxmzsdisaymtpebaxlp` at the time it was written, and the file

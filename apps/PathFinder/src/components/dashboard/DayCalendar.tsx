@@ -171,7 +171,7 @@ function DayBlockModal({
 
 export function DayCalendar({
   date: _date, calBlocks, systems, courseAssignments, scheduleEntries, tasks,
-  sessionsByBlock, onCreateBlock, onUpdateBlock, onDeleteBlock, onToggleWorked,
+  sessionsByBlock, missedBlockIds, onCreateBlock, onUpdateBlock, onDeleteBlock, onToggleWorked, onToggleMissed,
   dropTarget,
 }: {
   date: string;
@@ -182,10 +182,13 @@ export function DayCalendar({
   tasks: TaskWithContext[];
   /** Sessions already logged, keyed by the occurrence's cal_block_id. */
   sessionsByBlock: Map<number, TaskSession>;
+  /** Occurrences marked "did not complete", by cal_block_id. */
+  missedBlockIds: ReadonlySet<number>;
   onCreateBlock: (d: DCBlockDraft) => Promise<void>;
   onUpdateBlock: (id: number, d: DCBlockDraft) => Promise<void>;
   onDeleteBlock: (b: CalBlock) => Promise<void>;
   onToggleWorked: (b: CalBlock) => void;
+  onToggleMissed: (b: CalBlock) => void;
   /** Dashboard's drag-to-schedule handle — the event column registers as its
    *  drop surface when present. Rail hidden → this component unmounts →
    *  unregistered → drags simply have nowhere to land. */
@@ -449,6 +452,7 @@ export function DayCalendar({
                 // A block committed to a task can be worked off in place; ticking
                 // it logs a session, which is what advances sessions/time modes.
                 const worked = b.task_id != null && sessionsByBlock.has(b.id);
+                const missed = b.task_id != null && !worked && missedBlockIds.has(b.id);
                 return (
                   <div
                     key={`blk-${b.id}`}
@@ -458,7 +462,8 @@ export function DayCalendar({
                       clr.bg, clr.border,
                       b.is_recurring ? "cursor-default opacity-80" : "cursor-pointer hover:brightness-110",
                       cbHidden && "opacity-15",
-                      worked && "ring-1 ring-emerald-400/60"
+                      worked && "ring-1 ring-emerald-400/60",
+                      missed && "ring-1 ring-rose-400/70"
                     )}
                     style={{ top, height: ht, left, right }}
                     onClick={b.is_recurring ? undefined : (e) => { e.stopPropagation(); setModal({ block: b }); }}
@@ -485,7 +490,21 @@ export function DayCalendar({
                           {worked && <Check className="h-1.5 w-1.5" />}
                         </button>
                       )}
-                      <p className={cn("text-[10px] font-semibold leading-tight truncate", clr.text, worked && "line-through opacity-70")}>{b.title}</p>
+                      {b.task_id != null && !worked && (
+                        <button
+                          title={missed ? "Marked as not completed — click to undo" : "Mark as not completed"}
+                          onClick={(e) => { e.stopPropagation(); onToggleMissed(b); }}
+                          className={cn(
+                            "flex h-2.5 w-2.5 shrink-0 items-center justify-center rounded-[2px] border transition-opacity",
+                            missed
+                              ? "bg-rose-500 border-rose-500 text-white"
+                              : cn("border-current opacity-0 group-hover:opacity-50 hover:!opacity-100", clr.text),
+                          )}
+                        >
+                          <X className="h-1.5 w-1.5" />
+                        </button>
+                      )}
+                      <p className={cn("text-[10px] font-semibold leading-tight truncate", clr.text, (worked || missed) && "line-through opacity-70")}>{b.title}</p>
                     </div>
                     {ht > 26 && (
                       <p className={cn("text-[9px] leading-tight opacity-70 tabular-nums", clr.text)}>

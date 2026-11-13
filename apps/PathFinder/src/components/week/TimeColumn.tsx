@@ -1,7 +1,7 @@
 // One day's timed column, and the all-day task chip with its popup card.
 
 import { useEffect, useState, useCallback, useRef } from "react";
-import { Check, RefreshCw, Repeat2, MapPin, GraduationCap, CalendarOff, CalendarRange, Eye, EyeOff, Users } from "lucide-react";
+import { Check, X, RefreshCw, Repeat2, MapPin, GraduationCap, CalendarOff, CalendarRange, Eye, EyeOff, Users } from "lucide-react";
 import { cn, layoutCalItems, PRIORITY_LABEL, URGENCY_LABEL, STAGE_LABEL, STAGE_CLASSES } from "../../lib/utils";
 import { planningOf, isFullTask } from "../../lib/taskTree";
 import { isSystemScheduledOn } from "../../lib/systems";
@@ -266,7 +266,7 @@ const NEST_MIN_CHILD_PX = 14;   // ...or if ANY child would render thinner than 
 const NEST_MAX_DEPTH = 24;      // pure runaway-recursion guard; real chains are refused at write time
 
 function CalBlockCard({
-  block, depth, style, childrenOf, categories, sessionsByBlock, hiddenIds, toggleHidden, onClickBlock, onToggleWorked,
+  block, depth, style, childrenOf, categories, sessionsByBlock, missedBlockIds, hiddenIds, toggleHidden, onClickBlock, onToggleWorked, onToggleMissed,
   hourPx, interactions, columnIso,
 }: {
   block: CalBlock;
@@ -276,10 +276,12 @@ function CalBlockCard({
   childrenOf: Map<number, CalBlock[]>;
   categories: CoverageCategoryOption[];
   sessionsByBlock: Map<number, TaskSession>;
+  missedBlockIds: ReadonlySet<number>;
   hiddenIds: Set<string>;
   toggleHidden: (id: string) => void;
   onClickBlock: (b: CalBlock) => void;
   onToggleWorked: (b: CalBlock) => void;
+  onToggleMissed: (b: CalBlock) => void;
   hourPx: number;
   /** Undefined on mobile — every pointer-drag code path below is gated on this. */
   interactions?: WeekInteractions;
@@ -294,6 +296,9 @@ function CalBlockCard({
   // A block committed to a task can be worked off right here at ANY depth: a
   // child linked to a subtask is ticked independently of its parent/siblings.
   const worked = block.task_id != null && sessionsByBlock.has(block.id);
+  // ...or marked as NOT done, which is what the adherence stats grade against.
+  // A worked tick wins if both somehow exist for the same occurrence.
+  const missed = block.task_id != null && !worked && missedBlockIds.has(block.id);
   const children = childrenOf.get(block.id) ?? [];
   const small = depth > 0;
 
@@ -348,6 +353,7 @@ function CalBlockCard({
         interactions ? (draggable ? "cursor-pointer" : "cursor-default") : "cursor-pointer",
         cbHidden && "opacity-15",
         worked && "ring-1 ring-emerald-400/60",
+        missed && "ring-1 ring-rose-400/70",
         isDragSource && "opacity-30",
         isDropTarget && "ring-2 ring-primary ring-offset-1",
       )}
@@ -425,8 +431,26 @@ function CalBlockCard({
               {worked && <Check className="h-2 w-2" />}
             </button>
           )}
+          {/* "Did not complete" — hover-only until set, so an unmarked card
+              keeps the single tick it always had. */}
+          {block.task_id != null && !worked && (
+            <button
+              title={missed ? "Marked as not completed — click to undo" : "Mark as not completed"}
+              onPointerDown={(e) => e.stopPropagation()}
+              onClick={(e) => { e.stopPropagation(); onToggleMissed(block); }}
+              className={cn(
+                "pointer-events-auto flex h-3 w-3 shrink-0 items-center justify-center rounded-[3px] border transition-opacity",
+                missed
+                  ? "bg-rose-500 border-rose-500 text-white"
+                  // No hover on touch (mobile has no `interactions`), so it stays faintly visible there.
+                  : cn("border-current hover:!opacity-100", interactions ? "opacity-0 group-hover:opacity-50" : "opacity-40", clr.text),
+              )}
+            >
+              <X className="h-2 w-2" />
+            </button>
+          )}
           {block.is_recurring && <Repeat2 className={cn("h-2.5 w-2.5 shrink-0 opacity-70", clr.text)} />}
-          <p className={cn(small ? "text-[10px]" : "text-[11px]", "font-semibold leading-tight truncate", clr.text, worked && "line-through opacity-70")}>
+          <p className={cn(small ? "text-[10px]" : "text-[11px]", "font-semibold leading-tight truncate", clr.text, (worked || missed) && "line-through opacity-70")}>
             {block.category && categories.find((c) => c.name === block.category)?.emoji
               ? `${categories.find((c) => c.name === block.category)!.emoji} `
               : ""}
@@ -474,10 +498,12 @@ function CalBlockCard({
                 childrenOf={childrenOf}
                 categories={categories}
                 sessionsByBlock={sessionsByBlock}
+                missedBlockIds={missedBlockIds}
                 hiddenIds={hiddenIds}
                 toggleHidden={toggleHidden}
                 onClickBlock={onClickBlock}
                 onToggleWorked={onToggleWorked}
+                onToggleMissed={onToggleMissed}
                 hourPx={hourPx}
                 interactions={interactions}
                 columnIso={columnIso}
@@ -492,7 +518,7 @@ function CalBlockCard({
 
 // ── Time column ───────────────────────────────────────────────────────────────
 
-export function TimeColumn({ date, isToday, blocks, systems, courseAssignments, scheduleEntries, actual, sleepSpans, categories, sessionsByBlock, hourPx, interactions, onClickSlot, onClickBlock, onToggleWorked }: {
+export function TimeColumn({ date, isToday, blocks, systems, courseAssignments, scheduleEntries, actual, sleepSpans, categories, sessionsByBlock, missedBlockIds, hourPx, interactions, onClickSlot, onClickBlock, onToggleWorked, onToggleMissed }: {
   date: Date; isToday: boolean;
   blocks: CalBlock[];
   systems: SystemEntry[];
@@ -505,6 +531,8 @@ export function TimeColumn({ date, isToday, blocks, systems, courseAssignments, 
   categories: CoverageCategoryOption[];
   /** Sessions already logged, keyed by the occurrence's cal_block_id. */
   sessionsByBlock: Map<number, TaskSession>;
+  /** Occurrences marked "did not complete", by cal_block_id. */
+  missedBlockIds: ReadonlySet<number>;
   /** Pixels-per-hour — the desktop zoom scale, or the fixed HOUR_PX default on mobile. */
   hourPx: number;
   /** Undefined on mobile: every U2 pointer-drag/pan code path below is gated on this. */
@@ -512,6 +540,7 @@ export function TimeColumn({ date, isToday, blocks, systems, courseAssignments, 
   onClickSlot: (date: string, time: string) => void;
   onClickBlock: (b: CalBlock) => void;
   onToggleWorked: (b: CalBlock) => void;
+  onToggleMissed: (b: CalBlock) => void;
 }) {
   const iso = toISO(date);
   const colRef = useRef<HTMLDivElement>(null);
@@ -771,10 +800,12 @@ export function TimeColumn({ date, isToday, blocks, systems, courseAssignments, 
                 childrenOf={childrenOf}
                 categories={categories}
                 sessionsByBlock={sessionsByBlock}
+                missedBlockIds={missedBlockIds}
                 hiddenIds={hiddenIds}
                 toggleHidden={toggleHidden}
                 onClickBlock={onClickBlock}
                 onToggleWorked={onToggleWorked}
+                onToggleMissed={onToggleMissed}
                 hourPx={hourPx}
                 interactions={interactions}
                 columnIso={iso}

@@ -207,6 +207,20 @@ export interface TaskSession {
   created_at: string;
 }
 
+/**
+ * A scheduled task block the user marked as NOT completed — the "missed"
+ * counterpart of a session keyed to a `cal_block_id`. Same occurrence key, so
+ * `cal_block_id` may be a recurring occurrence's negative virtual id.
+ */
+export interface BlockMiss {
+  id: number;
+  task_id: number;
+  cal_block_id: number;
+  date: string;
+  minutes: number;
+  created_at: string;
+}
+
 /** How much calendar time a task has committed, and how much it still needs. */
 export interface TaskCoverage {
   /** Minutes of calendar blocks pointing at this task (one-off + recurring occurrences). */

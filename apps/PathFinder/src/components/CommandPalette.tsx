@@ -3,7 +3,7 @@ import { Command } from "cmdk";
 import {
   LayoutDashboard, Kanban, CalendarDays, FolderKanban, BookOpen,
   CalendarRange, Gamepad2, Plus, CornerDownLeft, Search as SearchIcon,
-  Target, ListTodo, Repeat, Users,
+  Target, ListTodo, Repeat, Users, ChartColumn,
 } from "lucide-react";
 import { search as apiSearch, createTask } from "../lib/api";
 import type { Page } from "./Sidebar";
@@ -14,6 +14,7 @@ const PAGES: { id: Page; label: string; icon: React.ComponentType<{ className?: 
   { id: "dashboard", label: "Dashboard", icon: LayoutDashboard },
   { id: "workspace", label: "Workspace", icon: Kanban },
   { id: "week",      label: "Week",      icon: CalendarDays },
+  { id: "stats",     label: "Stats",     icon: ChartColumn },
   { id: "team",      label: "Team",      icon: Users },
   { id: "projects",  label: "Projects",  icon: FolderKanban },
   { id: "courses",   label: "Study",     icon: BookOpen },
