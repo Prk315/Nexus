@@ -14,44 +14,48 @@ export const LENS_LABEL: Record<Lens, string> = {
   retention: "Retention",
 };
 
-/** Per-course constellation hues, keyed by lr_course.c_id. Chosen for a
- *  near-black field: L* ~0.78–0.83 so they glow rather than sit, and ~100° of
- *  hue between each so the three constellations read apart at a glance.
- *    1  Introduction to Probability and Statistics → aqua
+/** Per-course constellation hues, keyed by lr_course.c_id. Retuned 2026-11-13
+ *  for the soft-white field (was a near-black "glow" palette): saturation up,
+ *  L* down to ~0.55–0.65 so the dots sit ON the paper instead of washing out,
+ *  still ~100° of hue apart so constellations read at a glance.
+ *    1  Introduction to Probability and Statistics → teal
  *    2  Linear Algebra                             → amber (descends from the
- *       outgoing conceptmap.html accent #b8892f, lifted for a dark field)
+ *       outgoing conceptmap.html accent #b8892f)
  *    3  Database Management Systems                → violet
  *  A course id this map has never seen falls back to steel — visible, but
  *  obviously unassigned, so a new course shows up as "needs a hue" rather
  *  than silently borrowing an existing constellation's identity. */
 export const COURSE_HUE: Record<number, string> = {
-  1: "#3FD8C4",
-  2: "#F2B23C",
-  3: "#9B7BFF",
+  1: "#0FA18F",
+  2: "#C8821A",
+  3: "#7657E8",
 };
-export const COURSE_HUE_FALLBACK = "#8A93A6";
+export const COURSE_HUE_FALLBACK = "#7A8294";
 export function courseHue(courseId: number | null | undefined): string {
   return (courseId != null && COURSE_HUE[courseId]) || COURSE_HUE_FALLBACK;
 }
 
-/** Dark-surface tokens. Mirrored in learn.css as CSS custom properties scoped
- *  to .learn-root — keep the two in sync; these are the JS-side copies the
- *  three.js layer needs (three cannot read CSS variables). */
+/** Soft-white-surface tokens (retuned 2026-11-13 from the original dark set).
+ *  Mirrored in learn.css as CSS custom properties scoped to .learn-root —
+ *  keep the two in sync; these are the JS-side copies the three.js layer
+ *  needs (three cannot read CSS variables). The ramps all flip polarity vs.
+ *  the dark theme: "cold/empty" is now pale, "hot/strong" is dark+saturated —
+ *  on paper, ink is intensity. */
 export const LR = {
-  void:        "#05060A",
-  deep:        "#0B0E17",
-  inert:       "#39404E",  // node with no memory state
-  slate:       "#3E4552",  // mastery-ramp cold end
-  unretained:  "#242A34",  // retention-lens dim end
-  ash:         "#2B3038",  // heat-ramp cold end
+  void:        "#F7F6F2",
+  deep:        "#ECEAE3",
+  inert:       "#C6CAD3",  // node with no memory state
+  slate:       "#AEB4C0",  // mastery-ramp cold end
+  unretained:  "#DBDED4",  // retention-lens dim end
+  ash:         "#DCD8CF",  // heat-ramp cold end
   ember:       "#FF6A1A",  // heat-ramp mid
-  incandescent:"#FFEFC2",  // heat-ramp hot end
-  link:        "rgba(126,140,170,0.11)",
-  linkPrereq:  "#5AA9FF",  // incoming — what the selection stands on
-  linkUnlock:  "#4ADE80",  // outgoing — what the selection unlocks
-  fg:          "#E6EAF2",
-  fgSoft:      "#A8B0C2",
-  fgMuted:     "#6C7488",
+  incandescent:"#C81E12",  // heat-ramp hot end (dark red — ink, not light)
+  link:        "rgba(70,80,105,0.16)",
+  linkPrereq:  "#2563EB",  // incoming — what the selection stands on
+  linkUnlock:  "#15803D",  // outgoing — what the selection unlocks
+  fg:          "#1A1A24",
+  fgSoft:      "#4A4F5C",
+  fgMuted:     "#7A8090",
 } as const;
 
 /** sRGB linear interpolation between two #rrggbb strings. Deliberately naive
