@@ -6,7 +6,7 @@
 
 import { useEffect, useState, useCallback, useRef, useMemo } from "react";
 import { ChevronLeft, ChevronRight, Target, Flag, GraduationCap, PanelLeft, PanelRight, PanelBottom, PanelTop, CalendarRange } from "lucide-react";
-import { getWeekItems, getAllTasks, getGoals, getPlans, getSystems, createTask, updateTask, deleteTask, toggleTask, toTaskWithContext, createGoal, updateGoal, deleteGoal, createPlan, updatePlan, deletePlan, createSystem, updateSystem, deleteSystem, markSystemDone, getCalBlocks, createCalBlock, updateCalBlock, deleteCalBlock, getTaskSessionsInRange, logTaskSession, unlogTaskOccurrence, getTaskScheduling, createRecurringCalBlock, updateRecurringCalBlock, deleteRecurringCalBlock, getDeadlines, toggleDeadline, updateCourseAssignment, getCoverageCategories, patchTask } from "../lib/api";
+import { getWeekItems, getAllTasks, getGoals, getPlans, getSystems, createTask, updateTask, deleteTask, toggleTask, toTaskWithContext, createGoal, updateGoal, deleteGoal, createPlan, updatePlan, deletePlan, createSystem, updateSystem, deleteSystem, markSystemDone, getCalBlocks, createCalBlock, updateCalBlock, deleteCalBlock, getTaskSessionsInRange, logTaskSession, unlogTaskOccurrence, getBlockMissesInRange, markBlockMissed, unmarkBlockMissed, getTaskScheduling, createRecurringCalBlock, updateRecurringCalBlock, deleteRecurringCalBlock, getDeadlines, toggleDeadline, updateCourseAssignment, getCoverageCategories, patchTask } from "../lib/api";
 import { loadActualWeek, loadSleepWeek } from "../lib/actual";
 import { Button } from "../components/ui/button";
 import { cn } from "../lib/utils";
@@ -57,6 +57,8 @@ export function Week() {
   // The raw list as well: sessionsByBlock drops freehand sessions (no
   // cal_block_id), and those are still time actually worked.
   const [sessionsInRange, setSessionsInRange] = useState<TaskSession[]>([]);
+  // Occurrences marked "did not complete" — same cal_block_id key as above.
+  const [missedBlockIds, setMissedBlockIds] = useState<Set<number>>(new Set());
   // Committed calendar minutes per task — the SAME source the board's stage gate
   // uses, so "unscheduled" means the same thing in both places. Deliberately not
   // derived from this week's calBlocks: a task due Thursday may be scheduled next
@@ -136,10 +138,11 @@ export function Week() {
   const queryEnd   = view === "week" ? end   : toISO(monthGridEnd);
 
   const load = useCallback(async () => {
-    const [wi, gp, pl, sy, cb, dl, at, ts, tc] = await Promise.all([
+    const [wi, gp, pl, sy, cb, dl, at, ts, tc, ms] = await Promise.all([
       getWeekItems(queryStart, queryEnd), getGoals(), getPlans(), getSystems(),
       getCalBlocks(queryStart, queryEnd), getDeadlines(), getAllTasks(),
       getTaskSessionsInRange(queryStart, queryEnd), getTaskScheduling(),
+      getBlockMissesInRange(queryStart, queryEnd),
     ]);
     const myUid = getUserId();
     setItems({ ...wi, tasks: wi.tasks.filter((x) => isTaskRelevantToMe(x, myUid)) });
@@ -149,6 +152,7 @@ export function Week() {
       ts.filter((x) => x.cal_block_id != null).map((x) => [x.cal_block_id!, x]),
     ));
     setSessionsInRange(ts);
+    setMissedBlockIds(new Set(ms.map((m) => m.cal_block_id)));
     setTaskCoverage(tc);
   }, [queryStart, queryEnd]);
 
@@ -452,6 +456,11 @@ export function Week() {
       });
       return next;
     });
+    // Ticking it worked clears a "did not complete" mark (logTaskSession does the same server-side).
+    if (!existing) setMissedBlockIds((prev) => {
+      if (!prev.has(block.id)) return prev;
+      const next = new Set(prev); next.delete(block.id); return next;
+    });
 
     try {
       if (existing) {
@@ -464,6 +473,36 @@ export function Week() {
           cal_block_id: block.id,
         });
       }
+    } finally {
+      load();
+    }
+  };
+
+  /**
+   * Marks a scheduled block as NOT completed, or clears that mark.
+   *
+   * The other half of the adherence ledger: a block that was neither worked nor
+   * marked counts against the rate once it is over, so this is how a skipped
+   * block gets recorded honestly rather than left hanging. Marking it missed
+   * also un-ticks it as worked — the two are exclusive per occurrence.
+   */
+  const handleToggleMissed = async (block: CalBlock) => {
+    if (block.task_id == null) return;
+    const wasMissed = missedBlockIds.has(block.id);
+
+    setMissedBlockIds((prev) => {
+      const next = new Set(prev);
+      if (wasMissed) next.delete(block.id); else next.add(block.id);
+      return next;
+    });
+    if (!wasMissed) setSessionsByBlock((prev) => {
+      if (!prev.has(block.id)) return prev;
+      const next = new Map(prev); next.delete(block.id); return next;
+    });
+
+    try {
+      if (wasMissed) await unmarkBlockMissed(block.task_id, block.id);
+      else await markBlockMissed(block);
     } finally {
       load();
     }
@@ -836,10 +875,12 @@ export function Week() {
               sleepSpans={sleepByDate.get(selectedDay)}
               categories={categories}
               sessionsByBlock={sessionsByBlock}
+              missedBlockIds={missedBlockIds}
               hourPx={HOUR_PX}
               onClickSlot={(date, time) => setModal({ kind: "create-block", date, startTime: time })}
               onClickBlock={(b) => setModal({ kind: "edit-block", block: b })}
               onToggleWorked={handleToggleWorked}
+              onToggleMissed={handleToggleMissed}
             />
           </div>
         </div>
@@ -1115,11 +1156,13 @@ export function Week() {
                       sleepSpans={sleepByDate.get(iso)}
                       categories={categories}
                       sessionsByBlock={sessionsByBlock}
+                      missedBlockIds={missedBlockIds}
                       hourPx={hourPx}
                       interactions={interactions}
                       onClickSlot={(date, time) => setModal({ kind: "create-block", date, startTime: time })}
                       onClickBlock={(b) => setModal({ kind: "edit-block", block: b })}
                       onToggleWorked={handleToggleWorked}
+                      onToggleMissed={handleToggleMissed}
                     />
                   );
                 })}

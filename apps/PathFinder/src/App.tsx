@@ -22,6 +22,7 @@ import { Learn } from "./pages/Learn";
 import { Projects } from "./pages/Projects";
 import { Games } from "./pages/Games";
 import { Schedules } from "./pages/Schedules";
+import { Stats } from "./pages/Stats";
 import { Workspace } from "./pages/Workspace";
 import { Team } from "./pages/Team";
 import { CommandPalette } from "./components/CommandPalette";
@@ -150,6 +151,7 @@ function App() {
           {page === "dashboard" && <Dashboard />}
           {page === "workspace" && <Workspace />}
           {page === "week"      && <Week />}
+          {page === "stats"     && <Stats />}
           {page === "team"      && <Team />}
           {page === "projects"  && <Projects />}
           {page === "courses"   && <Courses />}

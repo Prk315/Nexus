@@ -5,9 +5,9 @@ import {
 } from "./_shared";
 import { getTeamOrFilter } from "./teams";
 import type {
-  CalBlock, CompletionMode, Priority, SystemEntry, Task, TaskCoverage, TaskPlanning, TaskSession, TaskStage, TaskType, TaskWithContext, Urgency,
+  BlockMiss, CalBlock, CompletionMode, Priority, SystemEntry, Task, TaskCoverage, TaskPlanning, TaskSession, TaskStage, TaskType, TaskWithContext, Urgency,
 } from "../../types";
-import { coverageByTask } from "../taskTree";
+import { blockMinutes, coverageByTask } from "../taskTree";
 import { createSystem } from "./systems";
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -537,6 +537,11 @@ export const logTaskSession = async (payload: {
     : supabase.from("pf_task_sessions").insert(row);
   const { data, error } = await q.select().single();
   if (error) err(error);
+  // Worked and missed are mutually exclusive per occurrence: ticking a block
+  // off clears an earlier "did not complete" mark on it.
+  if (payload.cal_block_id != null) {
+    await unmarkBlockMissed(payload.task_id, payload.cal_block_id);
+  }
   return mapTaskSession(data!);
 };
 
@@ -548,6 +553,54 @@ export const deleteTaskSession = async (id: number): Promise<void> => {
 /** Removes the session logged against a specific calendar occurrence, if any. */
 export const unlogTaskOccurrence = async (taskId: number, calBlockId: number): Promise<void> => {
   const { error } = await supabase.from("pf_task_sessions").delete()
+    .eq("task_id", taskId).eq("cal_block_id", calBlockId);
+  if (error) err(error);
+};
+
+// ─── Missed blocks ──────────────────────────────────────────────────────────
+
+const mapBlockMiss = (r: any): BlockMiss => ({
+  id: num(r.id),
+  task_id: num(r.task_id),
+  cal_block_id: num(r.cal_block_id),
+  date: r.date,
+  minutes: r.minutes ?? 0,
+  created_at: r.created_at,
+});
+
+/** Every "did not complete" mark in a date range — the other half of the adherence ledger. */
+export const getBlockMissesInRange = async (
+  startDate: string, endDate: string,
+): Promise<BlockMiss[]> => {
+  const { data, error } = await supabase
+    .from("pf_block_misses").select("*")
+    .eq("user_id", getUserId())
+    .gte("date", startDate).lte("date", endDate);
+  if (error) err(error);
+  return (data ?? []).map(mapBlockMiss);
+};
+
+/**
+ * Marks a scheduled occurrence as not completed.
+ *
+ * Done and missed are mutually exclusive, so this also drops any session that
+ * ticked the same occurrence off as worked.
+ */
+export const markBlockMissed = async (block: CalBlock): Promise<void> => {
+  if (block.task_id == null) return;
+  await unlogTaskOccurrence(block.task_id, block.id);
+  const { error } = await supabase.from("pf_block_misses").upsert({
+    user_id: getUserId(),
+    task_id: block.task_id,
+    cal_block_id: block.id,
+    date: block.date,
+    minutes: blockMinutes(block.start_time, block.end_time),
+  }, { onConflict: "task_id,cal_block_id" });
+  if (error) err(error);
+};
+
+export const unmarkBlockMissed = async (taskId: number, calBlockId: number): Promise<void> => {
+  const { error } = await supabase.from("pf_block_misses").delete()
     .eq("task_id", taskId).eq("cal_block_id", calBlockId);
   if (error) err(error);
 };
