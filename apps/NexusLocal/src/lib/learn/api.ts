@@ -588,6 +588,51 @@ export async function fetchSolvedDrillIds(drillIds: string[]): Promise<Set<strin
 
 const REVIEW_QUEUE_SIZE = 30; // was 10; raised with the day-cap (90) so a session is a third of the day, not a ninth
 
+// ── Card flags ──────────────────────────────────────────────────────────────
+// A user judgement that a specific card is broken. `item_ref` is the drill id
+// (same key as lr_attempt_log), so authored and synthesized drills flag the
+// same way. Unresolved flags are excluded from every future review queue;
+// clearing `resolved_at` (manual, after fixing the card) lets it back in.
+
+export const CARD_FLAG_REASONS = [
+  { value: "duplicate", label: "Duplicate" },
+  { value: "missing_info", label: "Missing information" },
+  { value: "unclear", label: "Unclear" },
+  { value: "wrong", label: "Wrong" },
+  { value: "bad", label: "Bad card" },
+] as const;
+export type CardFlagReason = (typeof CARD_FLAG_REASONS)[number]["value"];
+
+/** One active flag per card: flagging again replaces the reason. */
+export async function flagCard(params: {
+  itemRef: string;
+  conceptId: string | null;
+  reason: CardFlagReason;
+}): Promise<void> {
+  const { error } = await supabasePublic.from("lr_card_flags").upsert(
+    {
+      user_id: await nodeUserId(),
+      item_ref: params.itemRef,
+      concept_id: params.conceptId,
+      reason: params.reason,
+      resolved_at: null,
+    },
+    { onConflict: "user_id,item_ref" }
+  );
+  if (error) throw error;
+}
+
+/** Drill ids with an unresolved flag — the review queue's exclusion set. */
+export async function fetchFlaggedItemRefs(): Promise<Set<string>> {
+  const { data, error } = await supabasePublic
+    .from("lr_card_flags")
+    .select("item_ref")
+    .eq("user_id", await nodeUserId())
+    .is("resolved_at", null);
+  if (error) throw error;
+  return new Set((data ?? []).map((r) => r.item_ref as string));
+}
+
 /** One resolved drill in a review session, plus the bookkeeping ReviewSession.tsx needs. */
 export interface ReviewQueueItem {
   drill: Drill;
@@ -669,6 +714,13 @@ export async function fetchReviewQueue(limit: number = REVIEW_QUEUE_SIZE): Promi
     if (due.length === 0) return [];
   } catch { /* fail-open */ }
 
+  // Cards the user has flagged as broken never come back while the flag is
+  // unresolved. Fail-open: an unreadable flag table must not empty the queue.
+  let flagged = new Set<string>();
+  try {
+    flagged = await fetchFlaggedItemRefs();
+  } catch { /* fail-open */ }
+
   const unitIds = Array.from(new Set(due.map((d) => d.unit_id)));
   const contentEntries = await Promise.all(
     unitIds.map(async (uid) => [uid, await fetchUnitContent(uid).catch(() => null)] as const)
@@ -688,6 +740,7 @@ export async function fetchReviewQueue(limit: number = REVIEW_QUEUE_SIZE): Promi
       const groupCovers = group.concept_ids.includes(dc.concept_id);
       for (const drill of group.drills) {
         const drillCovers = groupCovers || (drill.concept_ids?.includes(dc.concept_id) ?? false);
+        if (flagged.has(drill.id)) continue;
         if (drillCovers) {
           candidates.push({ drill, group, archetype: group.archetype });
           allCandidateIds.add(drill.id);
@@ -767,10 +820,10 @@ export async function fetchReviewQueue(limit: number = REVIEW_QUEUE_SIZE): Promi
   // selv". Deterministisk (hash-shuffle af concept_id): samme kø, samme dag.
   if (items.length < limit) {
     try {
-      const extra = await memoryWideDue(
+      const extra = (await memoryWideDue(
         limit - items.length,
         new Set(items.map((i) => i.conceptId)),
-      );
+      )).filter((i) => !flagged.has(i.drill.id));
       // VÆV dem ind i stedet for at hænge dem bagpå: klassisk-først betød at
       // kort 1-6 altid var LA, og den der stopper efter en håndfuld kort har
       // bogstaveligt talt kun set Lineær Algebra — præcis klagen blandingen

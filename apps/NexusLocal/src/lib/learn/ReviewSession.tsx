@@ -26,10 +26,13 @@ import { useEffect, useMemo, useState } from "react";
 import type { Grade, Lens, LrMemoryState } from "./types";
 import {
   applyBlamePropagation,
+  CARD_FLAG_REASONS,
   fetchMemoryStates,
   fetchReviewQueue,
+  flagCard,
   logAttempt,
   upsertMemory,
+  type CardFlagReason,
   type ReviewQueueItem,
 } from "./api";
 import { applyGrade, defaultMemoryState, isStable, valueMean } from "./memory";
@@ -56,6 +59,9 @@ export function ReviewSession({ onClose, source, title, emptyText }: {
   const [baseline, setBaseline] = useState<Record<string, LrMemoryState>>({});
   const [memoryCache, setMemoryCache] = useState<Record<string, LrMemoryState>>({});
   const [done, setDone] = useState(false);
+  const [flagOpen, setFlagOpen] = useState(false);
+  // A menu opened over card N must not hang over card N+1.
+  useEffect(() => setFlagOpen(false), [index]);
 
   useEffect(() => {
     let alive = true;
@@ -129,6 +135,22 @@ export function ReviewSession({ onClose, source, title, emptyText }: {
     }
   }
 
+  /**
+   * Flags the current card as broken and skips it WITHOUT grading: a broken
+   * card says nothing about memory, so no applyGrade, no attempt log, no
+   * blame propagation. The flag also excludes it from every future queue
+   * (fetchReviewQueue reads lr_card_flags) until the flag is resolved.
+   */
+  function handleFlag(reason: CardFlagReason) {
+    if (!current || !queue) return;
+    setFlagOpen(false);
+    flagCard({ itemRef: current.drill.id, conceptId: current.conceptId, reason }).catch((e) =>
+      console.error("[learn] flagCard failed", e)
+    );
+    if (index + 1 < queue.length) setIndex((n) => n + 1);
+    else setDone(true);
+  }
+
   return (
     <div className="fixed inset-0 z-50 flex flex-col animate-[learn-overlay_.22s_ease-out] bg-[#F6F5F1]/97 backdrop-blur-xl text-[#1A1A24]">
       <style>{PLAYER_STYLE}</style>
@@ -149,6 +171,40 @@ export function ReviewSession({ onClose, source, title, emptyText }: {
               <span className="ml-auto shrink-0 font-mono text-[11px] tabular-nums text-[#6E6E78]">
                 {Math.min(index + 1, total)} / {total}
               </span>
+            )}
+            {current && !done && (
+              <div className="relative shrink-0">
+                <button
+                  type="button"
+                  onClick={() => setFlagOpen((v) => !v)}
+                  className="grid h-11 w-11 place-items-center rounded-lg text-[#6E6E78] active:bg-black/[0.05]"
+                  aria-label="Report a problem with this card"
+                  aria-expanded={flagOpen}
+                  title="Report a problem with this card"
+                >
+                  ⚑
+                </button>
+                {flagOpen && (
+                  <div className="absolute right-0 top-full z-10 mt-1 w-48 overflow-hidden rounded-xl border border-black/[0.08] bg-white shadow-lg">
+                    <p className="px-3 pb-1 pt-2 text-[10px] uppercase tracking-wide text-[#6E6E78]/80">
+                      What's wrong?
+                    </p>
+                    {CARD_FLAG_REASONS.map((r) => (
+                      <button
+                        key={r.value}
+                        type="button"
+                        onClick={() => handleFlag(r.value)}
+                        className="block w-full px-3 py-2 text-left text-[13px] text-[#1A1A24]/85 active:bg-black/[0.05] hover:bg-black/[0.03]"
+                      >
+                        {r.label}
+                      </button>
+                    ))}
+                    <p className="border-t border-black/[0.06] px-3 py-1.5 text-[10px] leading-snug text-[#6E6E78]/70">
+                      Skips the card and keeps it out of future sessions.
+                    </p>
+                  </div>
+                )}
+              </div>
             )}
           </div>
           {total > 0 && !done && (
