@@ -741,4 +741,7 @@ export function isCourseKey(value: string): value is CourseKey {
     || value === "kal" || value === "uml" || value === "mc" || value === "ad";
 }
 
-export const COURSE_LIST: CourseDef[] = [COURSES.la, COURSES.dbms, COURSES.pgm, COURSES.prob, COURSES.kal, COURSES.uml, COURSES.mc];
+// ⚠️ Hand-maintained: a course registered in COURSES but missing here is
+// silently invisible in the CourseSwitcher (how AD shipped unreachable on
+// 2026-11-13). Add every new course to BOTH.
+export const COURSE_LIST: CourseDef[] = [COURSES.la, COURSES.dbms, COURSES.pgm, COURSES.prob, COURSES.kal, COURSES.uml, COURSES.mc, COURSES.ad];
