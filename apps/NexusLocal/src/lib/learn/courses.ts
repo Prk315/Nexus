@@ -72,7 +72,7 @@ export interface CourseDef {
   /** `lr_course.c_id` / `lr_unit.course_id` — the one hard DB key everything
    * else in this file exists to avoid hardcoding a second time. */
   courseId: number;
-  key: "la" | "dbms" | "pgm" | "prob" | "kal" | "uml" | "mc";
+  key: "la" | "dbms" | "pgm" | "prob" | "kal" | "uml" | "mc" | "ad";
   /** Full title, this course's own language ("Lineær Algebra" — LA is
    * Danish-content, DBMS is English-content, per each course's own
    * `contentLanguage`). Used in the path header ("Learn · {title}"). */
@@ -493,6 +493,63 @@ const MC_TRANSLATE_BAR: Record<string, string> = {
   "regler-maskine": "bg-gradient-to-r from-fuchsia-500 to-indigo-500",
 };
 
+// --- Algorithms & Data Structures (CLRS 4th ed) — tre perspektiver ----------
+//
+// ide     = hvad og HVORFOR (intuitionen, designparadigmet, invarianter)
+// pseudo  = hvad algoritmen GØR (pseudokode, trin for trin, datastrukturen)
+// analyse = hvad det KOSTER (korrekthed, køretid, vækstrater, nedre grænser)
+//
+// CLRS' egen opdeling: hvert kapitel præsenterer idéen, giver pseudokoden og
+// beviser/analyserer den. Farverne genbruger triaden (cyan/indigo/fuchsia) —
+// ét kursus er aktivt ad gangen, feedback-huerne er fredede (DESIGN.md §1.2).
+const AD_LENSES: Record<string, LensToken> = {
+  ide: {
+    label: "Idé",
+    long: "Idébilledet — hvad og hvorfor",
+    hex: "#22d3ee",
+    chip: "bg-cyan-50 text-cyan-700 ring-1 ring-cyan-600/25",
+    chipOn: "bg-cyan-100 text-cyan-800 ring-1 ring-cyan-600/40",
+    dot: "bg-cyan-500",
+    edge: "border-l-2 border-cyan-500/60",
+    tint: "bg-cyan-50",
+  },
+  pseudo: {
+    label: "Pseudokode",
+    long: "Pseudokoden — hvad algoritmen gør",
+    hex: "#818cf8",
+    chip: "bg-indigo-50 text-indigo-700 ring-1 ring-indigo-600/25",
+    chipOn: "bg-indigo-100 text-indigo-800 ring-1 ring-indigo-600/40",
+    dot: "bg-indigo-500",
+    edge: "border-l-2 border-indigo-500/60",
+    tint: "bg-indigo-50",
+  },
+  analyse: {
+    label: "Analyse",
+    long: "Analysen — hvad det koster",
+    hex: "#e879f9",
+    chip: "bg-fuchsia-50 text-fuchsia-700 ring-1 ring-fuchsia-600/25",
+    chipOn: "bg-fuchsia-100 text-fuchsia-800 ring-1 ring-fuchsia-600/40",
+    dot: "bg-fuchsia-500",
+    edge: "border-l-2 border-fuchsia-500/60",
+    tint: "bg-fuchsia-50",
+  },
+};
+
+const AD_SOLID_BAR: Record<string, string> = {
+  ide: "bg-cyan-500",
+  pseudo: "bg-indigo-500",
+  analyse: "bg-fuchsia-500",
+};
+
+const AD_TRANSLATE_BAR: Record<string, string> = {
+  "ide-pseudo": "bg-gradient-to-r from-cyan-500 to-indigo-500",
+  "ide-analyse": "bg-gradient-to-r from-cyan-500 to-fuchsia-500",
+  "pseudo-ide": "bg-gradient-to-r from-indigo-500 to-cyan-500",
+  "pseudo-analyse": "bg-gradient-to-r from-indigo-500 to-fuchsia-500",
+  "analyse-ide": "bg-gradient-to-r from-fuchsia-500 to-cyan-500",
+  "analyse-pseudo": "bg-gradient-to-r from-fuchsia-500 to-indigo-500",
+};
+
 export const COURSES: Record<CourseKey, CourseDef> = {
   la: {
     courseId: 2,
@@ -648,6 +705,27 @@ export const COURSES: Record<CourseKey, CourseDef> = {
       { re: /Givet (?:som|i) regl/i, lens: "regler" },
     ],
   },
+  ad: {
+    courseId: 11,
+    key: "ad",
+    title: "Algoritmer & Datastrukturer",
+    shortLabel: "AD",
+    contentLanguage: "da",
+    itemSlugPrefix: "ad-x-",
+    hasLearnState: false,
+    // 26 units langs CLRS 4. udg. kap. 1-25 + 34 (bog-ingest 2026-11-13);
+    // forfattes unit for unit mod Unit-baren, AD 1 · U1 først.
+    complete: false,
+    lensOrder: ["ide", "pseudo", "analyse"],
+    lenses: AD_LENSES,
+    solidBar: AD_SOLID_BAR,
+    translateBar: AD_TRANSLATE_BAR,
+    sourceLensPatterns: [
+      { re: /Givet (?:som|i) (?:en )?id[eé]/i, lens: "ide" },
+      { re: /Givet (?:som|i) pseudo/i, lens: "pseudo" },
+      { re: /Givet (?:som|i) (?:en )?analys/i, lens: "analyse" },
+    ],
+  },
 };
 
 export const DEFAULT_COURSE_KEY: CourseKey = "la";
@@ -660,7 +738,7 @@ export function isCourseKey(value: string): value is CourseKey {
   // kal/uml manglede her, så et gemt kursusvalg faldt tilbage til LA ved
   // genindlæsning — rettet sammen med mc-tilføjelsen.
   return value === "la" || value === "dbms" || value === "pgm" || value === "prob"
-    || value === "kal" || value === "uml" || value === "mc";
+    || value === "kal" || value === "uml" || value === "mc" || value === "ad";
 }
 
 export const COURSE_LIST: CourseDef[] = [COURSES.la, COURSES.dbms, COURSES.pgm, COURSES.prob, COURSES.kal, COURSES.uml, COURSES.mc];
