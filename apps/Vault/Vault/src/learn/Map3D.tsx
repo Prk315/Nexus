@@ -326,8 +326,12 @@ export function Map3D({ graph, lens, courseFilter, selectedId, onSelect, active 
             map: getGlowTexture(), // module-scope, built once
             color: new THREE.Color(nodeColorFor(n, lens)),
             transparent: true,
-            opacity: 0.55,
-            blending: THREE.AdditiveBlending,
+            // NormalBlending, not Additive: additive glow ADDS light to the
+            // background, which on the soft-white field sums to ~white, i.e.
+            // invisible. A translucent tinted halo reads like ink bleed on
+            // paper instead.
+            opacity: 0.3,
+            blending: THREE.NormalBlending,
             depthWrite: false,
           }),
         );
@@ -366,7 +370,7 @@ export function Map3D({ graph, lens, courseFilter, selectedId, onSelect, active 
       const s = new SpriteText(truncate(raw.title, 48));
       s.textHeight = 6;
       s.color = LR.fg;
-      s.backgroundColor = "rgba(5,6,10,0.78)";
+      s.backgroundColor = "rgba(255,255,255,0.85)";
       s.padding = 2;
       s.borderRadius = 2;
       s.material.depthTest = false; // hover label always on top

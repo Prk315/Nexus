@@ -1,14 +1,14 @@
-/* Learn & Retain observatory. Vault's shell is a LIGHT theme (App.css:2, Luma);
-   this surface is deliberately dark — LEARN_PLAN.md's "Vault-native dark
-   aesthetic". Every token is scoped to .learn-root and NEVER to :root, so it
-   cannot leak into the Vault workspace rendered above it. JS-side mirrors of
-   these values live in learn/palette.ts (three.js can't read CSS variables) —
-   change both or the map and the panel drift apart. */
+/* Learn & Retain observatory. Retuned 2026-11-13 to a soft shadowed white
+   (was the original "Vault-native dark aesthetic") so it sits with Vault's
+   own light shell. Every token is scoped to .learn-root and NEVER to :root,
+   so it cannot leak into the Vault workspace rendered above it. JS-side
+   mirrors of these values live in learn/palette.ts (three.js can't read CSS
+   variables) — change both or the map and the panel drift apart. */
 .learn-root {
-  --lr-void: #05060A;  --lr-deep: #0B0E17;
-  --lr-panel: rgba(14,17,26,0.90);  --lr-panel-solid: #0E1119;
-  --lr-border: rgba(150,165,200,0.14);  --lr-border-strong: rgba(150,165,200,0.30);
-  --lr-fg: #E6EAF2;  --lr-fg-soft: #A8B0C2;  --lr-fg-muted: #6C7488;  --lr-fg-dim: #454C5C;
+  --lr-void: #F7F6F2;  --lr-deep: #ECEAE3;
+  --lr-panel: rgba(255,255,255,0.88);  --lr-panel-solid: #FFFFFF;
+  --lr-border: rgba(26,26,36,0.10);  --lr-border-strong: rgba(26,26,36,0.22);
+  --lr-fg: #1A1A24;  --lr-fg-soft: #4A4F5C;  --lr-fg-muted: #7A8090;  --lr-fg-dim: #ABB0BC;
   --lr-ease: cubic-bezier(0.25, 0, 0, 1);  --lr-dur: 160ms;
 
   position: relative; flex: 1; min-width: 0; min-height: 0;
@@ -20,10 +20,12 @@
    iframe's light backdrop). Two classes = specificity 0,2,0, so it wins
    regardless of which stylesheet the bundler injects first — an order-only
    override would be a coin flip once this chunk loads lazily. */
-.learn-fullbleed.learn-host { background: var(--lr-void, #05060A); display: flex; }
+.learn-fullbleed.learn-host { background: var(--lr-void, #F7F6F2); display: flex; }
 
+/* The "soft shadowed white": light at the focal point, gently vignetting
+   toward warm grey at the edges — depth from shade, not darkness. */
 .learn-map { position: absolute; inset: 0;
-  background: radial-gradient(circle at 50% 44%, #0B0E17 0%, #07080F 58%, #05060A 100%); }
+  background: radial-gradient(circle at 50% 44%, #FFFFFF 0%, #F4F2EC 58%, #E7E4DC 100%); }
 
 /* ── Full-bleed loading / error panels — never an empty map, which is
    indistinguishable from "you have learned nothing". ── */
@@ -31,7 +33,7 @@
   position: absolute; inset: 0; z-index: 2;
   display: flex; flex-direction: column; align-items: center; justify-content: center;
   gap: 12px; text-align: center; padding: 32px;
-  background: radial-gradient(circle at 50% 44%, #0B0E17 0%, #07080F 58%, #05060A 100%);
+  background: radial-gradient(circle at 50% 44%, #FFFFFF 0%, #F4F2EC 58%, #E7E4DC 100%);
 }
 .learn-panel-title { font-size: 15px; font-weight: 600; color: var(--lr-fg-soft);
   letter-spacing: 0.01em; }
@@ -43,14 +45,14 @@
   color: var(--lr-fg); font-size: 13px;
   transition: background var(--lr-dur) var(--lr-ease), border-color var(--lr-dur) var(--lr-ease);
 }
-.learn-retry:hover { background: rgba(150,165,200,0.10); border-color: var(--lr-fg-muted); }
+.learn-retry:hover { background: rgba(26,26,36,0.05); border-color: var(--lr-fg-muted); }
 
 /* ── HUD ── */
 .learn-hud { position: absolute; top: 14px; left: 14px; z-index: 3;
   display: flex; flex-direction: column; gap: 8px;
   padding: 12px 14px; border-radius: 14px;
   background: var(--lr-panel); border: 1px solid var(--lr-border);
-  backdrop-filter: blur(10px); box-shadow: 0 8px 32px rgba(0,0,0,0.45);
+  backdrop-filter: blur(10px); box-shadow: 0 8px 32px rgba(26,26,36,0.10);
   max-width: min(460px, calc(100% - 28px)); }
 
 .learn-hud-row { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; }
@@ -85,7 +87,7 @@
   transition: color var(--lr-dur) var(--lr-ease), background var(--lr-dur) var(--lr-ease);
 }
 .learn-lens:hover { color: var(--lr-fg-soft); }
-.learn-lens.active { background: rgba(150,165,200,0.12); border-color: var(--lr-border);
+.learn-lens.active { background: rgba(26,26,36,0.06); border-color: var(--lr-border);
   color: var(--lr-fg); }
 
 /* Meta row + refresh */
@@ -98,7 +100,7 @@
   color: var(--lr-fg-soft); font-size: 13px;
   transition: background var(--lr-dur) var(--lr-ease), color var(--lr-dur) var(--lr-ease);
 }
-.learn-refresh:hover:not(:disabled) { background: rgba(150,165,200,0.12); color: var(--lr-fg); }
+.learn-refresh:hover:not(:disabled) { background: rgba(26,26,36,0.06); color: var(--lr-fg); }
 .learn-refresh:disabled { opacity: 0.4; cursor: default; }
 
 /* Lens legend */
@@ -127,7 +129,7 @@
   color: var(--lr-fg-muted); font-size: 18px; line-height: 1;
   transition: color var(--lr-dur) var(--lr-ease), background var(--lr-dur) var(--lr-ease);
 }
-.learn-insp-close:hover { color: var(--lr-fg); background: rgba(150,165,200,0.12); }
+.learn-insp-close:hover { color: var(--lr-fg); background: rgba(26,26,36,0.06); }
 
 .learn-insp-title { font-size: 18px; font-weight: 700; line-height: 1.3;
   color: var(--lr-fg); padding-right: 28px; margin-bottom: 8px; }
@@ -135,11 +137,11 @@
 .learn-insp-badges { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 10px; }
 .learn-badge {
   padding: 2px 9px; border-radius: 999px; font-size: 11px; font-weight: 500;
-  background: rgba(150,165,200,0.10); border: 1px solid var(--lr-border);
+  background: rgba(26,26,36,0.05); border: 1px solid var(--lr-border);
   color: var(--lr-fg-soft); text-transform: lowercase;
 }
-.learn-badge-intuition { border-color: rgba(90,169,255,0.35); color: #9CC8FF; }
-.learn-badge-retained { border-color: rgba(74,222,128,0.35); color: #86EFAC; }
+.learn-badge-intuition { border-color: rgba(37,99,235,0.35); color: #2563EB; }
+.learn-badge-retained { border-color: rgba(21,128,61,0.35); color: #15803D; }
 
 .learn-insp-course { font-size: 12.5px; margin-bottom: 16px; line-height: 1.4; }
 .learn-insp-sep { color: var(--lr-fg-dim); }
@@ -153,8 +155,8 @@
 .learn-readout-label > span:first-child { font-weight: 600; color: var(--lr-fg);
   font-size: 11.5px; text-transform: uppercase; letter-spacing: 0.05em; }
 .learn-readout-dim { color: var(--lr-fg-dim); font-style: italic; }
-.learn-stable { color: #86EFAC; font-size: 11px; }
-.learn-bar { height: 7px; border-radius: 4px; background: #1A1E27; overflow: hidden; }
+.learn-stable { color: #15803D; font-size: 11px; }
+.learn-bar { height: 7px; border-radius: 4px; background: #E5E2DA; overflow: hidden; }
 .learn-bar-fill { height: 100%; border-radius: 4px;
   transition: width var(--lr-dur) var(--lr-ease); }
 .learn-readout-sub { font-size: 11px; color: var(--lr-fg-muted); margin-top: 4px;
@@ -186,7 +188,7 @@
   color: var(--lr-fg-soft); font-size: 12.5px; line-height: 1.35;
   transition: background var(--lr-dur) var(--lr-ease), color var(--lr-dur) var(--lr-ease);
 }
-.learn-neighbor:hover { background: rgba(150,165,200,0.08); color: var(--lr-fg); }
+.learn-neighbor:hover { background: rgba(26,26,36,0.04); color: var(--lr-fg); }
 .learn-neighbor-dot { width: 6px; height: 6px; border-radius: 50%; flex: none; }
 .learn-neighbor-title { overflow: hidden; text-overflow: ellipsis; }
 
