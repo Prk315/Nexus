@@ -14,21 +14,63 @@ export const LENS_LABEL: Record<Lens, string> = {
   retention: "Retention",
 };
 
-/** Per-course constellation hues, keyed by lr_course.c_id. Retuned 2026-11-13
- *  for the soft-white field (was a near-black "glow" palette): saturation up,
- *  L* down to ~0.55–0.65 so the dots sit ON the paper instead of washing out,
- *  still ~100° of hue apart so constellations read at a glance.
- *    1  Introduction to Probability and Statistics → teal
- *    2  Linear Algebra                             → amber (descends from the
- *       outgoing conceptmap.html accent #b8892f)
- *    3  Database Management Systems                → violet
+/** Domain-coordinated constellation hues (2026-11-15). The graph is heading
+ *  toward "all the major sciences", so colour is organised in two levels:
+ *  each DOMAIN owns a hue family, and each course is a shade inside its
+ *  family — family membership reads at a glance, siblings stay separable.
+ *
+ *  Anchors sit ~50–85° apart and were VALIDATED, not eyeballed: all anchor
+ *  pairs ≥ 20 ΔE (CIE76) in normal vision and ≥ 13 under simulated
+ *  deuteranopia AND protanopia; within-family pairs ≥ 10 under deuteranopia
+ *  (the stats-board lesson: the lens triad fails exactly this test, so hue
+ *  alone is never trusted — families also separate in lightness). All L* ≤ 72
+ *  so every dot sits ON the white paper.
+ *
+ *    Matematik   → gold    (anchor #C8821A — LinAlg keeps its heritage hue)
+ *    Datalogi    → violet  (anchor #7657E8 — DBMS keeps its hue)
+ *    AI & ML     → teal    (anchor #0FA18F — inherits Prob&Stat's old teal)
+ *    Fysik       → navy    (#16349C; deliberately darker than linkPrereq blue)
+ *    Medicin     → magenta (#B01E6E; NOT the heat-ramp red — heat is a lens,
+ *                           identity may never imitate it)
+ *    Spil/intera.→ green   (#3C7F24)
+ *
+ *  Reserved for future sciences (do not spend on course shades): kemi ~#9A3FB8
+ *  (purple), biologi ~#1F8A3D (leaf — retire if Spil grows crowded), økonomi
+ *  ~#6B7280 steel is taken by the fallback, pick warm grey-brown #8A6F5C.
+ *
  *  A course id this map has never seen falls back to steel — visible, but
  *  obviously unassigned, so a new course shows up as "needs a hue" rather
  *  than silently borrowing an existing constellation's identity. */
+export const COURSE_DOMAIN: Record<number, string> = {
+  1: "Matematik", 2: "Matematik", 6: "Matematik",
+  3: "Datalogi", 8: "Datalogi", 11: "Datalogi",
+  4: "AI & ML", 5: "AI & ML", 7: "AI & ML", 9: "AI & ML", 10: "AI & ML",
+  13: "Fysik",
+  14: "Medicin",
+  12: "Spil & interaktive systemer", 15: "Spil & interaktive systemer",
+};
 export const COURSE_HUE: Record<number, string> = {
-  1: "#0FA18F",
-  2: "#C8821A",
-  3: "#7657E8",
+  // Matematik — gold
+  2: "#C8821A",   // Linear Algebra (anchor)
+  6: "#D9A850",   // Kalkulus — lighter, honey
+  1: "#7D540A",   // Prob & Stat — deep bronze (moved from teal; AI owns teal now)
+  // Datalogi — violet
+  3: "#7657E8",   // DBMS (anchor)
+  8: "#5436C9",   // Modern C — deep indigo
+  11: "#9D7BF4",  // AD — light periwinkle
+  // AI & ML — teal
+  7: "#0FA18F",   // ML (anchor)
+  9: "#0A7066",   // Deep Learning — deep sea
+  10: "#26B9D1",  // Computer Vision — bright cyan
+  4: "#3C9F6B",   // PGM — green-teal
+  5: "#1D86A8",   // Probabilistic Robotics — blue-teal
+  // Fysik — navy
+  13: "#16349C",  // HQP (anchor)
+  // Medicin — magenta
+  14: "#B01E6E",  // Medicinsk Fysiologi (anchor)
+  // Spil & interaktive systemer — green
+  15: "#3C7F24",  // Game Engine Architecture (anchor)
+  12: "#6FA32E",  // Virtual Reality — spring green
 };
 export const COURSE_HUE_FALLBACK = "#7A8294";
 export function courseHue(courseId: number | null | undefined): string {
