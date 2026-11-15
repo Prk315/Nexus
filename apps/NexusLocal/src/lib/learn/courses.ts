@@ -72,7 +72,7 @@ export interface CourseDef {
   /** `lr_course.c_id` / `lr_unit.course_id` — the one hard DB key everything
    * else in this file exists to avoid hardcoding a second time. */
   courseId: number;
-  key: "la" | "dbms" | "pgm" | "prob" | "kal" | "uml" | "mc" | "ad" | "hqp";
+  key: "la" | "dbms" | "pgm" | "prob" | "kal" | "uml" | "mc" | "ad" | "hqp" | "mp" | "gea";
   /** Full title, this course's own language ("Lineær Algebra" — LA is
    * Danish-content, DBMS is English-content, per each course's own
    * `contentLanguage`). Used in the path header ("Learn · {title}"). */
@@ -607,6 +607,116 @@ const HQP_TRANSLATE_BAR: Record<string, string> = {
   "formalisme-kredsloeb": "bg-gradient-to-r from-fuchsia-500 to-indigo-500",
 };
 
+// --- Medicinsk Fysiologi (Boron & Boulpaep 3e) — tre perspektiver -----------
+//
+// mekanisme = hvad sker der (molekylet, kanalen, pumpen — kausalkæden)
+// system    = hvad gør det for kroppen (organ, regulering, integration)
+// klinik    = hvordan ses det (måling, normalværdier, svigt og symptom)
+//
+// Bogens egen pædagogik: hver claim-overskrift ER en mekanisme-påstand, og
+// kapitlerne integrerer op mod organsystem og klinik. Farverne genbruger
+// triaden — ét kursus er aktivt ad gangen (DESIGN.md §1.2).
+const MP_LENSES: Record<string, LensToken> = {
+  mekanisme: {
+    label: "Mekanisme",
+    long: "Mekanismen — hvad der sker, og hvorfor",
+    hex: "#22d3ee",
+    chip: "bg-cyan-50 text-cyan-700 ring-1 ring-cyan-600/25",
+    chipOn: "bg-cyan-100 text-cyan-800 ring-1 ring-cyan-600/40",
+    dot: "bg-cyan-500",
+    edge: "border-l-2 border-cyan-500/60",
+    tint: "bg-cyan-50",
+  },
+  system: {
+    label: "System",
+    long: "Systemet — hvad det gør for kroppen",
+    hex: "#818cf8",
+    chip: "bg-indigo-50 text-indigo-700 ring-1 ring-indigo-600/25",
+    chipOn: "bg-indigo-100 text-indigo-800 ring-1 ring-indigo-600/40",
+    dot: "bg-indigo-500",
+    edge: "border-l-2 border-indigo-500/60",
+    tint: "bg-indigo-50",
+  },
+  klinik: {
+    label: "Klinik",
+    long: "Klinikken — hvordan det måles, og hvordan det svigter",
+    hex: "#e879f9",
+    chip: "bg-fuchsia-50 text-fuchsia-700 ring-1 ring-fuchsia-600/25",
+    chipOn: "bg-fuchsia-100 text-fuchsia-800 ring-1 ring-fuchsia-600/40",
+    dot: "bg-fuchsia-500",
+    edge: "border-l-2 border-fuchsia-500/60",
+    tint: "bg-fuchsia-50",
+  },
+};
+
+const MP_SOLID_BAR: Record<string, string> = {
+  mekanisme: "bg-cyan-500",
+  system: "bg-indigo-500",
+  klinik: "bg-fuchsia-500",
+};
+
+const MP_TRANSLATE_BAR: Record<string, string> = {
+  "mekanisme-system": "bg-gradient-to-r from-cyan-500 to-indigo-500",
+  "mekanisme-klinik": "bg-gradient-to-r from-cyan-500 to-fuchsia-500",
+  "system-mekanisme": "bg-gradient-to-r from-indigo-500 to-cyan-500",
+  "system-klinik": "bg-gradient-to-r from-indigo-500 to-fuchsia-500",
+  "klinik-mekanisme": "bg-gradient-to-r from-fuchsia-500 to-cyan-500",
+  "klinik-system": "bg-gradient-to-r from-fuchsia-500 to-indigo-500",
+};
+
+// --- Game Engine Architecture (Gregory 4e, Vol I) — tre perspektiver --------
+//
+// arkitektur = hvordan systemet er skåret (lag, ansvar, afhængigheder)
+// kode       = hvordan det skrives (C++, data layout, APIer)
+// runtime    = hvad det koster i kørsel (frame-budget, cache, parallelisme)
+const GEA_LENSES: Record<string, LensToken> = {
+  arkitektur: {
+    label: "Arkitektur",
+    long: "Arkitekturen — hvordan systemet er skåret",
+    hex: "#22d3ee",
+    chip: "bg-cyan-50 text-cyan-700 ring-1 ring-cyan-600/25",
+    chipOn: "bg-cyan-100 text-cyan-800 ring-1 ring-cyan-600/40",
+    dot: "bg-cyan-500",
+    edge: "border-l-2 border-cyan-500/60",
+    tint: "bg-cyan-50",
+  },
+  kode: {
+    label: "Kode",
+    long: "Koden — hvordan det skrives i praksis",
+    hex: "#818cf8",
+    chip: "bg-indigo-50 text-indigo-700 ring-1 ring-indigo-600/25",
+    chipOn: "bg-indigo-100 text-indigo-800 ring-1 ring-indigo-600/40",
+    dot: "bg-indigo-500",
+    edge: "border-l-2 border-indigo-500/60",
+    tint: "bg-indigo-50",
+  },
+  runtime: {
+    label: "Runtime",
+    long: "Runtime — hvad det koster når framen kører",
+    hex: "#e879f9",
+    chip: "bg-fuchsia-50 text-fuchsia-700 ring-1 ring-fuchsia-600/25",
+    chipOn: "bg-fuchsia-100 text-fuchsia-800 ring-1 ring-fuchsia-600/40",
+    dot: "bg-fuchsia-500",
+    edge: "border-l-2 border-fuchsia-500/60",
+    tint: "bg-fuchsia-50",
+  },
+};
+
+const GEA_SOLID_BAR: Record<string, string> = {
+  arkitektur: "bg-cyan-500",
+  kode: "bg-indigo-500",
+  runtime: "bg-fuchsia-500",
+};
+
+const GEA_TRANSLATE_BAR: Record<string, string> = {
+  "arkitektur-kode": "bg-gradient-to-r from-cyan-500 to-indigo-500",
+  "arkitektur-runtime": "bg-gradient-to-r from-cyan-500 to-fuchsia-500",
+  "kode-arkitektur": "bg-gradient-to-r from-indigo-500 to-cyan-500",
+  "kode-runtime": "bg-gradient-to-r from-indigo-500 to-fuchsia-500",
+  "runtime-arkitektur": "bg-gradient-to-r from-fuchsia-500 to-cyan-500",
+  "runtime-kode": "bg-gradient-to-r from-fuchsia-500 to-indigo-500",
+};
+
 export const COURSES: Record<CourseKey, CourseDef> = {
   la: {
     courseId: 2,
@@ -805,6 +915,48 @@ export const COURSES: Record<CourseKey, CourseDef> = {
       { re: /Givet (?:som|i) (?:en )?formalism/i, lens: "formalisme" },
     ],
   },
+  mp: {
+    courseId: 14,
+    key: "mp",
+    title: "Medicinsk Fysiologi",
+    shortLabel: "MP",
+    contentLanguage: "da",
+    itemSlugPrefix: "mp-x-",
+    hasLearnState: false,
+    // 220 units langs Boron & Boulpaep 3e kap. 1-62 i LA-tæthed (~6-7
+    // koncepter/unit; TOC-claims-ingest 2026-11-14, path 2026-11-15).
+    complete: false,
+    lensOrder: ["mekanisme", "system", "klinik"],
+    lenses: MP_LENSES,
+    solidBar: MP_SOLID_BAR,
+    translateBar: MP_TRANSLATE_BAR,
+    sourceLensPatterns: [
+      { re: /Givet (?:som|i) (?:en )?mekanism/i, lens: "mekanisme" },
+      { re: /Givet (?:som|i) (?:et )?system/i, lens: "system" },
+      { re: /Givet (?:som|i) (?:en )?klinik/i, lens: "klinik" },
+    ],
+  },
+  gea: {
+    courseId: 15,
+    key: "gea",
+    title: "Game Engine Architecture",
+    shortLabel: "GEA",
+    contentLanguage: "da",
+    itemSlugPrefix: "gea-x-",
+    hasLearnState: false,
+    // 71 units langs Gregory 4e Vol I i LA-tæthed (marker-ingest 2026-11-14,
+    // path 2026-11-15).
+    complete: false,
+    lensOrder: ["arkitektur", "kode", "runtime"],
+    lenses: GEA_LENSES,
+    solidBar: GEA_SOLID_BAR,
+    translateBar: GEA_TRANSLATE_BAR,
+    sourceLensPatterns: [
+      { re: /Givet (?:som|i) (?:en )?arkitektur/i, lens: "arkitektur" },
+      { re: /Givet (?:som|i) (?:noget )?kode/i, lens: "kode" },
+      { re: /Givet (?:som|i) (?:en )?runtime/i, lens: "runtime" },
+    ],
+  },
 };
 
 export const DEFAULT_COURSE_KEY: CourseKey = "la";
@@ -818,10 +970,10 @@ export function isCourseKey(value: string): value is CourseKey {
   // genindlæsning — rettet sammen med mc-tilføjelsen.
   return value === "la" || value === "dbms" || value === "pgm" || value === "prob"
     || value === "kal" || value === "uml" || value === "mc" || value === "ad"
-    || value === "hqp";
+    || value === "hqp" || value === "mp" || value === "gea";
 }
 
 // ⚠️ Hand-maintained: a course registered in COURSES but missing here is
 // silently invisible in the CourseSwitcher (how AD shipped unreachable on
 // 2026-11-13). Add every new course to BOTH.
-export const COURSE_LIST: CourseDef[] = [COURSES.la, COURSES.dbms, COURSES.pgm, COURSES.prob, COURSES.kal, COURSES.uml, COURSES.mc, COURSES.ad, COURSES.hqp];
+export const COURSE_LIST: CourseDef[] = [COURSES.la, COURSES.dbms, COURSES.pgm, COURSES.prob, COURSES.kal, COURSES.uml, COURSES.mc, COURSES.ad, COURSES.hqp, COURSES.mp, COURSES.gea];
