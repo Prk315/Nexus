@@ -72,7 +72,7 @@ export interface CourseDef {
   /** `lr_course.c_id` / `lr_unit.course_id` — the one hard DB key everything
    * else in this file exists to avoid hardcoding a second time. */
   courseId: number;
-  key: "la" | "dbms" | "pgm" | "prob" | "kal" | "uml" | "mc" | "ad";
+  key: "la" | "dbms" | "pgm" | "prob" | "kal" | "uml" | "mc" | "ad" | "hqp";
   /** Full title, this course's own language ("Lineær Algebra" — LA is
    * Danish-content, DBMS is English-content, per each course's own
    * `contentLanguage`). Used in the path header ("Learn · {title}"). */
@@ -550,6 +550,63 @@ const AD_TRANSLATE_BAR: Record<string, string> = {
   "analyse-pseudo": "bg-gradient-to-r from-fuchsia-500 to-indigo-500",
 };
 
+// --- Hybrid Quantum Programming (Nielsen & Chuang) — tre perspektiver -------
+//
+// tilstand  = hvad systemet ER (kets, superposition, sammenfiltring, Bloch)
+// kredsloeb = hvad vi GØR ved det (gates, kredsløb, protokoller, algoritmer)
+// formalisme = hvad det BETYDER formelt (lineær algebra, beviser, grænser)
+//
+// N&C's egen rytme: hvert emne gives som tilstandsbillede, som kredsløb og
+// som sætning med bevis. Farverne genbruger triaden — ét kursus er aktivt ad
+// gangen (DESIGN.md §1.2).
+const HQP_LENSES: Record<string, LensToken> = {
+  tilstand: {
+    label: "Tilstand",
+    long: "Tilstandsbilledet — hvad systemet er",
+    hex: "#22d3ee",
+    chip: "bg-cyan-50 text-cyan-700 ring-1 ring-cyan-600/25",
+    chipOn: "bg-cyan-100 text-cyan-800 ring-1 ring-cyan-600/40",
+    dot: "bg-cyan-500",
+    edge: "border-l-2 border-cyan-500/60",
+    tint: "bg-cyan-50",
+  },
+  kredsloeb: {
+    label: "Kredsløb",
+    long: "Kredsløbet — hvad vi gør ved det",
+    hex: "#818cf8",
+    chip: "bg-indigo-50 text-indigo-700 ring-1 ring-indigo-600/25",
+    chipOn: "bg-indigo-100 text-indigo-800 ring-1 ring-indigo-600/40",
+    dot: "bg-indigo-500",
+    edge: "border-l-2 border-indigo-500/60",
+    tint: "bg-indigo-50",
+  },
+  formalisme: {
+    label: "Formalisme",
+    long: "Formalismen — hvad det betyder matematisk",
+    hex: "#e879f9",
+    chip: "bg-fuchsia-50 text-fuchsia-700 ring-1 ring-fuchsia-600/25",
+    chipOn: "bg-fuchsia-100 text-fuchsia-800 ring-1 ring-fuchsia-600/40",
+    dot: "bg-fuchsia-500",
+    edge: "border-l-2 border-fuchsia-500/60",
+    tint: "bg-fuchsia-50",
+  },
+};
+
+const HQP_SOLID_BAR: Record<string, string> = {
+  tilstand: "bg-cyan-500",
+  kredsloeb: "bg-indigo-500",
+  formalisme: "bg-fuchsia-500",
+};
+
+const HQP_TRANSLATE_BAR: Record<string, string> = {
+  "tilstand-kredsloeb": "bg-gradient-to-r from-cyan-500 to-indigo-500",
+  "tilstand-formalisme": "bg-gradient-to-r from-cyan-500 to-fuchsia-500",
+  "kredsloeb-tilstand": "bg-gradient-to-r from-indigo-500 to-cyan-500",
+  "kredsloeb-formalisme": "bg-gradient-to-r from-indigo-500 to-fuchsia-500",
+  "formalisme-tilstand": "bg-gradient-to-r from-fuchsia-500 to-cyan-500",
+  "formalisme-kredsloeb": "bg-gradient-to-r from-fuchsia-500 to-indigo-500",
+};
+
 export const COURSES: Record<CourseKey, CourseDef> = {
   la: {
     courseId: 2,
@@ -726,6 +783,27 @@ export const COURSES: Record<CourseKey, CourseDef> = {
       { re: /Givet (?:som|i) (?:en )?analys/i, lens: "analyse" },
     ],
   },
+  hqp: {
+    courseId: 13,
+    key: "hqp",
+    title: "Hybrid Quantum Programming",
+    shortLabel: "HQP",
+    contentLanguage: "da",
+    itemSlugPrefix: "hqp-x-",
+    hasLearnState: false,
+    // 15 units langs N&C kap. 1-12 (bog-ingest 2026-11-14; kap. 7/10/12 delt
+    // i to, appendiks A1-A6 bevidst udeladt — brugerbeslutning 2026-11-15).
+    complete: false,
+    lensOrder: ["tilstand", "kredsloeb", "formalisme"],
+    lenses: HQP_LENSES,
+    solidBar: HQP_SOLID_BAR,
+    translateBar: HQP_TRANSLATE_BAR,
+    sourceLensPatterns: [
+      { re: /Givet (?:som|i) (?:en )?tilstand/i, lens: "tilstand" },
+      { re: /Givet (?:som|i) (?:et )?kredsl/i, lens: "kredsloeb" },
+      { re: /Givet (?:som|i) (?:en )?formalism/i, lens: "formalisme" },
+    ],
+  },
 };
 
 export const DEFAULT_COURSE_KEY: CourseKey = "la";
@@ -738,10 +816,11 @@ export function isCourseKey(value: string): value is CourseKey {
   // kal/uml manglede her, så et gemt kursusvalg faldt tilbage til LA ved
   // genindlæsning — rettet sammen med mc-tilføjelsen.
   return value === "la" || value === "dbms" || value === "pgm" || value === "prob"
-    || value === "kal" || value === "uml" || value === "mc" || value === "ad";
+    || value === "kal" || value === "uml" || value === "mc" || value === "ad"
+    || value === "hqp";
 }
 
 // ⚠️ Hand-maintained: a course registered in COURSES but missing here is
 // silently invisible in the CourseSwitcher (how AD shipped unreachable on
 // 2026-11-13). Add every new course to BOTH.
-export const COURSE_LIST: CourseDef[] = [COURSES.la, COURSES.dbms, COURSES.pgm, COURSES.prob, COURSES.kal, COURSES.uml, COURSES.mc, COURSES.ad];
+export const COURSE_LIST: CourseDef[] = [COURSES.la, COURSES.dbms, COURSES.pgm, COURSES.prob, COURSES.kal, COURSES.uml, COURSES.mc, COURSES.ad, COURSES.hqp];
