@@ -791,8 +791,9 @@ export const COURSES: Record<CourseKey, CourseDef> = {
     contentLanguage: "da",
     itemSlugPrefix: "hqp-x-",
     hasLearnState: false,
-    // 15 units langs N&C kap. 1-12 (bog-ingest 2026-11-14; kap. 7/10/12 delt
-    // i to, appendiks A1-A6 bevidst udeladt — brugerbeslutning 2026-11-15).
+    // 55 units langs N&C kap. 1-12 i LA-tæthed (~6 koncepter/unit, pakket ved
+    // sektionsgrænser; re-split 2026-11-15). Appendiks A1-A6 bevidst udeladt
+    // — brugerbeslutning 2026-11-15.
     complete: false,
     lensOrder: ["tilstand", "kredsloeb", "formalisme"],
     lenses: HQP_LENSES,
