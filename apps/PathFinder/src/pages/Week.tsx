@@ -32,6 +32,9 @@ import { useSyncedItems } from "../components/synced/useSyncedItems";
 import { SyncedChip } from "../components/synced/SyncedCard";
 import { SyncedItemDialog } from "../components/synced/SyncedItemDialog";
 import { ScheduleProtocolDialog } from "../components/synced/ScheduleProtocolDialog";
+import { useCalReminders } from "../components/reminders/useCalReminders";
+import { ReminderDialog } from "../components/reminders/ReminderDialog";
+import type { CalReminder } from "../lib/reminders";
 import { SYNCED_KIND_LABEL } from "@nexus/core/protocol";
 
 export function Week() {
@@ -170,6 +173,29 @@ export function Week() {
   const [openSynced, setOpenSynced] = useState<SyncedItem | null>(null);
   const [scheduleAt, setScheduleAt] = useState<{ date: string; time?: string } | null>(null);
 
+  // Timed reminders (pf_task_reminders.remind_at). Ticking one completes its
+  // task, so the week's task lists reload with it.
+  const calReminders = useCalReminders(queryStart, queryEnd, load);
+  const [openReminder, setOpenReminder] = useState<CalReminder | null>(null);
+  const [reminderCreateAt, setReminderCreateAt] = useState<string | null>(null);
+  const remindersByDate = useMemo(() => {
+    const m = new Map<string, CalReminder[]>();
+    for (const r of calReminders.reminders) m.set(r.date, [...(m.get(r.date) ?? []), r]);
+    return m;
+  }, [calReminders.reminders]);
+  const remindersFor = (iso: string) => remindersByDate.get(iso) ?? [];
+  // A reminder with a time on its due date already shows at that time; its
+  // all-day chip would be the same thing twice.
+  const timedReminderOn = useMemo(
+    () => new Set(calReminders.reminders.map((r) => `${r.task_id}|${r.date}`)),
+    [calReminders.reminders],
+  );
+  const newReminderAt = (iso: string) => {
+    const d = new Date(`${iso}T09:00:00`);
+    if (iso === todayISO()) { d.setTime(Date.now() + 60 * 60_000); d.setMinutes(0, 0, 0); }
+    setReminderCreateAt(d.toISOString());
+  };
+
   // Load/save weekly focus note from localStorage
   useEffect(() => { setWeekNote(localStorage.getItem(`week_note_${start}`) ?? ""); }, [start]);
   useEffect(() => {
@@ -242,7 +268,7 @@ export function Week() {
   const prevMonth = () => setMonthStart((d) => new Date(d.getFullYear(), d.getMonth() - 1, 1));
   const nextMonth = () => setMonthStart((d) => new Date(d.getFullYear(), d.getMonth() + 1, 1));
 
-  const tasksFor             = (iso: string) => items.tasks.filter((t) => t.due_date === iso);
+  const tasksFor             = (iso: string) => items.tasks.filter((t) => t.due_date === iso && !timedReminderOn.has(`${t.id}|${iso}`));
   // A step that carries its own due date belongs in the week — but shown bare it
   // reads as an orphan, so it gets its parent as a breadcrumb.
   const taskTitleById = useMemo(
@@ -716,6 +742,12 @@ export function Week() {
     return (
       <>
         <SyncedItemDialog item={openSynced} synced={synced} onClose={() => setOpenSynced(null)} />
+        <ReminderDialog
+          reminder={openReminder}
+          createAt={reminderCreateAt}
+          state={calReminders}
+          onClose={() => { setOpenReminder(null); setReminderCreateAt(null); }}
+        />
         <ScheduleProtocolDialog
           open={scheduleAt != null}
           initialDate={scheduleAt?.date ?? today}
@@ -847,8 +879,10 @@ export function Week() {
           <span className="text-xs font-medium text-muted-foreground">{selectedLabel}</span>
           <button onClick={() => setScheduleAt({ date: selectedDay })}
             className="float-right text-[11px] text-muted-foreground hover:text-foreground">+ Protocol</button>
+          <button onClick={() => newReminderAt(selectedDay)}
+            className="float-right mr-3 text-[11px] text-muted-foreground hover:text-foreground">+ Reminder</button>
         </div>
-        <SyncedErrors synced={synced} />
+        <SyncedErrors synced={synced} reminderError={calReminders.error} />
 
         {/* All-day items for selected day */}
         {hasAllDay && (
@@ -908,6 +942,9 @@ export function Week() {
               synced={syncedFor(selectedDay)}
               onOpenSynced={setOpenSynced}
               onToggleSynced={synced.toggleItem}
+              reminders={remindersFor(selectedDay)}
+              onOpenReminder={setOpenReminder}
+              onToggleReminder={calReminders.toggle}
               sleepSpans={sleepByDate.get(selectedDay)}
               categories={categories}
               sessionsByBlock={sessionsByBlock}
@@ -983,6 +1020,10 @@ export function Week() {
           <Button size="sm" variant="outline" className="h-7 text-xs" onClick={() => setScheduleAt({ date: today >= start && today <= end ? today : start })}
             title="Schedule a training, run, meal, supplement stack or routine — it lives in Protocol">
             + Protocol
+          </Button>
+          <Button size="sm" variant="outline" className="h-7 text-xs" onClick={() => newReminderAt(today >= start && today <= end ? today : start)}
+            title="Add a reminder at a time — it shows here and in the Reminders panel">
+            + Reminder
           </Button>
           <div className="w-px h-4 bg-border" />
           {/* Actual-day overlay toggle */}
@@ -1078,7 +1119,7 @@ export function Week() {
               })}
             </div>
 
-            <SyncedErrors synced={synced} />
+            <SyncedErrors synced={synced} reminderError={calReminders.error} />
 
             {/* Shared all-day row */}
             <div className="shrink-0 flex border-b border-border bg-card/50 overflow-y-auto" style={{ maxHeight: 96 }}>
@@ -1201,6 +1242,9 @@ export function Week() {
                       synced={syncedFor(iso)}
                       onOpenSynced={setOpenSynced}
                       onToggleSynced={synced.toggleItem}
+                      reminders={remindersFor(iso)}
+                      onOpenReminder={setOpenReminder}
+                      onToggleReminder={calReminders.toggle}
                       actual={showActual ? actualByDate.get(iso) : undefined}
                       sleepSpans={sleepByDate.get(iso)}
                       categories={categories}
@@ -1277,11 +1321,14 @@ export function Week() {
  * A Protocol domain that failed to load is SAID, never rendered as an empty
  * day — "no workouts planned" and "couldn't read workouts" must not look alike.
  */
-function SyncedErrors({ synced }: { synced: ReturnType<typeof useSyncedItems> }) {
-  if (synced.errors.length === 0) return null;
+function SyncedErrors({ synced, reminderError }: { synced: ReturnType<typeof useSyncedItems>; reminderError?: string | null }) {
+  if (synced.errors.length === 0 && !reminderError) return null;
   return (
     <div className="shrink-0 px-3 py-1 text-[11px] text-destructive bg-destructive/5 border-b border-destructive/20" role="alert">
-      Protocol: couldn't load {synced.errors.map((e) => SYNCED_KIND_LABEL[e.kind].toLowerCase()).join(", ")} — {synced.errors[0].message}
+      {synced.errors.length > 0 && (
+        <p>Protocol: couldn't load {synced.errors.map((e) => SYNCED_KIND_LABEL[e.kind].toLowerCase()).join(", ")} — {synced.errors[0].message}</p>
+      )}
+      {reminderError && <p>Reminders: couldn't load — {reminderError}</p>}
     </div>
   );
 }

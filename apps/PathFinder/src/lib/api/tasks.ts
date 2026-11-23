@@ -9,6 +9,7 @@ import type {
 } from "../../types";
 import { blockMinutes, coverageByTask } from "../taskTree";
 import { sortOrderWrites } from "../groupOrder";
+import { localDayBounds, toCalReminder, type CalReminder } from "../reminders";
 import { createSystem } from "./systems";
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -253,6 +254,30 @@ export const createQuickTask = async (
   if (Object.keys(present).length === 0) return { task, attrs: null };
   await saveTaskSubtype(task.id, category, attrs);
   return { task, attrs: { task_id: task.id, ...attrs } };
+};
+
+/**
+ * Timed reminders falling on local days `start`..`end`, for the calendar.
+ * One query: the `!inner` embed brings each reminder's task title and done
+ * state, and drops a reminder row whose task the caller cannot see.
+ */
+export const getRemindersInRange = async (start: string, end: string): Promise<CalReminder[]> => {
+  const { from, to } = localDayBounds(start, end);
+  const { data, error } = await supabase
+    .from("pf_task_reminders")
+    .select("task_id, remind_at, lead_minutes, pf_tasks!inner(id, title, done)")
+    .eq("user_id", getUserId())
+    .gte("remind_at", from).lt("remind_at", to);
+  if (error) err(error);
+  return ((data ?? []) as any[])
+    .map((r) => toCalReminder({
+      task_id: num(r.task_id),
+      title: r.pf_tasks?.title ?? "Reminder",
+      done: Boolean(r.pf_tasks?.done),
+      remind_at: r.remind_at,
+      lead_minutes: r.lead_minutes,
+    }))
+    .filter((r): r is CalReminder => r != null);
 };
 
 /** All subtype rows of one sparse kind, for panels that need them in bulk. */

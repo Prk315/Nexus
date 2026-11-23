@@ -16,17 +16,14 @@ PathFinder migrated from local SQLite (via `tauri-plugin-sql`) to **Supabase** a
 
 **Current sync model — read this before assuming anything:**
 
-- Every CRUD call in `src/lib/api.ts` goes directly to Supabase. No local cache, no offline support — if the network drops, every operation throws.
-- Auth is **disabled**. Every row uses a hardcoded `USER_ID = "default"`, and every `pf_*` table has a permissive `anon_all` RLS policy (`USING (true) WITH CHECK (true)`).
-- No realtime subscriptions — multi-device awareness only on refresh.
+- Every CRUD call in `src/lib/api/` goes directly to Supabase. No local cache, no offline support — if the network drops, every operation throws.
+- **Auth is live.** Rows are scoped to `auth.uid()` (see "RLS posture" below). This
+  paragraph used to say auth was disabled with a hardcoded `USER_ID = "default"`;
+  that stopped being true and the stale claim was misleading sessions until 2026-11-23.
+- No realtime subscriptions — multi-device awareness only on refresh (the Week's
+  Protocol items and reminders also reload on window focus).
 - Last-writer-wins on concurrent edits; no conflict detection.
 - The Rust SQLite plumbing (`src-tauri/src/{db,commands}.rs`) is **dead code** — left in tree for now but no longer called from the frontend.
-
-**To turn on multi-user / multi-device safely:**
-
-- Replace `USER_ID = "default"` in `api.ts` with `auth.uid()` after wiring `supabase.auth`.
-- Migrate RLS policies from `anon_all` to `USING (user_id = auth.uid())`.
-- TimeTrackerApp's commit `c29f73c` (multi-device active timer sync) is the closest in-tree precedent — start there.
 
 **PathFinder data layer** (`apps/PathFinder/src/lib/`):
 - `supabase.ts` — creates the shared client from `VITE_SUPABASE_URL` /
@@ -236,3 +233,22 @@ additive).
 - `pf_training_*` and `pf_daily_habits` are PathFinder's own earlier models of
   the same things, effectively unused (4 sessions, last April; 0 habits). They
   are superseded by this, not yet removed — removals are strictly ordered.
+
+### Reminders on the calendar
+
+Timed reminders (`pf_task_reminders.remind_at`) render in Week and the
+Dashboard day calendar as a `rem` kind — the same seam as `syn`, and for the
+same reason: they are not `pf_cal_blocks`. Unlike synced blocks they are
+PathFinder's own data, so they go through `lib/api` (`getRemindersInRange`,
+`saveTaskSubtype`, `toggleTask`), not `@nexus/core/protocol`.
+
+- **A reminder is a point, drawn as a marker** `REMINDER_MARKER_MIN` tall so it
+  can be seen and clicked; it claims no duration.
+- **Colour comes from `reminderStatus`**, the same rule as the sidebar badge, so
+  "soon" there is amber here.
+- **Ranges are local days** (`localDayBounds`): comparing the timestamptz against
+  bare dates would use UTC days and put a 00:30 reminder on the day before.
+- **No double rendering:** a reminder with a time on its due date is dropped
+  from that day's all-day task chips.
+- "Clear time" keeps the reminder and takes it off the calendar; it stays in the
+  Reminders panel.
