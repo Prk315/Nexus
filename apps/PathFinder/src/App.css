@@ -120,6 +120,44 @@
     --sidebar-ring: oklch(0.556 0 0);
 }
 
+/*
+  Text size (Settings → Appearance → Text size). `useNexusAppearance` sets
+  `--nexus-text-scale` on <html>; every font size in the app multiplies by it.
+  Separate from UI scale, which zooms the whole layout — this grows type only.
+
+  Two halves, because the app sizes text two ways:
+
+  1. Tailwind's named sizes (`text-xs` … `text-2xl`) compile to
+     `font-size: var(--text-xs)`, so redefining the THEME VARIABLES is enough.
+     Unlayered `:root` beats Tailwind's `@layer theme` declaration. Their
+     `--text-*--line-height` companions are unitless ratios, so line height
+     follows for free.
+
+  2. Arbitrary sizes (`text-[10px]`) compile to a literal `font-size: 10px`
+     that no variable reaches, so each one used in the app is restated here.
+     ⚠️ These rules are UNLAYERED and therefore beat any variant of the same
+     property (`md:text-xs` on the same element would lose). That is safe only
+     because no element combines an arbitrary size with a variant size today —
+     `lib/textScaleCss.test.ts` asserts both that and that every arbitrary px
+     size in src/ (and nexus-core) has a rule here, so a new `text-[13px]`
+     fails a test rather than silently ignoring the slider.
+*/
+:root {
+    --text-xs: calc(0.75rem * var(--nexus-text-scale, 1));
+    --text-sm: calc(0.875rem * var(--nexus-text-scale, 1));
+    --text-base: calc(1rem * var(--nexus-text-scale, 1));
+    --text-lg: calc(1.125rem * var(--nexus-text-scale, 1));
+    --text-xl: calc(1.25rem * var(--nexus-text-scale, 1));
+    --text-2xl: calc(1.5rem * var(--nexus-text-scale, 1));
+    --text-3xl: calc(1.875rem * var(--nexus-text-scale, 1));
+}
+.text-\[8px\] { font-size: calc(8px * var(--nexus-text-scale, 1)); }
+.text-\[9px\] { font-size: calc(9px * var(--nexus-text-scale, 1)); }
+.text-\[10px\] { font-size: calc(10px * var(--nexus-text-scale, 1)); }
+.text-\[11px\] { font-size: calc(11px * var(--nexus-text-scale, 1)); }
+.text-\[12px\] { font-size: calc(12px * var(--nexus-text-scale, 1)); }
+.text-\[13px\] { font-size: calc(13px * var(--nexus-text-scale, 1)); }
+
 @layer base {
   * {
     @apply border-border outline-ring/50;
@@ -200,7 +238,7 @@
   gap: 3px;
   padding: 10px 4px 8px;
   min-height: 56px;
-  font-size: 11px;
+  font-size: calc(11px * var(--nexus-text-scale, 1));
   color: var(--muted-foreground);
   background: transparent;
   border: none;

@@ -81,6 +81,7 @@ export * from "./components/Chart2D";
 export * from "./components/Chart3D";
 export * from "./components/AppGraph3D";
 export * from "./settings";
+export * from "./colorTheme";
 export * from "./hooks/useConnectedApps";
 export * from "./hooks/useAppearance";
 export * from "./hooks/useNexusRegistration";

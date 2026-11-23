@@ -29,6 +29,7 @@ import {
 } from "./TaskDialogs";
 import { getTaskSubtype, saveTaskSubtype, getTeamMembers, type TeamMember } from "../../lib/api";
 import { useRowReorder, ReorderIndicator } from "../common";
+import { groupOrderIds, mergeSubsetOrder } from "../../lib/groupOrder";
 import { TaskPlanner } from "./TaskPlanner";
 import { StudySection } from "./StudySection";
 
@@ -432,12 +433,18 @@ export function TaskBoard({ selectedPlanId, selectedGoalId, reloadSignal, scope 
   };
 
   // Reorder within a plan bucket (only offered when group === "plan").
+  // The bucket is a FILTERED view (done hidden, search, team scope), so the
+  // swap is merged into the plan's complete root order rather than handed to
+  // reorderTasks as-is — renumbering just the visible rows would drop them
+  // into the middle of the hidden ones (lib/groupOrder.ts).
   const reorderWithin = (bucketTasks: TaskWithContext[], index: number, dir: -1 | 1) => {
     const ids = bucketTasks.map((t) => t.id);
     const j = index + dir;
     if (j < 0 || j >= ids.length) return;
     [ids[index], ids[j]] = [ids[j], ids[index]];
-    reorder.mutate(ids);
+    const planId = bucketTasks[index].plan_id;
+    const full = groupOrderIds(tasks, (t) => t.parent_id == null && t.plan_id === planId);
+    reorder.mutate(mergeSubsetOrder(full, ids) ?? ids);
   };
 
   // Props every row shares regardless of where it sits (board root or a
