@@ -20,6 +20,7 @@ import { HabitsStrip } from "../components/dashboard/HabitsStrip";
 import { WelcomeBox } from "../components/dashboard/WelcomeBox";
 import { TodoList, TaskNotice } from "../components/dashboard/TodoList";
 import { NowPanel } from "../components/dashboard/NowPanel";
+import { QuickCapture } from "../components/dashboard/QuickCapture";
 import { TaskPlanner } from "../components/workspace/TaskPlanner";
 import { nextUp, needsScheduling } from "../lib/nextUp";
 import { getDashBlockVisibility, getDashLayout, subscribeDashBlocks, type DashLayoutBlockId, type DashRegion } from "../lib/dashBlocks";
@@ -540,6 +541,8 @@ export function Dashboard() {
           {/* The notice sits above every block, whatever order they're in —
               it can come from any row (Now panel, tasks, a quick drop). */}
           {taskNotice && <TaskNotice notice={taskNotice} onDismiss={() => setTaskNotice(null)} />}
+          {/* Capture anything — task, reminder, shopping, note… (QuickCapture.tsx) */}
+          <QuickCapture onCreateTask={(title) => handleCreateTask({ title, plan_id: null, due_date: date })} />
           {mainBlocks.map((id) => renderBlock(id, "main"))}
         </div>
 

@@ -2,6 +2,7 @@ import { useState } from "react";
 import type { ReactNode } from "react";
 import { LayoutDashboard, CalendarDays, Kanban, MoreHorizontal } from "lucide-react";
 import type { Page } from "./Sidebar";
+import { QuickPanelButtons } from "./QuickPanels";
 
 const PRIMARY_TABS: { page: Page; label: string; icon: ReactNode }[] = [
   { page: "dashboard", label: "Home",      icon: <LayoutDashboard size={22} /> },
@@ -36,6 +37,14 @@ export function BottomNav({ currentPage, onNavigate }: BottomNavProps) {
             onClick={() => setShowMore(false)}
           />
           <div className="fixed bottom-[calc(4rem+env(safe-area-inset-bottom))] left-4 right-4 z-50 rounded-2xl border border-border bg-popover shadow-xl p-3 grid grid-cols-3 gap-2">
+            {/* The quick tools. On the phone there is no sidebar, so before
+                this row reminders, shopping, chores and the rest were not
+                reachable at all on iOS. Picking one closes the sheet so the
+                tool's panel isn't stacked under it. */}
+            <div className="col-span-3 flex flex-col gap-1.5 pb-2 mb-1 border-b border-border">
+              <span className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">Tools</span>
+              <QuickPanelButtons layout="row" onPick={() => setShowMore(false)} />
+            </div>
             {MORE_PAGES.map(({ page, label }) => (
               <button
                 key={page}

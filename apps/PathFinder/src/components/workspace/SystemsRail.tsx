@@ -6,6 +6,7 @@ import {
 } from "../../lib/api";
 import { Button } from "../ui/button";
 import { Dialog, DialogContent } from "../ui/dialog";
+import { IconAction } from "../common/IconAction";
 import { cn } from "../../lib/utils";
 import type { SystemEntry, SystemSubtask } from "../../types";
 import {
@@ -77,8 +78,10 @@ function SystemCard({ sys, due, subtasks, onMarkDone, onToggleSubtask, onEdit, o
           ) : allSubsDone ? (
             <span className="flex items-center gap-0.5 text-[10px] text-green-600 font-medium"><CheckCircle className="h-3 w-3" />Done</span>
           ) : null}
-          <button onClick={onEdit} className="opacity-0 group-hover:opacity-100 p-1 rounded hover:bg-secondary text-muted-foreground hover:text-foreground transition-opacity"><Pencil className="h-3 w-3" /></button>
-          <button onClick={onDelete} className="opacity-0 group-hover:opacity-100 p-1 rounded hover:bg-secondary text-muted-foreground hover:text-destructive transition-opacity"><Trash2 className="h-3 w-3" /></button>
+          <span className="flex items-center gap-0.5 opacity-0 group-hover:opacity-100 focus-within:opacity-100 [@media(hover:none)]:opacity-100 transition-opacity">
+            <IconAction title="Edit system" onClick={onEdit}><Pencil className="h-3 w-3" /></IconAction>
+            <IconAction title="Delete system" tone="danger" confirm="Delete?" onClick={onDelete}><Trash2 className="h-3 w-3" /></IconAction>
+          </span>
         </div>
       </div>
     </div>
@@ -129,13 +132,17 @@ export function SystemsRail({ onCollapse }: { onCollapse?: () => void }) {
         <span className="text-sm font-semibold text-foreground">Systems</span>
         {due.length > 0 && <span className="text-[10px] text-muted-foreground">· {due.length} due</span>}
         <div className="flex-1" />
-        <button title="New system" onClick={() => setCreating(true)} className="p-1 rounded hover:bg-secondary text-muted-foreground hover:text-foreground">
-          <Plus className="h-4 w-4" />
+        {/* Filled like the Navigator's "+ Goal": the creating action is the
+            one button in a header that should not look like the others. */}
+        <button
+          title="New system"
+          onClick={() => setCreating(true)}
+          className="inline-flex h-6 items-center gap-0.5 rounded-md bg-primary px-1.5 text-[11px] font-medium text-primary-foreground hover:bg-primary/90 transition-colors"
+        >
+          <Plus className="h-3 w-3" /> System
         </button>
         {onCollapse && (
-          <button title="Hide Systems" onClick={onCollapse} className="p-1 rounded hover:bg-secondary text-muted-foreground hover:text-foreground">
-            <PanelRightClose className="h-3.5 w-3.5" />
-          </button>
+          <IconAction title="Hide Systems" onClick={onCollapse}><PanelRightClose className="h-3.5 w-3.5" /></IconAction>
         )}
       </div>
 

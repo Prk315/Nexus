@@ -1,17 +1,26 @@
 import {
-  createContext, useCallback, useContext, useEffect, useRef, useState,
-  type ComponentType,
+  createContext, useCallback, useContext, useEffect, useMemo, useRef, useState,
+  type ComponentType, type ReactNode,
 } from "react";
 import {
   Bell, FileText, Zap, Calendar, Clock, Handshake,
-  Check, ChevronDown, ChevronRight, Plus, X,
-  Brush, ShoppingCart, RefreshCw, Flame, Repeat, AlarmClock,
+  Check, ChevronDown, ChevronRight, Plus, X, Pencil, GripVertical,
+  Brush, ShoppingCart, RefreshCw, Flame, Repeat, AlarmClock, Trash2,
 } from "lucide-react";
 import { cn } from "../lib/utils";
 import { isSystemDue, frequencyLabel } from "../lib/systems";
 import {
-  getQuickTasks, createTask, toggleTask, deleteTask,
-  getTaskSubtypeRows, promoteChoreToSystem,
+  LEAD_OPTIONS, compareReminders, fromLocalInputValue, isReminderActionable,
+  reminderPresets, reminderStatus, toLocalInputValue,
+  type ReminderMeta, type ReminderStatus,
+} from "../lib/reminders";
+import {
+  distinctCategories, groupByCategory, parseChoreInput, parseShoppingInput,
+} from "../lib/quickItems";
+import { clampFloatRect, clampWidth, parseStoredPos, parseStoredWidth } from "../lib/paneLayout";
+import {
+  getQuickTasks, createQuickTask, toggleTask, deleteTask,
+  getTaskSubtypeRows, saveTaskSubtype, promoteChoreToSystem,
   getSystems, markSystemDone, unmarkSystemDone, getSystemSubtasks, toggleSystemSubtask,
   getQuickNotes, addQuickNote, deleteQuickNote,
   getBrainDump, addBrainEntry, deleteBrainEntry,
@@ -25,229 +34,564 @@ import type {
 } from "../types";
 
 /**
- * The six side-tools — reminders, quick notes, brain dump, events, deadlines,
- * agreements — extracted out of the dashboard.
+ * The side-tools — reminders, chores, shopping, systems, quick notes, brain
+ * dump, events, deadlines, agreements.
  *
- * They used to be a full-width strip of six labelled buttons pinned above the
+ * They used to be a full-width strip of labelled buttons pinned above the
  * dashboard's content, which spent a prominent row on things that are relevant
- * a few times a day. They now live as icons in the sidebar, below a divider that
- * separates them from navigation: they are *tools*, not places.
+ * a few times a day. They now live as icon "boxes" — in the sidebar below a
+ * divider (they are *tools*, not places), on the Dashboard's capture bar, and in
+ * the phone's More sheet, where there is no sidebar at all.
  *
  * NEXT STEPS — reminders do not actually fire yet.
  *
  * `pf_task_reminders.remind_at` is currently *surfaced*, not delivered: due
- * reminders sort to the top of the panel, turn amber, and are what the sidebar
- * badge counts. Nothing notifies you, because nothing in this ecosystem can —
- * there is no UNUserNotificationCenter anywhere in the repo, and the free
- * sideload tier has neither silent push nor BGTaskScheduler (see CLAUDE.md).
+ * reminders sort to the top of the panel, change colour, are what the sidebar
+ * badge counts. Nothing
+ * notifies you, because nothing in this ecosystem can — there is no
+ * UNUserNotificationCenter anywhere in the repo, and the free sideload tier has
+ * neither silent push nor BGTaskScheduler (see CLAUDE.md).
  *
+ * `lead_minutes` is honoured the only way it can be without delivery: inside the
+ * lead window a reminder turns "soon" and joins the badge early (lib/reminders.ts).
  * The intended home for real delivery is Nexus Local, which already runs a
  * daemon loop on the Mac and is the one native app on the phone:
  *   - Mac:   a grid-module tick reads due reminders and posts a notification.
  *   - Phone: schedule UNCalendarNotificationTrigger alerts on foreground, for
  *            the reminders known at that moment.
- * `lead_minutes` is stored and unused until then — it only means something once
- * something can fire early.
  *
  * Owning their own data is what makes that possible. Nothing else on the
- * dashboard ever read these six slices, so lifting them out of that page removed
- * six state variables, six loads and eighteen handlers from a 3000-line file —
- * and, as a side effect, made every tool reachable from any page rather than
- * only the dashboard.
+ * dashboard ever read these slices, so lifting them out of that page removed
+ * state, loads and handlers from a 3000-line file — and made every tool
+ * reachable from any page rather than only the dashboard.
  */
 
+// ── Shared row pieces ────────────────────────────────────────────────────────
+
+function Checkbox({ done, onClick }: { done: boolean; onClick: () => void }) {
+  return (
+    <button
+      onClick={onClick}
+      className={cn(
+        "flex h-3.5 w-3.5 shrink-0 items-center justify-center rounded-[4px] border transition-colors",
+        done ? "bg-primary border-primary text-primary-foreground" : "border-border hover:border-primary",
+      )}
+    >
+      {done && <Check className="h-2 w-2" />}
+    </button>
+  );
+}
+
+const hoverBtn = "shrink-0 p-0.5 rounded text-muted-foreground opacity-0 group-hover:opacity-100 focus:opacity-100 [@media(hover:none)]:opacity-100 transition-all";
 
 /**
- * A quick-task list: one of the reminder / chore / shopping categories.
+ * One quick-task line: checkbox, optional leading chip, title, optional trailing
+ * chip, hover actions, and an optional editor slot underneath.
  *
- * These are created on the phone via Nexus Local's quick-capture, so the panel
- * is deliberately thin — a title, a checkbox and a delete. They carry no plan,
- * no breakdown and no lifecycle, which is exactly what the sparse ISA subtypes
- * say about them.
- *
- * Note this REPLACED a panel backed by a separate `pf_reminders` table, which
- * held zero rows — every reminder the user actually has is a quick task. Pointing
- * the Reminders icon at that empty table while the real ones sat in the
- * dashboard's task list was the routing bug this fixed. The table has since been
- * dropped.
+ * These lists are created mostly from Nexus Local on the phone, so the row stays
+ * thin — a title and a box. The sparse ISA subtypes are what give each kind its
+ * one or two extra attributes, and those are what the chips show.
  */
-function QuickTaskPanel({ tasks, category, remindAt, onToggle, onDelete, onAdd, onMakeRecurring }: {
-  tasks: Task[];
-  category: TaskCategory;
-  /** task_id -> remind_at ISO, for the reminder category only. */
-  remindAt?: Map<number, string>;
+function QuickRow({ task, onToggle, onDelete, leading, trailing, actions, below }: {
+  task: Task;
   onToggle: (id: number) => void;
   onDelete: (id: number) => void;
-  onAdd: (title: string, category: TaskCategory) => void;
-  /** Chores only — promotes into a recurring system. */
-  onMakeRecurring?: (id: number, intervalDays: number) => void;
+  leading?: ReactNode;
+  trailing?: ReactNode;
+  actions?: ReactNode;
+  below?: ReactNode;
+}) {
+  return (
+    <div className="group flex flex-col gap-1 rounded-md px-1 py-1 hover:bg-secondary/50 transition-colors">
+      <div className="flex items-center gap-2">
+        <Checkbox done={task.done} onClick={() => onToggle(task.id)} />
+        {leading}
+        <span className={cn("flex-1 min-w-0 truncate text-xs", task.done && "line-through text-muted-foreground")}>
+          {task.title}
+        </span>
+        {trailing}
+        {actions}
+        <button onClick={() => onDelete(task.id)} title="Delete" className={cn(hoverBtn, "hover:text-destructive")}>
+          <X className="h-3 w-3" />
+        </button>
+      </div>
+      {below}
+    </div>
+  );
+}
+
+function AddBar({ placeholder, onSubmit, hint, children }: {
+  placeholder: string;
+  onSubmit: (text: string) => void;
+  /** Live preview of how the shorthand will be read. */
+  hint?: (text: string) => ReactNode;
+  children?: ReactNode;
 }) {
   const [draft, setDraft] = useState("");
-  const now = Date.now();
-
-  // Reminders sort by when they are due, soonest first, with undated ones last —
-  // an unsorted reminder list buries the thing that is actually due today. The
-  // other categories keep their natural order.
-  const byDue = (a: Task, b: Task) => {
-    const ra = remindAt?.get(a.id), rb = remindAt?.get(b.id);
-    if (ra && rb) return ra.localeCompare(rb);
-    if (ra) return -1;
-    if (rb) return 1;
-    return 0;
-  };
-  const open = tasks.filter((t) => !t.done).sort(remindAt ? byDue : () => 0);
-  const done = tasks.filter((t) => t.done);
-
   const submit = () => {
     const v = draft.trim();
     if (!v) return;
-    onAdd(v, category);
+    onSubmit(v);
     setDraft("");
   };
-
   return (
-    <div className="flex flex-col gap-2">
+    <div className="flex flex-col gap-1">
       <div className="flex gap-1.5">
         <input
           value={draft}
           onChange={(e) => setDraft(e.target.value)}
           onKeyDown={(e) => { if (e.key === "Enter") submit(); }}
-          placeholder="Add… (Enter)"
+          placeholder={placeholder}
           className="flex-1 min-w-0 rounded-md border border-border bg-transparent px-2 py-1 text-xs outline-none focus:ring-1 focus:ring-ring placeholder:text-muted-foreground/50"
         />
         <button
           onClick={submit}
           disabled={!draft.trim()}
-          className="shrink-0 rounded-md border border-border px-1.5 text-muted-foreground hover:text-foreground hover:bg-secondary transition-colors disabled:opacity-30"
+          title="Add"
+          className="shrink-0 rounded-md bg-primary px-1.5 text-primary-foreground hover:bg-primary/90 transition-colors disabled:opacity-30"
         >
           <Plus className="h-3.5 w-3.5" />
         </button>
       </div>
+      {hint && draft.trim() && <div className="pl-0.5 text-[10px] text-muted-foreground">{hint(draft)}</div>}
+      {children}
+    </div>
+  );
+}
+
+function GroupHeader({ label, count }: { label: string | null; count: number }) {
+  return (
+    <div className="flex items-center gap-1.5 px-1 pt-1.5 pb-0.5 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground/70">
+      <span className="truncate">{label ?? "Other"}</span>
+      <span className="opacity-60 tabular-nums">{count}</span>
+    </div>
+  );
+}
+
+/** Two-click destructive button: the first click arms it, the second commits. */
+function ArmedButton({ label, armedLabel, onConfirm }: { label: string; armedLabel: string; onConfirm: () => void }) {
+  const [armed, setArmed] = useState(false);
+  useEffect(() => {
+    if (!armed) return;
+    const t = setTimeout(() => setArmed(false), 3000);
+    return () => clearTimeout(t);
+  }, [armed]);
+  return (
+    <button
+      onClick={() => { if (armed) { setArmed(false); onConfirm(); } else setArmed(true); }}
+      className={cn(
+        "inline-flex items-center gap-1 rounded px-1.5 py-px text-[10px] font-medium transition-colors",
+        armed ? "bg-destructive text-white" : "text-muted-foreground hover:text-destructive hover:bg-destructive/10",
+      )}
+    >
+      <Trash2 className="h-2.5 w-2.5" />
+      {armed ? armedLabel : label}
+    </button>
+  );
+}
+
+/** Inline editor for one or two free-text subtype attributes (store, area…). */
+function AttrEditor({ fields, initial, onSave, onClose }: {
+  fields: { key: string; label: string; placeholder: string; suggestions?: string[] }[];
+  initial: Record<string, string | null | undefined>;
+  onSave: (values: Record<string, string | null>) => void;
+  onClose: () => void;
+}) {
+  const [vals, setVals] = useState<Record<string, string>>(
+    () => Object.fromEntries(fields.map((f) => [f.key, initial[f.key] ?? ""])),
+  );
+  const save = () => {
+    onSave(Object.fromEntries(fields.map((f) => [f.key, vals[f.key].trim() || null])));
+    onClose();
+  };
+  return (
+    <div className="flex flex-wrap items-center gap-1.5 pl-5 pb-0.5">
+      {fields.map((f, i) => (
+        <label key={f.key} className="flex items-center gap-1 text-[10px] text-muted-foreground">
+          {f.label}
+          <input
+            autoFocus={i === 0}
+            list={f.suggestions?.length ? `qp-${f.key}-list` : undefined}
+            value={vals[f.key]}
+            placeholder={f.placeholder}
+            onChange={(e) => setVals((p) => ({ ...p, [f.key]: e.target.value }))}
+            onKeyDown={(e) => { if (e.key === "Enter") save(); if (e.key === "Escape") onClose(); }}
+            className="w-20 rounded border border-border bg-transparent px-1 py-px text-[10px] text-foreground outline-none focus:ring-1 focus:ring-ring"
+          />
+          {f.suggestions && f.suggestions.length > 0 && (
+            <datalist id={`qp-${f.key}-list`}>
+              {f.suggestions.map((s) => <option key={s} value={s} />)}
+            </datalist>
+          )}
+        </label>
+      ))}
+      <button onClick={save} className="rounded bg-primary px-1.5 py-px text-[10px] font-medium text-primary-foreground hover:bg-primary/90">Save</button>
+      <button onClick={onClose} className="rounded px-1 py-px text-[10px] text-muted-foreground hover:text-foreground">Cancel</button>
+    </div>
+  );
+}
+
+// ── Reminders ────────────────────────────────────────────────────────────────
+
+const STATUS_CHIP: Record<ReminderStatus, string> = {
+  unscheduled: "text-muted-foreground/50",
+  scheduled:   "text-muted-foreground/70",
+  soon:        "text-amber-500 font-medium",
+  due:         "text-rose-500 font-medium",
+};
+const STATUS_TITLE: Record<ReminderStatus, string> = {
+  unscheduled: "No time set — click to schedule",
+  scheduled:   "Scheduled",
+  soon:        "Inside its heads-up window",
+  due:         "Due",
+};
+
+function fmtWhen(iso: string): string {
+  return new Date(iso).toLocaleString(undefined, { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" });
+}
+
+function leadLabel(min: number | null): string | null {
+  if (!min) return null;
+  return min >= 1440 && min % 1440 === 0 ? `${min / 1440}d` : min >= 60 && min % 60 === 0 ? `${min / 60}h` : `${min}m`;
+}
+
+/** Time + heads-up controls, shared by the add form and the per-row editor. */
+function ReminderTimeFields({ value, onChange }: {
+  value: ReminderMeta;
+  onChange: (m: ReminderMeta) => void;
+}) {
+  return (
+    <div className="flex flex-col gap-1">
+      <div className="flex items-center gap-1.5">
+        <input
+          type="datetime-local"
+          value={toLocalInputValue(value.remind_at)}
+          onChange={(e) => onChange({ ...value, remind_at: fromLocalInputValue(e.target.value) })}
+          className="flex-1 min-w-0 rounded border border-border bg-transparent px-1 py-px text-[10px] tabular-nums outline-none focus:ring-1 focus:ring-ring"
+        />
+        <select
+          value={value.lead_minutes ?? ""}
+          onChange={(e) => onChange({ ...value, lead_minutes: e.target.value ? Number(e.target.value) : null })}
+          disabled={!value.remind_at}
+          title="Heads-up: the reminder turns amber and joins the badge this long before its time"
+          className="rounded border border-border bg-transparent px-1 py-px text-[10px] outline-none disabled:opacity-40"
+        >
+          {LEAD_OPTIONS.map((o) => <option key={o.label} value={o.value ?? ""}>{o.label}</option>)}
+        </select>
+      </div>
+      <div className="flex flex-wrap items-center gap-1">
+        {reminderPresets(new Date()).map((p) => (
+          <button
+            key={p.label}
+            onClick={() => onChange({ ...value, remind_at: p.iso })}
+            className="rounded-full border border-border px-1.5 py-px text-[10px] text-muted-foreground hover:text-foreground hover:bg-secondary transition-colors"
+          >
+            {p.label}
+          </button>
+        ))}
+        {value.remind_at && (
+          <button
+            onClick={() => onChange({ remind_at: null, lead_minutes: null })}
+            className="rounded-full px-1.5 py-px text-[10px] text-muted-foreground hover:text-destructive transition-colors"
+          >
+            No time
+          </button>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function RemindersPanel({ tasks, meta, onToggle, onDelete, onAdd, onSetMeta }: {
+  tasks: Task[];
+  meta: Map<number, ReminderMeta>;
+  onToggle: (id: number) => void;
+  onDelete: (id: number) => void;
+  onAdd: (title: string, m: ReminderMeta) => void;
+  onSetMeta: (id: number, m: ReminderMeta) => void;
+}) {
+  const [timing, setTiming] = useState<ReminderMeta>({ remind_at: null, lead_minutes: null });
+  const [showTime, setShowTime] = useState(false);
+  const [editing, setEditing] = useState<number | null>(null);
+  const now = Date.now();
+
+  const open = tasks.filter((t) => !t.done).sort((a, b) => compareReminders(meta.get(a.id), meta.get(b.id)));
+  const done = tasks.filter((t) => t.done);
+
+  const row = (t: Task) => {
+    const m = meta.get(t.id);
+    const status = reminderStatus(m, now);
+    const lead = leadLabel(m?.lead_minutes ?? null);
+    return (
+      <QuickRow
+        key={t.id}
+        task={t}
+        onToggle={onToggle}
+        onDelete={onDelete}
+        trailing={
+          <button
+            onClick={() => setEditing(editing === t.id ? null : t.id)}
+            title={STATUS_TITLE[status]}
+            className={cn(
+              "shrink-0 inline-flex items-center gap-0.5 rounded px-0.5 text-[10px] tabular-nums hover:bg-secondary transition-colors",
+              STATUS_CHIP[status],
+              status === "unscheduled" && "opacity-0 group-hover:opacity-100 focus:opacity-100 [@media(hover:none)]:opacity-100",
+            )}
+          >
+            <AlarmClock className="h-2.5 w-2.5" />
+            {m?.remind_at ? fmtWhen(m.remind_at) : "Set time"}
+            {lead && m?.remind_at && <span className="opacity-60">−{lead}</span>}
+          </button>
+        }
+        below={editing === t.id ? (
+          <div className="pl-5 pb-0.5">
+            <ReminderTimeFields
+              value={m ?? { remind_at: null, lead_minutes: null }}
+              onChange={(next) => onSetMeta(t.id, next)}
+            />
+          </div>
+        ) : undefined}
+      />
+    );
+  };
+
+  return (
+    <div className="flex flex-col gap-2">
+      <AddBar
+        placeholder="Remind me to… (Enter)"
+        onSubmit={(title) => {
+          onAdd(title, showTime ? timing : { remind_at: null, lead_minutes: null });
+          setTiming({ remind_at: null, lead_minutes: null });
+        }}
+      >
+        <button
+          onClick={() => setShowTime((v) => !v)}
+          className={cn(
+            "self-start inline-flex items-center gap-1 text-[10px] transition-colors",
+            showTime ? "text-foreground" : "text-muted-foreground hover:text-foreground",
+          )}
+        >
+          <AlarmClock className="h-2.5 w-2.5" />
+          {showTime ? "With a time" : "Add a time"}
+        </button>
+        {showTime && <ReminderTimeFields value={timing} onChange={setTiming} />}
+      </AddBar>
 
       {open.length === 0 && done.length === 0 && (
         <p className="text-xs text-muted-foreground italic">Nothing here.</p>
       )}
+      <div className="flex flex-col gap-0.5">{open.map(row)}</div>
+      {done.length > 0 && (
+        <div className="flex flex-col gap-0.5 pt-1.5 border-t border-border/60">{done.map(row)}</div>
+      )}
+    </div>
+  );
+}
 
-      <div className="flex flex-col gap-0.5">
-        {open.map((t) => (
-          <QuickTaskRow
-            key={t.id}
-            task={t}
-            remindAt={remindAt?.get(t.id)}
-            now={now}
-            onToggle={onToggle}
-            onDelete={onDelete}
-            onMakeRecurring={onMakeRecurring}
+// ── Shopping ─────────────────────────────────────────────────────────────────
+
+interface ShoppingMeta { quantity: string | null; store: string | null }
+
+function ShoppingPanel({ tasks, meta, onToggle, onDelete, onAdd, onSetMeta, onClearDone }: {
+  tasks: Task[];
+  meta: Map<number, ShoppingMeta>;
+  onToggle: (id: number) => void;
+  onDelete: (id: number) => void;
+  onAdd: (raw: string) => void;
+  onSetMeta: (id: number, m: ShoppingMeta) => void;
+  onClearDone: (ids: number[]) => void;
+}) {
+  const [editing, setEditing] = useState<number | null>(null);
+  const stores = useMemo(() => distinctCategories([...meta.values()].map((m) => m.store)), [meta]);
+  const open = tasks.filter((t) => !t.done);
+  const done = tasks.filter((t) => t.done);
+  // Grouping only appears once a store is actually in use — a single "Other"
+  // heading over an ungrouped list is noise.
+  const grouped = open.some((t) => meta.get(t.id)?.store);
+  const groups = grouped ? groupByCategory(open, (t) => meta.get(t.id)?.store) : [{ key: null, label: null, items: open }];
+
+  const row = (t: Task) => {
+    const m = meta.get(t.id);
+    return (
+      <QuickRow
+        key={t.id}
+        task={t}
+        onToggle={onToggle}
+        onDelete={onDelete}
+        leading={m?.quantity ? (
+          <span className="shrink-0 rounded bg-secondary px-1 text-[10px] font-medium tabular-nums text-foreground/80">{m.quantity}</span>
+        ) : undefined}
+        trailing={!grouped && m?.store ? (
+          <span className="shrink-0 max-w-20 truncate text-[10px] text-muted-foreground/70">@{m.store}</span>
+        ) : undefined}
+        actions={
+          <button onClick={() => setEditing(editing === t.id ? null : t.id)} title="Quantity & store" className={cn(hoverBtn, "hover:text-foreground")}>
+            <Pencil className="h-3 w-3" />
+          </button>
+        }
+        below={editing === t.id ? (
+          <AttrEditor
+            fields={[
+              { key: "quantity", label: "Qty", placeholder: "2, 500 g" },
+              { key: "store", label: "Store", placeholder: "Netto", suggestions: stores },
+            ]}
+            initial={{ quantity: m?.quantity, store: m?.store }}
+            onSave={(v) => onSetMeta(t.id, { quantity: v.quantity, store: v.store })}
+            onClose={() => setEditing(null)}
           />
+        ) : undefined}
+      />
+    );
+  };
+
+  return (
+    <div className="flex flex-col gap-2">
+      <AddBar
+        placeholder="2x milk @netto (Enter)"
+        onSubmit={onAdd}
+        hint={(raw) => {
+          const p = parseShoppingInput(raw);
+          if (!p.quantity && !p.store) return null;
+          return <>Adds <b>{p.title}</b>{p.quantity && <> · qty {p.quantity}</>}{p.store && <> · @{p.store}</>}</>;
+        }}
+      />
+
+      {open.length === 0 && done.length === 0 && (
+        <p className="text-xs text-muted-foreground italic">Nothing here.</p>
+      )}
+      <div className="flex flex-col gap-0.5">
+        {groups.map((g) => (
+          <div key={g.key ?? "__none"} className="flex flex-col gap-0.5">
+            {grouped && <GroupHeader label={g.label} count={g.items.length} />}
+            {g.items.map(row)}
+          </div>
         ))}
       </div>
-
       {done.length > 0 && (
         <div className="flex flex-col gap-0.5 pt-1.5 border-t border-border/60">
-          {done.map((t) => (
-            <QuickTaskRow key={t.id} task={t} now={now} onToggle={onToggle} onDelete={onDelete} />
-          ))}
+          <div className="flex justify-end">
+            <ArmedButton
+              label={`Clear ${done.length} checked`}
+              armedLabel="Click again to delete"
+              onConfirm={() => onClearDone(done.map((t) => t.id))}
+            />
+          </div>
+          {done.map(row)}
         </div>
       )}
     </div>
   );
 }
 
-function QuickTaskRow({ task, remindAt, now, onToggle, onDelete, onMakeRecurring }: {
-  task: Task;
-  remindAt?: string;
-  now: number;
+// ── Chores ───────────────────────────────────────────────────────────────────
+
+interface ChoreMeta { area: string | null; rotation_days: number | null }
+
+function ChoresPanel({ tasks, meta, onToggle, onDelete, onAdd, onSetArea, onMakeRecurring }: {
+  tasks: Task[];
+  meta: Map<number, ChoreMeta>;
   onToggle: (id: number) => void;
   onDelete: (id: number) => void;
-  onMakeRecurring?: (id: number, intervalDays: number) => void;
+  onAdd: (raw: string) => void;
+  onSetArea: (id: number, area: string | null) => void;
+  onMakeRecurring: (id: number, intervalDays: number) => void;
 }) {
-  const [everyDraft, setEveryDraft] = useState<string | null>(null);
-  const due = remindAt != null && new Date(remindAt).getTime() <= now;
+  const [editing, setEditing] = useState<number | null>(null);
+  const [everyFor, setEveryFor] = useState<{ id: number; draft: string } | null>(null);
+  const areas = useMemo(() => distinctCategories([...meta.values()].map((m) => m.area)), [meta]);
+  const open = tasks.filter((t) => !t.done);
+  const done = tasks.filter((t) => t.done);
+  const grouped = open.some((t) => meta.get(t.id)?.area);
+  const groups = grouped ? groupByCategory(open, (t) => meta.get(t.id)?.area) : [{ key: null, label: null, items: open }];
+
+  const commitEvery = () => {
+    if (!everyFor) return;
+    const n = Number(everyFor.draft);
+    if (Number.isFinite(n) && n >= 1) { onMakeRecurring(everyFor.id, n); setEveryFor(null); }
+  };
+
+  const row = (t: Task) => {
+    const m = meta.get(t.id);
+    return (
+      <QuickRow
+        key={t.id}
+        task={t}
+        onToggle={onToggle}
+        onDelete={onDelete}
+        trailing={!grouped && m?.area ? (
+          <span className="shrink-0 max-w-20 truncate text-[10px] text-muted-foreground/70">#{m.area}</span>
+        ) : undefined}
+        actions={!t.done ? (
+          <>
+            <button onClick={() => setEditing(editing === t.id ? null : t.id)} title="Area" className={cn(hoverBtn, "hover:text-foreground")}>
+              <Pencil className="h-3 w-3" />
+            </button>
+            <button
+              onClick={() => setEveryFor(everyFor?.id === t.id ? null : { id: t.id, draft: "7" })}
+              title="Make recurring — moves it to Systems"
+              className={cn(hoverBtn, "hover:text-foreground")}
+            >
+              <Repeat className="h-3 w-3" />
+            </button>
+          </>
+        ) : undefined}
+        below={
+          editing === t.id ? (
+            <AttrEditor
+              fields={[{ key: "area", label: "Area", placeholder: "kitchen", suggestions: areas }]}
+              initial={{ area: m?.area }}
+              onSave={(v) => onSetArea(t.id, v.area)}
+              onClose={() => setEditing(null)}
+            />
+          ) : everyFor?.id === t.id ? (
+            <div className="flex items-center gap-1.5 pl-5 pb-0.5">
+              <span className="text-[10px] text-muted-foreground">Every</span>
+              <input
+                autoFocus
+                type="number"
+                min={1}
+                value={everyFor.draft}
+                onChange={(e) => setEveryFor({ id: t.id, draft: e.target.value })}
+                onKeyDown={(e) => { if (e.key === "Escape") setEveryFor(null); if (e.key === "Enter") commitEvery(); }}
+                className="w-12 rounded border border-border bg-transparent px-1 py-px text-[10px] tabular-nums outline-none focus:ring-1 focus:ring-ring"
+              />
+              <span className="text-[10px] text-muted-foreground">days</span>
+              <button
+                onClick={commitEvery}
+                className="rounded bg-primary px-1.5 py-px text-[10px] font-medium text-primary-foreground hover:bg-primary/90 transition-colors"
+              >
+                Move to Systems
+              </button>
+            </div>
+          ) : undefined
+        }
+      />
+    );
+  };
 
   return (
-    <div className="group flex flex-col gap-1 rounded-md px-1 py-1 hover:bg-secondary/50 transition-colors">
-      <div className="flex items-center gap-2">
-      <button
-        onClick={() => onToggle(task.id)}
-        className={cn(
-          "flex h-3.5 w-3.5 shrink-0 items-center justify-center rounded-[4px] border transition-colors",
-          task.done ? "bg-primary border-primary text-primary-foreground" : "border-border hover:border-primary",
-        )}
-      >
-        {task.done && <Check className="h-2 w-2" />}
-      </button>
-      <span className={cn("flex-1 min-w-0 truncate text-xs", task.done && "line-through text-muted-foreground")}>
-        {task.title}
-      </span>
-      {/*
-        remind_at surfaces here rather than firing a notification: nothing in
-        this ecosystem can deliver one yet (no UNUserNotificationCenter anywhere,
-        and the sideload tier has no push or BGTaskScheduler). Due reminders sort
-        to the top and turn amber; that is honest about what the field currently
-        does. See NEXT STEPS at the top of this file.
-      */}
-      {remindAt && (
-        <span
-          className={cn(
-            "shrink-0 inline-flex items-center gap-0.5 text-[10px] tabular-nums",
-            due ? "text-amber-500 font-medium" : "text-muted-foreground/60",
-          )}
-          title={due ? "Due" : "Scheduled"}
-        >
-          <AlarmClock className="h-2.5 w-2.5" />
-          {new Date(remindAt).toLocaleString(undefined, {
-            day: "numeric", month: "short", hour: "2-digit", minute: "2-digit",
-          })}
-        </span>
+    <div className="flex flex-col gap-2">
+      <AddBar
+        placeholder="wipe counters #kitchen (Enter)"
+        onSubmit={onAdd}
+        hint={(raw) => {
+          const p = parseChoreInput(raw);
+          return p.area ? <>Adds <b>{p.title}</b> · #{p.area}</> : null;
+        }}
+      />
+      {open.length === 0 && done.length === 0 && (
+        <p className="text-xs text-muted-foreground italic">Nothing here.</p>
       )}
-
-      {onMakeRecurring && (
-        <button
-          onClick={() => setEveryDraft(everyDraft == null ? "7" : null)}
-          title="Make recurring — moves it to Systems"
-          className="shrink-0 p-0.5 rounded text-muted-foreground opacity-0 group-hover:opacity-100 hover:text-foreground transition-all"
-        >
-          <Repeat className="h-3 w-3" />
-        </button>
-      )}
-
-      <button
-        onClick={() => onDelete(task.id)}
-        className="shrink-0 p-0.5 rounded text-muted-foreground opacity-0 group-hover:opacity-100 hover:text-destructive transition-all"
-      >
-        <X className="h-3 w-3" />
-      </button>
+      <div className="flex flex-col gap-0.5">
+        {groups.map((g) => (
+          <div key={g.key ?? "__none"} className="flex flex-col gap-0.5">
+            {grouped && <GroupHeader label={g.label} count={g.items.length} />}
+            {g.items.map(row)}
+          </div>
+        ))}
       </div>
-
-      {everyDraft != null && onMakeRecurring && (
-        <div className="flex items-center gap-1.5 pl-5 pb-0.5">
-          <span className="text-[10px] text-muted-foreground">Every</span>
-          <input
-            autoFocus
-            type="number"
-            min={1}
-            value={everyDraft}
-            onChange={(e) => setEveryDraft(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === "Escape") setEveryDraft(null);
-              if (e.key === "Enter") {
-                const n = Number(everyDraft);
-                if (Number.isFinite(n) && n >= 1) { onMakeRecurring(task.id, n); setEveryDraft(null); }
-              }
-            }}
-            className="w-12 rounded border border-border bg-transparent px-1 py-px text-[10px] tabular-nums outline-none focus:ring-1 focus:ring-ring"
-          />
-          <span className="text-[10px] text-muted-foreground">days</span>
-          <button
-            onClick={() => {
-              const n = Number(everyDraft);
-              if (Number.isFinite(n) && n >= 1) { onMakeRecurring(task.id, n); setEveryDraft(null); }
-            }}
-            className="rounded border border-border px-1.5 py-px text-[10px] text-muted-foreground hover:text-foreground hover:bg-secondary transition-colors"
-          >
-            Move to Systems
-          </button>
-        </div>
+      {done.length > 0 && (
+        <div className="flex flex-col gap-0.5 pt-1.5 border-t border-border/60">{done.map(row)}</div>
       )}
     </div>
   );
@@ -664,7 +1008,8 @@ function AgreementsPanel({ agreements, onAdd, onDelete }: {
   );
 }
 
-// ── The sidebar-mounted tool set ─────────────────────────────────────────────
+
+// ── The tool set: provider, buttons, flyout ──────────────────────────────────
 
 export type QuickPanelId =
   | "reminders" | "chores" | "shopping" | "systems"
@@ -678,29 +1023,47 @@ export interface QuickPanelDef {
   count?: number;
 }
 
+/** What the Dashboard's capture bar can file, and where each lands. */
+export type CaptureKind = "reminder" | "chore" | "shopping" | "note" | "brain" | "event" | "deadline" | "agreement";
+
+export interface CaptureExtra {
+  /** event / deadline: YYYY-MM-DD. */
+  date?: string;
+  /** reminder: timing. */
+  reminder?: ReminderMeta;
+}
+
 interface QuickPanelsCtx {
   panels: QuickPanelDef[];
   open: QuickPanelId | null;
   toggle: (id: QuickPanelId) => void;
+  openPanel: (id: QuickPanelId) => void;
   close: () => void;
+  /** Files one item into the tool it belongs to. Rejects on failure. */
+  capture: (kind: CaptureKind, text: string, extra?: CaptureExtra) => Promise<void>;
 }
 
 const Ctx = createContext<QuickPanelsCtx | null>(null);
 
-/** Sidebar-side view of the tools. Throws outside the provider rather than silently rendering nothing. */
+/** Throws outside the provider rather than silently rendering nothing. */
 export function useQuickPanels(): QuickPanelsCtx {
   const v = useContext(Ctx);
   if (!v) throw new Error("useQuickPanels must be used inside <QuickPanelsProvider>");
   return v;
 }
 
+const IS_IOS = typeof navigator !== "undefined" && /iPhone|iPad|iPod/.test(navigator.userAgent);
+const today = () => new Date().toISOString().slice(0, 10);
+
 export function QuickPanelsProvider({ children }: { children: React.ReactNode }) {
   // Quick tasks (reminder / chore / shopping) — created almost entirely from
   // Nexus Local on the phone. One query, grouped by category here.
   const [quickTasks, setQuickTasks]     = useState<Task[]>([]);
   const [systems, setSystems]           = useState<SystemEntry[]>([]);
-  // task_id -> remind_at, from the pf_task_reminders subtype.
-  const [remindAt, setRemindAt]         = useState<Map<number, string>>(new Map());
+  // task_id -> subtype attributes, one map per sparse kind.
+  const [reminderMeta, setReminderMeta] = useState<Map<number, ReminderMeta>>(new Map());
+  const [shoppingMeta, setShoppingMeta] = useState<Map<number, ShoppingMeta>>(new Map());
+  const [choreMeta, setChoreMeta]       = useState<Map<number, ChoreMeta>>(new Map());
   const [subtaskMap, setSubtaskMap]     = useState<Record<number, SystemSubtask[]>>({});
   const [notes, setNotes]               = useState<QuickNote[]>([]);
   const [brainEntries, setBrainEntries] = useState<BrainEntry[]>([]);
@@ -709,6 +1072,8 @@ export function QuickPanelsProvider({ children }: { children: React.ReactNode })
   const [agreements, setAgreements]     = useState<Agreement[]>([]);
   const [open, setOpen]                 = useState<QuickPanelId | null>(null);
   const [loaded, setLoaded]             = useState(false);
+  const [error, setError]               = useState<string | null>(null);
+  const lastLoad = useRef(0);
 
   // Loaded on mount, not lazily on first open.
   //
@@ -716,28 +1081,33 @@ export function QuickPanelsProvider({ children }: { children: React.ReactNode })
   // meant to tell you how many unchecked items are waiting, and a badge that
   // only appears after you have already opened the panel tells you nothing. The
   // counts have to be true before the first click.
-  //
-  // The cost is small and not new — the dashboard used to issue six of these
-  // reads on every visit, and they are tiny tables.
   const load = useCallback(async () => {
-    const [qt, sys, rem, n, b, e, d, a] = await Promise.all([
-      getQuickTasks(), getSystems(), getTaskSubtypeRows("reminder"), getQuickNotes(),
-      getBrainDump(), getEvents(), getDeadlines(), getAgreements(),
+    lastLoad.current = Date.now();
+    const [qt, sys, rem, shop, chore, n, b, e, d, a] = await Promise.all([
+      getQuickTasks(), getSystems(),
+      getTaskSubtypeRows("reminder"), getTaskSubtypeRows("shopping"), getTaskSubtypeRows("chore"),
+      getQuickNotes(), getBrainDump(), getEvents(), getDeadlines(), getAgreements(),
     ]);
     setQuickTasks(qt); setSystems(sys); setNotes(n); setBrainEntries(b);
     setEvents(e); setDeadlines(d); setAgreements(a);
-    setRemindAt(new Map(
-      rem.filter((r) => r.remind_at).map((r) => [Number(r.task_id), String(r.remind_at)]),
-    ));
+    setReminderMeta(new Map(rem.map((r) => [Number(r.task_id), {
+      remind_at: r.remind_at ? String(r.remind_at) : null,
+      lead_minutes: r.lead_minutes != null ? Number(r.lead_minutes) : null,
+    }])));
+    setShoppingMeta(new Map(shop.map((r) => [Number(r.task_id), {
+      quantity: r.quantity ?? null, store: r.store ?? null,
+    }])));
+    setChoreMeta(new Map(chore.map((r) => [Number(r.task_id), {
+      area: r.area ?? null, rotation_days: r.rotation_days != null ? Number(r.rotation_days) : null,
+    }])));
 
     // Subtasks are per-system, so they can only be fetched once the systems are
     // known. Failing here must not blank the panel — a system with no subtasks
     // and a system whose subtasks failed to load look the same to the UI, so we
     // keep whatever we had rather than clearing.
-    const today = new Date().toISOString().slice(0, 10);
     try {
       const entries = await Promise.all(
-        sys.map(async (x) => [x.id, await getSystemSubtasks(x.id, today)] as [number, SystemSubtask[]]),
+        sys.map(async (x) => [x.id, await getSystemSubtasks(x.id, today())] as [number, SystemSubtask[]]),
       );
       setSubtaskMap(Object.fromEntries(entries));
     } catch { /* keep the previous map */ }
@@ -747,56 +1117,104 @@ export function QuickPanelsProvider({ children }: { children: React.ReactNode })
 
   useEffect(() => { load().catch(() => {}); }, [load]);
 
-  const toggle = useCallback((id: QuickPanelId) => {
-    setOpen((prev) => (prev === id ? null : id));
-  }, []);
+  // Quick tasks arrive from the phone (Nexus Local, the widgets) while this tab
+  // sits in the background. Refetch when the window comes back — throttled, so
+  // alt-tabbing doesn't issue ten reads a minute.
+  useEffect(() => {
+    const onVisible = () => {
+      if (document.visibilityState !== "visible") return;
+      if (Date.now() - lastLoad.current < 30_000) return;
+      load().catch(() => {});
+    };
+    window.addEventListener("focus", onVisible);
+    document.addEventListener("visibilitychange", onVisible);
+    return () => {
+      window.removeEventListener("focus", onVisible);
+      document.removeEventListener("visibilitychange", onVisible);
+    };
+  }, [load]);
 
+  const toggle = useCallback((id: QuickPanelId) => setOpen((prev) => (prev === id ? null : id)), []);
+  const openPanel = useCallback((id: QuickPanelId) => setOpen(id), []);
   const close = useCallback(() => setOpen(null), []);
 
-  const today = new Date().toISOString().slice(0, 10);
   // Counts stay undefined until the first load, so a badge never claims "0"
   // about data that simply hasn't been read yet.
   const n = (v: number) => (loaded && v > 0 ? v : undefined);
 
   const byCategory = (c: TaskCategory) => quickTasks.filter((t) => t.category === c);
   const nowMs = Date.now();
-  const actionableReminders = byCategory("reminder").filter((t) => {
-    if (t.done) return false;
-    const at = remindAt.get(t.id);
-    return !at || new Date(at).getTime() <= nowMs;
-  }).length;
+  const actionableReminders = byCategory("reminder")
+    .filter((t) => !t.done && isReminderActionable(reminderMeta.get(t.id), nowMs)).length;
   const openIn = (c: TaskCategory) => byCategory(c).filter((t) => !t.done).length;
+  const todayStr = today();
 
   const panels: QuickPanelDef[] = [
     // The three phone-captured kinds first — these are the ones with live counts
     // you act on, and they are why the rail exists.
-    // Counts what is ACTIONABLE now: undated reminders plus those whose time has
-    // passed. A reminder set for next week shouldn't sit on the badge all week —
-    // that is how a badge stops meaning anything.
+    // Reminders count what is ACTIONABLE now: undated, due, or inside their
+    // heads-up window. A reminder set for next week shouldn't sit on the badge
+    // all week — that is how a badge stops meaning anything.
     { id: "reminders",  label: "Reminders",   icon: Bell,         count: n(actionableReminders) },
     { id: "chores",     label: "Chores",      icon: Brush,        count: n(openIn("chore")) },
     { id: "shopping",   label: "Shopping",    icon: ShoppingCart, count: n(openIn("shopping")) },
     { id: "systems",    label: "Systems",     icon: RefreshCw,    count: n(systems.filter((x) => isSystemDue(x)).length) },
     { id: "notes",      label: "Quick Notes", icon: FileText,     count: n(notes.length) },
     { id: "brain",      label: "Brain Dump",  icon: Zap,          count: n(brainEntries.length) },
-    { id: "events",     label: "Events",      icon: Calendar,     count: n(events.filter((e) => e.date >= today).length) },
+    { id: "events",     label: "Events",      icon: Calendar,     count: n(events.filter((e) => e.date >= todayStr).length) },
     { id: "deadlines",  label: "Deadlines",   icon: Clock,        count: n(deadlines.filter((d) => !d.done).length) },
     { id: "agreements", label: "Agreements",  icon: Handshake,    count: n(agreements.length) },
   ];
 
-  // ── Handlers (moved verbatim from Dashboard) ──
-  const handleToggleQuickTask = async (id: number) => {
+  // ── Quick-task handlers ──
+  const fail = (e: unknown) => setError(e instanceof Error ? e.message : String(e));
+
+  const toggleQuickTask = useCallback(async (id: number) => {
     // Optimistic — a checkbox that waits on the network feels broken.
     setQuickTasks((p) => p.map((t) => (t.id === id ? { ...t, done: !t.done } : t)));
     try { await toggleTask(id); } catch { load().catch(() => {}); }
-  };
+  }, [load]);
   const handleDeleteQuickTask = async (id: number) => {
     setQuickTasks((p) => p.filter((t) => t.id !== id));
     try { await deleteTask(id); } catch { load().catch(() => {}); }
   };
-  const handleAddQuickTask = async (title: string, category: TaskCategory) => {
-    const t = await createTask({ title, category, plan_id: null });
-    setQuickTasks((p) => [t, ...p]);
+  /** Deletes one at a time: one connection per row in parallel is the shape that wedged Supabase on 2026-08-15. */
+  const handleClearDone = async (ids: number[]) => {
+    const gone = new Set(ids);
+    setQuickTasks((p) => p.filter((t) => !gone.has(t.id)));
+    try { for (const id of ids) await deleteTask(id); } catch (e) { fail(e); load().catch(() => {}); }
+  };
+
+  const addReminder = async (title: string, m: ReminderMeta) => {
+    const { task } = await createQuickTask("reminder", title, { remind_at: m.remind_at, lead_minutes: m.remind_at ? m.lead_minutes : null });
+    setQuickTasks((p) => [task, ...p]);
+    if (m.remind_at) setReminderMeta((p) => new Map(p).set(task.id, m));
+  };
+  const addShopping = async (raw: string) => {
+    const { title, quantity, store } = parseShoppingInput(raw);
+    const { task } = await createQuickTask("shopping", title, { quantity, store });
+    setQuickTasks((p) => [task, ...p]);
+    if (quantity || store) setShoppingMeta((p) => new Map(p).set(task.id, { quantity, store }));
+  };
+  const addChore = async (raw: string) => {
+    const { title, area } = parseChoreInput(raw);
+    const { task } = await createQuickTask("chore", title, { area });
+    setQuickTasks((p) => [task, ...p]);
+    if (area) setChoreMeta((p) => new Map(p).set(task.id, { area, rotation_days: null }));
+  };
+
+  const setReminder = async (id: number, m: ReminderMeta) => {
+    const next = { remind_at: m.remind_at, lead_minutes: m.remind_at ? m.lead_minutes : null };
+    setReminderMeta((p) => new Map(p).set(id, next));
+    try { await saveTaskSubtype(id, "reminder", next); } catch (e) { fail(e); load().catch(() => {}); }
+  };
+  const setShopping = async (id: number, m: ShoppingMeta) => {
+    setShoppingMeta((p) => new Map(p).set(id, m));
+    try { await saveTaskSubtype(id, "shopping", m); } catch (e) { fail(e); load().catch(() => {}); }
+  };
+  const setChoreArea = async (id: number, area: string | null) => {
+    setChoreMeta((p) => new Map(p).set(id, { area, rotation_days: p.get(id)?.rotation_days ?? null }));
+    try { await saveTaskSubtype(id, "chore", { area }); } catch (e) { fail(e); load().catch(() => {}); }
   };
 
   const handleMakeRecurring = async (id: number, intervalDays: number) => {
@@ -805,6 +1223,7 @@ export function QuickPanelsProvider({ children }: { children: React.ReactNode })
     setOpen("systems"); // land the user where the thing now lives
   };
 
+  // ── Other tools (moved verbatim from Dashboard) ──
   const handleMarkSystem = async (id: number) => {
     const x = await markSystemDone(id); setSystems((p) => p.map((y) => (y.id === id ? x : y)));
   };
@@ -812,8 +1231,7 @@ export function QuickPanelsProvider({ children }: { children: React.ReactNode })
     const x = await unmarkSystemDone(id); setSystems((p) => p.map((y) => (y.id === id ? x : y)));
   };
   const handleToggleSubtask = async (subtaskId: number, systemId: number) => {
-    const today = new Date().toISOString().slice(0, 10);
-    const res = await toggleSystemSubtask(subtaskId, today);
+    const res = await toggleSystemSubtask(subtaskId, today());
     setSubtaskMap((p) => ({ ...p, [systemId]: res.subtasks }));
     setSystems((p) => p.map((y) => (y.id === systemId ? res.system : y)));
   };
@@ -851,11 +1269,34 @@ export function QuickPanelsProvider({ children }: { children: React.ReactNode })
     await deleteAgreement(id); setAgreements((p) => p.filter((x) => x.id !== id));
   };
 
+  /**
+   * The Dashboard's capture bar routes through here, not straight to the api,
+   * so the item lands in this provider's state and the sidebar badge moves the
+   * moment it is filed — a capture that only shows after a reload reads as lost.
+   */
+  const capture = async (kind: CaptureKind, text: string, extra?: CaptureExtra) => {
+    const t = text.trim();
+    if (!t) return;
+    switch (kind) {
+      case "reminder":  return addReminder(t, extra?.reminder ?? { remind_at: null, lead_minutes: null });
+      case "shopping":  return addShopping(t);
+      case "chore":     return addChore(t);
+      case "note":      return handleAddNote(t, null);
+      case "brain":     return handleAddBrain(t);
+      case "event":     return handleAddEvent(t, extra?.date || today());
+      case "deadline":  return handleAddDeadline(t, extra?.date || today());
+      case "agreement": return handleAddAgreement(t, null);
+    }
+  };
+
+  const guard = <A extends unknown[]>(f: (...a: A) => Promise<unknown>) =>
+    (...a: A) => { f(...a).catch(fail); };
+
   const body = (() => {
     switch (open) {
-      case "reminders":  return <QuickTaskPanel tasks={byCategory("reminder")} category="reminder" remindAt={remindAt} onToggle={handleToggleQuickTask} onDelete={handleDeleteQuickTask} onAdd={handleAddQuickTask} />;
-      case "chores":     return <QuickTaskPanel tasks={byCategory("chore")}    category="chore"    onToggle={handleToggleQuickTask} onDelete={handleDeleteQuickTask} onAdd={handleAddQuickTask} onMakeRecurring={handleMakeRecurring} />;
-      case "shopping":   return <QuickTaskPanel tasks={byCategory("shopping")} category="shopping" onToggle={handleToggleQuickTask} onDelete={handleDeleteQuickTask} onAdd={handleAddQuickTask} />;
+      case "reminders":  return <RemindersPanel tasks={byCategory("reminder")} meta={reminderMeta} onToggle={toggleQuickTask} onDelete={handleDeleteQuickTask} onAdd={guard(addReminder)} onSetMeta={setReminder} />;
+      case "chores":     return <ChoresPanel    tasks={byCategory("chore")}    meta={choreMeta}    onToggle={toggleQuickTask} onDelete={handleDeleteQuickTask} onAdd={guard(addChore)} onSetArea={setChoreArea} onMakeRecurring={guard(handleMakeRecurring)} />;
+      case "shopping":   return <ShoppingPanel  tasks={byCategory("shopping")} meta={shoppingMeta} onToggle={toggleQuickTask} onDelete={handleDeleteQuickTask} onAdd={guard(addShopping)} onSetMeta={setShopping} onClearDone={handleClearDone} />;
       case "systems":    return <SystemsPanel systems={systems} subtaskMap={subtaskMap} onMark={handleMarkSystem} onUnmark={handleUnmarkSystem} onToggleSubtask={handleToggleSubtask} />;
       case "notes":      return <QuickNotesPanel notes={notes}           onAdd={handleAddNote}      onDelete={handleDeleteNote} />;
       case "brain":      return <BrainDumpPanel  entries={brainEntries}  onAdd={handleAddBrain}     onDelete={handleDeleteBrain} />;
@@ -869,20 +1310,114 @@ export function QuickPanelsProvider({ children }: { children: React.ReactNode })
   const label = panels.find((p) => p.id === open)?.label ?? "";
 
   return (
-    <Ctx.Provider value={{ panels, open, toggle, close }}>
+    <Ctx.Provider value={{ panels, open, toggle, openPanel, close, capture }}>
       {children}
-      {open && <QuickPanelFlyout title={label} loaded={loaded} onClose={close}>{body}</QuickPanelFlyout>}
+      {open && (
+        <QuickPanelFlyout title={label} loaded={loaded} onClose={close}>
+          {error && (
+            <div className="mb-2 flex items-center gap-2 rounded-md border border-rose-400/40 bg-rose-500/10 px-2 py-1 text-[11px] text-rose-600 dark:text-rose-300">
+              <span className="flex-1 min-w-0">{error}</span>
+              <button onClick={() => setError(null)} title="Dismiss"><X className="h-3 w-3" /></button>
+            </div>
+          )}
+          {body}
+        </QuickPanelFlyout>
+      )}
     </Ctx.Provider>
   );
 }
 
 /**
- * The open tool, as a panel anchored to the sidebar edge.
+ * The tool "boxes" — one icon button per panel, with its badge.
  *
- * A flyout rather than an inline block: the trigger now lives in global
- * navigation, so the panel has to be able to appear over any page. Click-outside
- * and Escape both dismiss it — a panel opened by a single click should not need
- * a hunt to close.
+ * Rendered in more than one place (sidebar rail, Dashboard capture bar, the
+ * phone's More sheet), so it lives here rather than in Sidebar. Every copy
+ * carries `data-quick-panel-trigger` so the flyout's click-outside handler
+ * ignores it — otherwise closing then re-toggling would fight.
+ */
+export function QuickPanelButtons({ layout = "row", size = "md", className, onPick }: {
+  /** "grid3": the sidebar's two rows of three; "column": collapsed sidebar; "row": inline strip. */
+  layout?: "grid3" | "column" | "row";
+  size?: "sm" | "md";
+  className?: string;
+  /** Called after a box is toggled — e.g. to close the sheet it lives in. */
+  onPick?: (id: QuickPanelId) => void;
+}) {
+  const { panels, open, toggle } = useQuickPanels();
+  const box = size === "sm" ? "h-7 w-7" : "h-8 w-8";
+  return (
+    <div
+      className={cn(
+        layout === "grid3" && "grid grid-cols-3 gap-x-1 gap-y-2.5 justify-items-center",
+        layout === "column" && "grid grid-cols-1 gap-y-2.5 justify-items-center",
+        layout === "row" && "flex flex-wrap items-center gap-1.5",
+        className,
+      )}
+    >
+      {panels.map(({ id, label, icon: Icon, count }) => (
+        <button
+          key={id}
+          data-quick-panel-trigger
+          onClick={() => { toggle(id); onPick?.(id); }}
+          title={label}
+          aria-label={label}
+          aria-pressed={open === id}
+          className={cn(
+            "relative flex items-center justify-center rounded-md transition-colors",
+            box,
+            layout === "row" && "border border-border bg-card",
+            open === id
+              ? "bg-sidebar-accent text-sidebar-accent-foreground border-primary/40"
+              : cn(
+                layout === "row" ? "text-muted-foreground" : "text-sidebar-foreground/60",
+                "hover:bg-sidebar-accent/60 hover:text-sidebar-accent-foreground",
+              ),
+          )}
+        >
+          <Icon className={size === "sm" ? "h-3.5 w-3.5" : "h-4 w-4"} />
+          {/* Superscript count of unchecked items. Capped at "9+" so a long
+              shopping list can't widen the badge past the icon it sits on. */}
+          {count != null && (
+            <span className={cn(
+              "absolute -top-1 -right-1 flex h-4 min-w-4 items-center justify-center rounded-full bg-blue-500 px-1 text-[9px] font-semibold leading-none text-white ring-2",
+              layout === "row" ? "ring-background" : "ring-sidebar",
+            )}>
+              {count > 9 ? "9+" : count}
+            </span>
+          )}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+const FLYOUT_POS_KEY = "pf-quick-panel-pos";
+const FLYOUT_W_KEY = "pf-quick-panel-w";
+const FLYOUT_W_MIN = 280, FLYOUT_W_MAX = 560, FLYOUT_W_DEFAULT = 320;
+/** Only the header must stay on screen — it is the drag handle. */
+const FLYOUT_HEADER_PX = 40;
+
+function readStore(key: string): string | null {
+  try { return localStorage.getItem(key); } catch { return null; }
+}
+function writeStore(key: string, v: string | null) {
+  try { if (v == null) localStorage.removeItem(key); else localStorage.setItem(key, v); } catch { /* private mode */ }
+}
+
+/**
+ * The open tool, as a floating panel.
+ *
+ * A flyout rather than an inline block: the triggers live in global navigation,
+ * so the panel has to be able to appear over any page. Click-outside and Escape
+ * both dismiss it — a panel opened by a single click should not need a hunt to
+ * close.
+ *
+ * It can be MOVED by its header and RESIZED by its right edge, and both persist:
+ * anchored to the sidebar corner it covered whatever was in the bottom-left of
+ * the page, which is exactly where the Week grid's early hours and the
+ * Workspace navigator's last rows sit. Double-click the header to put it back.
+ * Positions are clamped so the header can never leave the viewport — a panel
+ * dragged off-screen would otherwise need storage cleared to recover.
  */
 function QuickPanelFlyout({ title, loaded, onClose, children }: {
   title: string;
@@ -891,40 +1426,128 @@ function QuickPanelFlyout({ title, loaded, onClose, children }: {
   children: React.ReactNode;
 }) {
   const ref = useRef<HTMLDivElement>(null);
+  const [pos, setPos] = useState(() => parseStoredPos(readStore(FLYOUT_POS_KEY)));
+  const [width, setWidth] = useState(() => parseStoredWidth(readStore(FLYOUT_W_KEY), FLYOUT_W_MIN, FLYOUT_W_MAX, FLYOUT_W_DEFAULT));
+  const [, setViewportTick] = useState(0);
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") onClose(); };
     const onDown = (e: MouseEvent) => {
       const el = ref.current;
       if (!el || el.contains(e.target as Node)) return;
-      // Ignore clicks on the sidebar triggers — they toggle for themselves, and
-      // closing here first would make a second click reopen instead of close.
+      // Ignore clicks on the triggers — they toggle for themselves, and closing
+      // here first would make a second click reopen instead of close.
       if ((e.target as HTMLElement).closest?.("[data-quick-panel-trigger]")) return;
       onClose();
     };
+    // Re-clamp on window resize so a panel parked at the right edge of a wide
+    // window doesn't end up out of reach when the window narrows.
+    const onResize = () => setViewportTick((v) => v + 1);
     document.addEventListener("keydown", onKey);
     document.addEventListener("mousedown", onDown);
+    window.addEventListener("resize", onResize);
     return () => {
       document.removeEventListener("keydown", onKey);
       document.removeEventListener("mousedown", onDown);
+      window.removeEventListener("resize", onResize);
     };
   }, [onClose]);
+
+  const vw = window.innerWidth, vh = window.innerHeight;
+  const w = clampWidth(width, Math.min(FLYOUT_W_MIN, vw - 16), Math.min(FLYOUT_W_MAX, vw - 16));
+  const placed = pos ? clampFloatRect({ x: pos.x, y: pos.y, w, h: FLYOUT_HEADER_PX }, vw, vh) : null;
+
+  /** Window listeners rather than pointer capture — see Dashboard's rail resize for why. */
+  const track = (e: React.PointerEvent, onMove: (ev: PointerEvent) => void, onEnd: () => void) => {
+    e.preventDefault();
+    const move = (ev: PointerEvent) => onMove(ev);
+    const up = () => {
+      window.removeEventListener("pointermove", move);
+      window.removeEventListener("pointerup", up);
+      window.removeEventListener("pointercancel", up);
+      document.body.style.userSelect = "";
+      onEnd();
+    };
+    document.body.style.userSelect = "none";
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", up);
+    window.addEventListener("pointercancel", up);
+  };
+
+  const startMove = (e: React.PointerEvent<HTMLDivElement>) => {
+    if ((e.target as HTMLElement).closest("button")) return;
+    const rect = ref.current?.getBoundingClientRect();
+    if (!rect) return;
+    const dx = e.clientX - rect.left, dy = e.clientY - rect.top;
+    let last = { x: rect.left, y: rect.top };
+    // A plain click on the header must not pin the default placement into
+    // storage — only a real drag moves the panel.
+    let moved = false;
+    track(e, (ev) => {
+      moved = true;
+      last = clampFloatRect({ x: ev.clientX - dx, y: ev.clientY - dy, w: rect.width, h: FLYOUT_HEADER_PX }, window.innerWidth, window.innerHeight);
+      setPos({ x: last.x, y: last.y });
+    }, () => { if (moved) writeStore(FLYOUT_POS_KEY, JSON.stringify(last)); });
+  };
+
+  const startResize = (e: React.PointerEvent<HTMLDivElement>) => {
+    const rect = ref.current?.getBoundingClientRect();
+    if (!rect) return;
+    let last = rect.width;
+    track(e, (ev) => {
+      last = clampWidth(ev.clientX - rect.left, FLYOUT_W_MIN, FLYOUT_W_MAX);
+      setWidth(last);
+    }, () => writeStore(FLYOUT_W_KEY, String(last)));
+  };
+
+  const reset = () => {
+    setPos(null); setWidth(FLYOUT_W_DEFAULT);
+    writeStore(FLYOUT_POS_KEY, null); writeStore(FLYOUT_W_KEY, null);
+  };
+
+  // Default placement: the sidebar corner on desktop; on the phone (no sidebar)
+  // just above the bottom tab bar, which would otherwise cover it.
+  const style: React.CSSProperties = placed
+    ? { left: placed.x, top: placed.y, width: w, maxHeight: Math.max(160, Math.min(vh * 0.8, vh - placed.y - 8)) }
+    : IS_IOS
+      ? { left: 8, bottom: "calc(4.5rem + env(safe-area-inset-bottom))", width: w, maxHeight: "65vh" }
+      : { left: 8, bottom: 56, width: w, maxHeight: "70vh" };
 
   return (
     <div
       ref={ref}
-      className="fixed left-2 bottom-14 z-50 w-80 max-h-[70vh] overflow-y-auto rounded-xl border border-border bg-popover shadow-2xl p-3"
+      style={style}
+      className="fixed z-50 flex flex-col rounded-xl border border-border bg-popover shadow-2xl"
     >
-      <div className="flex items-center justify-between mb-2">
-        <span className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">{title}</span>
+      <div
+        onPointerDown={startMove}
+        onDoubleClick={reset}
+        title="Drag to move · double-click to reset"
+        className="flex shrink-0 cursor-grab active:cursor-grabbing touch-none select-none items-center justify-between gap-2 px-3 pt-3 pb-2"
+      >
+        <span className="flex items-center gap-1 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+          <GripVertical className="h-3 w-3 opacity-40" />
+          {title}
+        </span>
         <button
           onClick={onClose}
+          title="Close"
           className="p-0.5 rounded text-muted-foreground hover:text-foreground hover:bg-secondary transition-colors"
         >
           <X className="h-3.5 w-3.5" />
         </button>
       </div>
-      {loaded ? children : <p className="text-xs text-muted-foreground italic">Loading…</p>}
+      <div className="min-h-0 flex-1 overflow-y-auto px-3 pb-3">
+        {loaded ? children : <p className="text-xs text-muted-foreground italic">Loading…</p>}
+      </div>
+      {/* Right-edge resize grip — 8px hit area around a hairline. */}
+      <div
+        onPointerDown={startResize}
+        title="Drag to resize"
+        className="absolute right-0 top-3 bottom-3 w-2 translate-x-1 cursor-col-resize touch-none group/grip hidden md:block"
+      >
+        <div className="mx-auto h-full w-px bg-transparent transition-colors group-hover/grip:bg-primary/60" />
+      </div>
     </div>
   );
 }
