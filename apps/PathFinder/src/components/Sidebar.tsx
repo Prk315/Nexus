@@ -1,7 +1,8 @@
 import { LayoutDashboard, ChevronLeft, ChevronRight, CalendarDays, BookOpen, Download, FolderKanban, Gamepad2, CalendarRange, Kanban, Users, Brain, ChartColumn, } from "lucide-react";
 import { cn } from "../lib/utils";
 import { exportData } from "../lib/api";
-import { useQuickPanels } from "./QuickPanels";
+import { QuickPanelButtons } from "./QuickPanels";
+import { ResizeHandle, usePaneWidth } from "./common/SidePane";
 
 export type Page = "dashboard" | "workspace" | "week" | "team" | "projects" | "courses" | "learn" | "schedules" | "games" | "stats";
 
@@ -26,13 +27,18 @@ interface SidebarProps {
 }
 
 export function Sidebar({ current, onChange, collapsed, onToggle }: SidebarProps) {
+  // Expanded width is drag-resizable (and persisted) like every other side
+  // pane; collapsed stays a fixed 48px icon rail. No width transition: it made
+  // the edge trail the pointer by 200 ms on every drag.
+  const { width, paneRef, startResize, reset } = usePaneWidth("pf-sidebar-w", "left", { min: 176, max: 320, initial: 208 });
   return (
     <aside
-      className={cn(
-        "flex h-screen shrink-0 flex-col border-r border-border bg-sidebar transition-all duration-200 overflow-hidden",
-        collapsed ? "w-12" : "w-52"
-      )}
+      ref={(el) => { paneRef.current = el; }}
+      style={{ width: collapsed ? 48 : width }}
+      className="relative flex h-screen shrink-0 flex-col border-r border-border bg-sidebar"
     >
+      {!collapsed && <ResizeHandle side="left" onPointerDown={startResize} onDoubleClick={reset} />}
+      <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
       {/* Header */}
       <div className="flex h-10 shrink-0 items-center border-b border-border px-2 gap-2">
         {!collapsed && (
@@ -112,48 +118,19 @@ export function Sidebar({ current, onChange, collapsed, onToggle }: SidebarProps
           {!collapsed && <span>Export backup</span>}
         </button>
       </div>
+      </div>
     </aside>
   );
 }
 
 function QuickPanelRail({ collapsed }: { collapsed: boolean }) {
-  const { panels, open, toggle } = useQuickPanels();
-
   return (
     <div className="shrink-0 border-t border-border px-2 py-2">
       {/* A fixed grid, not flex-wrap: six icons in a 208px sidebar wrap to 5+1,
           which reads as a mistake. Two rows of three reads as a set. */}
       {/* Extra row gap: the badge sits above the button box (-top-1), so a
             uniform gap-1 let a badge nearly touch the icon on the row above. */}
-        <div className={cn("grid gap-x-1 gap-y-2.5 justify-items-center", collapsed ? "grid-cols-1" : "grid-cols-3")}>
-        {panels.map(({ id, label, icon: Icon, count }) => (
-          <button
-            key={id}
-            // Marks this as a trigger so the flyout's click-outside handler
-            // ignores it — otherwise closing then re-toggling would fight.
-            data-quick-panel-trigger
-            onClick={() => toggle(id)}
-            title={label}
-            aria-label={label}
-            aria-pressed={open === id}
-            className={cn(
-              "relative flex h-8 w-8 items-center justify-center rounded-md transition-colors",
-              open === id
-                ? "bg-sidebar-accent text-sidebar-accent-foreground"
-                : "text-sidebar-foreground/60 hover:bg-sidebar-accent/60 hover:text-sidebar-accent-foreground",
-            )}
-          >
-            <Icon className="h-4 w-4" />
-            {/* Superscript count of unchecked items. Capped at "9+" so a long
-                shopping list can't widen the badge past the icon it sits on. */}
-            {count != null && (
-              <span className="absolute -top-1 -right-1 flex h-4 min-w-4 items-center justify-center rounded-full bg-blue-500 px-1 text-[9px] font-semibold leading-none text-white ring-2 ring-sidebar">
-                {count > 9 ? "9+" : count}
-              </span>
-            )}
-          </button>
-        ))}
-      </div>
+        <QuickPanelButtons layout={collapsed ? "column" : "grid3"} />
     </div>
   );
 }

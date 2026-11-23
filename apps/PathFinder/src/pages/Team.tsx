@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import { Users, ChevronDown } from "lucide-react";
+import { Users, ChevronDown, ListTree, Plus } from "lucide-react";
 import { Navigator, type Selection } from "../components/workspace/Navigator";
 import { TaskBoard } from "../components/workspace/TaskBoard";
 import { getMyTeams, createTeam, getTeamMembers } from "../lib/api";
@@ -7,6 +7,7 @@ import type { Team as TeamRow, TeamMember } from "../lib/api";
 import { Button } from "../components/ui/button";
 import { Input } from "../components/ui/input";
 import { cn } from "../lib/utils";
+import { SidePane } from "../components/common/SidePane";
 
 // The Team page: same Navigator | TaskBoard shape as Workspace, but scoped to
 // one team's shared plans/tasks instead of the signed-in user's own. No
@@ -21,6 +22,9 @@ export function Team() {
   const [switcherOpen, setSwitcherOpen] = useState(false);
   const [newTeamName, setNewTeamName] = useState("");
   const [creating, setCreating] = useState(false);
+  // Inline "new team" field inside the switcher. Before it, the create form
+  // only existed while you had ZERO teams — a second team was unreachable.
+  const [addingTeam, setAddingTeam] = useState(false);
 
   const loadTeams = useCallback(async () => {
     const t = await getMyTeams();
@@ -49,6 +53,8 @@ export function Team() {
     try {
       const team = await createTeam(name);
       setNewTeamName("");
+      setAddingTeam(false);
+      setSwitcherOpen(false);
       await loadTeams();
       setActiveTeamId(team.id);
     } finally {
@@ -98,19 +104,17 @@ export function Team() {
         <Users className="h-4 w-4 text-violet-500 shrink-0" />
         <div className="relative">
           <button
-            onClick={() => teams.length > 1 && setSwitcherOpen((v) => !v)}
-            className={cn(
-              "flex items-center gap-1 text-sm font-semibold text-foreground",
-              teams.length > 1 && "hover:text-violet-500 cursor-pointer",
-            )}
+            onClick={() => setSwitcherOpen((v) => !v)}
+            title="Switch or create team"
+            className="flex items-center gap-1 rounded-md px-1 -mx-1 text-sm font-semibold text-foreground hover:text-violet-500 hover:bg-secondary/60 cursor-pointer transition-colors"
           >
             {activeTeam.name}
-            {teams.length > 1 && <ChevronDown className="h-3.5 w-3.5 text-muted-foreground" />}
+            <ChevronDown className="h-3.5 w-3.5 text-muted-foreground" />
           </button>
-          {switcherOpen && teams.length > 1 && (
+          {switcherOpen && (
             <>
-              <div className="fixed inset-0 z-40" onClick={() => setSwitcherOpen(false)} />
-              <div className="absolute left-0 top-full z-50 mt-1 w-44 rounded-lg border border-border bg-popover p-1 shadow-lg">
+              <div className="fixed inset-0 z-40" onClick={() => { setSwitcherOpen(false); setAddingTeam(false); }} />
+              <div className="absolute left-0 top-full z-50 mt-1 w-52 rounded-lg border border-border bg-popover p-1 shadow-lg">
                 {teams.map((t) => (
                   <button
                     key={t.id}
@@ -123,6 +127,29 @@ export function Team() {
                     {t.name}
                   </button>
                 ))}
+                <div className="my-1 h-px bg-border" />
+                {addingTeam ? (
+                  <div className="flex items-center gap-1 p-1">
+                    <Input
+                      autoFocus
+                      placeholder="Team name"
+                      value={newTeamName}
+                      onChange={(e) => setNewTeamName(e.target.value)}
+                      onKeyDown={(e) => { if (e.key === "Enter") handleCreate(); if (e.key === "Escape") setAddingTeam(false); }}
+                      className="h-7 text-xs"
+                    />
+                    <Button size="sm" className="h-7 px-2" onClick={handleCreate} disabled={!newTeamName.trim() || creating}>
+                      {creating ? "…" : "Add"}
+                    </Button>
+                  </div>
+                ) : (
+                  <button
+                    onClick={() => setAddingTeam(true)}
+                    className="flex w-full items-center gap-1.5 rounded-md px-2 py-1.5 text-left text-sm text-violet-600 dark:text-violet-400 hover:bg-violet-500/10"
+                  >
+                    <Plus className="h-3.5 w-3.5" /> New team
+                  </button>
+                )}
               </div>
             </>
           )}
@@ -146,18 +173,21 @@ export function Team() {
       </div>
 
       <div className="flex flex-1 min-h-0">
-        <aside className="w-60 shrink-0 border-r border-border">
-          {/* Keyed on the team id so switching teams remounts fresh state
-              (selection, expanded rows) instead of carrying the old team's
-              tree shape into the new one. */}
-          <Navigator
-            key={activeTeam.id}
-            selection={selection}
-            onSelect={setSelection}
-            onDataChange={() => setDataVersion((v) => v + 1)}
-            scope={{ kind: "team", teamId: activeTeam.id }}
-          />
-        </aside>
+        <SidePane id="team-nav" side="left" label="Plans" icon={ListTree} initial={240} min={190} max={440}>
+          {(collapse) => (
+            /* Keyed on the team id so switching teams remounts fresh state
+               (selection, expanded rows) instead of carrying the old team's
+               tree shape into the new one. */
+            <Navigator
+              key={activeTeam.id}
+              selection={selection}
+              onSelect={setSelection}
+              onDataChange={() => setDataVersion((v) => v + 1)}
+              scope={{ kind: "team", teamId: activeTeam.id }}
+              onCollapse={collapse}
+            />
+          )}
+        </SidePane>
 
         <div className="flex-1 min-w-0">
           <TaskBoard

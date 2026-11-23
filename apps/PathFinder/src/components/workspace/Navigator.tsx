@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState, useCallback } from "react";
 import {
   Plus, Pencil, Trash2, ChevronRight, ChevronDown, Target, FolderKanban,
-  CheckCircle, Archive, RotateCcw, Inbox, ListTree,
+  CheckCircle, Archive, RotateCcw, Inbox, ListTree, PanelLeftClose,
 } from "lucide-react";
 import {
   getGoals, createGoal, updateGoal, deleteGoal,
@@ -14,6 +14,7 @@ import { Dialog, DialogContent } from "../ui/dialog";
 import { cn } from "../../lib/utils";
 import type { Goal, GoalGroup, GoalStatus, Plan } from "../../types";
 import { colorFor, GroupManager, GoalForm, type GoalFormState } from "./goalForms";
+import { IconAction, type IconActionTone } from "../common/IconAction";
 
 export type Selection =
   | { kind: "all" }
@@ -80,23 +81,24 @@ function PlanForm({ initial, goals, submitLabel, onSubmit, onClose }: {
 }
 
 // ── Small row helpers ─────────────────────────────────────────────────────────
-function RowButton({ title, onClick, children }: { title: string; onClick: () => void; children: React.ReactNode }) {
-  return (
-    <button
-      title={title}
-      onClick={(e) => { e.stopPropagation(); onClick(); }}
-      className="p-0.5 rounded hover:bg-secondary text-muted-foreground hover:text-foreground"
-    >
-      {children}
-    </button>
-  );
+/**
+ * A row's hover action. Tone tells the actions apart by role — complete is
+ * green, archive amber, delete red and two-click — instead of four identical
+ * grey glyphs. See components/common/IconAction.
+ */
+function RowButton({ title, onClick, tone, confirm, children }: {
+  title: string; onClick: () => void; tone?: IconActionTone; confirm?: string; children: React.ReactNode;
+}) {
+  return <IconAction title={title} onClick={onClick} tone={tone} confirm={confirm}>{children}</IconAction>;
 }
 
-export function Navigator({ selection, onSelect, onDataChange, scope = { kind: "personal" } }: {
+export function Navigator({ selection, onSelect, onDataChange, scope = { kind: "personal" }, onCollapse }: {
   selection: Selection;
   onSelect: (s: Selection) => void;
   onDataChange: () => void; // notify parent so the task board reloads
   scope?: NavigatorScope;
+  /** Present when the navigator sits in a collapsible pane. */
+  onCollapse?: () => void;
 }) {
   const isTeam = scope.kind === "team";
   const teamId = scope.kind === "team" ? scope.teamId : null;
@@ -215,18 +217,19 @@ export function Navigator({ selection, onSelect, onDataChange, scope = { kind: "
           {g.task_count > 0 && (
             <span className="text-[10px] text-muted-foreground tabular-nums shrink-0">{pct}%</span>
           )}
-          <span className="hidden group-hover:flex items-center gap-0.5 shrink-0">
+          <span className="hidden group-hover:flex group-focus-within:flex items-center gap-0.5 shrink-0">
             {g.status === "active" ? (
               <>
-                <RowButton title="Complete" onClick={() => changeStatus(g, "completed")}><CheckCircle className="h-3 w-3" /></RowButton>
-                <RowButton title="Archive" onClick={() => changeStatus(g, "archived")}><Archive className="h-3 w-3" /></RowButton>
+                <RowButton title="Complete" tone="positive" onClick={() => changeStatus(g, "completed")}><CheckCircle className="h-3 w-3" /></RowButton>
+                <RowButton title="Archive" tone="warning" onClick={() => changeStatus(g, "archived")}><Archive className="h-3 w-3" /></RowButton>
               </>
             ) : (
-              <RowButton title="Reactivate" onClick={() => changeStatus(g, "active")}><RotateCcw className="h-3 w-3" /></RowButton>
+              <RowButton title="Reactivate" tone="positive" onClick={() => changeStatus(g, "active")}><RotateCcw className="h-3 w-3" /></RowButton>
             )}
-            <RowButton title="Add plan" onClick={() => setPlanDialog({ mode: "add", goalId: g.id })}><Plus className="h-3 w-3" /></RowButton>
+            <RowButton title="Add plan" tone="primary" onClick={() => setPlanDialog({ mode: "add", goalId: g.id })}><Plus className="h-3 w-3" /></RowButton>
             <RowButton title="Edit goal" onClick={() => setEditGoal(g)}><Pencil className="h-3 w-3" /></RowButton>
-            <RowButton title="Delete goal" onClick={() => removeGoal(g)}><Trash2 className="h-3 w-3" /></RowButton>
+            <span className="mx-0.5 h-3 w-px bg-border" aria-hidden />
+            <RowButton title="Delete goal" tone="danger" confirm="Delete?" onClick={() => removeGoal(g)}><Trash2 className="h-3 w-3" /></RowButton>
           </span>
         </div>
         {expanded && gplans.map((p) => PlanNode(p))}
@@ -248,9 +251,10 @@ export function Navigator({ selection, onSelect, onDataChange, scope = { kind: "
         <FolderKanban className="h-3.5 w-3.5 shrink-0 text-blue-500/80" />
         <span className="flex-1 truncate">{p.title}</span>
         <span className="text-[10px] text-muted-foreground tabular-nums shrink-0">{p.done_count}/{p.task_count}</span>
-        <span className="hidden group-hover:flex items-center gap-0.5 shrink-0">
+        <span className="hidden group-hover:flex group-focus-within:flex items-center gap-0.5 shrink-0">
           <RowButton title="Edit plan" onClick={() => setPlanDialog({ mode: "edit", plan: p })}><Pencil className="h-3 w-3" /></RowButton>
-          <RowButton title="Delete plan" onClick={() => removePlan(p)}><Trash2 className="h-3 w-3" /></RowButton>
+          <span className="mx-0.5 h-3 w-px bg-border" aria-hidden />
+          <RowButton title="Delete plan" tone="danger" confirm="Delete?" onClick={() => removePlan(p)}><Trash2 className="h-3 w-3" /></RowButton>
         </span>
       </div>
     );
@@ -276,8 +280,19 @@ export function Navigator({ selection, onSelect, onDataChange, scope = { kind: "
               {showAll ? "All" : "Active"}
             </button>
             <RowButton title="Manage groups" onClick={() => setGroupsOpen(true)}><FolderKanban className="h-3.5 w-3.5" /></RowButton>
-            <RowButton title="New goal" onClick={() => setCreateGoalOpen(true)}><Plus className="h-4 w-4" /></RowButton>
+            {/* The one creating action in the header — filled, so it reads as
+                the primary button rather than one more grey glyph. */}
+            <button
+              onClick={() => setCreateGoalOpen(true)}
+              title="New goal"
+              className="inline-flex h-6 items-center gap-0.5 rounded-md bg-primary px-1.5 text-[11px] font-medium text-primary-foreground hover:bg-primary/90 transition-colors"
+            >
+              <Plus className="h-3 w-3" /> Goal
+            </button>
           </>
+        )}
+        {onCollapse && (
+          <RowButton title="Hide navigator" onClick={onCollapse}><PanelLeftClose className="h-3.5 w-3.5" /></RowButton>
         )}
       </div>
 
@@ -345,7 +360,7 @@ export function Navigator({ selection, onSelect, onDataChange, scope = { kind: "
         )}
 
         <div className="pt-2">
-          <Button variant="ghost" size="sm" className="w-full justify-start text-muted-foreground" onClick={() => setPlanDialog({ mode: "add", goalId: null })}>
+          <Button variant="outline" size="sm" className="w-full justify-start border-dashed text-muted-foreground hover:text-foreground" onClick={() => setPlanDialog({ mode: "add", goalId: null })}>
             <Plus className="h-3.5 w-3.5 mr-1" /> New plan
           </Button>
         </div>
