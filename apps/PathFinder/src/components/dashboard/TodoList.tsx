@@ -3,10 +3,11 @@
 
 import { Fragment, useMemo, useRef, useState } from "react";
 import {
-  CalendarClock, CheckCircle, CheckSquare, Check, ChevronDown, ChevronRight,
+  ArrowUpDown, CalendarClock, CheckCircle, CheckSquare, Check, ChevronDown, ChevronRight,
   CornerDownRight, Plus, X, BookOpen, Users,
 } from "lucide-react";
 import { cn } from "../../lib/utils";
+import { groupOrderIds, mergeSubsetOrder } from "../../lib/groupOrder";
 import { blockMinutes, flatten, planningOf, isFullTask, subtreeNode } from "../../lib/taskTree";
 import type { TaskNode } from "../../lib/taskTree";
 import { UrgencyMeter } from "../UrgencyMeter";
@@ -111,7 +112,7 @@ function rowActionCallbacks(actions: Pick<TaskRowActions, "onReload" | "onError"
  * physical click can never land back on this row to trigger a double-click.
  */
 function DashTaskRow({
-  task, steps, today, expanded, actions, onToggleExpand, drag,
+  task, steps, today, expanded, actions, onToggleExpand, drag, dragHandle,
 }: {
   task: TaskWithContext;
   /** Direct subtasks. Named `steps`, not `children` — that prop name is React's. */
@@ -122,6 +123,10 @@ function DashTaskRow({
   onToggleExpand: () => void;
   /** Present → the row body can be dragged onto the day calendar. */
   drag?: DashDragSource;
+  /** Present (manual order only) → a grip that reorders the row within its
+   *  plan card. Its pointerdown stops propagation, so it never arms the
+   *  row-body drag above. */
+  dragHandle?: (e: React.PointerEvent) => void;
 }) {
   const doneKids = steps.filter((c) => c.done).length;
   const hasKids = steps.length > 0;
@@ -168,8 +173,14 @@ function DashTaskRow({
         // Drag the row body onto the day calendar to schedule it. Below the
         // 4px threshold this is inert and every click target works as before;
         // interactive children are excluded inside the hook.
-        onPointerDown={drag ? (e) => drag.onTaskDragPointerDown(e, taskDragPayload(task)) : undefined}
+        onPointerDown={drag ? (e) => drag.onTaskDragPointerDown(e, taskDragPayload(task, { hasKids })) : undefined}
       >
+        {dragHandle && (
+          <GripHandle
+            onPointerDown={dragHandle}
+            className="-mr-1 opacity-0 group-hover/task:opacity-100 focus-visible:opacity-100"
+          />
+        )}
         {/* Importance as a left accent bar. */}
         <span className={cn("w-0.5 self-stretch rounded-full shrink-0", PRIORITY_BAR[task.priority] ?? PRIORITY_BAR.medium)} />
 
@@ -376,7 +387,7 @@ function StepRow({ node, ctx, dragHandle }: {
         onContextMenu={contextMenuOpener(setMenuOpen)}
         // Row-body drag schedules the step onto the day calendar; the grip
         // below owns reordering (its own pointerdown stops propagation).
-        onPointerDown={ctx.drag ? (e) => ctx.drag!.onTaskDragPointerDown(e, taskDragPayload(t)) : undefined}
+        onPointerDown={ctx.drag ? (e) => ctx.drag!.onTaskDragPointerDown(e, taskDragPayload(t, { hasKids: hasChildren })) : undefined}
       >
         {dragHandle && (
           <GripHandle
@@ -593,10 +604,114 @@ function TaskExpandPanel({
   );
 }
 
+/** A dismissible error surfaced from any row's TaskActionMenu or a quick drop
+ *  (e.g. "no free slot"). Exported so the Dashboard can render it once above
+ *  every block, whichever order the blocks are in. */
+export function TaskNotice({ notice, onDismiss }: { notice: string; onDismiss: () => void }) {
+  return (
+    <div className="flex items-center gap-2 rounded-md border border-amber-400/40 bg-amber-500/10 px-2 py-1.5 text-xs text-amber-700 dark:text-amber-300">
+      <span className="flex-1 min-w-0">{notice}</span>
+      <button
+        onClick={onDismiss}
+        title="Dismiss"
+        className="shrink-0 rounded p-0.5 hover:bg-amber-500/20 transition-colors"
+      >
+        <X className="h-3 w-3" />
+      </button>
+    </div>
+  );
+}
+
+// ── Manual order (848) ───────────────────────────────────────────────────────
+//
+// The card order is "smart" by default — overdue first, then importance —
+// which is computed from the data, so a drag there would write a sort_order
+// nothing displays. Manual mode reads sort_order instead, and only then are
+// the grips offered. Per device (localStorage), like the rest of the
+// dashboard's layout.
+const ORDER_KEY = "pf.dash.taskOrder";
+type TaskOrderMode = "smart" | "manual";
+function readOrderMode(): TaskOrderMode {
+  try { return localStorage.getItem(ORDER_KEY) === "manual" ? "manual" : "smart"; } catch { return "smart"; }
+}
+
+/**
+ * One plan card: header + rows. Also a quick-drop zone (drag a task from
+ * another card onto it → it moves to this plan) and, in manual order, a
+ * reorder group whose commit is MERGED into the plan's complete order —
+ * the card shows only today's tasks, and renumbering just those would drop
+ * them into the middle of the plan's other tasks (lib/groupOrder.ts).
+ */
+function PlanCard({
+  planId, planTitle, goalTitle, tasks, allTasks, collapsed, onToggleCollapse,
+  manual, rowFor, onReorderGroup, drag,
+}: {
+  planId: number | null;
+  planTitle: string | null;
+  goalTitle: string | null;
+  tasks: TaskWithContext[];
+  allTasks: TaskWithContext[];
+  collapsed: boolean;
+  onToggleCollapse: () => void;
+  manual: boolean;
+  rowFor: (task: TaskWithContext, dragHandle?: (e: React.PointerEvent) => void) => React.ReactNode;
+  onReorderGroup?: (orderedIds: number[]) => void;
+  drag?: DashDragSource;
+}) {
+  const label = planTitle ?? "No plan";
+  const zoneKey = `plan:${planId ?? "none"}`;
+  const reorder = useRowReorder(tasks.map((t) => t.id), (visibleOrdered) => {
+    if (!onReorderGroup) return;
+    const full = groupOrderIds(allTasks, (t) => t.parent_id == null && t.plan_id === planId);
+    const merged = mergeSubsetOrder(full, visibleOrdered);
+    if (merged) onReorderGroup(merged);
+  });
+  const hot = drag?.hoverZone === zoneKey;
+
+  return (
+    <div
+      ref={drag?.zoneRef(zoneKey, { kind: "plan", planId, label })}
+      className={cn(
+        "flex flex-col gap-0.5 rounded-lg border bg-card/40 p-2 transition-colors",
+        hot ? "border-primary bg-primary/5" : "border-border/60",
+      )}
+    >
+      {/* Plan group header */}
+      <button
+        onClick={onToggleCollapse}
+        className="flex items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground transition-colors w-full min-w-0"
+      >
+        {collapsed ? <ChevronRight className="h-3 w-3 shrink-0" /> : <ChevronDown className="h-3 w-3 shrink-0" />}
+        <span className="font-medium truncate" title={[label, goalTitle].filter(Boolean).join(" · ")}>{label}</span>
+        <span className="opacity-50 shrink-0">({tasks.length})</span>
+        {hot && <span className="ml-auto shrink-0 text-[10px] text-primary">Move here</span>}
+      </button>
+
+      {!collapsed && (
+        <div className="flex flex-col gap-0.5">
+          {tasks.map((task, i) => (
+            <Fragment key={task.id}>
+              {manual && reorder.insertion === i && <ReorderIndicator />}
+              <div
+                ref={manual ? reorder.registerRow(task.id) : undefined}
+                className={cn(manual && reorder.draggingId === task.id && "opacity-40")}
+              >
+                {rowFor(task, manual && tasks.length > 1 ? reorder.handlePointerDown(task.id) : undefined)}
+              </div>
+            </Fragment>
+          ))}
+          {manual && reorder.insertion === tasks.length && <ReorderIndicator />}
+        </div>
+      )}
+    </div>
+  );
+}
+
 export function TodoList({
   tasks, allTasks, plans, courseAssignments, blocksByTask, workedBlockIds,
   onToggleTask, onCreateTask, onDeleteTask, onRenameTask, onAddSubtask, onOpenPlanner,
   onReload, onToggleAssignment, notice, onDismissNotice, onError, drag,
+  sections = ["tasks", "study"], onReorderTasks,
 }: {
   /** Top-level tasks to list — already filtered to today. */
   tasks: TaskWithContext[];
@@ -622,14 +737,29 @@ export function TodoList({
   /** Refetches whatever a schedule/due quick-action or a step add touched. */
   onReload: () => void;
   onToggleAssignment: (ca: CourseAssignment) => void;
-  /** A dismissible error surfaced from any row's TaskActionMenu (e.g. "no free slot"). */
-  notice: string | null;
-  onDismissNotice: () => void;
+  /** A dismissible error surfaced from any row's TaskActionMenu (e.g. "no
+   *  free slot"). Optional — the Dashboard renders it itself (TaskNotice) so
+   *  it stays on top whatever order the blocks are in. */
+  notice?: string | null;
+  onDismissNotice?: () => void;
   onError: (message: string) => void;
   /** Dashboard's drag-to-calendar source handle — rows become draggable onto
    *  the day rail when present. */
   drag?: DashDragSource;
+  /** Which sections to render, in this order. The Dashboard mounts one
+   *  TodoList per block so Tasks and Study can sit apart (868). */
+  sections?: ("tasks" | "study")[];
+  /** Commits a plan's COMPLETE new root order (already merged — see
+   *  PlanCard). Absent → manual order is not offered. */
+  onReorderTasks?: (orderedIds: number[]) => void;
 }) {
+  const [orderMode, setOrderMode] = useState<TaskOrderMode>(readOrderMode);
+  const manual = orderMode === "manual" && onReorderTasks != null;
+  const toggleOrderMode = () => {
+    const next: TaskOrderMode = orderMode === "manual" ? "smart" : "manual";
+    setOrderMode(next);
+    try { localStorage.setItem(ORDER_KEY, next); } catch { /* ignore */ }
+  };
   const [tasksCollapsed, setTasksCollapsed] = useState(false);
   const [studyCollapsed, setStudyCollapsed] = useState(false);
   const [collapsedPlans, setCollapsedPlans] = useState<Set<number | null>>(new Set());
@@ -699,18 +829,21 @@ export function TodoList({
 
   const open = useMemo(() => {
     const p = { high: 0, medium: 1, low: 2 } as Record<string, number>;
-    return [...tasks]
-      .filter((t) => !t.done && t.parent_id == null && t.category == null)
-      // Overdue first, then by importance — the dashboard's job is to surface
-      // what is slipping, and a high-priority task due next month should not
-      // outrank one that was due yesterday.
-      .sort((a, b) => {
-        const aLate = a.due_date != null && a.due_date < todayDate() ? 0 : 1;
-        const bLate = b.due_date != null && b.due_date < todayDate() ? 0 : 1;
-        if (aLate !== bLate) return aLate - bLate;
-        return (p[a.priority] ?? 1) - (p[b.priority] ?? 1);
-      });
-  }, [tasks]);
+    const roots = [...tasks].filter((t) => !t.done && t.parent_id == null && t.category == null);
+    // Manual: the plan's own order — sort_order then id, exactly the
+    // comparator groupOrderIds uses, so the visible rows are a faithful
+    // subsequence of the complete group the reorder merges into.
+    if (manual) return roots.sort((a, b) => a.sort_order - b.sort_order || a.id - b.id);
+    // Smart: overdue first, then by importance — the dashboard's job is to
+    // surface what is slipping, and a high-priority task due next month
+    // should not outrank one that was due yesterday.
+    return roots.sort((a, b) => {
+      const aLate = a.due_date != null && a.due_date < todayDate() ? 0 : 1;
+      const bLate = b.due_date != null && b.due_date < todayDate() ? 0 : 1;
+      if (aLate !== bLate) return aLate - bLate;
+      return (p[a.priority] ?? 1) - (p[b.priority] ?? 1);
+    });
+  }, [tasks, manual]);
 
   // Group open tasks by plan. Quick tasks (category set) group under their
   // category instead — a shopping list under "No plan" reads as clutter, not
@@ -751,24 +884,8 @@ export function TodoList({
     </button>
   );
 
-  return (
-    <div className="flex flex-col gap-3">
-
-      {notice && (
-        <div className="flex items-center gap-2 rounded-md border border-amber-400/40 bg-amber-500/10 px-2 py-1.5 text-xs text-amber-700 dark:text-amber-300">
-          <span className="flex-1 min-w-0">{notice}</span>
-          <button
-            onClick={onDismissNotice}
-            title="Dismiss"
-            className="shrink-0 rounded p-0.5 hover:bg-amber-500/20 transition-colors"
-          >
-            <X className="h-3 w-3" />
-          </button>
-        </div>
-      )}
-
-      {/* ── Tasks section ── */}
-      <div className="flex flex-col gap-2">
+  const tasksSection = (
+      <div key="tasks" className="flex flex-col gap-2">
         <div className="flex items-center justify-between">
           <SectionHeader
             icon={<CheckSquare className="h-3.5 w-3.5" />}
@@ -776,12 +893,29 @@ export function TodoList({
             collapsed={tasksCollapsed}
             onToggle={() => setTasksCollapsed((v) => !v)}
           />
-          <button
-            onClick={() => setShowAdd((v) => !v)}
-            className="flex items-center gap-0.5 text-xs text-muted-foreground hover:text-foreground transition-colors"
-          >
-            <Plus className="h-3.5 w-3.5" />
-          </button>
+          <div className="flex items-center gap-1">
+            {onReorderTasks && (
+              <button
+                onClick={toggleOrderMode}
+                title={manual
+                  ? "Manual order — drag the grips to reorder within a plan. Click for smart order (overdue, then priority)."
+                  : "Smart order (overdue, then priority). Click for manual order, which you can drag."}
+                className={cn(
+                  "inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[10px] transition-colors",
+                  manual ? "bg-primary/10 text-primary" : "text-muted-foreground hover:text-foreground hover:bg-secondary",
+                )}
+              >
+                <ArrowUpDown className="h-3 w-3" />
+                {manual ? "Manual" : "Smart"}
+              </button>
+            )}
+            <button
+              onClick={() => setShowAdd((v) => !v)}
+              className="flex items-center gap-0.5 text-xs text-muted-foreground hover:text-foreground transition-colors"
+            >
+              <Plus className="h-3.5 w-3.5" />
+            </button>
+          </div>
         </div>
 
         {/* Inline create form */}
@@ -880,34 +1014,31 @@ export function TodoList({
                 const expandedInGroup = isPlanCollapsed ? [] : group.tasks.filter((t) => expandedTasks.has(t.id));
 
                 const card = (
-                  <div key={`plan-${planId}`} className="flex flex-col gap-0.5 rounded-lg border border-border/60 bg-card/40 p-2">
-                    {/* Plan group header */}
-                    <button
-                      onClick={() => togglePlan(planId)}
-                      className="flex items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground transition-colors w-full min-w-0"
-                    >
-                      {isPlanCollapsed ? <ChevronRight className="h-3 w-3 shrink-0" /> : <ChevronDown className="h-3 w-3 shrink-0" />}
-                      <span className="font-medium truncate" title={[group.planTitle ?? "No plan", group.goalTitle].filter(Boolean).join(" · ")}>{group.planTitle ?? "No plan"}</span>
-                      <span className="opacity-50 shrink-0">({group.tasks.length})</span>
-                    </button>
-
-                    {!isPlanCollapsed && (
-                      <div className="flex flex-col gap-0.5">
-                        {group.tasks.map((task) => (
-                          <DashTaskRow
-                            key={task.id}
-                            task={task}
-                            steps={childrenByParent.get(task.id) ?? []}
-                            today={todayDate()}
-                            expanded={expandedTasks.has(task.id)}
-                            actions={rowActions}
-                            onToggleExpand={() => toggleTaskExpand(task.id)}
-                            drag={drag}
-                          />
-                        ))}
-                      </div>
+                  <PlanCard
+                    key={`plan-${planId}`}
+                    planId={planId}
+                    planTitle={group.planTitle}
+                    goalTitle={group.goalTitle}
+                    tasks={group.tasks}
+                    allTasks={allTasks}
+                    collapsed={isPlanCollapsed}
+                    onToggleCollapse={() => togglePlan(planId)}
+                    manual={manual}
+                    onReorderGroup={onReorderTasks}
+                    drag={drag}
+                    rowFor={(task, dragHandle) => (
+                      <DashTaskRow
+                        task={task}
+                        steps={childrenByParent.get(task.id) ?? []}
+                        today={todayDate()}
+                        expanded={expandedTasks.has(task.id)}
+                        actions={rowActions}
+                        onToggleExpand={() => toggleTaskExpand(task.id)}
+                        drag={drag}
+                        dragHandle={dragHandle}
+                      />
                     )}
-                  </div>
+                  />
                 );
 
                 const expansions = expandedInGroup.map((task) => {
@@ -934,10 +1065,10 @@ export function TodoList({
           )
         )}
       </div>
+  );
 
-      {/* ── Study section ── */}
-      {courseAssignments.length > 0 && (
-        <div className="flex flex-col gap-2">
+  const studySection = courseAssignments.length > 0 && (
+        <div key="study" className="flex flex-col gap-2">
           <SectionHeader
             icon={<BookOpen className="h-3.5 w-3.5" />}
             label={`Study (${courseAssignments.length})`}
@@ -974,8 +1105,12 @@ export function TodoList({
             </div>
           )}
         </div>
-      )}
+  );
 
+  return (
+    <div className="flex flex-col gap-3">
+      {notice && onDismissNotice && <TaskNotice notice={notice} onDismiss={onDismissNotice} />}
+      {sections.map((s) => (s === "tasks" ? tasksSection : studySection))}
     </div>
   );
 }

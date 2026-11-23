@@ -7,29 +7,31 @@
 
 import { useEffect, useState, useCallback, useMemo, useSyncExternalStore } from "react";
 import { PanelRight, PanelRightClose } from "lucide-react";
-import { getGoals, getPlans, getAllTasks, getSystems, toggleTask, createTask, patchTask, addSubtask, deleteTask, toTaskWithContext, getTaskSessionsInRange, logTaskSession, unlogTaskOccurrence, getBlockMissesInRange, markBlockMissed, unmarkBlockMissed, getCalBlocks, createCalBlock, updateCalBlock, deleteCalBlock, getDailyGoals, setDailyPrimaryGoal, clearDailyPrimaryGoal, addDailySecondaryGoal, updateDailySecondaryGoal, deleteDailySecondaryGoal, getCourseAssignments, updateCourseAssignment, getScheduleEntriesForDate, getHabitsForDate, toggleHabitCompletion, getHabitStacks, getTrainingSessionsForDate } from "../lib/api";
+import { getGoals, getPlans, getAllTasks, getSystems, toggleTask, createTask, patchTask, addSubtask, deleteTask, moveTask, reorderTasks, toTaskWithContext, getTaskSessionsInRange, logTaskSession, unlogTaskOccurrence, getBlockMissesInRange, markBlockMissed, unmarkBlockMissed, getCalBlocks, createCalBlock, updateCalBlock, deleteCalBlock, getDailyGoals, setDailyPrimaryGoal, clearDailyPrimaryGoal, addDailySecondaryGoal, updateDailySecondaryGoal, deleteDailySecondaryGoal, getCourseAssignments, updateCourseAssignment, getScheduleEntriesForDate, getHabitsForDate, toggleHabitCompletion, getHabitStacks, getTrainingSessionsForDate } from "../lib/api";
 import { blockMinutes } from "../lib/taskTree";
 import { isTaskRelevantToMe } from "../lib/team";
 import { getUserId } from "../lib/supabase";
 import type { Goal, Plan, TaskWithContext, SystemEntry, CalBlock, DailyGoals, DailyPrimaryGoal, CourseAssignment, ScheduleEntry, HabitWithCompletion, HabitStack, TrainingSession, TaskSession } from "../types";
 import { DCBlockDraft, timeToMin, todayDate } from "../components/dashboard/_shared";
 import { todayDateStr } from "../lib/quickSchedule";
-import { useDashDrag, DashDragGhostLayer } from "../components/dashboard/useDashDrag";
+import { useDashDrag, DashDragGhostLayer, DashDropTray } from "../components/dashboard/useDashDrag";
 import { DayCalendar } from "../components/dashboard/DayCalendar";
 import { HabitsStrip } from "../components/dashboard/HabitsStrip";
 import { WelcomeBox } from "../components/dashboard/WelcomeBox";
-import { TodoList } from "../components/dashboard/TodoList";
+import { TodoList, TaskNotice } from "../components/dashboard/TodoList";
 import { NowPanel } from "../components/dashboard/NowPanel";
 import { QuickCapture } from "../components/dashboard/QuickCapture";
 import { TaskPlanner } from "../components/workspace/TaskPlanner";
 import { nextUp, needsScheduling } from "../lib/nextUp";
-import { getDashBlockVisibility, subscribeDashBlocks } from "../lib/dashBlocks";
+import { getDashBlockVisibility, getDashLayout, subscribeDashBlocks, type DashLayoutBlockId, type DashRegion } from "../lib/dashBlocks";
 
 export function Dashboard() {
   // Settings → Dashboard blocks. Read live via useSyncExternalStore so
   // toggling a checkbox in the dialog repaints this page immediately, without
-  // a reload — same mechanism the appearance settings use.
+  // a reload — same mechanism the appearance settings use. Both snapshots are
+  // cached by raw string in dashBlocks.ts (see the #136 note there).
   const dashBlocks = useSyncExternalStore(subscribeDashBlocks, getDashBlockVisibility);
+  const dashLayout = useSyncExternalStore(subscribeDashBlocks, getDashLayout);
 
   const [goals,      setGoals]      = useState<Goal[]>([]);
   const [plans,      setPlans]      = useState<Plan[]>([]);
@@ -361,7 +363,48 @@ export function Dashboard() {
       await createCalBlock(todayDateStr(), payload.title, dest.start, dest.end, "blue", null, null, payload.taskId);
       load();
     },
+    // Quick drops (849): another plan card, or the tray's due/done chips.
+    // The rules for which drops are meaningful are in lib/dashDrop.ts and
+    // already ran — a zone that would do nothing never got this far.
+    onZoneDrop: async (payload, action) => {
+      try {
+        if (action.kind === "move") {
+          await moveTask(payload.taskId, action.planId);
+          await refreshTasks();
+        } else if (action.kind === "due") {
+          await patchTask(payload.taskId, { due_date: action.date });
+          setTasks((prev) => prev.map((t) => t.id === payload.taskId ? { ...t, due_date: action.date } : t));
+        } else {
+          // The row's checkbox refuses a task with unfinished steps; a drag
+          // must not be the way around that. NowPanel rows carry no hasKids,
+          // so re-check against the loaded tree here.
+          if (tasks.some((t) => t.parent_id === payload.taskId && !t.done)) {
+            setTaskNotice(`Finish the steps of "${payload.title}" first.`);
+            return;
+          }
+          await handleToggleTask(payload.taskId);
+        }
+      } catch (e) {
+        setTaskNotice(e instanceof Error ? e.message : `Couldn't ${action.label.toLowerCase()}.`);
+        load();
+      }
+    },
   });
+
+  // Manual order (848): TodoList hands over a plan's COMPLETE root order,
+  // already merged so tasks hidden from today's card keep their positions.
+  // Optimistic — sort_order is patched locally first so the card doesn't
+  // snap back while the writes land.
+  const handleReorderTasks = async (orderedIds: number[]) => {
+    const rank = new Map(orderedIds.map((id, i) => [id, i]));
+    setTasks((prev) => prev.map((t) => rank.has(t.id) ? { ...t, sort_order: rank.get(t.id)! } : t));
+    try {
+      await reorderTasks(orderedIds);
+    } catch (e) {
+      setTaskNotice(e instanceof Error ? e.message : "Couldn't save the new order.");
+      load();
+    }
+  };
 
   const handleCreateCalBlock = async (d: DCBlockDraft) => {
     let taskId = d.task_id;
@@ -387,16 +430,94 @@ export function Dashboard() {
     setCalBlocks((prev) => prev.filter((x) => x.id !== b.id));
   };
 
-  // Settings → Dashboard blocks: what's collapsed onto the page.
-  //
-  // TodoList has no showTasks/showStudy props (it's not this file's to add —
-  // components/dashboard/ isn't owned here), so Study is hidden via the
-  // existing `courseAssignments` prop (its Study section only renders when
-  // that array is non-empty), and Tasks has no equivalent lever: turning it
-  // off alone still leaves the "Tasks" header + empty-state line, and only
-  // turning BOTH off unmounts the component entirely.
-  const showTodoList = dashBlocks.tasks || dashBlocks.study;
-  const railBlocksEnabled = dashBlocks.habits || dashBlocks.calendar;
+  // Settings → Dashboard blocks: what's on the page (visibility) and where
+  // (layout — 868). Each block renders through one function so it can sit in
+  // either column, in any order. Tasks and Study are separate TodoList
+  // instances (its `sections` prop), which is what lets them be apart and
+  // what lets "Tasks off" actually remove the Tasks header.
+  const visibleIn = (region: DashRegion) =>
+    dashLayout[region].filter((id) => dashBlocks[id]);
+  const mainBlocks = visibleIn("main");
+  const railBlocks = visibleIn("rail");
+  const railBlocksEnabled = railBlocks.length > 0;
+
+  const todoListProps = {
+    allTasks: tasks,
+    plans,
+    blocksByTask,
+    workedBlockIds,
+    onToggleTask: handleToggleTask,
+    onCreateTask: handleCreateTask,
+    onDeleteTask: handleDeleteTask,
+    onRenameTask: handleRenameTask,
+    onAddSubtask: handleAddSubtask,
+    onOpenPlanner: (id: number) => setPlannerId(id),
+    onReload: load,
+    onToggleAssignment: handleToggleAssignment,
+    onError: setTaskNotice,
+    onReorderTasks: handleReorderTasks,
+    drag: dashDrag.source,
+  };
+
+  const renderBlock = (id: DashLayoutBlockId, region: DashRegion) => {
+    switch (id) {
+      case "now":
+        return (
+          <NowPanel
+            key={id}
+            items={nowItems}
+            blockedCount={blocked.length}
+            onOpen={(t) => setPlannerId(t.id)}
+            onLogSession={(item) => { if (item.block) handleToggleWorked(item.block); }}
+            // Turns the count into an action: open the planner on the first
+            // thing the gate is holding back, where it can be scheduled.
+            onScheduleHint={() => { if (blocked[0]) setPlannerId(blocked[0].id); }}
+            actions={{
+              onRenameTask: handleRenameTask,
+              onDeleteTask: handleDeleteTask,
+              onReload: load,
+              onError: setTaskNotice,
+            }}
+            drag={dashDrag.source}
+          />
+        );
+      case "tasks":
+        return <TodoList key={id} {...todoListProps} sections={["tasks"]} tasks={todayTasks} courseAssignments={[]} />;
+      case "study":
+        // Renders nothing on a day with no assignments — as before.
+        return <TodoList key={id} {...todoListProps} sections={["study"]} tasks={[]} courseAssignments={courseAssignments} />;
+      case "habits":
+        return (
+          <div key={id} className="shrink-0">
+            <HabitsStrip habits={habits} stacks={habitStacks} onToggle={handleToggleHabit} today={date} />
+          </div>
+        );
+      case "calendar":
+        // DayCalendar fills its parent's height and scrolls inside itself, so
+        // it needs a bounded box: the rest of the rail there, a fixed height
+        // in the (scrolling) main column.
+        return (
+          <div key={id} className={region === "rail" ? "flex-1 min-h-[320px] flex flex-col" : "h-[560px] shrink-0 flex flex-col"}>
+            <DayCalendar
+              date={date}
+              calBlocks={calBlocks}
+              systems={systems}
+              courseAssignments={courseAssignments}
+              scheduleEntries={scheduleEntries}
+              tasks={tasks}
+              sessionsByBlock={sessionsByBlock}
+              missedBlockIds={missedBlockIds}
+              onToggleWorked={handleToggleWorked}
+              onToggleMissed={handleToggleMissed}
+              onCreateBlock={handleCreateCalBlock}
+              onUpdateBlock={handleUpdateCalBlock}
+              onDeleteBlock={handleDeleteCalBlock}
+              dropTarget={dashDrag.target}
+            />
+          </div>
+        );
+    }
+  };
 
   return (
     <div className="flex flex-col h-[calc(100dvh-2.75rem-5.5rem)] md:h-[calc(100vh-2.5rem)] overflow-hidden">
@@ -413,58 +534,19 @@ export function Dashboard() {
 
       <div className="flex-1 min-h-0 flex flex-col md:flex-row overflow-hidden relative">
 
-        {/* ── Left column ─────────────────────────────────────────────────── */}
-        <div className="flex-1 min-w-0 overflow-y-auto border-r border-border px-3 py-2 md:px-4 md:py-3 flex flex-col gap-3 md:gap-4">
-
+        {/* ── Main column ─────────────────────────────────────────────────── */}
+        {/* data-dash-scroll: quick-drop zones inside it are clipped to its
+            visible box (useDashDrag's `hit`). */}
+        <div data-dash-scroll className="flex-1 min-w-0 overflow-y-auto border-r border-border px-3 py-2 md:px-4 md:py-3 flex flex-col gap-3 md:gap-4">
+          {/* The notice sits above every block, whatever order they're in —
+              it can come from any row (Now panel, tasks, a quick drop). */}
+          {taskNotice && <TaskNotice notice={taskNotice} onDismiss={() => setTaskNotice(null)} />}
           {/* Capture anything — task, reminder, shopping, note… (QuickCapture.tsx) */}
           <QuickCapture onCreateTask={(title) => handleCreateTask({ title, plan_id: null, due_date: date })} />
-
-          {/* To-Do List */}
-          {dashBlocks.now && (
-            <NowPanel
-              items={nowItems}
-              blockedCount={blocked.length}
-              onOpen={(t) => setPlannerId(t.id)}
-              onLogSession={(item) => { if (item.block) handleToggleWorked(item.block); }}
-              // Turns the count into an action: open the planner on the first
-              // thing the gate is holding back, where it can be scheduled.
-              onScheduleHint={() => { if (blocked[0]) setPlannerId(blocked[0].id); }}
-              actions={{
-                onRenameTask: handleRenameTask,
-                onDeleteTask: handleDeleteTask,
-                onReload: load,
-                onError: setTaskNotice,
-              }}
-              drag={dashDrag.source}
-            />
-          )}
-
-          {showTodoList && (
-            <TodoList
-              tasks={dashBlocks.tasks ? todayTasks : []}
-              allTasks={tasks}
-              plans={plans}
-              courseAssignments={dashBlocks.study ? courseAssignments : []}
-              blocksByTask={blocksByTask}
-              workedBlockIds={workedBlockIds}
-              onToggleTask={handleToggleTask}
-              onCreateTask={handleCreateTask}
-              onDeleteTask={handleDeleteTask}
-              onRenameTask={handleRenameTask}
-              onAddSubtask={handleAddSubtask}
-              onOpenPlanner={(id) => setPlannerId(id)}
-              onReload={load}
-              onToggleAssignment={handleToggleAssignment}
-              notice={taskNotice}
-              onDismissNotice={() => setTaskNotice(null)}
-              onError={setTaskNotice}
-              drag={dashDrag.source}
-            />
-          )}
-
+          {mainBlocks.map((id) => renderBlock(id, "main"))}
         </div>
 
-        {/* ── Right column: Habits + Day Calendar ─────────────────────────── */}
+        {/* ── Side rail ───────────────────────────────────────────────────── */}
         {/*
           Collapsible and resizable. The day calendar is the densest thing on the
           page and how much room it deserves depends entirely on what the day
@@ -472,14 +554,13 @@ export function Dashboard() {
           Both the width and the open/closed state persist, because a layout you
           have to re-adjust on every visit is worse than a fixed one.
 
-          The whole rail (collapse toggle, resize handle, content) additionally
-          disappears when Settings has turned off both Habits and Day calendar —
-          there's nothing left in it to show or resize.
+          The whole rail (collapse toggle, resize handle, content) disappears
+          when Settings leaves nothing visible in it.
         */}
         {railBlocksEnabled && !railOpen && (
           <button
             onClick={() => setRailOpen(true)}
-            title="Show day calendar"
+            title="Show side rail"
             className="hidden md:flex absolute bottom-3 right-3 z-10 h-8 w-8 items-center justify-center rounded-md border border-border bg-card shadow-sm text-muted-foreground hover:text-foreground transition-colors"
           >
             <PanelRight className="h-4 w-4" />
@@ -502,36 +583,20 @@ export function Dashboard() {
 
         {railBlocksEnabled && railOpen && (
         <div
+          data-dash-scroll
           style={{ width: railWidth }}
-          className="hidden md:flex shrink-0 flex-col overflow-hidden px-3 py-3 gap-3 relative">
+          // overflow-y-auto rather than hidden: the rail may now hold blocks
+          // that grow (Tasks, the Now panel). The calendar still fills the
+          // remaining height via its flex-1 wrapper and scrolls internally.
+          className="hidden md:flex shrink-0 flex-col overflow-y-auto px-3 py-3 gap-3 relative">
           <button
             onClick={() => setRailOpen(false)}
-            title="Hide day calendar"
+            title="Hide side rail"
             className="absolute top-1 right-1 z-10 p-1 rounded text-muted-foreground/50 hover:text-foreground hover:bg-secondary transition-colors"
           >
             <PanelRightClose className="h-3.5 w-3.5" />
           </button>
-          {dashBlocks.habits && (
-            <HabitsStrip habits={habits} stacks={habitStacks} onToggle={handleToggleHabit} today={date} />
-          )}
-          {dashBlocks.calendar && (
-            <DayCalendar
-              date={date}
-              calBlocks={calBlocks}
-              systems={systems}
-              courseAssignments={courseAssignments}
-              scheduleEntries={scheduleEntries}
-              tasks={tasks}
-              sessionsByBlock={sessionsByBlock}
-              missedBlockIds={missedBlockIds}
-              onToggleWorked={handleToggleWorked}
-              onToggleMissed={handleToggleMissed}
-              onCreateBlock={handleCreateCalBlock}
-              onUpdateBlock={handleUpdateCalBlock}
-              onDeleteBlock={handleDeleteCalBlock}
-              dropTarget={dashDrag.target}
-            />
-          )}
+          {railBlocks.map((id) => renderBlock(id, "rail"))}
         </div>
         )}
 
@@ -545,6 +610,8 @@ export function Dashboard() {
       {/* Drag-to-schedule ghost — subscribes to the gesture's micro-store,
           so pointer moves re-render only this leaf. */}
       <DashDragGhostLayer subscribe={dashDrag.subscribeGhost} getSnapshot={dashDrag.getGhostSnapshot} />
+      {/* Quick-drop tray (849) — mounted only while a task drag is live. */}
+      <DashDropTray drag={dashDrag.source} today={date} />
 </div>
   );
 }

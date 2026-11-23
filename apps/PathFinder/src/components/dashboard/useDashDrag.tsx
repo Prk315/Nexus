@@ -32,7 +32,21 @@
 // but never finds a drop target, so release simply cancels. No error, by
 // design.
 
+//
+// Quick drags (849) — the same gesture has two more kinds of target, both
+// registered through `zoneRef` and resolved by the pure rules in
+// lib/dashDrop.ts:
+//   - every OTHER plan card: drop → move the task to that plan;
+//   - the drop tray that appears at the bottom of the screen while a drag is
+//     live: Today / Tomorrow / Next week / No date / Done.
+// The calendar wins if the pointer is over it; then the tray (it floats above
+// everything); then the plan cards. A zone whose rule says "this drop changes
+// nothing" (its own card, the date it already has, Done on a task with open
+// steps) never lights up, so a drop that would do nothing never looks like
+// it did something.
+
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react";
+import { CalendarArrowUp, CalendarClock, CalendarX, CheckCircle2, Sun } from "lucide-react";
 import { cn } from "../../lib/utils";
 // The Week grid's duration heuristic — imported from week/_shared (pure,
 // React-free), NOT from useWeekInteractions.
@@ -41,11 +55,14 @@ import type { TaskWithContext } from "../../types";
 import {
   DC_COLORS, DC_HOUR_PX, dcMinToPx, dcMinToTime, dcSnapDropStartMin, formatMinutes,
 } from "./_shared";
+import {
+  dropTrayZones, zoneAction,
+  type DashDropTask, type DashZone, type DashZoneAction,
+} from "../../lib/dashDrop";
 
 const DASH_DRAG_THRESHOLD_PX = 4;
 
-export interface DashDragPayload {
-  taskId: number;
+export interface DashDragPayload extends DashDropTask {
   title: string;
   /** Fixed for the whole gesture — resolved by the source row via
    *  `externalDragDurationMin` (week/_shared). */
@@ -65,11 +82,19 @@ export interface DashDropDest {
  * an acceptable stand-in, so the estimate feeds both arguments (the clamp
  * to 15–240min with a 30min default still applies either way).
  */
-export function taskDragPayload(task: Pick<TaskWithContext, "id" | "title" | "time_estimate">): DashDragPayload {
+export function taskDragPayload(
+  task: Pick<TaskWithContext, "id" | "title" | "time_estimate" | "plan_id" | "parent_id" | "done" | "due_date">,
+  opts: { hasKids?: boolean } = {},
+): DashDragPayload {
   return {
     taskId: task.id,
     title: task.title,
     durationMin: externalDragDurationMin(task.time_estimate ?? 0, task.time_estimate),
+    planId: task.plan_id,
+    isRoot: task.parent_id == null,
+    done: task.done,
+    dueDate: task.due_date,
+    hasKids: opts.hasKids ?? false,
   };
 }
 
@@ -93,6 +118,15 @@ export interface DashDragSource {
   consumeWasDrag: () => boolean;
   /** The task mid-drag, so its source row can dim itself. */
   draggingTaskId: number | null;
+  /** The whole payload mid-drag (null when idle) — the drop tray reads it to
+   *  dim chips that would do nothing for THIS task. */
+  dragging: DashDragPayload | null;
+  /** Ref callback registering an element as a quick-drop zone under `key`.
+   *  Call it every render (it returns a cached callback per key and just
+   *  refreshes the zone's data). */
+  zoneRef: (key: string, zone: DashZone) => (el: HTMLElement | null) => void;
+  /** The zone key the pointer is over AND whose drop would do something. */
+  hoverZone: string | null;
 }
 
 /** What the drop TARGET needs — threaded to DayCalendar. */
@@ -111,10 +145,47 @@ interface Internal {
   payload: DashDragPayload;
   /** Snapped start while over the column; null = not a valid drop. */
   curStartMin: number | null;
+  /** The quick-drop zone under the pointer, when its drop does something. */
+  zone: { key: string; action: DashZoneAction } | null;
 }
 
-export function useDashDrag({ onDrop }: {
+interface ZoneEntry { el: HTMLElement | null; zone: DashZone }
+
+/** Is the point inside `el`'s box — and, when `el` sits in a scrolled
+ *  container marked `data-dash-scroll`, inside that container's visible box
+ *  too? A plan card scrolled out of view still has a rect (overlapping the
+ *  welcome header above it), and a target the user can't see isn't one. */
+function hit(el: HTMLElement, x: number, y: number): boolean {
+  const r = el.getBoundingClientRect();
+  if (x < r.left || x >= r.right || y < r.top || y >= r.bottom) return false;
+  const clip = el.parentElement?.closest<HTMLElement>("[data-dash-scroll]");
+  if (!clip) return true;
+  const c = clip.getBoundingClientRect();
+  return x >= c.left && x < c.right && y >= c.top && y < c.bottom;
+}
+
+function findZone(
+  zones: Map<string, ZoneEntry>, x: number, y: number, payload: DashDragPayload,
+): Internal["zone"] {
+  // The tray floats above the page, so it is tested before the plan cards
+  // that may lie underneath it.
+  const entries = [...zones.entries()].sort(
+    ([, a], [, b]) => Number(a.zone.kind === "plan") - Number(b.zone.kind === "plan"),
+  );
+  for (const [key, { el, zone }] of entries) {
+    if (!el || !hit(el, x, y)) continue;
+    const action = zoneAction(payload, zone);
+    // The first box under the pointer decides: a no-op card must not let the
+    // drop fall through to whatever is behind it.
+    return action ? { key, action } : null;
+  }
+  return null;
+}
+
+export function useDashDrag({ onDrop, onZoneDrop }: {
   onDrop: (payload: DashDragPayload, dest: DashDropDest) => void;
+  /** A drop on a quick zone (plan card / drop tray) whose rule allowed it. */
+  onZoneDrop?: (payload: DashDragPayload, action: DashZoneAction) => void;
 }) {
   const colRef = useRef<HTMLElement | null>(null);
   const viewportRef = useRef<HTMLElement | null>(null);
@@ -122,8 +193,33 @@ export function useDashDrag({ onDrop }: {
   const wasDragRef = useRef(false);
   const onDropRef = useRef(onDrop);
   onDropRef.current = onDrop;
+  const onZoneDropRef = useRef(onZoneDrop);
+  onZoneDropRef.current = onZoneDrop;
 
   const [draggingTaskId, setDraggingTaskId] = useState<number | null>(null);
+  const [dragging, setDragging] = useState<DashDragPayload | null>(null);
+  const [hoverZone, setHoverZone] = useState<string | null>(null);
+
+  // Zone registry. Ref callbacks are cached per key so React doesn't detach
+  // and re-attach every zone on every render; the zone DATA (a card's label,
+  // say) is refreshed on each `zoneRef` call instead.
+  const zones = useRef<Map<string, ZoneEntry>>(new Map());
+  const zoneCallbacks = useRef<Map<string, (el: HTMLElement | null) => void>>(new Map());
+  const zoneRef = useCallback((key: string, zone: DashZone) => {
+    const entry = zones.current.get(key);
+    if (entry) entry.zone = zone;
+    else zones.current.set(key, { el: null, zone });
+    let cb = zoneCallbacks.current.get(key);
+    if (!cb) {
+      cb = (el: HTMLElement | null) => {
+        const e = zones.current.get(key);
+        if (e) e.el = el;
+      };
+      zoneCallbacks.current.set(key, cb);
+    }
+    return cb;
+  }, []);
+
 
   // Ghost micro-store — the week hook's idiom.
   const listeners = useRef<Set<() => void>>(new Set());
@@ -146,6 +242,8 @@ export function useDashDrag({ onDrop }: {
   const endGesture = useCallback(() => {
     state.current = null;
     setDraggingTaskId(null);
+    setDragging(null);
+    setHoverZone(null);
     setGhost(null);
     document.body.style.cursor = "";
     document.body.style.userSelect = "";
@@ -166,6 +264,7 @@ export function useDashDrag({ onDrop }: {
       s.mode = "placing";
       wasDragRef.current = true;
       setDraggingTaskId(s.payload.taskId);
+      setDragging(s.payload);
       document.body.style.cursor = "grabbing";
       document.body.style.userSelect = "none";
     }
@@ -191,15 +290,20 @@ export function useDashDrag({ onDrop }: {
 
     if (!over || !colRect) {
       s.curStartMin = null;
+      const zone = findZone(zones.current, e.clientX, e.clientY, s.payload);
+      if ((zone?.key ?? null) !== (s.zone?.key ?? null)) setHoverZone(zone?.key ?? null);
+      s.zone = zone;
       setGhost({
         x: e.clientX, y: e.clientY,
         title: s.payload.title,
-        detail: formatMinutes(dur),
+        // Over a quick zone the chip says what the drop will do.
+        detail: zone ? zone.action.label : formatMinutes(dur),
         cal: null,
       });
       return;
     }
 
+    if (s.zone) { s.zone = null; setHoverZone(null); }
     const startMin = dcSnapDropStartMin(e.clientY - colRect.top, dur);
     s.curStartMin = startMin;
     setGhost({
@@ -224,6 +328,8 @@ export function useDashDrag({ onDrop }: {
         start: dcMinToTime(s.curStartMin),
         end: dcMinToTime(s.curStartMin + s.payload.durationMin),
       });
+    } else if (s.mode === "placing" && s.zone) {
+      onZoneDropRef.current?.(s.payload, s.zone.action);
     }
     // pending under threshold: no-op — the row's own click still fires.
     endGesture();
@@ -252,7 +358,7 @@ export function useDashDrag({ onDrop }: {
     state.current = {
       mode: "pending", pointerId: e.pointerId,
       startX: e.clientX, startY: e.clientY,
-      payload, curStartMin: null,
+      payload, curStartMin: null, zone: null,
     };
     window.addEventListener("pointermove", onMove);
     window.addEventListener("pointerup", onUp);
@@ -271,7 +377,9 @@ export function useDashDrag({ onDrop }: {
     return v;
   }, []);
 
-  const source: DashDragSource = { onTaskDragPointerDown, consumeWasDrag, draggingTaskId };
+  const source: DashDragSource = {
+    onTaskDragPointerDown, consumeWasDrag, draggingTaskId, dragging, zoneRef, hoverZone,
+  };
   const target: DashDropTarget = { registerCalendar };
 
   return { source, target, subscribeGhost, getGhostSnapshot };
@@ -312,5 +420,60 @@ export function DashDragGhostLayer({ subscribe, getSnapshot }: {
         {!snap.cal && <p className="text-[10px] leading-tight text-muted-foreground">{snap.detail}</p>}
       </div>
     </>
+  );
+}
+
+const TRAY_ICONS: Record<string, typeof Sun> = {
+  "due:today": Sun,
+  "due:tomorrow": CalendarArrowUp,
+  "due:next-week": CalendarClock,
+  "due:none": CalendarX,
+  done: CheckCircle2,
+};
+
+/**
+ * The quick-drop tray: five chips that appear at the bottom of the screen
+ * only while a task is being dragged, and vanish with the gesture. Fixed and
+ * `pointer-events-none` — the gesture hit-tests by rect through window
+ * listeners, so the tray never needs to receive an event, and it can never
+ * swallow a click when no drag is live.
+ *
+ * A chip whose drop would do nothing for THIS task (its current due date,
+ * Done on a task with open steps) renders dimmed and never lights up.
+ */
+export function DashDropTray({ drag, today }: { drag: DashDragSource; today: string }) {
+  const payload = drag.dragging;
+  if (!payload) return null;
+  return (
+    <div
+      className="pointer-events-none fixed inset-x-0 bottom-4 z-[9996] flex justify-center px-4"
+      aria-hidden
+    >
+      <div className="flex flex-wrap items-center justify-center gap-1.5 rounded-xl border border-border bg-popover/95 p-1.5 shadow-xl backdrop-blur">
+        {dropTrayZones(today).map(({ key, zone }) => {
+          const Icon = TRAY_ICONS[key] ?? CalendarClock;
+          const live = zoneAction(payload, zone) != null;
+          const hot = drag.hoverZone === key;
+          return (
+            <div
+              key={key}
+              ref={drag.zoneRef(key, zone)}
+              className={cn(
+                "flex min-w-[84px] flex-col items-center gap-0.5 rounded-lg border px-3 py-2 text-xs transition-colors",
+                !live && "opacity-35",
+                hot
+                  ? zone.kind === "done"
+                    ? "border-emerald-500 bg-emerald-500/15 text-emerald-700 dark:text-emerald-300"
+                    : "border-primary bg-primary/10 text-foreground"
+                  : "border-dashed border-border text-muted-foreground",
+              )}
+            >
+              <Icon className="h-4 w-4" />
+              {zone.label}
+            </div>
+          );
+        })}
+      </div>
+    </div>
   );
 }
