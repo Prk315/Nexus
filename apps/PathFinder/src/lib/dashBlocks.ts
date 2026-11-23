@@ -90,11 +90,118 @@ export function setDashBlockVisible(id: DashBlockId, visible: boolean): void {
   emit();
 }
 
-/** Subscribes to both same-tab (emitter) and cross-tab (`storage` event) changes. */
+// ── Layout: which column each block sits in, and in what order ──────────────
+//
+// Stored separately (`pf.dash.layout`) from visibility so neither write can
+// clobber the other, and so a client that predates the layout keeps its
+// visibility untouched. `welcome` is not in the layout: it is the full-width
+// header above both columns, and there is nowhere else on the page it fits.
+//
+// The rail is `hidden md:flex` — on a phone nothing in it shows. That was
+// already true of Habits and the Day calendar, and it is the honest cost of
+// moving a block there; the Settings list says "Side rail (desktop)".
+
+export type DashRegion = "main" | "rail";
+export type DashLayoutBlockId = Exclude<DashBlockId, "welcome">;
+export interface DashLayout {
+  main: DashLayoutBlockId[];
+  rail: DashLayoutBlockId[];
+}
+
+const LAYOUT_KEY = "pf.dash.layout";
+
+export const DASH_LAYOUT_DEFAULT: DashLayout = {
+  main: ["now", "tasks", "study"],
+  rail: ["habits", "calendar"],
+};
+
+const LAYOUT_IDS: DashLayoutBlockId[] = [...DASH_LAYOUT_DEFAULT.main, ...DASH_LAYOUT_DEFAULT.rail];
+const isLayoutId = (v: unknown): v is DashLayoutBlockId =>
+  typeof v === "string" && (LAYOUT_IDS as string[]).includes(v);
+
+/**
+ * Coerces anything — a stored blob from an older or newer build, a hand edit —
+ * into a layout where every block appears EXACTLY ONCE. Unknown ids and
+ * duplicates are dropped (first occurrence wins, main before rail); a block
+ * missing from the stored value (added after it was written) goes to its
+ * default column, at the end. Never throws. A block that vanished from the
+ * layout would be unreachable from Settings — it could not even be re-shown.
+ */
+export function normalizeDashLayout(raw: unknown): DashLayout {
+  const o = (raw && typeof raw === "object" ? raw : {}) as Record<string, unknown>;
+  const seen = new Set<DashLayoutBlockId>();
+  const take = (v: unknown): DashLayoutBlockId[] => {
+    if (!Array.isArray(v)) return [];
+    const out: DashLayoutBlockId[] = [];
+    for (const id of v) {
+      if (isLayoutId(id) && !seen.has(id)) { seen.add(id); out.push(id); }
+    }
+    return out;
+  };
+  const main = take(o.main);
+  const rail = take(o.rail);
+  for (const id of DASH_LAYOUT_DEFAULT.main) if (!seen.has(id)) main.push(id);
+  for (const id of DASH_LAYOUT_DEFAULT.rail) if (!seen.has(id)) rail.push(id);
+  return { main, rail };
+}
+
+/**
+ * Moves `id` into `region` at insertion slot `index` (clamped). Pure — the
+ * Settings list's grip drag and its "move to rail/main" button both land
+ * here, so there is one definition of what a move does.
+ */
+export function moveDashBlock(layout: DashLayout, id: DashLayoutBlockId, region: DashRegion, index: number): DashLayout {
+  const main = layout.main.filter((x) => x !== id);
+  const rail = layout.rail.filter((x) => x !== id);
+  const target = region === "main" ? main : rail;
+  const at = Math.max(0, Math.min(target.length, Math.floor(index)));
+  target.splice(at, 0, id);
+  return { main, rail };
+}
+
+/** Which column a block currently sits in. */
+export function regionOf(layout: DashLayout, id: DashLayoutBlockId): DashRegion {
+  return layout.rail.includes(id) ? "rail" : "main";
+}
+
+// Same referential-stability rule as getDashBlockVisibility above — this is a
+// useSyncExternalStore snapshot too, and a fresh object per call is the #136
+// white screen.
+let cachedLayoutRaw: string | null = null;
+let cachedLayout: DashLayout | null = null;
+
+export function getDashLayout(): DashLayout {
+  let raw: string | null;
+  try {
+    raw = localStorage.getItem(LAYOUT_KEY);
+  } catch {
+    raw = null;
+  }
+  if (cachedLayout !== null && raw === cachedLayoutRaw) return cachedLayout;
+  cachedLayoutRaw = raw;
+  let parsed: unknown = null;
+  try { parsed = raw ? JSON.parse(raw) : null; } catch { parsed = null; }
+  cachedLayout = normalizeDashLayout(parsed);
+  return cachedLayout;
+}
+
+export function setDashLayout(layout: DashLayout): void {
+  try { localStorage.setItem(LAYOUT_KEY, JSON.stringify(normalizeDashLayout(layout))); } catch { /* ignore */ }
+  emit();
+}
+
+export function resetDashLayout(): void {
+  try { localStorage.removeItem(LAYOUT_KEY); } catch { /* ignore */ }
+  emit();
+}
+
+/** Subscribes to both same-tab (emitter) and cross-tab (`storage` event)
+ *  changes — of visibility AND layout; both live behind one subscription so a
+ *  page reading either repaints on either. */
 export function subscribeDashBlocks(onChange: Listener): () => void {
   listeners.add(onChange);
   const onStorage = (e: StorageEvent) => {
-    if (e.key === KEY || e.key === null) onChange();
+    if (e.key === KEY || e.key === LAYOUT_KEY || e.key === null) onChange();
   };
   if (typeof window !== "undefined") window.addEventListener("storage", onStorage);
   return () => {

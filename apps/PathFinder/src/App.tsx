@@ -1,16 +1,9 @@
-import { useState, useSyncExternalStore } from "react";
+import { useState } from "react";
 import { useNexusRegistration, NexusHeader, useNexusAuth, useNexusAppearance, SettingsDialog, createMailLoader, createMailRulesApi, createMailApi, createJobsApi } from "@nexus/core";
 import { ymd } from "@nexus/core/coverage";
 import { loadScreenSpansForDate } from "./lib/actual";
 import { supabase } from "./lib/supabase";
-import {
-  DASH_BLOCK_IDS,
-  DASH_BLOCK_LABELS,
-  getDashBlockVisibility,
-  setDashBlockVisible,
-  subscribeDashBlocks,
-  type DashBlockId,
-} from "./lib/dashBlocks";
+import { DashBlocksSettings } from "./components/dashboard/DashBlocksSettings";
 import "./App.css";
 import { Sidebar, type Page } from "./components/Sidebar";
 import { SchedulesProvider } from "./contexts/SchedulesContext";
@@ -64,38 +57,6 @@ const mailApi = createMailApi(supabase);
 // Same client, same reason — the five `job_*` tables are owner-only with no
 // anon policy, so this must be the authenticated one.
 const jobsApi = createJobsApi(supabase);
-
-/**
- * The Dashboard-blocks checkboxes shown inside the shared Settings dialog.
- *
- * Lives here, not in nexus-core: nexus-core has no notion of a "Dashboard" or
- * what's on it. `dashBlocks.ts` is the same getter/setter/subscribe shape as
- * nexus-core's own `settings.ts`, just scoped to PathFinder's localStorage
- * namespace (`pf.dash.blocks`) instead of the shared `nexus.settings.` one.
- */
-function DashboardBlocksSection() {
-  const visibility = useSyncExternalStore(subscribeDashBlocks, getDashBlockVisibility);
-  return (
-    <div className="flex flex-col gap-2">
-      <h3 className="text-[11px] font-medium text-muted-foreground uppercase tracking-wider">
-        Dashboard blocks
-      </h3>
-      <div className="flex flex-col gap-1.5">
-        {DASH_BLOCK_IDS.map((id: DashBlockId) => (
-          <label key={id} className="flex items-center gap-2 text-sm text-foreground cursor-pointer select-none">
-            <input
-              type="checkbox"
-              checked={visibility[id]}
-              onChange={(e) => setDashBlockVisible(id, e.target.checked)}
-              className="h-3.5 w-3.5 rounded border-input accent-primary"
-            />
-            {DASH_BLOCK_LABELS[id]}
-          </label>
-        ))}
-      </div>
-    </div>
-  );
-}
 
 function App() {
   useNexusRegistration("PathFinder");
@@ -167,7 +128,12 @@ function App() {
       <SettingsDialog
         open={settingsOpen}
         onClose={() => setSettingsOpen(false)}
-        sections={<DashboardBlocksSection />}
+        // Both opt-ins are backed by this app's CSS: App.css scales every
+        // font size by --nexus-text-scale, and the palette is the shadcn
+        // token set colour themes derive from.
+        textSize
+        colorThemes
+        sections={<DashBlocksSettings />}
       />
     </div>
     </QuickPanelsProvider>

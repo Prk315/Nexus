@@ -8,6 +8,7 @@ import type {
   BlockMiss, CalBlock, CompletionMode, Priority, SystemEntry, Task, TaskCoverage, TaskPlanning, TaskSession, TaskStage, TaskType, TaskWithContext, Urgency,
 } from "../../types";
 import { blockMinutes, coverageByTask } from "../taskTree";
+import { sortOrderWrites } from "../groupOrder";
 import { createSystem } from "./systems";
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -226,6 +227,32 @@ export const saveTaskSubtype = async (
     .from(SUBTYPE_TABLE[type])
     .upsert({ task_id: id, user_id: getUserId(), ...attrs }, { onConflict: "task_id" });
   if (error) err(error);
+};
+
+/**
+ * Creates a quick task (reminder / chore / shopping) together with its subtype
+ * attributes — "call mum at 18:00", "2 l milk @ netto".
+ *
+ * Two writes, supertype first: the subtype's guard trigger checks the parent's
+ * `task_type`, so the row has to exist before its attributes can. Attributes
+ * that are all null/empty write no subtype row at all — the sparse subtypes
+ * carry no defaults worth materialising (see the section comment above).
+ *
+ * If the subtype write fails the task still exists, untimed; the error is
+ * rethrown so the caller can say so rather than silently dropping the time.
+ */
+export const createQuickTask = async (
+  category: Exclude<TaskType, "task">,
+  title: string,
+  attrs: Record<string, string | number | null> = {},
+): Promise<{ task: Task; attrs: Record<string, any> | null }> => {
+  const task = await createTask({ title, category, plan_id: null });
+  const present = Object.fromEntries(
+    Object.entries(attrs).filter(([, v]) => v !== null && v !== undefined && v !== ""),
+  );
+  if (Object.keys(present).length === 0) return { task, attrs: null };
+  await saveTaskSubtype(task.id, category, attrs);
+  return { task, attrs: { task_id: task.id, ...attrs } };
 };
 
 /** All subtype rows of one sparse kind, for panels that need them in bulk. */
@@ -677,13 +704,30 @@ export const moveTask = async (id: number, planId: number | null): Promise<Task>
   return mapTask(data!);
 };
 
-// Persist a new ordering: assigns sort_order = position for each id in the list.
+// Persist a new ordering: makes sort_order = position true for each id in the
+// list. Always hand it the COMPLETE group — see lib/groupOrder.ts.
+//
+// It reads the current values first and writes only the rows that change,
+// a few at a time. It used to fire one UPDATE per id, all at once: fine for
+// a parent's five steps, but a plan group can be a couple of hundred tasks
+// (most still tied at the default 0), and one connection per row in parallel
+// is the shape that wedged Supabase on 2026-08-15.
+const REORDER_CHUNK = 8;
 export const reorderTasks = async (orderedIds: number[]): Promise<void> => {
-  const results = await Promise.all(
-    orderedIds.map((id, index) =>
-      supabase.from("pf_tasks").update({ sort_order: index }).eq("id", id),
-    ),
-  );
-  const failed = results.find((r) => r.error);
-  if (failed?.error) err(failed.error);
+  if (orderedIds.length === 0) return;
+  const { data, error: readErr } = await supabase
+    .from("pf_tasks").select("id, sort_order").in("id", orderedIds);
+  if (readErr) err(readErr);
+  const current = new Map<number, number>((data ?? []).map((r: { id: number; sort_order: number }) => [r.id, r.sort_order]));
+  const writes = sortOrderWrites(orderedIds, current);
+
+  for (let i = 0; i < writes.length; i += REORDER_CHUNK) {
+    const results = await Promise.all(
+      writes.slice(i, i + REORDER_CHUNK).map(({ id, sort_order }) =>
+        supabase.from("pf_tasks").update({ sort_order }).eq("id", id),
+      ),
+    );
+    const failed = results.find((r) => r.error);
+    if (failed?.error) err(failed.error);
+  }
 };

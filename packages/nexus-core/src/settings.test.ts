@@ -1,5 +1,9 @@
 import { describe, it, expect, beforeEach, beforeAll } from "vitest";
-import { clampUiScale, getTheme, getUiScale, setTheme, setUiScale, THEME_DEFAULT, UI_SCALE_DEFAULT, UI_SCALE_MIN, UI_SCALE_MAX } from "./settings";
+import {
+  clampUiScale, getTheme, getUiScale, setTheme, setUiScale, THEME_DEFAULT, UI_SCALE_DEFAULT, UI_SCALE_MIN, UI_SCALE_MAX,
+  clampTextScale, getTextScale, setTextScale, TEXT_SCALE_DEFAULT, TEXT_SCALE_MIN, TEXT_SCALE_MAX,
+  getColorTheme, setColorTheme, subscribeSettings,
+} from "./settings";
 
 // vitest's default environment is Node, which has no `localStorage` global
 // (unlike a browser or the Tauri WebView this actually runs in) — polyfill a
@@ -67,5 +71,50 @@ describe("theme / uiScale store", () => {
   it("ignores a corrupt stored uiScale and falls back to default", () => {
     localStorage.setItem("nexus.settings.uiScale", "banana");
     expect(getUiScale()).toBe(UI_SCALE_DEFAULT);
+  });
+});
+
+describe("textScale / colorTheme store", () => {
+  beforeEach(() => {
+    localStorage.clear();
+  });
+
+  it("defaults to 1x text and the neutral colour theme when unset", () => {
+    expect(getTextScale()).toBe(TEXT_SCALE_DEFAULT);
+    expect(getColorTheme()).toBe("neutral");
+  });
+
+  it("round-trips and clamps textScale, independently of uiScale", () => {
+    setTextScale(1.25);
+    expect(getTextScale()).toBe(1.25);
+    expect(getUiScale()).toBe(UI_SCALE_DEFAULT);
+    setTextScale(0.1);
+    expect(getTextScale()).toBe(TEXT_SCALE_MIN);
+    setTextScale(9);
+    expect(getTextScale()).toBe(TEXT_SCALE_MAX);
+    expect(clampTextScale(NaN)).toBe(TEXT_SCALE_DEFAULT);
+  });
+
+  it("round-trips a colour theme and ignores a corrupt stored one", () => {
+    setColorTheme("teal");
+    expect(getColorTheme()).toBe("teal");
+    localStorage.setItem("nexus.settings.colorTheme", "{\"hue\":12}");
+    expect(getColorTheme()).toBe("neutral");
+  });
+
+  it("snapshots are primitives, so useSyncExternalStore sees an unchanged store as unchanged (#136)", () => {
+    setColorTheme("rose");
+    expect(Object.is(getColorTheme(), getColorTheme())).toBe(true);
+    expect(Object.is(getTextScale(), getTextScale())).toBe(true);
+  });
+
+  it("notifies subscribers on a text-size or colour-theme write", () => {
+    let n = 0;
+    const off = subscribeSettings(() => { n++; });
+    setTextScale(1.1);
+    setColorTheme("green");
+    off();
+    setTextScale(1.2);
+    expect(n).toBe(2);
   });
 });
