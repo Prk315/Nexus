@@ -27,6 +27,12 @@ import type { DragCommitPatch, ExternalDragPayload, ExternalDropDest } from "../
 import type { Span } from "@nexus/core/coverage";
 import type { ActualDay } from "../lib/actual";
 import type { CoverageCategoryOption } from "../lib/api";
+import type { SyncedItem } from "@nexus/core/protocol";
+import { useSyncedItems } from "../components/synced/useSyncedItems";
+import { SyncedChip } from "../components/synced/SyncedCard";
+import { SyncedItemDialog } from "../components/synced/SyncedItemDialog";
+import { ScheduleProtocolDialog } from "../components/synced/ScheduleProtocolDialog";
+import { SYNCED_KIND_LABEL } from "@nexus/core/protocol";
 
 export function Week() {
   const [view,       setView]      = useState<"week" | "month">("week");
@@ -158,6 +164,12 @@ export function Week() {
 
   useEffect(() => { load(); }, [load]);
 
+  // Protocol items (synced blocks): read from Protocol's own rows, written back
+  // to them — PathFinder keeps no copy. See packages/nexus-core/src/protocol.
+  const synced = useSyncedItems(queryStart, queryEnd);
+  const [openSynced, setOpenSynced] = useState<SyncedItem | null>(null);
+  const [scheduleAt, setScheduleAt] = useState<{ date: string; time?: string } | null>(null);
+
   // Load/save weekly focus note from localStorage
   useEffect(() => { setWeekNote(localStorage.getItem(`week_note_${start}`) ?? ""); }, [start]);
   useEffect(() => {
@@ -278,6 +290,12 @@ export function Week() {
   const deadlinesFor         = (iso: string) => items.deadlines.filter((d) => d.due_date === iso);
   const courseAssignmentsFor = (iso: string) => items.course_assignments.filter((a) => a.due_date === iso);
   const scheduleEntriesFor   = (iso: string) => items.schedule_entries.filter((e) => e.date === iso);
+  const syncedByDate = useMemo(() => {
+    const m = new Map<string, SyncedItem[]>();
+    for (const i of synced.items) m.set(i.date, [...(m.get(i.date) ?? []), i]);
+    return m;
+  }, [synced.items]);
+  const syncedFor = (iso: string) => syncedByDate.get(iso) ?? [];
   const trainingSessionsFor  = (iso: string) => items.training_sessions.filter((s) => s.scheduled_date === iso);
   const blocksFor            = (iso: string) => calBlocks.filter((b) => b.date === iso);
 
@@ -697,6 +715,14 @@ export function Week() {
   function renderModals() {
     return (
       <>
+        <SyncedItemDialog item={openSynced} synced={synced} onClose={() => setOpenSynced(null)} />
+        <ScheduleProtocolDialog
+          open={scheduleAt != null}
+          initialDate={scheduleAt?.date ?? today}
+          initialTime={scheduleAt?.time}
+          synced={synced}
+          onClose={() => setScheduleAt(null)}
+        />
         {modal?.kind === "pick" && (
           <TypePickerModal date={modal.date}
             onPick={(type) => setModal({ kind: `create-${type}` as "create-task" | "create-goal" | "create-plan", date: modal.date })}
@@ -774,7 +800,8 @@ export function Week() {
     const selCAAll  = courseAssignmentsFor(selectedDay);
     const selCAAllDay = selCAAll.filter((a) => !a.start_time);
     const selectedLabel = `${DAY_NAMES[selDate.getDay()]}, ${MONTHS[selDate.getMonth()]} ${selDate.getDate()}`;
-    const hasAllDay = selGoals.length + selTasks.length + selDL.length + selCAAll.length > 0;
+    const selSynUntimed = syncedFor(selectedDay).filter((i) => !i.start_time);
+    const hasAllDay = selGoals.length + selTasks.length + selDL.length + selCAAll.length + selSynUntimed.length > 0;
 
     return (
       <div className="flex flex-col h-[calc(100vh-2.5rem)] overflow-hidden">
@@ -818,11 +845,17 @@ export function Week() {
         {/* Selected day label */}
         <div className="shrink-0 px-4 py-1.5 border-b border-border/40 bg-card/50">
           <span className="text-xs font-medium text-muted-foreground">{selectedLabel}</span>
+          <button onClick={() => setScheduleAt({ date: selectedDay })}
+            className="float-right text-[11px] text-muted-foreground hover:text-foreground">+ Protocol</button>
         </div>
+        <SyncedErrors synced={synced} />
 
         {/* All-day items for selected day */}
         {hasAllDay && (
           <div className="shrink-0 px-3 py-2 border-b border-border bg-card/30 flex flex-col gap-1 max-h-28 overflow-y-auto">
+            {selSynUntimed.map((i) => (
+              <SyncedChip key={i.key} item={i} onOpen={setOpenSynced} onToggle={synced.toggleItem} />
+            ))}
             {selGoals.map((g) => (
               <button key={`g-${g.id}`} onClick={() => setModal({ kind: "edit-goal", goal: g })}
                 className="flex items-center gap-1.5 px-2 py-1 rounded text-left w-full bg-blue-500/10 border border-blue-500/20 transition-colors">
@@ -872,6 +905,9 @@ export function Week() {
               systems={systems}
               courseAssignments={selCAAll}
               scheduleEntries={scheduleEntriesFor(selectedDay)}
+              synced={syncedFor(selectedDay)}
+              onOpenSynced={setOpenSynced}
+              onToggleSynced={synced.toggleItem}
               sleepSpans={sleepByDate.get(selectedDay)}
               categories={categories}
               sessionsByBlock={sessionsByBlock}
@@ -944,6 +980,10 @@ export function Week() {
             </button>
           )}
           <Button size="sm" variant="outline" className="h-7 text-xs" onClick={goToday}>Today</Button>
+          <Button size="sm" variant="outline" className="h-7 text-xs" onClick={() => setScheduleAt({ date: today >= start && today <= end ? today : start })}
+            title="Schedule a training, run, meal, supplement stack or routine — it lives in Protocol">
+            + Protocol
+          </Button>
           <div className="w-px h-4 bg-border" />
           {/* Actual-day overlay toggle */}
           <button
@@ -1038,6 +1078,8 @@ export function Week() {
               })}
             </div>
 
+            <SyncedErrors synced={synced} />
+
             {/* Shared all-day row */}
             <div className="shrink-0 flex border-b border-border bg-card/50 overflow-y-auto" style={{ maxHeight: 96 }}>
               <div className="w-12 shrink-0 flex items-start justify-end pr-1.5 pt-1">
@@ -1052,13 +1094,17 @@ export function Week() {
                 const dayCA       = courseAssignmentsFor(iso);
                 const daySE       = scheduleEntriesFor(iso).filter((e) => !e.start_time);
                 const dayTS       = trainingSessionsFor(iso);
-                const hasItems = dayGoals.length + dayTasks.length + dayDL.length + dayCA.length + daySE.length + dayTS.length > 0;
+                const daySyn      = syncedFor(iso).filter((i) => !i.start_time);
+                const hasItems = dayGoals.length + dayTasks.length + dayDL.length + dayCA.length + daySE.length + dayTS.length + daySyn.length > 0;
                 return (
                   <div key={iso}
                     className={cn("flex-1 min-w-0 border-r border-border p-0.5 flex flex-col gap-0.5",
                       isToday && "bg-primary/[0.03]",
                       !hasItems && "min-h-[1.75rem]"
                     )}>
+                    {daySyn.map((i) => (
+                      <SyncedChip key={i.key} item={i} onOpen={setOpenSynced} onToggle={synced.toggleItem} />
+                    ))}
                     {dayGoals.map((g) => (
                       <button key={`g-${g.id}`} onClick={() => setModal({ kind: "edit-goal", goal: g })}
                         className="flex items-center gap-1 px-1.5 py-0.5 rounded text-left w-full bg-blue-500/10 hover:bg-blue-500/20 border border-blue-500/20 transition-colors">
@@ -1152,6 +1198,9 @@ export function Week() {
                       systems={systems}
                       courseAssignments={items.course_assignments.filter((a) => a.due_date === iso)}
                       scheduleEntries={scheduleEntriesFor(iso)}
+                      synced={syncedFor(iso)}
+                      onOpenSynced={setOpenSynced}
+                      onToggleSynced={synced.toggleItem}
                       actual={showActual ? actualByDate.get(iso) : undefined}
                       sleepSpans={sleepByDate.get(iso)}
                       categories={categories}
@@ -1220,6 +1269,19 @@ export function Week() {
       )}
 
       {renderModals()}
+    </div>
+  );
+}
+
+/**
+ * A Protocol domain that failed to load is SAID, never rendered as an empty
+ * day — "no workouts planned" and "couldn't read workouts" must not look alike.
+ */
+function SyncedErrors({ synced }: { synced: ReturnType<typeof useSyncedItems> }) {
+  if (synced.errors.length === 0) return null;
+  return (
+    <div className="shrink-0 px-3 py-1 text-[11px] text-destructive bg-destructive/5 border-b border-destructive/20" role="alert">
+      Protocol: couldn't load {synced.errors.map((e) => SYNCED_KIND_LABEL[e.kind].toLowerCase()).join(", ")} — {synced.errors[0].message}
     </div>
   );
 }

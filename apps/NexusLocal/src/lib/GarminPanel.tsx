@@ -152,6 +152,12 @@ export function GarminPanel({ platform }: { platform: string | null }) {
       const lines = [
         `Imported · ${c.runs ?? 0} run(s), ${c.workouts ?? 0} workout(s), ${c.exercise_sets ?? 0} set(s)`,
       ];
+      // Activities that completed a session planned in Protocol/PathFinder
+      // rather than adding a row beside it. Absent from an older function.
+      const cl = out.claimed ?? {};
+      if ((cl.runs ?? 0) + (cl.workouts ?? 0) > 0) {
+        lines.push(`Completed plans · ${cl.runs ?? 0} run(s), ${cl.workouts ?? 0} workout(s)`);
+      }
       // Skips are shown, not swallowed: "0 imported" because Oura owns that
       // metric is a very different thing from "0 imported" because it broke.
       if (Array.isArray(out.skipped) && out.skipped.length) lines.push(...out.skipped);

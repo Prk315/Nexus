@@ -33,7 +33,15 @@
 // the scoped secret is the authentication, and the anon key the gateway would
 // demand is public anyway — requiring it adds friction, not security.
 
-import { createClient } from "jsr:@supabase/supabase-js@2";
+import { createClient, type SupabaseClient } from "jsr:@supabase/supabase-js@2";
+import {
+  type ActivityIn,
+  type Candidate,
+  claimableDates,
+  type Decision,
+  type ExistingRow,
+  planImport,
+} from "./match.ts";
 
 const MIN_KEY_LEN = 32;
 
@@ -87,7 +95,10 @@ async function constantTimeEqual(a: string, b: string): Promise<boolean> {
  * Garmin's own activity id into the primary key means the second import updates
  * the row the first one wrote.
  *
- * Manually-created rows keep their random ids and are never touched by this.
+ * Manually-created rows keep their random ids. A PLANNED row an activity
+ * completes (see match.ts) keeps its random id too — after that it is found by
+ * `external_id`, so stableId is only the id of rows this function inserted,
+ * never an id to write onto a row that already exists.
  */
 async function stableId(namespace: string, key: string): Promise<string> {
   const digest = await crypto.subtle.digest(
@@ -176,6 +187,61 @@ function localToUtcIso(value: string | null): string | null {
   let utc = target - (wallAsUtc(target) - target);
   utc = target - (wallAsUtc(utc) - utc);
   return new Date(utc).toISOString();
+}
+
+/** A positive integer or null — `protocol_running_sessions.duration_min` has a CHECK > 0. */
+const positiveInt = (v: unknown): number | null => {
+  const n = int(v);
+  return n !== null && n > 0 ? n : null;
+};
+
+/** Drop null/undefined so a claim never erases a value the user typed by hand. */
+function defined(o: Record<string, unknown>): Record<string, unknown> {
+  return Object.fromEntries(Object.entries(o).filter(([, v]) => v !== null && v !== undefined));
+}
+
+const IN_CHUNK = 200;
+
+/** Rows in `table` that already carry one of these external_ids. Null on error. */
+async function loadExisting(
+  sb: SupabaseClient,
+  table: string,
+  userId: string,
+  externalIds: string[],
+): Promise<ExistingRow[] | null> {
+  const out: ExistingRow[] = [];
+  const ids = [...new Set(externalIds)];
+  for (let i = 0; i < ids.length; i += IN_CHUNK) {
+    const { data, error } = await sb
+      .from(table)
+      .select("id, external_id")
+      .eq("user_id", userId)
+      .in("external_id", ids.slice(i, i + IN_CHUNK));
+    if (error) return null;
+    out.push(...(data as ExistingRow[]));
+  }
+  return out;
+}
+
+/** Planned rows (no external_id) on these dates. Null on error. */
+async function loadCandidates(
+  sb: SupabaseClient,
+  table: string,
+  dateCol: string,
+  userId: string,
+  dates: string[],
+): Promise<Candidate[] | null> {
+  if (!dates.length) return [];
+  const { data, error } = await sb
+    .from(table)
+    .select(`id, date:${dateCol}, start_time, created_at, notes`)
+    .eq("user_id", userId)
+    .is("external_id", null)
+    .in(dateCol, dates);
+  if (error) return null;
+  // The select string is built at runtime, so supabase-js cannot infer its
+  // row type statically.
+  return data as unknown as Candidate[];
 }
 
 Deno.serve(async (req: Request) => {
@@ -284,9 +350,15 @@ Deno.serve(async (req: Request) => {
   }
 
   // ── Activities → runs + workouts ─────────────────────────────────────────
+  //
+  // Which row each activity lands in — the row it already has, a PLANNED
+  // session it completes, or a new one — is decided in match.ts, pure and
+  // tested; its header holds the rules (type gating, candidate ranking, why a
+  // primary key is never rewritten). This section only reads and writes.
   const activities = arr(body.activities);
-  const runRows = [];
-  const workoutRows = [];
+  type Item = { a: Raw; act: ActivityIn };
+  const runItems: Item[] = [];
+  const workoutItems: Item[] = [];
   let skippedWorkouts = 0;
 
   for (const a of activities) {
@@ -306,58 +378,169 @@ Deno.serve(async (req: Request) => {
         ? String(rawId)
         : `${date}|${str(a.type) ?? ""}|${str(a.name) ?? ""}|${str(a.start_time) ?? ""}`;
 
-    if (a.type === "run") {
-      runRows.push({
-        id: await stableId("garmin:run", key),
-        user_id: userId,
-        // The database's real dedupe key. `id` being deterministic makes THIS
-        // function idempotent; `external_id` + its partial unique index makes
-        // a duplicate impossible no matter which client writes.
-        external_id: `garmin:${key}`,
-        plan_id: null,
-        date,
-        started_at: localToUtcIso(str(a.start_time)),
-        planned_km: null,
-        actual_km: num(a.actual_km),
-        avg_pace_s_per_km: int(a.avg_pace_s_per_km),
-        heart_rate_avg: int(a.heart_rate_avg),
-        heart_rate_max: int(a.heart_rate_max),
-        elevation_gain_m: int(a.elevation_gain_m),
-        cadence_avg: int(a.cadence_avg),
-        calories: int(a.calories),
-        completed: true,
-        notes: str(a.name),
-      });
-    } else if (settings.workouts_source === "garmin") {
-      workoutRows.push({
-        id: await stableId("garmin:workout", key),
-        user_id: userId,
-        external_id: `garmin:${key}`,
-        plan_id: null,
-        name: str(a.name) ?? "Workout",
-        scheduled_date: date,
-        started_at: localToUtcIso(str(a.start_time)),
-        completed: true,
-        duration_min: int(a.duration_min),
-        calories_burned: int(a.calories_burned) ?? int(a.calories),
-        avg_heart_rate: int(a.avg_heart_rate) ?? int(a.heart_rate_avg),
-        notes: "Garmin import",
-      });
-    } else {
+    const isRun = a.type === "run";
+    if (!isRun && settings.workouts_source !== "garmin") {
       skippedWorkouts++;
+      continue;
     }
+    (isRun ? runItems : workoutItems).push({
+      a,
+      act: {
+        kind: isRun ? "run" : "workout",
+        // The database's real dedupe key. `id` being deterministic makes THIS
+        // function idempotent; `external_id` + its unique index makes a
+        // duplicate impossible no matter which client writes.
+        externalId: `garmin:${key}`,
+        stableId: await stableId(isRun ? "garmin:run" : "garmin:workout", key),
+        date,
+        startLocal: str(a.start_time),
+        // Garmin's raw activityType.typeKey. Absent from bridges older than
+        // 2026-11-23 — such activities are inserted as before, never merged.
+        typeKey: str(a.type_key),
+      },
+    });
   }
 
-  if (runRows.length) {
-    const { error } = await sb.from("protocol_running_sessions").upsert(runRows, { onConflict: "user_id,external_id" });
-    if (error) errors.push(`runs: ${error.message}`);
-    else counts.runs = runRows.length;
-  }
-  if (workoutRows.length) {
-    const { error } = await sb.from("protocol_workout_sessions").upsert(workoutRows, { onConflict: "user_id,external_id" });
-    if (error) errors.push(`workouts: ${error.message}`);
-    else counts.workouts = workoutRows.length;
-  }
+  /** Duration from the bridge, else derived from distance × pace. */
+  const runDuration = (a: Raw): number | null => {
+    const d = positiveInt(a.duration_min);
+    if (d !== null) return d;
+    const km = num(a.actual_km), pace = num(a.avg_pace_s_per_km);
+    return km !== null && pace !== null ? positiveInt((km * pace) / 60) : null;
+  };
+
+  // What the watch MEASURED. This is all a claim writes onto a planned row —
+  // the plan's name, routine_id, plan_id, planned_km, notes and start_time stay.
+  const runMeasured = (a: Raw) => ({
+    started_at: localToUtcIso(str(a.start_time)),
+    actual_km: num(a.actual_km),
+    avg_pace_s_per_km: int(a.avg_pace_s_per_km),
+    heart_rate_avg: int(a.heart_rate_avg),
+    heart_rate_max: int(a.heart_rate_max),
+    elevation_gain_m: int(a.elevation_gain_m),
+    cadence_avg: int(a.cadence_avg),
+    calories: int(a.calories),
+    duration_min: runDuration(a),
+  });
+  const workoutMeasured = (a: Raw) => ({
+    started_at: localToUtcIso(str(a.start_time)),
+    duration_min: int(a.duration_min),
+    calories_burned: int(a.calories_burned) ?? int(a.calories),
+    avg_heart_rate: int(a.avg_heart_rate) ?? int(a.heart_rate_avg),
+  });
+
+  // The full row this function owns: a new insert, or a re-sync of a row it
+  // inserted (under that row's own id, which equals stableId).
+  const runRow = (a: Raw, act: ActivityIn, id: string) => ({
+    id,
+    user_id: userId,
+    external_id: act.externalId,
+    plan_id: null,
+    date: act.date,
+    planned_km: null,
+    ...runMeasured(a),
+    completed: true,
+    notes: str(a.name),
+  });
+  const workoutRow = (a: Raw, act: ActivityIn, id: string) => ({
+    id,
+    user_id: userId,
+    external_id: act.externalId,
+    plan_id: null,
+    name: str(a.name) ?? "Workout",
+    scheduled_date: act.date,
+    ...workoutMeasured(a),
+    completed: true,
+    notes: "Garmin import",
+  });
+
+  // `counts` = activity rows written (new, or re-synced). `claimed` = planned
+  // sessions completed by an activity THIS run — reported apart, so "0
+  // imported" and "3 merged into your plans" never read the same.
+  const claimed = { runs: 0, workouts: 0 };
+
+  const importKind = async (
+    label: "runs" | "workouts",
+    table: string,
+    dateCol: string,
+    list: Item[],
+    measured: (a: Raw) => Record<string, unknown>,
+    fullRow: (a: Raw, act: ActivityIn, id: string) => Record<string, unknown>,
+  ): Promise<void> => {
+    if (!list.length) return;
+    const acts = list.map((i) => i.act);
+
+    // Without knowing which rows exist we could rewrite a claimed row's
+    // primary key; without the plans we would re-create exactly the duplicate
+    // this exists to prevent. Write nothing instead — the next sync retries.
+    const existing = await loadExisting(sb, table, userId, acts.map((x) => x.externalId));
+    if (!existing) {
+      errors.push(`${label}: could not read existing rows — nothing written`);
+      return;
+    }
+    const candidates = await loadCandidates(sb, table, dateCol, userId, claimableDates(acts, existing));
+    if (!candidates) {
+      errors.push(`${label}: could not read planned sessions — nothing written`);
+      return;
+    }
+
+    const decisions: Decision[] = planImport(acts, existing, candidates);
+    const upserts: Record<string, unknown>[] = [];
+    let written = 0;
+
+    // Sequential on purpose: a connection per row in parallel is the shape
+    // that wedged Supabase on 2026-08-15.
+    for (let i = 0; i < list.length; i++) {
+      const d = decisions[i];
+      const { a, act } = list[i];
+      if (d.action === "duplicate") continue;
+      if (d.action === "upsert") {
+        upserts.push(fullRow(a, act, d.id));
+        continue;
+      }
+
+      // Nulls dropped: a claim must not erase a value typed in by hand.
+      const patch = { ...defined(measured(a)), completed: true };
+      if (d.action === "resync-claimed") {
+        const { error } = await sb.from(table).update(patch).eq("id", d.id).eq("user_id", userId);
+        if (error) errors.push(`${label} ${act.externalId}: ${error.message}`);
+        else written++;
+        continue;
+      }
+
+      // Claim: an UPDATE by the planned row's id — not an upsert, which would
+      // conflict on the PK rather than on external_id. Guarded on
+      // external_id IS NULL so a plan a concurrent sync claimed is left alone.
+      const { data, error } = await sb
+        .from(table)
+        .update({ ...patch, external_id: act.externalId })
+        .eq("id", d.id)
+        .eq("user_id", userId)
+        .is("external_id", null)
+        .select("id");
+      if (error) {
+        errors.push(`${label} ${act.externalId} → plan ${d.id}: ${error.message}`);
+      } else if (data && data.length) {
+        claimed[label]++;
+      } else {
+        // The plan changed under us (claimed concurrently, or deleted).
+        // Inserting now could collide with that claim on (user_id,
+        // external_id) and rewrite its id — so leave it: the next sync sees
+        // the claimed row, or the gap, and does the right thing.
+        skipped.push(`${label}: ${act.externalId} skipped — its planned session changed during import`);
+      }
+    }
+
+    if (upserts.length) {
+      const { error } = await sb.from(table).upsert(upserts, { onConflict: "user_id,external_id" });
+      if (error) errors.push(`${label}: ${error.message}`);
+      else written += upserts.length;
+    }
+    counts[label] = written;
+  };
+
+  await importKind("runs", "protocol_running_sessions", "date", runItems, runMeasured, runRow);
+  await importKind("workouts", "protocol_workout_sessions", "scheduled_date", workoutItems, workoutMeasured, workoutRow);
   if (skippedWorkouts) {
     skipped.push(`workouts: ${skippedWorkouts} skipped — Oura is the selected workouts source`);
   }
@@ -402,5 +585,5 @@ Deno.serve(async (req: Request) => {
     }
   }
 
-  return json({ ok: errors.length === 0, counts, skipped, errors, settings });
+  return json({ ok: errors.length === 0, counts, claimed, skipped, errors, settings });
 });

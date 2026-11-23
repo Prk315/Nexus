@@ -150,7 +150,7 @@ to ~40k tokens loaded into every session regardless of which app was in play.
 
 | File | Covers |
 |---|---|
-| `apps/PathFinder/CLAUDE.md` | Supabase data layer, ISA task model, goals, Systems recurrence, scheduling gate, sessions |
+| `apps/PathFinder/CLAUDE.md` | Supabase data layer, ISA task model, goals, Systems recurrence, scheduling gate, sessions, synced blocks (Protocol items on the calendar) |
 | `apps/NexusLocal/CLAUDE.md` | grid node vs iOS bridge, `blocking_state`, Mac enforcement + daemon + root hosts enforcer, usage tracking, Garmin, widget writes, SideStore delivery, releasing |
 | `apps/Vault/Vault/CLAUDE.md` | data layer, Tiptap note editor + schema guard, co-editing, history, code cells, PathFinder task blocks, canvas, theming |
 | `integrations/n8n/CLAUDE.md` | mail triage: n8n on the Mac, Supabase as the bus |

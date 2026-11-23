@@ -6,6 +6,11 @@ import { cn, layoutCalItems } from "../../lib/utils";
 import type { TaskWithContext, SystemEntry, CalBlock, CourseAssignment, ScheduleEntry, TaskSession } from "../../types";
 import { DCBlockDraft, DC_COLORS, DC_COLOR_KEYS, DC_HOURS, DC_HOUR_END, DC_HOUR_PX, DC_HOUR_START, addMinutes, dcAddHour, dcMinToPx, dcPxToTime, dcTimeToMin } from "./_shared";
 import type { DashDropTarget } from "./useDashDrag";
+import type { SyncedItem } from "@nexus/core/protocol";
+import { useSyncedItems } from "../synced/useSyncedItems";
+import { SyncedCard, SyncedChip } from "../synced/SyncedCard";
+import { SyncedItemDialog } from "../synced/SyncedItemDialog";
+import { ScheduleProtocolDialog } from "../synced/ScheduleProtocolDialog";
 
 // ── Day Block Modal ───────────────────────────────────────────────────────────
 
@@ -243,8 +248,18 @@ export function DayCalendar({
   // Schedule entries for today with a start_time
   const timedSEs     = scheduleEntries.filter((e) => e.start_time);
 
+  // Protocol items for the day. Self-contained on purpose: the Dashboard
+  // passes nothing, so its layout code never has to know synced blocks exist.
+  const synced = useSyncedItems(_date, _date);
+  const [openSynced, setOpenSynced] = useState<SyncedItem | null>(null);
+  const [scheduling, setScheduling] = useState(false);
+  const syncedTimed   = synced.items.filter((i) => i.start_time && i.end_time);
+  const syncedUntimed = synced.items.filter((i) => !i.start_time);
+
   return (
     <div className="flex flex-col h-full">
+      <SyncedItemDialog item={openSynced} synced={synced} onClose={() => setOpenSynced(null)} />
+      <ScheduleProtocolDialog open={scheduling} initialDate={_date} synced={synced} onClose={() => setScheduling(false)} />
       {/* Header */}
       <div className="flex items-center justify-between mb-2 shrink-0 px-1">
         <h2 className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">
@@ -258,6 +273,24 @@ export function DayCalendar({
           <Plus className="h-3.5 w-3.5" />
         </button>
       </div>
+      <div className="flex items-center justify-end -mt-1.5 mb-1 px-1 shrink-0">
+        <button onClick={() => setScheduling(true)} className="text-[10px] text-muted-foreground hover:text-foreground"
+          title="Schedule a training, run, meal, supplement stack or routine — it lives in Protocol">
+          + Protocol
+        </button>
+      </div>
+      {synced.errors.length > 0 && (
+        <p className="text-[10px] text-destructive px-1 mb-1 shrink-0" role="alert">
+          Protocol unavailable: {synced.errors[0].message}
+        </p>
+      )}
+      {syncedUntimed.length > 0 && (
+        <div className="flex flex-col gap-0.5 mb-1 px-1 shrink-0">
+          {syncedUntimed.map((i) => (
+            <SyncedChip key={i.key} item={i} onOpen={setOpenSynced} onToggle={synced.toggleItem} />
+          ))}
+        </div>
+      )}
 
       {/* Scrollable grid */}
       <div ref={scrollRef} className="flex-1 overflow-y-auto">
@@ -319,7 +352,8 @@ export function DayCalendar({
                 | { kind: "sys"; startMin: number; endMin: number; s: typeof timedSystems[number] }
                 | { kind: "ca";  startMin: number; endMin: number; ca: typeof timedCAs[number] }
                 | { kind: "blk"; startMin: number; endMin: number; b: CalBlock }
-                | { kind: "se";  startMin: number; endMin: number; e: ScheduleEntry };
+                | { kind: "se";  startMin: number; endMin: number; e: ScheduleEntry }
+                | { kind: "syn"; startMin: number; endMin: number; i: SyncedItem };
 
               const evts: DcEvt[] = [
                 ...timedSystems.map((s) => ({
@@ -346,6 +380,12 @@ export function DayCalendar({
                   endMin:   e.end_time ? dcTimeToMin(e.end_time) : dcTimeToMin(e.start_time!) + 60,
                   e,
                 })),
+                ...syncedTimed.map((i) => ({
+                  kind: "syn" as const,
+                  startMin: dcTimeToMin(i.start_time!),
+                  endMin:   Math.max(dcTimeToMin(i.end_time!), dcTimeToMin(i.start_time!) + 15),
+                  i,
+                })),
               ];
 
               return layoutCalItems(evts).map(({ item, col, totalCols }) => {
@@ -353,6 +393,14 @@ export function DayCalendar({
                 const ht    = Math.max(18, dcMinToPx(item.endMin) - top);
                 const left  = `calc(${(col / totalCols) * 100}% + 1px)`;
                 const right = `calc(${((totalCols - col - 1) / totalCols) * 100}% + 1px)`;
+
+                if (item.kind === "syn") {
+                  return (
+                    <SyncedCard key={item.i.key} item={item.i} height={ht}
+                      style={{ top, height: ht, left, right, zIndex: 20 }}
+                      onOpen={setOpenSynced} onToggle={synced.toggleItem} />
+                  );
+                }
 
                 if (item.kind === "sys") {
                   const { s } = item;

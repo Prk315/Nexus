@@ -304,6 +304,16 @@ Three things that function gets right and a reimplementation won't:
 Nearly every numeric column in `protocol_*` is `integer` while Garmin sends floats
 (elevation arrives as `156.109375`); the function rounds on the way in.
 
+**A Garmin activity completes a PLANNED session instead of adding a row beside it**
+(rule in `garmin-import/match.ts`, tested with `node --test`). Only a `running`
+typeKey may claim a planned run and only a `strength` one a planned workout — the
+bridge files walks as `"run"`, so it now sends the raw `type_key`, and without it
+nothing claims. Rows written by other importers (`Synced from Oura`, `Strava…`,
+`Garmin import`) are never candidates: oura-sync delete-and-reinserts its rows, so
+a claimed Oura row would be deleted on its next pass. A claimed row keeps its
+random id forever and is found again by `external_id` — **never upsert `stableId`
+onto an existing row**; `protocol_exercises.session_id` references that PK.
+
 ### Conventions that fail silently
 
 - **`supabasePublic`, not `supabase`**, for `time_entries` / `active_sessions` /
