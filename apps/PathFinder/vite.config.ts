@@ -17,6 +17,7 @@ export default defineConfig(async () => ({
       "@nexus/core/coverage": path.resolve(__dirname, "../../packages/nexus-core/src/coverage.ts"),
       "@nexus/core/categories": path.resolve(__dirname, "../../packages/nexus-core/src/categories.ts"),
       "@nexus/core/pathfinder": path.resolve(__dirname, "../../packages/nexus-core/src/pathfinder/index.ts"),
+      "@nexus/core/protocol": path.resolve(__dirname, "../../packages/nexus-core/src/protocol/index.ts"),
       "@nexus/core/members": path.resolve(__dirname, "../../packages/nexus-core/src/members.ts"),
       "@nexus/core": path.resolve(__dirname, "../../packages/nexus-core/src/index.ts"),
     },

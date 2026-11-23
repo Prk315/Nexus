@@ -465,6 +465,16 @@ Three things that function gets right and a reimplementation won't:
 Nearly every numeric column in `protocol_*` is `integer` while Garmin sends floats
 (elevation arrives as `156.109375`); the function rounds on the way in.
 
+**A Garmin activity completes a PLANNED session instead of adding a row beside it**
+(rule in `garmin-import/match.ts`, tested with `node --test`). Only a `running`
+typeKey may claim a planned run and only a `strength` one a planned workout — the
+bridge files walks as `"run"`, so it now sends the raw `type_key`, and without it
+nothing claims. Rows written by other importers (`Synced from Oura`, `Strava…`,
+`Garmin import`) are never candidates: oura-sync delete-and-reinserts its rows, so
+a claimed Oura row would be deleted on its next pass. A claimed row keeps its
+random id forever and is found again by `external_id` — **never upsert `stableId`
+onto an existing row**; `protocol_exercises.session_id` references that PK.
+
 ### Conventions that fail silently
 
 - **`supabasePublic`, not `supabase`**, for `time_entries` / `active_sessions` /
@@ -849,6 +859,42 @@ with a `task_id` renders a tick in Week and Dashboard, and ticking it logs a
 session. That is the only thing that advances `sessions`- and `time`-mode
 completion, so a recurring step that is never ticked never finishes no matter how
 often it is scheduled.
+
+### Synced blocks: Protocol items on PathFinder's calendar
+
+Trainings, runs, meals, supplement stacks and routines (habit stacks) are
+scheduled, ticked, moved and deleted from PathFinder's Week and Dashboard —
+and **Protocol owns every one of them**: the item, its date, its time and
+whether it is done. PathFinder keeps no copy. `@nexus/core/protocol`
+(`packages/nexus-core/src/protocol/`) projects Protocol rows into
+`SyncedItem`s and writes straight back to those rows, so "ticked here, ticked
+there" is not a feature to maintain — there is one tick. Migration
+`20261123120000_protocol_synced_schedule.sql` added the time columns (all
+additive).
+
+- **They are a `syn` kind in the time grid, never `pf_cal_blocks`.** Task
+  sessions, missed-block marks, Stats adherence and the scheduling gate all
+  key on cal-block ids; a Protocol item pretending to be one would trip every
+  one of them.
+- **The STACK is the schedulable unit** for routines and supplements
+  (`scheduled_time`/`duration_min`/`repeat_days` on `protocol_{habit,supplement}_stacks`,
+  mirroring `protocol_habits`). A routine with no stack time falls back to its
+  earliest habit's time; with neither it is unscheduled and draws nothing.
+  Recurring items can change time but not day — Protocol has no per-occurrence
+  override, so "move Tuesday's" would silently move all of them.
+- ⚠️ **Protocol weekdays are Monday = 0**, PathFinder's recurring blocks are
+  Sunday = 0. `protocolWeekday()` is the Protocol one.
+- ⚠️ **`external_id IS NULL` does not mean "planned".** ~165 `Synced from Oura`
+  and ~120 Strava rows have none. `recordedBy()` marks importer rows, which
+  cannot be moved, deleted or un-done from PathFinder — the importer would put
+  them back (oura-sync deletes and re-inserts its window). Its markers are
+  asserted equal to `garmin-import/match.ts`'s `isImportedRow`.
+- **Each domain loads atomically and fails visibly.** Habits without their
+  completions would render every routine as untouched; a failed domain shows
+  a banner instead of an empty day.
+- `pf_training_*` and `pf_daily_habits` are PathFinder's own earlier models of
+  the same things, effectively unused (4 sessions, last April; 0 habits). They
+  are superseded by this, not yet removed — removals are strictly ordered.
 
 **Vault data layer** (`apps/Vault/Vault/src/lib/`):
 - `supabase.ts` — shared client from `VITE_SUPABASE_URL` / `VITE_SUPABASE_ANON_KEY`.

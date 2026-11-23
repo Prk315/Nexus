@@ -271,6 +271,11 @@ def cmd_activities(args):
                 # no stable identity, so every re-sync inserts a duplicate row.
                 # Additive and backwards compatible: existing clients ignore them.
                 "activity_id": act.get("activityId"),
+                # Garmin's own type ("running", "walking", "trail_running", …).
+                # "run" above lumps walks in with runs, so garmin-import needs
+                # the real type to decide whether this may complete a PLANNED
+                # run. Additive: older importers ignore it.
+                "type_key": type_key or None,
                 "start_time": start_ts or None,
                 "date": act_date,
                 "name": act.get("activityName", ""),
@@ -287,6 +292,9 @@ def cmd_activities(args):
             results.append({
                 "type": "workout",
                 "activity_id": act.get("activityId"),
+                # Only a strength typeKey may complete a planned workout session
+                # in garmin-import — a walk or a ride must not tick off leg day.
+                "type_key": type_key or None,
                 "start_time": start_ts or None,
                 "date": act_date,
                 "name": act.get("activityName", ""),

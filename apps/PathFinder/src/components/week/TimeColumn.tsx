@@ -15,6 +15,8 @@ import type { Span } from "@nexus/core/coverage";
 import type { ActualDay } from "../../lib/actual";
 import type { CoverageCategoryOption } from "../../lib/api";
 import { ActualOverlay, SleepBand } from "./overlays";
+import type { SyncedItem } from "@nexus/core/protocol";
+import { SyncedCard } from "../synced/SyncedCard";
 import type { WeekInteractions, ExternalDragPayload } from "./useWeekInteractions";
 
 // Resize grab-zone height, and the minimum card height that leaves room for
@@ -518,12 +520,18 @@ function CalBlockCard({
 
 // ── Time column ───────────────────────────────────────────────────────────────
 
-export function TimeColumn({ date, isToday, blocks, systems, courseAssignments, scheduleEntries, actual, sleepSpans, categories, sessionsByBlock, missedBlockIds, hourPx, interactions, onClickSlot, onClickBlock, onToggleWorked, onToggleMissed }: {
+export function TimeColumn({ date, isToday, blocks, systems, courseAssignments, scheduleEntries, synced = [], actual, sleepSpans, categories, sessionsByBlock, missedBlockIds, hourPx, interactions, onClickSlot, onClickBlock, onToggleWorked, onToggleMissed, onOpenSynced, onToggleSynced }: {
   date: Date; isToday: boolean;
   blocks: CalBlock[];
   systems: SystemEntry[];
   courseAssignments: CourseAssignment[];
   scheduleEntries: ScheduleEntry[];
+  /**
+   * Protocol items for this day (workouts, runs, meals, supplement stacks,
+   * routines). Their own `syn` kind — they are NOT pf_cal_blocks, so task
+   * sessions, missed-block marks and the scheduling gate never see them.
+   */
+  synced?: SyncedItem[];
   actual?: ActualDay;
   /** Always-on sleep band spans for this day — independent of `actual`/the Actual toggle. */
   sleepSpans?: Span[];
@@ -541,6 +549,8 @@ export function TimeColumn({ date, isToday, blocks, systems, courseAssignments, 
   onClickBlock: (b: CalBlock) => void;
   onToggleWorked: (b: CalBlock) => void;
   onToggleMissed: (b: CalBlock) => void;
+  onOpenSynced?: (i: SyncedItem) => void;
+  onToggleSynced?: (i: SyncedItem) => void;
 }) {
   const iso = toISO(date);
   const colRef = useRef<HTMLDivElement>(null);
@@ -650,7 +660,8 @@ export function TimeColumn({ date, isToday, blocks, systems, courseAssignments, 
             | { kind: "sys"; startMin: number; endMin: number; s: SystemEntry }
             | { kind: "ca";  startMin: number; endMin: number; a: CourseAssignment }
             | { kind: "blk"; startMin: number; endMin: number; b: CalBlock }
-            | { kind: "se";  startMin: number; endMin: number; e: ScheduleEntry };
+            | { kind: "se";  startMin: number; endMin: number; e: ScheduleEntry }
+            | { kind: "syn"; startMin: number; endMin: number; i: SyncedItem };
 
           const evts: WkEvt[] = [
             ...timedSys.map((s) => ({
@@ -678,6 +689,13 @@ export function TimeColumn({ date, isToday, blocks, systems, courseAssignments, 
               startMin: timeToMinutes(e.start_time!),
               endMin:   e.end_time ? timeToMinutes(e.end_time) : timeToMinutes(e.start_time!) + 60,
               e,
+            })),
+            // Untimed Protocol items live in the all-day row, not here.
+            ...synced.filter((i) => i.start_time && i.end_time).map((i) => ({
+              kind: "syn" as const,
+              startMin: timeToMinutes(i.start_time!),
+              endMin:   Math.max(timeToMinutes(i.end_time!), timeToMinutes(i.start_time!) + 15),
+              i,
             })),
           ];
 
@@ -747,6 +765,19 @@ export function TimeColumn({ date, isToday, blocks, systems, courseAssignments, 
                     <p className={cn("text-[10px] leading-tight opacity-60 truncate", caTxt)}>{a.plan_title}</p>
                   )}
                 </div>
+              );
+            }
+
+            if (item.kind === "syn") {
+              return (
+                <SyncedCard
+                  key={item.i.key}
+                  item={item.i}
+                  height={height}
+                  style={{ top, height, left, right }}
+                  onOpen={(i) => onOpenSynced?.(i)}
+                  onToggle={(i) => onToggleSynced?.(i)}
+                />
               );
             }
 

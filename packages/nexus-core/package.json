@@ -6,7 +6,8 @@
     ".": "./src/index.ts",
     "./coverage": "./src/coverage.ts",
     "./categories": "./src/categories.ts",
-    "./pathfinder": "./src/pathfinder/index.ts"
+    "./pathfinder": "./src/pathfinder/index.ts",
+    "./protocol": "./src/protocol/index.ts"
   },
   "scripts": {
     "test": "vitest run"
