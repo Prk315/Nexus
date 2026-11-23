@@ -20,6 +20,7 @@ import { HabitsStrip } from "../components/dashboard/HabitsStrip";
 import { WelcomeBox } from "../components/dashboard/WelcomeBox";
 import { TodoList } from "../components/dashboard/TodoList";
 import { NowPanel } from "../components/dashboard/NowPanel";
+import { QuickCapture } from "../components/dashboard/QuickCapture";
 import { TaskPlanner } from "../components/workspace/TaskPlanner";
 import { nextUp, needsScheduling } from "../lib/nextUp";
 import { getDashBlockVisibility, subscribeDashBlocks } from "../lib/dashBlocks";
@@ -414,6 +415,9 @@ export function Dashboard() {
 
         {/* ── Left column ─────────────────────────────────────────────────── */}
         <div className="flex-1 min-w-0 overflow-y-auto border-r border-border px-3 py-2 md:px-4 md:py-3 flex flex-col gap-3 md:gap-4">
+
+          {/* Capture anything — task, reminder, shopping, note… (QuickCapture.tsx) */}
+          <QuickCapture onCreateTask={(title) => handleCreateTask({ title, plan_id: null, due_date: date })} />
 
           {/* To-Do List */}
           {dashBlocks.now && (

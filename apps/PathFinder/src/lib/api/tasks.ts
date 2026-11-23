@@ -228,6 +228,32 @@ export const saveTaskSubtype = async (
   if (error) err(error);
 };
 
+/**
+ * Creates a quick task (reminder / chore / shopping) together with its subtype
+ * attributes — "call mum at 18:00", "2 l milk @ netto".
+ *
+ * Two writes, supertype first: the subtype's guard trigger checks the parent's
+ * `task_type`, so the row has to exist before its attributes can. Attributes
+ * that are all null/empty write no subtype row at all — the sparse subtypes
+ * carry no defaults worth materialising (see the section comment above).
+ *
+ * If the subtype write fails the task still exists, untimed; the error is
+ * rethrown so the caller can say so rather than silently dropping the time.
+ */
+export const createQuickTask = async (
+  category: Exclude<TaskType, "task">,
+  title: string,
+  attrs: Record<string, string | number | null> = {},
+): Promise<{ task: Task; attrs: Record<string, any> | null }> => {
+  const task = await createTask({ title, category, plan_id: null });
+  const present = Object.fromEntries(
+    Object.entries(attrs).filter(([, v]) => v !== null && v !== undefined && v !== ""),
+  );
+  if (Object.keys(present).length === 0) return { task, attrs: null };
+  await saveTaskSubtype(task.id, category, attrs);
+  return { task, attrs: { task_id: task.id, ...attrs } };
+};
+
 /** All subtype rows of one sparse kind, for panels that need them in bulk. */
 export const getTaskSubtypeRows = async (
   type: Exclude<TaskType, "task">,
