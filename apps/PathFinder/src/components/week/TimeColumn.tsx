@@ -17,6 +17,8 @@ import type { CoverageCategoryOption } from "../../lib/api";
 import { ActualOverlay, SleepBand } from "./overlays";
 import type { SyncedItem } from "@nexus/core/protocol";
 import { SyncedCard } from "../synced/SyncedCard";
+import { ReminderMarker } from "../reminders/ReminderMarker";
+import { REMINDER_MARKER_MIN, type CalReminder } from "../../lib/reminders";
 import type { WeekInteractions, ExternalDragPayload } from "./useWeekInteractions";
 
 // Resize grab-zone height, and the minimum card height that leaves room for
@@ -520,7 +522,7 @@ function CalBlockCard({
 
 // ── Time column ───────────────────────────────────────────────────────────────
 
-export function TimeColumn({ date, isToday, blocks, systems, courseAssignments, scheduleEntries, synced = [], actual, sleepSpans, categories, sessionsByBlock, missedBlockIds, hourPx, interactions, onClickSlot, onClickBlock, onToggleWorked, onToggleMissed, onOpenSynced, onToggleSynced }: {
+export function TimeColumn({ date, isToday, blocks, systems, courseAssignments, scheduleEntries, synced = [], reminders = [], actual, sleepSpans, categories, sessionsByBlock, missedBlockIds, hourPx, interactions, onClickSlot, onClickBlock, onToggleWorked, onToggleMissed, onOpenSynced, onToggleSynced, onOpenReminder, onToggleReminder }: {
   date: Date; isToday: boolean;
   blocks: CalBlock[];
   systems: SystemEntry[];
@@ -532,6 +534,8 @@ export function TimeColumn({ date, isToday, blocks, systems, courseAssignments, 
    * sessions, missed-block marks and the scheduling gate never see them.
    */
   synced?: SyncedItem[];
+  /** Timed reminders for this day — points in time, drawn as markers. */
+  reminders?: CalReminder[];
   actual?: ActualDay;
   /** Always-on sleep band spans for this day — independent of `actual`/the Actual toggle. */
   sleepSpans?: Span[];
@@ -551,6 +555,8 @@ export function TimeColumn({ date, isToday, blocks, systems, courseAssignments, 
   onToggleMissed: (b: CalBlock) => void;
   onOpenSynced?: (i: SyncedItem) => void;
   onToggleSynced?: (i: SyncedItem) => void;
+  onOpenReminder?: (r: CalReminder) => void;
+  onToggleReminder?: (r: CalReminder) => void;
 }) {
   const iso = toISO(date);
   const colRef = useRef<HTMLDivElement>(null);
@@ -661,7 +667,8 @@ export function TimeColumn({ date, isToday, blocks, systems, courseAssignments, 
             | { kind: "ca";  startMin: number; endMin: number; a: CourseAssignment }
             | { kind: "blk"; startMin: number; endMin: number; b: CalBlock }
             | { kind: "se";  startMin: number; endMin: number; e: ScheduleEntry }
-            | { kind: "syn"; startMin: number; endMin: number; i: SyncedItem };
+            | { kind: "syn"; startMin: number; endMin: number; i: SyncedItem }
+            | { kind: "rem"; startMin: number; endMin: number; r: CalReminder };
 
           const evts: WkEvt[] = [
             ...timedSys.map((s) => ({
@@ -697,7 +704,16 @@ export function TimeColumn({ date, isToday, blocks, systems, courseAssignments, 
               endMin:   Math.max(timeToMinutes(i.end_time!), timeToMinutes(i.start_time!) + 15),
               i,
             })),
+            // A point in time gets a fixed marker height so it can be seen
+            // and clicked — and so the overlap layout gives it its own lane.
+            ...reminders.map((r) => ({
+              kind: "rem" as const,
+              startMin: timeToMinutes(r.time),
+              endMin:   Math.min(timeToMinutes(r.time) + REMINDER_MARKER_MIN, GRID_END_MIN),
+              r,
+            })),
           ];
+          const now = Date.now();
 
           return layoutCalItems(evts).map(({ item, col, totalCols }) => {
             const top    = minutesToPx(item.startMin, hourPx);
@@ -765,6 +781,19 @@ export function TimeColumn({ date, isToday, blocks, systems, courseAssignments, 
                     <p className={cn("text-[10px] leading-tight opacity-60 truncate", caTxt)}>{a.plan_title}</p>
                   )}
                 </div>
+              );
+            }
+
+            if (item.kind === "rem") {
+              return (
+                <ReminderMarker
+                  key={`rem-${item.r.task_id}`}
+                  reminder={item.r}
+                  now={now}
+                  style={{ top, height: Math.max(18, height), left, right }}
+                  onOpen={(r) => onOpenReminder?.(r)}
+                  onToggle={(r) => onToggleReminder?.(r)}
+                />
               );
             }
 

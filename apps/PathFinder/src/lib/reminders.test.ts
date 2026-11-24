@@ -1,5 +1,8 @@
 import { describe, it, expect } from "vitest";
 import {
+  localDayBounds,
+  toCalReminder,
+  REMINDER_MARKER_MIN,
   compareReminders, fromLocalInputValue, isReminderActionable,
   reminderPresets, reminderStatus, toLocalInputValue,
 } from "./reminders";
@@ -98,5 +101,34 @@ describe("reminderPresets", () => {
   it("tomorrow rolls over the month", () => {
     const p = reminderPresets(at(2026, 11, 30, 12)).find((x) => x.label.startsWith("Tomorrow"))!;
     expect(toLocalInputValue(p.iso)).toBe("2026-12-01T09:00");
+  });
+});
+
+describe("reminders on the calendar", () => {
+  it("places a reminder on its LOCAL day and minute", () => {
+    const at = new Date(2026, 10, 24, 0, 30).toISOString(); // 00:30 local
+    const r = toCalReminder({ task_id: 1, title: "Call", done: false, remind_at: at, lead_minutes: 15 })!;
+    expect(r.date).toBe("2026-11-24");
+    expect(r.time).toBe("00:30");
+  });
+
+  it("has no position without a parseable time", () => {
+    expect(toCalReminder({ task_id: 1, title: "x", done: false, remind_at: null, lead_minutes: null })).toBeNull();
+    expect(toCalReminder({ task_id: 1, title: "x", done: false, remind_at: "soon", lead_minutes: null })).toBeNull();
+  });
+
+  it("bounds a range by local midnights, end-exclusive the day after", () => {
+    const { from, to } = localDayBounds("2026-11-23", "2026-11-29");
+    expect(from).toBe(new Date(2026, 10, 23).toISOString());
+    expect(to).toBe(new Date(2026, 10, 30).toISOString());
+    // A reminder at 23:59 on the last day is inside; 00:00 the next day is not.
+    const last = new Date(2026, 10, 29, 23, 59).toISOString();
+    const next = new Date(2026, 10, 30, 0, 0).toISOString();
+    expect(last >= from && last < to).toBe(true);
+    expect(next < to).toBe(false);
+  });
+
+  it("draws a point in time with a visible height", () => {
+    expect(REMINDER_MARKER_MIN).toBeGreaterThanOrEqual(15);
   });
 });

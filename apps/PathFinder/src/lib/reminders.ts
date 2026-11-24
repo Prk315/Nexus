@@ -112,3 +112,55 @@ export function reminderPresets(now: Date): { label: string; iso: string }[] {
   out.push({ label: "Tomorrow 09:00", iso: tomorrow.toISOString() });
   return out;
 }
+
+// ── On the calendar ─────────────────────────────────────────────────────────
+
+/** A timed reminder, placed on a local day and minute. */
+export interface CalReminder {
+  task_id: number;
+  title: string;
+  done: boolean;
+  remind_at: string;
+  lead_minutes: number | null;
+  /** Local YYYY-MM-DD of `remind_at`. */
+  date: string;
+  /** Local HH:MM of `remind_at`. */
+  time: string;
+}
+
+/**
+ * A reminder is a POINT in time, but a zero-height card cannot be seen or
+ * clicked. It is drawn as this many minutes tall — a marker, not a duration.
+ */
+export const REMINDER_MARKER_MIN = 20;
+
+/**
+ * The instants bounding local days `start`..`end` inclusive, for a
+ * `remind_at` range query: [start 00:00 local, the day after end 00:00 local).
+ * Comparing the timestamptz against bare dates would use UTC days and put a
+ * 00:30 reminder on the previous day.
+ */
+export function localDayBounds(start: string, end: string): { from: string; to: string } {
+  const from = new Date(`${start}T00:00:00`);
+  const to = new Date(`${end}T00:00:00`);
+  to.setDate(to.getDate() + 1);
+  return { from: from.toISOString(), to: to.toISOString() };
+}
+
+/** Null when `remind_at` does not parse — an unplaceable reminder has no position. */
+export function toCalReminder(row: {
+  task_id: number; title: string; done: boolean; remind_at: string | null; lead_minutes: number | null;
+}): CalReminder | null {
+  if (!row.remind_at) return null;
+  const d = new Date(row.remind_at);
+  if (Number.isNaN(d.getTime())) return null;
+  return {
+    task_id: row.task_id,
+    title: row.title,
+    done: row.done,
+    remind_at: row.remind_at,
+    lead_minutes: row.lead_minutes,
+    date: localDateOf(d),
+    time: `${pad(d.getHours())}:${pad(d.getMinutes())}`,
+  };
+}

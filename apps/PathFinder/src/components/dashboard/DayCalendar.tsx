@@ -11,6 +11,10 @@ import { useSyncedItems } from "../synced/useSyncedItems";
 import { SyncedCard, SyncedChip } from "../synced/SyncedCard";
 import { SyncedItemDialog } from "../synced/SyncedItemDialog";
 import { ScheduleProtocolDialog } from "../synced/ScheduleProtocolDialog";
+import { useCalReminders } from "../reminders/useCalReminders";
+import { ReminderMarker } from "../reminders/ReminderMarker";
+import { ReminderDialog } from "../reminders/ReminderDialog";
+import { REMINDER_MARKER_MIN, type CalReminder } from "../../lib/reminders";
 
 // ── Day Block Modal ───────────────────────────────────────────────────────────
 
@@ -256,10 +260,17 @@ export function DayCalendar({
   const syncedTimed   = synced.items.filter((i) => i.start_time && i.end_time);
   const syncedUntimed = synced.items.filter((i) => !i.start_time);
 
+  // Today's timed reminders, same self-contained shape as the synced items.
+  const calReminders = useCalReminders(_date, _date);
+  const [openReminder, setOpenReminder] = useState<CalReminder | null>(null);
+  const [reminderCreateAt, setReminderCreateAt] = useState<string | null>(null);
+
   return (
     <div className="flex flex-col h-full">
       <SyncedItemDialog item={openSynced} synced={synced} onClose={() => setOpenSynced(null)} />
       <ScheduleProtocolDialog open={scheduling} initialDate={_date} synced={synced} onClose={() => setScheduling(false)} />
+      <ReminderDialog reminder={openReminder} createAt={reminderCreateAt} state={calReminders}
+        onClose={() => { setOpenReminder(null); setReminderCreateAt(null); }} />
       {/* Header */}
       <div className="flex items-center justify-between mb-2 shrink-0 px-1">
         <h2 className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">
@@ -274,11 +285,20 @@ export function DayCalendar({
         </button>
       </div>
       <div className="flex items-center justify-end -mt-1.5 mb-1 px-1 shrink-0">
+        <button
+          onClick={() => { const d = new Date(Date.now() + 60 * 60_000); d.setMinutes(0, 0, 0); setReminderCreateAt(d.toISOString()); }}
+          className="text-[10px] text-muted-foreground hover:text-foreground mr-3"
+          title="Add a reminder at a time">
+          + Reminder
+        </button>
         <button onClick={() => setScheduling(true)} className="text-[10px] text-muted-foreground hover:text-foreground"
           title="Schedule a training, run, meal, supplement stack or routine — it lives in Protocol">
           + Protocol
         </button>
       </div>
+      {calReminders.error && (
+        <p className="text-[10px] text-destructive px-1 mb-1 shrink-0" role="alert">Reminders unavailable: {calReminders.error}</p>
+      )}
       {synced.errors.length > 0 && (
         <p className="text-[10px] text-destructive px-1 mb-1 shrink-0" role="alert">
           Protocol unavailable: {synced.errors[0].message}
@@ -353,7 +373,8 @@ export function DayCalendar({
                 | { kind: "ca";  startMin: number; endMin: number; ca: typeof timedCAs[number] }
                 | { kind: "blk"; startMin: number; endMin: number; b: CalBlock }
                 | { kind: "se";  startMin: number; endMin: number; e: ScheduleEntry }
-                | { kind: "syn"; startMin: number; endMin: number; i: SyncedItem };
+                | { kind: "syn"; startMin: number; endMin: number; i: SyncedItem }
+                | { kind: "rem"; startMin: number; endMin: number; r: CalReminder };
 
               const evts: DcEvt[] = [
                 ...timedSystems.map((s) => ({
@@ -386,13 +407,28 @@ export function DayCalendar({
                   endMin:   Math.max(dcTimeToMin(i.end_time!), dcTimeToMin(i.start_time!) + 15),
                   i,
                 })),
+                ...calReminders.reminders.map((r) => ({
+                  kind: "rem" as const,
+                  startMin: dcTimeToMin(r.time),
+                  endMin:   dcTimeToMin(r.time) + REMINDER_MARKER_MIN,
+                  r,
+                })),
               ];
+              const now = Date.now();
 
               return layoutCalItems(evts).map(({ item, col, totalCols }) => {
                 const top   = dcMinToPx(item.startMin);
                 const ht    = Math.max(18, dcMinToPx(item.endMin) - top);
                 const left  = `calc(${(col / totalCols) * 100}% + 1px)`;
                 const right = `calc(${((totalCols - col - 1) / totalCols) * 100}% + 1px)`;
+
+                if (item.kind === "rem") {
+                  return (
+                    <ReminderMarker key={`rem-${item.r.task_id}`} reminder={item.r} now={now}
+                      style={{ top, height: Math.max(18, ht), left, right }}
+                      onOpen={setOpenReminder} onToggle={calReminders.toggle} />
+                  );
+                }
 
                 if (item.kind === "syn") {
                   return (
