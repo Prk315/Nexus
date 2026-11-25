@@ -1,23 +1,21 @@
 /**
- * Meal sessions — breakfast, lunch and dinner buttons that open a 30-minute
- * window in the blocking wall for a per-meal list of sites and apps.
+ * Meal sessions — read-only status for the 30-minute meal unblock windows,
+ * plus management of each meal's target list.
  *
- * The panel never derives blocking policy. Activating a meal inserts one
- * `meal_sessions` row; `focus-evaluate` folds it into `blocking_state` and
- * every enforcer reads that. Because the cron pass is 5 minutes apart and a
- * meal is only 30 minutes long, activation also *pokes* the evaluator directly
- * (an anon-key POST — the function recomputes from data we could already read,
- * it accepts no input that changes the outcome), so the unblock lands on the
- * Mac's next 30 s tick instead of up to 5½ minutes later. A second best-effort
- * poke fires when the session expires so re-blocking is prompt while the app
- * is open; with the app closed the cron pass re-blocks within ~5 minutes.
+ * The activation buttons ("Start 30 min" per meal) and the "Finish day"
+ * button were removed 2026-11-25 on request: an unblock you can trigger from
+ * the blocked device isn't a blocker — same reasoning as the block lists
+ * being one-way. The evaluator still honors `meal_sessions` /
+ * `day_checkouts` rows, so a session started elsewhere renders its countdown
+ * here; this panel just no longer creates them.
  *
- * One activation per meal per local day, enforced by a unique index server-side
- * — the disabled button here is a courtesy, not the guard.
- *
- * Each activation is also logged to PathFinder's calendar (`pf_cal_blocks`) so
- * the meal shows up in the Week view. That insert is best-effort: a failed log
- * must not roll back an already-running session.
+ * The panel never derives blocking policy. `focus-evaluate` folds
+ * `meal_sessions` into `blocking_state` and every enforcer reads that. A
+ * best-effort *poke* of the evaluator (an anon-key POST — the function
+ * recomputes from data we could already read, it accepts no input that
+ * changes the outcome) fires when a running session expires, so re-blocking
+ * is prompt while the app is open; with the app closed the cron pass
+ * re-blocks within ~5 minutes.
  *
  * Protocol tie-in (added 2026-08-21): each card also shows what Protocol's
  * meal planner says was planned for today — a read-only reminder, not a new
@@ -35,7 +33,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { supabasePublic } from "../supabase";
 import { nodeUserId } from "../nodeUser";
-import { calendarOwnerUid } from "./calendarOwner";
 
 type MealKey = "breakfast" | "lunch" | "dinner";
 
@@ -71,19 +68,16 @@ type MealSession = {
 type BlockedApp = { process_name: string; display_name: string };
 type BlockedSite = { domain: string };
 
-const SESSION_MINUTES = 30;
-
 // Keep in sync with TIMEZONE in supabase/functions/focus-evaluate/logic.ts and
 // the local_date default in the meal_sessions migration.
 const TZ = "Europe/Copenhagen";
 
 // Literal Tailwind classes per meal — template-built class names never survive
-// the compiler's scan. `calColor` is a PathFinder BLOCK_COLORS key.
+// the compiler's scan.
 const MEALS: Array<{
   key: MealKey;
   label: string;
   emoji: string;
-  calColor: string;
   activeCls: string;
   buttonCls: string;
 }> = [
@@ -91,7 +85,6 @@ const MEALS: Array<{
     key: "breakfast",
     label: "Breakfast",
     emoji: "🍳",
-    calColor: "amber",
     activeCls: "border-amber-500/25 bg-amber-500/[0.06]",
     buttonCls: "bg-amber-500/20 text-amber-300",
   },
@@ -99,7 +92,6 @@ const MEALS: Array<{
     key: "lunch",
     label: "Lunch",
     emoji: "🥗",
-    calColor: "emerald",
     activeCls: "border-emerald-500/25 bg-emerald-500/[0.06]",
     buttonCls: "bg-emerald-500/20 text-emerald-300",
   },
@@ -107,7 +99,6 @@ const MEALS: Array<{
     key: "dinner",
     label: "Dinner",
     emoji: "🍽️",
-    calColor: "violet",
     activeCls: "border-violet-500/25 bg-violet-500/[0.06]",
     buttonCls: "bg-violet-500/20 text-violet-300",
   },
@@ -151,9 +142,6 @@ async function pokeEvaluator(): Promise<void> {
   }
 }
 
-/** Today's "finish day" press, if any — see the day_checkouts migration. */
-type DayCheckout = { id: string; started_at: string };
-
 export function MealsPanel() {
   const [targets, setTargets] = useState<MealTarget[]>([]);
   const [sessions, setSessions] = useState<MealSession[]>([]);
@@ -171,10 +159,6 @@ export function MealsPanel() {
   // no write path yet. Empty on fetch failure or no plan; never blocks the
   // rest of the panel.
   const [mealPlan, setMealPlan] = useState<PlannedMealEntry[]>([]);
-  // Today's checkout: null = not finished, undefined = table unreachable (the
-  // migration isn't applied yet), in which case the button stays hidden rather
-  // than offering something that cannot work.
-  const [checkout, setCheckout] = useState<DayCheckout | null | undefined>(undefined);
 
   const alive = useRef(true);
   useEffect(() => {
@@ -188,7 +172,7 @@ export function MealsPanel() {
     const user = await nodeUserId();
     const nowIso = new Date().toISOString();
     const today = localParts(new Date()).date;
-    const [t, s, a, w, c] = await Promise.all([
+    const [t, s, a, w] = await Promise.all([
       supabasePublic
         .from("meal_unlock_targets")
         .select("id, meal, domain, process_name")
@@ -211,12 +195,6 @@ export function MealsPanel() {
         .select("domain")
         .eq("user_id", user)
         .order("domain"),
-      supabasePublic
-        .from("day_checkouts")
-        .select("id, started_at")
-        .eq("user_id", user)
-        .eq("local_date", today)
-        .limit(1),
     ]);
     if (!alive.current) return;
     if (t.error || s.error) {
@@ -229,7 +207,6 @@ export function MealsPanel() {
     setSessions((s.data ?? []) as MealSession[]);
     if (!a.error) setApps((a.data ?? []) as BlockedApp[]);
     if (!w.error) setSites((w.data ?? []) as BlockedSite[]);
-    setCheckout(c.error ? undefined : (((c.data ?? [])[0] as DayCheckout | undefined) ?? null));
     setError("");
   }, []);
 
@@ -315,115 +292,6 @@ export function MealsPanel() {
       clearTimeout(endT);
     };
   }, [active.length, sessions, load]);
-
-  async function activate(meal: (typeof MEALS)[number]) {
-    setBusy(true);
-    try {
-      const user = await nodeUserId();
-      const start = new Date();
-      const end = new Date(start.getTime() + SESSION_MINUTES * 60_000);
-      const { error: insErr } = await supabasePublic.from("meal_sessions").insert({
-        user_id: user,
-        meal: meal.key,
-        started_at: start.toISOString(),
-        ends_at: end.toISOString(),
-        // local_date is defaulted server-side to the Copenhagen day.
-      });
-      if (insErr) {
-        setError(
-          insErr.code === "23505"
-            ? `${meal.label} has already been used today — one session per meal per day.`
-            : insErr.message,
-        );
-        return;
-      }
-
-      // Log to PathFinder's calendar. Best-effort: the session is already live.
-      const { date, hm } = localParts(start);
-      const endParts = localParts(end);
-      const names = targets
-        .filter((t) => t.meal === meal.key)
-        .map(
-          (t) =>
-            t.domain ??
-            (apps.find((a) => a.process_name === t.process_name)?.display_name ??
-              t.process_name),
-        );
-      // PathFinder's calendar is keyed by the authed account, not the node id —
-      // see calendarOwner.ts. The RLS insert policy is pinned to that uid.
-      const { error: calErr } = await supabasePublic.from("pf_cal_blocks").insert({
-        user_id: await calendarOwnerUid(),
-        date,
-        title: `${meal.emoji} ${meal.label}`,
-        start_time: hm,
-        // A block crossing midnight would end "earlier" than it starts on the
-        // same date row — clamp so the calendar entry stays renderable.
-        end_time: endParts.date === date ? endParts.hm : "23:59",
-        color: meal.calColor,
-        // Phase E: every meal session is unambiguously the Meals category.
-        category: "Meals",
-        description: `Nexus Local meal session — unblocked for ${SESSION_MINUTES} min: ${
-          names.join(", ") || "no targets"
-        }`,
-        location: null,
-        task_id: null,
-      });
-      if (calErr) setError(`Session started, but the calendar log failed: ${calErr.message}`);
-      else setError("");
-
-      await pokeEvaluator();
-      setNowMs(Date.now());
-      await load();
-    } finally {
-      if (alive.current) setBusy(false);
-    }
-  }
-
-  /**
-   * "Finish day": unblock everything until local midnight. The row carries no
-   * end time on purpose — the evaluator ends it at midnight on the server's
-   * clock, and `local_date` defaults server-side, so neither can be stretched.
-   */
-  async function finishDay() {
-    setBusy(true);
-    try {
-      const { error: insErr } = await supabasePublic
-        .from("day_checkouts")
-        .insert({ user_id: await nodeUserId() });
-      // 23505: already finished today (another device, or a double tap) —
-      // the state we wanted, so just refresh into it.
-      if (insErr && insErr.code !== "23505") {
-        setError(insErr.message);
-        return;
-      }
-      setError("");
-      await pokeEvaluator();
-      await load();
-    } finally {
-      if (alive.current) setBusy(false);
-    }
-  }
-
-  /** Undo a mis-tap. Deleting re-blocks — the safe direction. */
-  async function undoFinishDay() {
-    if (!checkout) return;
-    setBusy(true);
-    try {
-      const { error: delErr } = await supabasePublic
-        .from("day_checkouts")
-        .delete()
-        .eq("id", checkout.id);
-      if (delErr) {
-        setError(delErr.message);
-        return;
-      }
-      setError("");
-      await pokeEvaluator();
-      await load();
-    } finally {
-      if (alive.current) setBusy(false);
-    }
-  }
 
   async function addTargetRow(meal: MealKey) {
     const value = addTarget.trim();
@@ -517,19 +385,7 @@ export function MealsPanel() {
                 <span className="rounded bg-white/[0.06] px-1.5 py-0.5 text-[9px] text-white/45">
                   Used today
                 </span>
-              ) : (
-                <button
-                  onClick={() => activate(meal)}
-                  disabled={busy || mealTargets.length === 0}
-                  className={`rounded-lg px-3 py-1 text-[11px] font-medium ${
-                    busy || mealTargets.length === 0
-                      ? "bg-white/[0.06] text-white/25"
-                      : meal.buttonCls
-                  }`}
-                >
-                  Start {SESSION_MINUTES} min
-                </button>
-              )}
+              ) : null}
             </div>
 
             {/* What Protocol planned for this meal today — read-only reminder,
@@ -635,38 +491,10 @@ export function MealsPanel() {
         );
       })}
 
-      {/* Finish day — under the last meal. Hidden until the table exists. */}
-      {checkout !== undefined &&
-        (checkout ? (
-          <div className="flex items-center gap-2 rounded-xl border border-emerald-500/25 bg-emerald-500/[0.07] p-3">
-            <span className="text-[13px]">🌙</span>
-            <span className="flex-1 text-xs text-emerald-200/90">
-              Day finished · everything unlocked until 23:59
-            </span>
-            <button
-              onClick={undoFinishDay}
-              disabled={busy}
-              className="text-[10px] text-white/35 hover:text-white/70 disabled:opacity-40"
-            >
-              Undo
-            </button>
-          </div>
-        ) : (
-          <button
-            onClick={finishDay}
-            disabled={busy}
-            className={`rounded-xl px-3 py-2.5 text-xs font-medium ${
-              busy ? "bg-white/[0.06] text-white/25" : "bg-emerald-500/15 text-emerald-300"
-            }`}
-          >
-            🌙 Finish day — unlock everything until 23:59
-          </button>
-        ))}
-
       <p className="text-[9px] leading-relaxed text-white/25">
-        Takes ~30 s to lift on the Mac after starting. Re-blocks on expiry —
-        within seconds while this app is open, otherwise on the next 5-minute
-        server pass. Logged to the PathFinder calendar.
+        Status only — sessions can no longer be started from here. A running
+        session re-blocks on expiry: within seconds while this app is open,
+        otherwise on the next 5-minute server pass.
       </p>
     </section>
   );

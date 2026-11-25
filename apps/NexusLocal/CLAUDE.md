@@ -189,15 +189,16 @@ the three removed controls were one loophole wearing three hats (`enabled = fals
 deleting the row, and flipping `block_mode` from `always` to `focus_only` all end with
 the thing unblocked) — restoring any one restores all three.
 
-**Meal sessions are the sanctioned valve** (`MealsPanel`, added 2026-08-16): breakfast,
-lunch and dinner each buy a 30-minute unblock of a per-meal target list
-(`meal_unlock_targets`), once per meal per local day (unique index on `meal_sessions`,
-not a UI guard). Activation inserts the session row, logs a `pf_cal_blocks` entry so it
-shows in PathFinder's Week view, and pokes `focus-evaluate` directly so the unblock
-lands on the Mac's next 30 s tick instead of the next cron pass. Expiry re-blocks via a
-second poke while the app is open, else on the cron pass (≤5 min late). As always the
-panel derives no policy — the evaluator removes active meal targets from
-`blocking_state` and every enforcer just reads that.
+**Meal sessions lost their buttons on 2026-11-25** (`MealsPanel`, added 2026-08-16):
+the per-meal "Start 30 min" buttons and the "Finish day — unlock until 23:59" button
+were removed on request — the same reasoning as the one-way block lists: an unblock
+you can trigger from the blocked device isn't a blocker. The server side is intact:
+`focus-evaluate` still folds `meal_sessions` and `day_checkouts` into
+`blocking_state`, the unique index (one session per meal per local day) still holds,
+and the panel still *renders* a running session's countdown, per-meal targets and
+today's Protocol plan — it just creates no rows. Expiry still re-blocks via a poke
+while the app is open, else on the cron pass (≤5 min late). Restoring either button
+restores the valve; don't do it casually.
 
 ### Usage tracking, and the one table with different RLS
 
